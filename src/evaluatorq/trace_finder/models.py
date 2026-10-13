@@ -202,6 +202,7 @@ class PopulationRequest(BaseModel):
 
     start: datetime | None = None
     end: datetime | None = None
+    time_origin: Literal['default', 'explicit', 'within_results'] = 'explicit'
     facets: FacetSelection = FacetSelection()
     numeric: NumericFilters = NumericFilters()
     limit: int = Field(default=500, ge=1, le=5000)
@@ -342,10 +343,13 @@ class RunSnapshot:
     error: str | None = None
     classifier_model: str | None = None
     """The model the store classifies with, fixed when the store was built."""
+    generated_time: tuple[datetime | None, datetime | None] | None = None
+    provenance: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'results', MappingProxyType(dict(self.results)))
         object.__setattr__(self, 'projections', MappingProxyType(dict(self.projections)))
+        object.__setattr__(self, 'provenance', MappingProxyType(dict(self.provenance)))
 
 
 @dataclass(frozen=True)

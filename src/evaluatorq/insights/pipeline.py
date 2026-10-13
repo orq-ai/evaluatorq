@@ -590,9 +590,10 @@ async def insights(  # noqa: C901
                 'n_matched': len(resolved.traces) if not resolved.compiled else 0,
                 'n_failed_match': 0,
             }
-            if population.query is not None:
-                # finder.classifier picked this query's generated filters; config holds only the labels model.
+            if population.query is not None and resolved.echo.get('filter_selection') == 'llm+jev':
                 run.population['finder_classifier_model'] = finder_classifier_model
+            elif population.query is not None and resolved.echo.get('filter_selection') == 'llm':
+                run.population['finder_filter_model'] = resolved.echo['filter_model']
             if _finder_export_source is not None and population.finder_export is not None:
                 run.population['finder_export'] = str(_finder_export_source)
                 if _finder_export_sha256 is not None:

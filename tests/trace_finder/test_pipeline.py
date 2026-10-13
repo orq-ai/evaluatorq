@@ -1,62 +1,73 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
-from evaluatorq.trace_finder import FacetCatalogue, FacetSelection, PopulationRequest, Snapshot, pipeline
-from evaluatorq.trace_finder.filter_selector import FilterSelectionResult
+from evaluatorq.trace_finder import PopulationRequest, Snapshot, pipeline
 from evaluatorq.trace_finder.settings import DashboardSettings
 
 
 @pytest.mark.asyncio
-async def test_filter_selector_falls_back_to_the_settings_window_when_bounds_are_missing(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize('mode', ['llm', 'llm+jev'])
+async def test_production_planner_uses_configured_roles_mode_and_current_window(
+    mode: Literal['llm', 'llm+jev'], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    seen: dict[str, datetime] = {}
+    seen: dict[str, Any] = {}
 
-    async def fake_catalogue(orq: Any, *, start: datetime, end: datetime, limit: int) -> FacetCatalogue:
-        seen['start'] = start
-        seen['end'] = end
-        return FacetCatalogue()
+    def fake_role(role: str, *, task: str) -> str:
+        seen.setdefault('roles', []).append((role, task))
+        return f'{role}/{task}'
 
-    async def fake_select(client: Any, model: str, catalogue: FacetCatalogue, query: str) -> FilterSelectionResult:
-        return FilterSelectionResult(FacetSelection())
+    async def fake_plan(query: str, population: PopulationRequest, **kwargs: Any) -> object:
+        seen.update(query=query, population=population, kwargs=kwargs)
+        return object()
 
-    monkeypatch.setattr(pipeline, 'load_facet_catalogue', fake_catalogue)
-    monkeypatch.setattr(pipeline, 'select_filters_with_response', fake_select)
-    settings = DashboardSettings(window_days=3, limit=500, parallelism=100)
+    monkeypatch.setattr(pipeline, 'role_model', fake_role)
+    monkeypatch.setattr(pipeline, 'plan_query', fake_plan)
+    settings = DashboardSettings(window_days=3, filter_selection=mode)
     store = pipeline.build_run_store(settings, client=cast(Any, object()), orq=cast(Any, object()))
 
-    await store._filter_selector('refunds', PopulationRequest())
+    planner = store._planner
+    assert planner is not None
+    await planner('refunds', PopulationRequest(), within_results=False)
 
-    assert seen['end'] - seen['start'] == timedelta(days=3)
-    assert seen['end'] <= datetime.now(timezone.utc)
+    planned_population = seen['population']
+    assert planned_population.end - planned_population.start == timedelta(days=3)
+    assert planned_population.time_origin == 'explicit'
+    assert seen['query'] == 'refunds'
+    assert seen['kwargs']['filter_selection'] == mode
+    assert seen['kwargs']['compiler_model'] == 'fast/finder.compiler'
+    assert seen['kwargs']['fast_filter_model'] == 'fast/finder.filters'
+    assert seen['kwargs']['classifier_model'] == 'classifier/finder.classifier'
+    assert seen['roles'] == [
+        ('classifier', 'finder.classifier'),
+        ('fast', 'finder.compiler'),
+        ('fast', 'finder.filters'),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_a_store_keeps_the_classifier_it_was_built_with_after_the_role_changes(
+async def test_factory_keeps_classifier_model_bound_to_the_store_after_role_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    seen: list[str] = []
+    selected: list[str] = []
 
-    async def fake_catalogue(orq: Any, *, start: datetime, end: datetime, limit: int) -> FacetCatalogue:
-        return FacetCatalogue()
+    async def fake_plan(query: str, population: PopulationRequest, **kwargs: Any) -> object:
+        selected.append(kwargs['classifier_model'])
+        return object()
 
-    async def fake_select(client: Any, model: str, catalogue: FacetCatalogue, query: str) -> FilterSelectionResult:
-        seen.append(model)
-        return FilterSelectionResult(FacetSelection())
-
-    monkeypatch.setattr(pipeline, 'load_facet_catalogue', fake_catalogue)
-    monkeypatch.setattr(pipeline, 'select_filters_with_response', fake_select)
+    monkeypatch.setattr(pipeline, 'plan_query', fake_plan)
     monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'acme/built-with')
     store = pipeline.build_run_store(DashboardSettings(), client=cast(Any, object()), orq=cast(Any, object()))
     monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'acme/changed-later')
 
-    await store._filter_selector('refunds', PopulationRequest())
+    planner = store._planner
+    assert planner is not None
+    await planner('refunds', PopulationRequest(), within_results=False)
 
-    assert seen == ['acme/built-with']
+    assert selected == ['acme/built-with']
     assert (await store.snapshot()).classifier_model == 'acme/built-with'
 
 
@@ -104,24 +115,3 @@ async def test_population_loader_uses_the_configured_window_when_bounds_are_miss
     await store._population_loader(PopulationRequest())
 
     assert seen['end'] - seen['start'] == timedelta(days=3)
-
-
-@pytest.mark.asyncio
-async def test_filter_selector_announces_degradation_and_keeps_semantic_run_available(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    async def unavailable(*args: Any, **kwargs: Any) -> FacetCatalogue:
-        raise RuntimeError('facet service unavailable')
-
-    monkeypatch.setattr(pipeline, 'load_facet_catalogue', unavailable)
-    store = pipeline.build_run_store(
-        DashboardSettings(window_days=7, limit=500, parallelism=100),
-        client=cast(Any, object()),
-        orq=cast(Any, object()),
-    )
-
-    with caplog.at_level('WARNING'):
-        selected = await store._filter_selector('refunds', PopulationRequest())
-
-    assert selected == FilterSelectionResult(FacetSelection(), error='facet service unavailable')
-    assert 'facet service unavailable' in caplog.text

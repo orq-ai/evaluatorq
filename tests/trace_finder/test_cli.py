@@ -194,6 +194,7 @@ def test_find_preserves_window_and_filter_selection_overrides(
     result = CliRunner().invoke(_app(), ['find', 'refund requests', *args])
 
     assert result.exit_code == 0, result.output
+    assert store.request is not None
     assert store.request.population.time_origin == expected_origin
     assert captured['settings'].filter_selection == expected_mode
 

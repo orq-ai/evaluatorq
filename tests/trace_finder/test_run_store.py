@@ -15,7 +15,7 @@ from evaluatorq.trace_finder.classifier import classifier_questions
 
 from evaluatorq.common.judge import ClassifyAnswer, ClassifyResponse
 from evaluatorq.trace_finder.compiler import CompiledPlan
-from evaluatorq.trace_finder.filter_selector import FilterSelectionResult
+from evaluatorq.trace_finder.planner import PlanningResult
 from evaluatorq.trace_finder.models import (
     CompiledQuery,
     DimensionAnswer,
@@ -28,6 +28,7 @@ from evaluatorq.trace_finder.models import (
     TraceClassification,
     TraceRecord,
 )
+from evaluatorq.trace_finder.filter_selector import FilterSelectionResult
 from evaluatorq.trace_finder.projection import project_trace
 from evaluatorq.trace_finder.run_store import RunStore
 from evaluatorq.trace_finder.explorer import ExplorerStore
@@ -1152,3 +1153,199 @@ async def test_new_search_through_the_table_queries_it_with_the_merged_filters()
     assert snapshot.within_results
     assert snapshot.trace_ids == ('trace-1',)
     assert loader.calls == []
+
+
+@pytest.mark.asyncio
+async def test_shared_planner_sets_effective_time_and_review_preserves_provenance() -> None:
+    requested_start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    requested_end = datetime(2026, 9, 20, tzinfo=timezone.utc)
+    generated = (datetime(2026, 9, 5, tzinfo=timezone.utc), datetime(2026, 9, 15, tzinfo=timezone.utc))
+    loader = Loader()
+
+    async def plan(query: str, population: PopulationRequest, *, within_results: bool) -> PlanningResult:
+        assert query == 'Find help requests'
+        assert not within_results
+        effective = population.model_copy(update={
+            'start': generated[0], 'end': generated[1], 'time_origin': 'default'
+        })
+        return PlanningResult(
+            dimensions=(compiled_query(),),
+            generated_facets=FacetSelection(),
+            generated_numeric=NumericFilters(),
+            generated_time=generated,
+            effective_population=effective,
+            selector_response=None,
+            selector_error=None,
+            provenance={'time': 'query', 'filter_mode': 'llm+jev'},
+            usage={},
+        )
+
+    runner = Runner()
+    store = RunStore(
+        compiler=None,
+        planner=plan,
+        population_loader=loader,
+        run_classifier=runner,
+    )
+    original = request(mode='review', population=PopulationRequest(
+        start=requested_start, end=requested_end, time_origin='default'
+    ))
+    reviewed = await store.compile(original)
+
+    assert loader.calls[0].start == generated[0]
+    assert loader.calls[0].end == generated[1]
+    assert reviewed.request is not None
+    assert reviewed.request.population.start == generated[0]
+    assert reviewed.generated_time == generated
+    assert reviewed.provenance == {'time': 'query', 'filter_mode': 'llm+jev'}
+
+    restarted = await store.start(reviewed.request, reviewed.dimensions or ())
+    assert restarted.generated_time == generated
+    assert restarted.provenance == {'time': 'query', 'filter_mode': 'llm+jev'}
+
+
+@pytest.mark.asyncio
+async def test_within_results_intersects_generated_time_locally_without_population_reload() -> None:
+    loaded_start = datetime(2026, 9, 20, tzinfo=timezone.utc)
+    loaded_end = datetime(2026, 9, 22, tzinfo=timezone.utc)
+    generated = (datetime(2026, 9, 21, tzinfo=timezone.utc), datetime(2026, 9, 23, tzinfo=timezone.utc))
+    loader = Loader()
+    inside = trace(1).model_copy(update={'timestamp': datetime(2026, 9, 21, 12, tzinfo=timezone.utc)})
+    before = trace(2).model_copy(update={'timestamp': datetime(2026, 9, 20, 12, tzinfo=timezone.utc)})
+    after = trace(3).model_copy(update={'timestamp': datetime(2026, 9, 22, 12, tzinfo=timezone.utc)})
+    planned_window: list[tuple[datetime | None, datetime | None]] = []
+
+    async def plan(query: str, population: PopulationRequest, *, within_results: bool) -> PlanningResult:
+        assert within_results
+        assert query == 'Find help requests'
+        intersection = (generated[0], loaded_end)
+        planned_window.append(intersection)
+        effective = population.model_copy(update={
+            'start': intersection[0], 'end': intersection[1], 'time_origin': 'within_results'
+        })
+        return PlanningResult(
+            dimensions=(compiled_query(),),
+            generated_facets=FacetSelection(),
+            generated_numeric=NumericFilters(),
+            generated_time=generated,
+            effective_population=effective,
+            selector_response=None,
+            selector_error=None,
+            provenance={'time': 'within-results'},
+            usage={},
+        )
+
+    store = RunStore(
+        compiler=None,
+        planner=plan,
+        population_loader=loader,
+        run_classifier=Runner(),
+    )
+    snapshot = await store.compile(
+        request(
+            mode='review',
+            population=PopulationRequest(start=loaded_start, end=loaded_end, time_origin='within_results'),
+        ),
+        traces=lambda: asyncio.sleep(0, result=(before, inside, after)),
+    )
+
+    assert snapshot.trace_ids == ('trace-1',)
+    assert planned_window == [(generated[0], loaded_end)]
+    assert loader.calls == []
+    assert snapshot.request is not None
+    assert snapshot.request.population.start == generated[0]
+    assert snapshot.request.population.end == loaded_end
+    assert snapshot.generated_time == generated
+
+
+@pytest.mark.asyncio
+async def test_disjoint_within_results_finishes_empty_without_loading_again() -> None:
+    loaded_start = datetime(2026, 9, 20, tzinfo=timezone.utc)
+    loaded_end = datetime(2026, 9, 22, tzinfo=timezone.utc)
+    loader = Loader()
+    source_calls: list[bool] = []
+
+    async def plan(query: str, population: PopulationRequest, *, within_results: bool) -> PlanningResult:
+        assert query == 'Find help requests'
+        assert within_results
+        return PlanningResult(
+            dimensions=(compiled_query(),),
+            generated_facets=FacetSelection(),
+            generated_numeric=NumericFilters(),
+            generated_time=(
+                datetime(2026, 9, 25, tzinfo=timezone.utc),
+                datetime(2026, 9, 26, tzinfo=timezone.utc),
+            ),
+            effective_population=population,
+            selector_response=None,
+            selector_error=None,
+            provenance={'time': 'within-results'},
+            usage={},
+            empty_match=True,
+        )
+
+    async def source_traces() -> tuple[TraceRecord, ...]:
+        source_calls.append(True)
+        return (trace(1),)
+
+    store = RunStore(planner=plan, population_loader=loader, run_classifier=Runner())
+    snapshot = await store.compile(
+        request(
+            mode='review',
+            population=PopulationRequest(
+                start=loaded_start, end=loaded_end, time_origin='within_results'
+            ),
+        ),
+        traces=source_traces,
+    )
+
+    assert snapshot.state == 'completed'
+    assert snapshot.trace_ids == ()
+    assert snapshot.total == snapshot.completed == 0
+    assert snapshot.plan_warning is not None
+    assert 'does not overlap the loaded results' in snapshot.plan_warning
+    assert snapshot.provenance == {'time': 'within-results'}
+    assert snapshot.request is not None
+    assert (snapshot.request.population.start, snapshot.request.population.end) == (loaded_start, loaded_end)
+    assert source_calls == []
+
+
+@pytest.mark.asyncio
+async def test_shared_planner_preserves_explicit_population_window() -> None:
+    explicit = (
+        datetime(2026, 9, 2, tzinfo=timezone.utc),
+        datetime(2026, 9, 9, tzinfo=timezone.utc),
+    )
+    loader = Loader()
+
+    async def plan(query: str, population: PopulationRequest, *, within_results: bool) -> PlanningResult:
+        assert not within_results
+        effective = population.model_copy(update={
+            'start': explicit[0], 'end': explicit[1], 'time_origin': 'explicit'
+        })
+        return PlanningResult(
+            dimensions=(compiled_query(),),
+            generated_facets=FacetSelection(),
+            generated_numeric=NumericFilters(),
+            generated_time=(datetime(2026, 9, 1, tzinfo=timezone.utc), datetime(2026, 9, 30, tzinfo=timezone.utc)),
+            effective_population=effective,
+            selector_response=None,
+            selector_error=None,
+            provenance={'time': 'explicit'},
+            usage={},
+        )
+
+    store = RunStore(
+        compiler=None,
+        planner=plan,
+        population_loader=loader,
+        run_classifier=Runner(),
+    )
+    snapshot = await store.compile(request(mode='review', population=PopulationRequest(
+        start=explicit[0], end=explicit[1], time_origin='explicit'
+    )))
+
+    assert (loader.calls[0].start, loader.calls[0].end) == explicit
+    assert snapshot.request is not None
+    assert snapshot.request.population.time_origin == 'explicit'
+    assert snapshot.generated_time is not None

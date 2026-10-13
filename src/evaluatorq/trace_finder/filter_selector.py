@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import ConfigDict, StrictBool, create_model
 
 from evaluatorq.common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, ClassifyResponse, run_classify
 from evaluatorq.common.llm_call import classify_request_body
@@ -155,7 +155,7 @@ async def select_llm_filters_with_response(
         raise ValueError('Enter a semantic trace query before selecting filters.')
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError('now must be timezone-aware')
-    current = now.astimezone(UTC)
+    current = now.astimezone(timezone.utc)
     choices: dict[str, tuple[str, ...]] = {}
     for name in FACET_NAMES:
         values = tuple(dict.fromkeys(getattr(catalogue, name)))
@@ -163,18 +163,20 @@ async def select_llm_filters_with_response(
         while no_filter in values:
             no_filter += '_'
         choices[name] = (*values, no_filter)
-    fields: dict[str, tuple[Any, Any]] = {
-        name: (list[Literal.__getitem__(values)], ...) for name, values in choices.items()
-    }
+    fields: dict[str, tuple[Any, Any]] = {}
+    for name, values in choices.items():
+        literal_type = cast('Any', Literal.__getitem__(values))
+        fields[name] = (list[literal_type], ...)
     fields.update({
         'numeric': (WireNumeric, ...),
+        'calendar_day': (StrictBool, ...),
         'start': (datetime | None, ...),
         'end': (datetime | None, ...),
     })
     response_model = create_model(
         'LLMFilterSelectionWire',
         __config__=ConfigDict(extra='forbid'),
-        **fields,
+        **cast('Any', fields),
     )
     messages = [
         {
@@ -186,7 +188,10 @@ async def select_llm_filters_with_response(
                 'exact offered catalogue value; return that full offered value. Extract inclusive integer token and '
                 'duration bounds, keeping fields null unless explicitly constrained. Return calendar time as nullable '
                 'ISO-8601 UTC bounds, with null for each absent bound and both null when no time filter is requested. '
-                f'Resolve relative dates against current UTC time: {current.isoformat()}'
+                'For whole-calendar-day requests set calendar_day true and use an exclusive next-day UTC midnight '
+                'end, including relative days. Set calendar_day false when the request has explicit clock-time '
+                'semantics or no calendar-time constraint, and preserve any exact clock-time instants. A date-only '
+                f'bound is a whole calendar day, not a time of day. Resolve relative dates against current UTC time: {current.isoformat()}'
             ),
         },
         {'role': 'user', 'content': normalized},
@@ -215,11 +220,7 @@ async def select_llm_filters_with_response(
                 else response_model.model_validate(result.parsed)
             )
             selection = FacetSelection.model_validate({
-                name: (
-                    frozenset()
-                    if choices[name][-1] in getattr(wire, name)
-                    else frozenset(getattr(wire, name))
-                )
+                name: (frozenset() if choices[name][-1] in getattr(wire, name) else frozenset(getattr(wire, name)))
                 for name in FACET_NAMES
             })
             numeric = _tighten_strict_bounds(
@@ -227,7 +228,7 @@ async def select_llm_filters_with_response(
                 NumericFilters.model_validate(wire.numeric.model_dump()),
             )
             time = (
-                TimeFilters(start=wire.start, end=wire.end)
+                TimeFilters(start=wire.start, end=wire.end, calendar_day=wire.calendar_day)
                 if wire.start is not None or wire.end is not None
                 else None
             )

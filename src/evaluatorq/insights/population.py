@@ -2,12 +2,9 @@
 
 Four mutually exclusive paths, matching `InsightsPopulation`'s own fields:
 
-- **Query path** (`pop.query` set): compile the semantic query with `compile_query`
-  and select generated facet/numeric filters with `select_filters_with_response`
-  concurrently (mirrors `trace_finder/run_store.py`'s `_plan`), merge them under the
-  caller's explicit facets/numeric (explicit wins through `run_store.merge_facets`/
-  `merge_numeric`), then
-  load with `OrqTraceSource`.
+- **Query path** (`pop.query` set): plan semantic dimensions, generated filters,
+  and query time through the shared `trace_finder.planner`, then load the resulting
+  effective population through `OrqTraceSource`.
 - **Finder export path** (`pop.finder_export` set): read a `RunExport` JSON, reload
   its merged filters and original query window through `OrqTraceSource`, constrained
   by the pinned trace IDs, and keep only the traces whose ids are in `matched_trace_ids`.
@@ -17,9 +14,8 @@ Four mutually exclusive paths, matching `InsightsPopulation`'s own fields:
 - **Filter-only path** (neither set): load `pop.facets`/`pop.numeric` directly. No
   compile, no match question.
 
-No retry layer here: `compile_query`, `select_filters_with_response` and
-`OrqTraceSource.load_async` each own their one retry layer already (see their
-docstrings); this module does not wrap them a second time.
+No retry layer here: the shared planner and `OrqTraceSource.load_async` each own
+their retry layer; this module does not wrap them a second time.
 
 Filter *selection* failing (facet catalogue or classify unavailable) is not fatal —
 mirroring `trace_finder/pipeline.py`'s `filter_selector`, it degrades to no generated
@@ -31,13 +27,12 @@ into a `StageFailure` for the `'population'` stage.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
@@ -53,12 +48,10 @@ from evaluatorq.common.trace_document import TraceDocument, ensure_trace_documen
 from evaluatorq.insights.labeling import MATCH_KEY, prepare_classifier_state
 from evaluatorq.insights.models import ensure_unique_trace_ids
 from evaluatorq.insights.summarize import _build_prompt_with_coverage
-from evaluatorq.trace_finder.compiler import compile_query
 from evaluatorq.trace_finder.export import RunExport
-from evaluatorq.trace_finder.facets import load_facet_catalogue
-from evaluatorq.trace_finder.filter_selector import select_filters_with_response
-from evaluatorq.trace_finder.models import FacetSelection, NumericFilters, Snapshot
+from evaluatorq.trace_finder.models import FacetSelection, NumericFilters, PopulationRequest, Snapshot
 from evaluatorq.trace_finder.orq_source import OrqTraceSource, require_complete_targeted_load
+from evaluatorq.trace_finder.planner import plan_query
 from evaluatorq.trace_finder.projection import serialize_projection
 from evaluatorq.trace_finder.run_store import merge_facets, merge_numeric
 from evaluatorq.trace_finder.settings import effective_settings
@@ -321,21 +314,6 @@ async def _load_traces(
     return documents
 
 
-async def _select_generated_filters(
-    query: str, *, orq: Orq, client: AsyncOpenAI, classifier_model: str, start: datetime, end: datetime
-) -> tuple[FacetSelection, str | None]:
-    """Select generated facet filters for `query`, degrading to none on failure (mirrors `trace_finder/pipeline.py`)."""
-    try:
-        catalogue = await load_facet_catalogue(orq, start=start, end=end, limit=50)
-        result = await select_filters_with_response(client, classifier_model, catalogue, query)
-    except Exception as error:  # noqa: BLE001 - filter selection is best-effort; the query itself still resolves
-        logger.warning(
-            'Insights population filter selection unavailable or incomplete: {}; skipping generated filters', error
-        )
-        return FacetSelection(), str(error)
-    return result.selection, result.error
-
-
 async def _resolve_from_query(
     pop: InsightsPopulation,
     *,
@@ -343,61 +321,82 @@ async def _resolve_from_query(
     client: AsyncOpenAI,
     compiler_model: str,
     classifier_model: str,
+    fast_filter_model: str,
+    filter_selection: Literal['llm', 'llm+jev'],
 ) -> ResolvedPopulation:
     assert pop.query is not None  # noqa: S101 - guarded by the caller's dispatch before this is reached
     start, end = _window(pop)
-
-    # Run the compile and the filter selection concurrently, mirroring
-    # `trace_finder/run_store.py`'s `_plan`. Only the compile task can raise
-    # (`_select_generated_filters` already catches its own failures and
-    # degrades instead); either way, clean up the other task before returning.
-    compile_task = asyncio.create_task(compile_query(client, compiler_model, pop.query))
-    filters_task = asyncio.create_task(
-        _select_generated_filters(
-            pop.query, orq=orq, client=client, classifier_model=classifier_model, start=start, end=end
-        )
+    time_origin = (
+        'explicit'
+        if pop.time_origin == 'explicit' or pop.start is not None or pop.end is not None or pop.window_days != 7
+        else 'default'
     )
-    tasks = (compile_task, filters_task)
+    population = PopulationRequest(
+        start=start,
+        end=end,
+        time_origin=time_origin,
+        facets=pop.facets,
+        numeric=pop.numeric,
+        limit=pop.limit,
+    )
     try:
-        plan, (generated_facets, filter_error) = await asyncio.gather(*tasks)
+        planned = await plan_query(
+            pop.query,
+            population,
+            client=client,
+            orq=orq,
+            compiler_model=compiler_model,
+            filter_selection=filter_selection,
+            classifier_model=classifier_model,
+            fast_filter_model=fast_filter_model,
+        )
     except Exception as error:
-        raise PopulationError(f'compiling the population query failed: {error}') from error
-    finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        raise PopulationError(f'planning the population query failed: {error}') from error
 
-    merged_facets = merge_facets(pop.facets, generated_facets)
-    merged_numeric = merge_numeric(pop.numeric, plan.numeric)
-
+    effective = planned.effective_population
     traces = await _load_traces(
-        orq, start=start, end=end, limit=pop.limit, facets=merged_facets, numeric=merged_numeric
+        orq,
+        start=effective.start,
+        end=effective.end,
+        limit=effective.limit,
+        facets=effective.facets,
+        numeric=effective.numeric,
     )
-
     echo: dict[str, Any] = {
         'mode': 'query',
         'query': pop.query,
+        'filter_selection': filter_selection,
+        'compiler_model': compiler_model,
+        'filter_model': fast_filter_model if filter_selection == 'llm' else classifier_model,
+        'filter_model_role': 'fast/finder.filters' if filter_selection == 'llm' else 'classifier/finder.classifier',
         'compiled_dimensions': [
             {
                 'name': dimension.name,
                 'task': dimension.task.instructions,
                 'selection': dimension.selection.model_dump(mode='json'),
             }
-            for dimension in plan.dimensions
+            for dimension in planned.dimensions
         ],
-        'facets': merged_facets.model_dump(mode='json'),
-        'generated_facets': generated_facets.model_dump(mode='json'),
-        'numeric': merged_numeric.model_dump(mode='json'),
-        'generated_numeric': plan.numeric.model_dump(mode='json'),
-        'start': start.isoformat(),
-        'end': end.isoformat(),
-        'limit': pop.limit,
-        'filter_selection_error': filter_error,
+        'facets': effective.facets.model_dump(mode='json'),
+        'generated_facets': planned.generated_facets.model_dump(mode='json'),
+        'numeric': effective.numeric.model_dump(mode='json'),
+        'generated_numeric': planned.generated_numeric.model_dump(mode='json'),
+        'start': effective.start.isoformat() if effective.start is not None else None,
+        'end': effective.end.isoformat() if effective.end is not None else None,
+        'time_origin': effective.time_origin,
+        'generated_time': (
+            [bound.isoformat() if bound is not None else None for bound in planned.generated_time]
+            if planned.generated_time is not None
+            else None
+        ),
+        'time_provenance': planned.provenance.get('time'),
+        'provenance': dict(planned.provenance),
+        'limit': effective.limit,
+        'filter_selection_error': planned.selector_error,
     }
     return ResolvedPopulation(
         traces=[ensure_trace_document(trace) for trace in traces],
-        compiled=plan.dimensions,
+        compiled=planned.dimensions,
         echo=echo,
         n_scanned=len(traces),
     )
@@ -496,16 +495,13 @@ async def resolve_population(
     client: AsyncOpenAI | None,
     compiler_model: str,
     classifier_model: str,
+    fast_filter_model: str | None = None,
+    filter_selection: Literal['llm', 'llm+jev'] | None = None,
     trace_input_chars: int | None = None,
     label_classifier_model: str | None = None,
     classifier_questions: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
 ) -> ResolvedPopulation:
-    """Resolve `pop` into traces via a local file or the Orq-backed paths — see module docstring.
-
-    `client` and the models are only used on the query path
-    (`compile_query` and `select_filters_with_response`, respectively); the
-    other paths never call the LLM during population selection.
-    """
+    """Resolve `pop` into traces via a local file or the Orq-backed paths."""
     if pop.snapshot_path is not None:
         resolved = _resolve_from_snapshot(pop)
     elif pop.finder_export is not None:
@@ -517,8 +513,16 @@ async def resolve_population(
             raise PopulationError('a query population requires an Orq client')
         if client is None:
             raise PopulationError('a query population requires an LLM client')
+        settings = effective_settings()
+        selected_mode = pop.filter_selection or filter_selection or settings.filter_selection
         resolved = await _resolve_from_query(
-            pop, orq=orq, client=client, compiler_model=compiler_model, classifier_model=classifier_model
+            pop,
+            orq=orq,
+            client=client,
+            compiler_model=compiler_model,
+            classifier_model=classifier_model,
+            fast_filter_model=fast_filter_model or role_model('fast', task='finder.filters'),
+            filter_selection=selected_mode,
         )
     else:
         if orq is None:

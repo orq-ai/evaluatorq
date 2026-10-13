@@ -303,7 +303,7 @@ async def test_select_filters_turns_exhausted_retries_into_domain_error(monkeypa
         await select_filters(cast(Any, object()), 'typesafe/jev-latest', catalogue(), 'find errors')
 @pytest.mark.asyncio
 async def test_llm_selector_returns_only_catalogue_values_and_numeric_filters(monkeypatch) -> None:
-    from datetime import UTC, datetime
+    from datetime import datetime, timezone
 
     from evaluatorq.common.structured_output import StructuredResult
     from evaluatorq.trace_finder.models import NumericFilters
@@ -329,6 +329,7 @@ async def test_llm_selector_returns_only_catalogue_values_and_numeric_filters(mo
                     'duration_ms_min': None,
                     'duration_ms_max': None,
                 },
+                'calendar_day': True,
                 'start': '2025-01-01T00:00:00Z',
                 'end': '2025-01-02T00:00:00Z',
             }),
@@ -340,21 +341,24 @@ async def test_llm_selector_returns_only_catalogue_values_and_numeric_filters(mo
         cast(Any, object()),
         'fast-model',
         FacetCatalogue(project=('Demos', 'Other')),
-        'Demos over 20k tokens',
-        now=datetime(2025, 1, 1, tzinfo=UTC),
+        'Demos over 20k tokens yesterday',
+        now=datetime(2025, 1, 1, tzinfo=timezone.utc),
     )
 
     assert result.selection.project == frozenset({'Demos'})
-    assert result.numeric == NumericFilters(tokens_min=20_000)
+    assert result.numeric == NumericFilters(tokens_min=20_001)
     assert result.time is not None
+    assert result.time.start is not None
     assert result.time.start.isoformat() == '2025-01-01T00:00:00+00:00'
+    assert result.time.end is not None
     assert result.time.end.isoformat() == '2025-01-02T00:00:00+00:00'
+    assert result.time.calendar_day is True
     assert result.usage is None
     assert calls[0]['api'] == 'responses'
 
 @pytest.mark.asyncio
 async def test_llm_selector_rejects_values_outside_the_catalogue(monkeypatch) -> None:
-    from datetime import UTC, datetime
+    from datetime import datetime, timezone
 
     calls = 0
 
@@ -377,6 +381,7 @@ async def test_llm_selector_rejects_values_outside_the_catalogue(monkeypatch) ->
                     'duration_ms_min': None,
                     'duration_ms_max': None,
                 },
+                'calendar_day': False,
                 'start': None,
                 'end': None,
             },
@@ -391,6 +396,6 @@ async def test_llm_selector_rejects_values_outside_the_catalogue(monkeypatch) ->
             'fast-model',
             FacetCatalogue(project=('Demos',)),
             'Demos',
-            now=datetime(2025, 1, 1, tzinfo=UTC),
+            now=datetime(2025, 1, 1, tzinfo=timezone.utc),
         )
     assert calls == 2

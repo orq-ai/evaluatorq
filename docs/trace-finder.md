@@ -65,7 +65,7 @@ On `/traces`, press `/` to focus and select Ask AI, `?` to open the keyboard sho
 Above the table, **Ask AI** plans a natural-language question and creates zero to three classifier dimensions. Traces with dimensions get one classifier call per trace that evaluates them all; a zero-dimension plan makes no per-trace classifier calls:
 
 1. You enter a question, such as `Conversations over 20k tokens where the customer was frustrated.`
-2. Two model calls plan the run concurrently. The compiler extracts numeric constraints for total tokens or duration and creates zero to three classifier dimensions: short-named questions to ask of each trace, such as **Frustrated** or **Refund**. It creates no dimension only when every part of the question is a numeric bound or an exact metadata value; descriptive phrases such as `coding agents` become dimensions because they require reading the trace. A question that filters alone can answer, such as `Any traces above 50k tokens`, gets no dimension, and no trace is sent to the classifier. A separate facet-selection call picks categorical metadata filters from the live facet catalogue. Boolean selections accept either `yes`/`no` or `true`/`false` labels.
+2. The compiler runs first, producing zero to three named classifier dimensions, numeric constraints for total tokens or duration, and (when requested) calendar bounds. The filter selector then uses the live catalogue of up to 50 values per facet to choose metadata filters; the two steps are sequential, not concurrent. Choose **LLM only** to have the configured fast `finder.filters` model select facets, numeric bounds and time bounds, or **LLM + Jev** to use the configured `finder.classifier` for facets while the compiler supplies numeric and calendar bounds. Both modes use the same compiler for dimensions. Literal-name assistance recognizes `model X`, `provider X`, `agent X`, `tool X`, `project X`, slash-qualified model names, and quoted values; a name outside the catalogue is used only after an exact scoped trace query confirms it. Boolean selections accept either `yes`/`no` or `true`/`false` labels.
 3. The finder merges those selections with any filters you chose explicitly and builds an OQL query. The base filter excludes `generate_content` operations, so the compiler and classifier traces do not crowd the population being searched. A model or provider filter drops the base filter, because a bare model call is itself a `generate_content` trace and would otherwise never match.
 4. The classifier judges each projected trace through evaluatorq, asking every dimension in one classify call per trace. A trace is included only when it matches every dimension. Results stream into one table column per dimension as each trace finishes, including the final poll after the run ends. With zero dimensions, every trace the filters keep is included without a classifier call.
 
@@ -107,14 +107,14 @@ flowchart TD
 
 ### 1. Plan
 
-Two model calls run **concurrently**, so a slow facet catalogue does not wait for semantic compilation.
+The compiler runs before facet selection, so the selector can use its generated time bounds when loading values. Each request supplies up to 50 values per facet for its selected time window. Candidate extraction is limited to eight values from `model`, `provider`, `agent`, `tool`, or `project` mentions, slash-qualified model names, and quoted strings up to 100 characters. A candidate outside the catalogue is added only when an exact trace query confirms a match in the effective window.
 
 | Step | Produces |
 |---|---|
 | **Compiler** | Zero to three named classifier dimensions, each with a question and match rule, plus [numeric bounds](#numeric-ranges) for total tokens and duration. |
-| **Facet selector** | Categorical metadata filters picked from the live [facet catalogue](#facets) in one classify request. |
+| **Facet selector** | Categorical metadata filters from the live [facet catalogue](#facets), using either the `llm` structured selector or `llm+jev` classifier mode. |
 
-The facet selector asks one question per non-empty facet dimension. When your query names several available values in one dimension, it asks a yes/no question for each named value in the same round trip.
+In `llm+jev` mode, the facet selector asks one question per non-empty facet dimension. When your query names several available values in one dimension, it asks a yes/no question for each named value in the same request. The `llm` mode uses structured output instead.
 
 ### 2. Fetch the population
 
@@ -176,7 +176,7 @@ Filter chips in the toolbar show the categorical and numeric filters in play, wh
 
 ### Facets
 
-The facet selector picks categorical metadata from the live catalogue. The catalogue follows the current search window. The eight categorical facets and their OQL fields:
+The facet selector picks categorical metadata from the live catalogue. The catalogue follows the current search window. Successful catalogues are cached for five minutes. Cache entries are isolated by Orq host, credentials, workspace/project scope and limit; explicit windows use exact bounds, while default-window entries are grouped by window duration. The eight categorical facets and their OQL fields:
 
 | Finder facet | OQL field | Meaning |
 |---|---|---|
@@ -201,6 +201,8 @@ The compiler, not the classifier, extracts numeric bounds. Classify tasks return
 
 The CLI and dashboard also accept minimum and maximum bounds explicitly.
 
+Generated whole-calendar-day filters use an exclusive next-day UTC-midnight end. Requests that specify a clock time keep that exact instant. During LLM selector reselection, the planner canonicalizes selector-produced ends at exactly `23:59:59` or `23:59:59.999999` to next midnight only when the structured plan marks the request as a whole-calendar-day interval; other clock values and caller-supplied bounds are unchanged.
+
 ## Settings and precedence
 
 The dashboard **Settings** page at `/settings` has separate **Models** and **Authentication** sections. Models contains the four model roles: fast, smart, classifier and embedding. **Ask AI on traces** controls whether Ask AI on **Traces** classifies immediately (**Just proceed**, the default) or pauses on the compiled plan (**Review first**); runs over 500 loaded traces always pause for review. Save settings to `.evaluatorq/dashboard-settings.json`, or set `EVALUATORQ_DASHBOARD_SETTINGS` to another JSON file. The separate Trace search page has per-run window, limit, and parallelism controls; environment variables and saved settings provide their defaults. On Traces, the toolbar range and row limit drive New search, while Within results classifies every loaded trace across tabs and pages.
@@ -209,7 +211,7 @@ Authentication offers four sources for dashboard requests: **Environment** reads
 
 Under **CLI OAuth**, choose a signed-in server, then a workspace and optionally a project from that workspace. The workspace and project lists load after the page opens; a signed-out server cannot supply choices. Saving checks that the selected project still belongs to the selected workspace and uses that scope for dashboard trace requests. Leave the project at **All projects** to search the selected workspace without a project restriction. Other authentication methods search all projects accessible to their credential unless you choose a project facet for a run. For runs without an experiment URL, the selected CLI OAuth workspace supplies trace links; otherwise set `ORQ_WORKSPACE` as a link fallback. Pass `--project` to choose a project facet for one `eq find` run. An explicit `--profile NAME` overrides the saved choice; without that flag, `eq find` uses the saved profile only when **CLI API-key profile** is selected in Settings, and otherwise uses `ORQ_API_KEY` and `ORQ_BASE_URL`. The dashboard's OAuth and manually entered API-key methods do not change credentials used by `eq find`.
 
-Models resolve through the roles described under [Configuration › Models](configuration.md#models): the compiler runs on the `fast` role (`openai/gpt-6-luna` by default) and the classifier on the `classifier` role (`typesafe/jev-latest`). The `finder.compiler` and `finder.classifier` tasks pin either one alone. For the finder's other settings, values resolve from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, then built-in defaults. Trace search window, limit, and parallelism are set per run; Settings edits the model roles and Ask AI review mode. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
+Models resolve through the roles described under [Configuration › Models](configuration.md#models): the compiler uses the configured `fast` role (`openai/gpt-6-luna` by default) and the classifier uses the configured `classifier` role (`typesafe/jev-latest` by default). Task overrides can change `finder.compiler` and `finder.classifier` independently. For the finder's other settings, values resolve from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, then built-in defaults. Trace search window, limit, and parallelism are set per run; Settings edits the model roles and Ask AI review mode. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
 
 | Setting | Default | Environment variable |
 |---|---|---|
@@ -220,9 +222,11 @@ Models resolve through the roles described under [Configuration › Models](conf
 
 | Trace search parallelism default | 100 (max 200) | `EVALUATORQ_FINDER_PARALLELISM` |
 
-Natural-language metadata filters use the saved **Trace filters** setting, which defaults to **LLM + Jev**. Choose **LLM only** to use the configured fast `finder.filters` task instead. The command-line override `--filter-selection llm|llm+jev` applies to `eq find` and query-based `eq insights`. Neither mode changes compiler/classifier dimensions: `llm` selects facets and numeric bounds with the fast role; `llm+jev` uses the configured `finder.classifier` role for facet selection.
+Natural-language metadata filters have exactly two modes. **LLM only** uses the configured fast `finder.filters` task to select facets, numeric bounds and time bounds. **LLM + Jev** uses the configured `finder.classifier` task for facets; the compiler supplies numeric bounds and calendar bounds in both modes. The mode setting defaults to `llm+jev` and can be overridden for `eq find` and query-based `eq insights` with `--filter-selection llm|llm+jev`. Neither mode changes the compiler's semantic dimensions.
 
-Generated calendar bounds replace the default search window; explicit window controls remain authoritative. `eq find --window-days` marks its window explicit only when supplied, while an omitted option keeps the configured window as a default so a question can narrow it. On the dashboard, the initial date window is a default; choosing a preset or applying exact dates makes it explicit. Within-results questions only narrow the already-loaded rows and do not reload a broader population.
+Query-generated calendar bounds are restricted to the rolling 30 days ending at the planner's current time. For a default window, generated bounds replace the default search window, and an open generated bound uses the corresponding edge of that 30-day window. Explicit window controls remain authoritative: `eq find --window-days` is explicit only when supplied, and on the dashboard the initial date window is a default while a chosen preset or applied exact dates is explicit. Within-results questions narrow only the already-loaded rows and do not reload a broader population.
+
+Facet selection uses at most 50 values returned for each facet in the selected time window. Explicitly named values outside that catalogue are considered only when they match the supported literal forms (including quoted values) and an exact query confirms a trace in the effective window. A catalogue, selector, or reselection failure does not broaden the search with stale or unverified generated filters; the planner fails closed for the affected population selection.
 
 `EVALUATORQ_COMPILER_MODEL` still works as a deprecated override for the `finder.compiler` task and logs a warning once per process.
 
@@ -236,7 +240,7 @@ The command cancels a run that has not finished after two hours of planning and 
 
 ```bash
 export ORQ_API_KEY=...
-eq find "customers asking for a refund" --compiler-model openai/gpt-5.6-luna --classifier-model typesafe/jev-latest --window-days 7 --limit 500 --parallelism 100 --json finder.json
+eq find "customers asking for a refund" --compiler-model openai/gpt-6-luna --classifier-model typesafe/jev-latest --window-days 7 --limit 500 --parallelism 100 --json finder.json
 ```
 
 For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same diagnostics in CLI and dashboard runs.

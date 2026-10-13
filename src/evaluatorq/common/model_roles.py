@@ -51,6 +51,7 @@ TASKS: dict[str, Role] = {
     'insights.labels': 'classifier',
     'insights.embedding': 'embedding',
     'signals': 'classifier',
+    'apply': 'smart',
 }
 # Env vars from before roles existed, still honoured as task overrides.
 LEGACY_TASK_ENV: dict[str, str] = {

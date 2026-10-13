@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -14,7 +13,6 @@ from evaluatorq.common.trace_document import TraceDocument, ensure_trace_documen
 from evaluatorq.insights import population as population_module
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.population import PopulationError, resolve_population
-from evaluatorq.trace_finder.compiler import CompiledPlan
 from evaluatorq.trace_finder.export import (
     ExportCounts,
     ExportDimension,
@@ -26,16 +24,16 @@ from evaluatorq.trace_finder.export import (
     ExportValuesSelection,
     RunExport,
 )
-from evaluatorq.trace_finder.filter_selector import FilterSelectionResult
 from evaluatorq.trace_finder.models import (
     CompiledQuery,
-    FacetCatalogue,
     FacetSelection,
     NumericFilters,
+    PopulationRequest,
     Snapshot,
     TraceRecord,
     ValueSelection,
 )
+from evaluatorq.trace_finder.planner import PlanningResult
 
 
 def make_trace(trace_id: str, *, span_id: str | None = None, content: str = 'hello') -> TraceRecord:
@@ -422,55 +420,9 @@ async def test_invalid_local_snapshot_reports_population_failure(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_query_path_merges_explicit_facets_and_numeric_over_generated(monkeypatch: pytest.MonkeyPatch) -> None:
-    from evaluatorq.common.judge import ClassifyQuestion
-
-    compiled_query = CompiledQuery(
-        task=ClassifyQuestion(
-            kind='choice', instructions='classify', criteria={'billing': 'billing help', 'technical': 'tech help'}, state={}
-        ),
-        selection=ValueSelection(kind='values', values=('billing',)),
-    )
-
-    async def fake_compile_query(client: Any, model: str, query: str, *, cfg: Any = None) -> CompiledPlan:
-        return CompiledPlan(dimensions=(compiled_query,), numeric=NumericFilters(tokens_min=5, tokens_max=100))
-
-    async def fake_load_facet_catalogue(orq: Any, *, start: Any, end: Any, limit: int) -> FacetCatalogue:
-        return FacetCatalogue()
-
-    async def fake_select_filters_with_response(
-        client: Any, model: str, catalogue: FacetCatalogue, query: str, *, cfg: Any = None
-    ) -> FilterSelectionResult:
-        return FilterSelectionResult(FacetSelection(agent_name=frozenset({'generated-bot'}), model=frozenset({'gpt-5'})))
-
-    monkeypatch.setattr(population_module, 'compile_query', fake_compile_query)
-    monkeypatch.setattr(population_module, 'load_facet_catalogue', fake_load_facet_catalogue)
-    monkeypatch.setattr(population_module, 'select_filters_with_response', fake_select_filters_with_response)
-    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
-    FakeSource.snapshot = Snapshot(traces=(make_trace('t1'),))
-
-    # Explicit agent_name wins over generated; explicit tokens_min is unset so the generated bound wins.
-    pop = InsightsPopulation(
-        query='refund requests', facets=FacetSelection(agent_name=frozenset({'explicit-bot'})), limit=50
-    )
-    resolved = await resolve_population(
-        pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
-    )
-
-    assert resolved.compiled == (compiled_query,)
-    assert resolved.echo['compiled_dimensions'][0]['name'] == 'AI match'
-    call = FakeSource.calls[0]
-    assert call['facets'].agent_name == frozenset({'explicit-bot'})
-    assert call['facets'].model == frozenset({'gpt-5'})
-    assert call['numeric'].tokens_min == 5
-    assert call['numeric'].tokens_max == 100
-    assert resolved.echo['mode'] == 'query'
-    assert resolved.echo['query'] == 'refund requests'
-
-
-@pytest.mark.asyncio
-async def test_query_path_degrades_when_filter_selection_fails(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize('mode', ['llm', 'llm+jev'])
+async def test_query_path_uses_shared_planner_and_generated_default_time(
+    mode: Literal['llm', 'llm+jev'], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from evaluatorq.common.judge import ClassifyQuestion
 
@@ -480,41 +432,150 @@ async def test_query_path_degrades_when_filter_selection_fails(
         ),
         selection=ValueSelection(kind='values', values=('billing',)),
     )
+    generated = (
+        datetime(2026, 9, 2, tzinfo=timezone.utc),
+        datetime(2026, 9, 8, tzinfo=timezone.utc),
+    )
+    generated_facets = FacetSelection(agent_name=frozenset({'generated-bot'}), model=frozenset({'gpt-5'}))
 
-    async def fake_compile_query(client: Any, model: str, query: str, *, cfg: Any = None) -> CompiledPlan:
-        return CompiledPlan(dimensions=(compiled_query,), numeric=NumericFilters())
-
-    async def unavailable_catalogue(orq: Any, *, start: Any, end: Any, limit: int) -> FacetCatalogue:
-        raise RuntimeError('facet service unavailable')
-
-    monkeypatch.setattr(population_module, 'compile_query', fake_compile_query)
-    monkeypatch.setattr(population_module, 'load_facet_catalogue', unavailable_catalogue)
-    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
-    FakeSource.snapshot = Snapshot(traces=())
-
-    pop = InsightsPopulation(query='refund requests', limit=50)
-
-    with caplog.at_level('WARNING'):
-        resolved = await resolve_population(
-            pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
+    async def fake_plan(
+        query: str, population: PopulationRequest, **kwargs: Any
+    ) -> PlanningResult:
+        assert query == 'refund requests'
+        assert kwargs['filter_selection'] == mode
+        assert population.time_origin == 'default'
+        effective = population.model_copy(update={
+            'start': generated[0],
+            'end': generated[1],
+            'time_origin': 'explicit',
+            'facets': FacetSelection(agent_name=frozenset({'explicit-bot'}), model=frozenset({'gpt-5'})),
+            'numeric': NumericFilters(tokens_min=5, tokens_max=100),
+        })
+        return PlanningResult(
+            dimensions=(compiled_query,),
+            generated_facets=generated_facets,
+            generated_numeric=NumericFilters(tokens_min=5, tokens_max=100),
+            generated_time=generated,
+            effective_population=effective,
+            selector_response=None,
+            selector_error=None,
+            provenance={'filter_mode': mode, 'time': 'query'},
+            usage={},
         )
 
+    monkeypatch.setattr(population_module, 'plan_query', fake_plan)
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=(make_trace('t1'),))
+    pop = InsightsPopulation(
+        query='refund requests',
+        facets=FacetSelection(agent_name=frozenset({'explicit-bot'})),
+        filter_selection=mode, limit=50
+    )
+    resolved = await resolve_population(
+        pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
+    )
+
     assert resolved.compiled == (compiled_query,)
-    assert resolved.echo['filter_selection_error'] == 'facet service unavailable'
-    assert 'facet service unavailable' in caplog.text
+    assert resolved.echo['filter_selection'] == mode
+    assert resolved.echo['filter_selection_error'] is None
+    assert resolved.echo['filter_model_role'] == (
+        'fast/finder.filters' if mode == 'llm' else 'classifier/finder.classifier'
+    )
+    assert resolved.echo['generated_time'] == [bound.isoformat() for bound in generated]
+    assert resolved.echo['time_provenance'] == 'query'
+    assert resolved.echo['time_origin'] == 'explicit'
+    call = FakeSource.calls[0]
+    assert (call['start'], call['end']) == generated
+    assert call['facets'].agent_name == frozenset({'explicit-bot'})
+    assert call['facets'].model == frozenset({'gpt-5'})
+    assert call['numeric'] == NumericFilters(tokens_min=5, tokens_max=100)
 
 
 @pytest.mark.asyncio
-async def test_query_path_compile_failure_raises_population_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def failing_compile_query(client: Any, model: str, query: str, *, cfg: Any = None) -> CompiledPlan:
+async def test_query_path_preserves_explicit_window_and_selector_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    explicit = (
+        datetime(2026, 9, 3, tzinfo=timezone.utc),
+        datetime(2026, 9, 7, tzinfo=timezone.utc),
+    )
+    generated = (datetime(2026, 9, 1, tzinfo=timezone.utc), datetime(2026, 9, 9, tzinfo=timezone.utc))
+
+    async def fake_plan(query: str, population: PopulationRequest, **kwargs: Any) -> PlanningResult:
+        assert kwargs['filter_selection'] == 'llm'
+        assert population.time_origin == 'explicit'
+        return PlanningResult(
+            dimensions=(),
+            generated_facets=FacetSelection(),
+            generated_numeric=NumericFilters(),
+            generated_time=generated,
+            effective_population=population,
+            selector_response=None,
+            selector_error='selector unavailable',
+            provenance={'time': 'explicit', 'filter_mode': 'llm'},
+            usage={},
+        )
+
+    monkeypatch.setattr(population_module, 'plan_query', fake_plan)
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=())
+    pop = InsightsPopulation(
+        query='refund requests', start=explicit[0], end=explicit[1], time_origin='explicit', filter_selection='llm'
+    )
+    resolved = await resolve_population(
+        pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
+    )
+
+    assert (FakeSource.calls[0]['start'], FakeSource.calls[0]['end']) == explicit
+    assert resolved.echo['generated_time'] == [bound.isoformat() for bound in generated]
+    assert resolved.echo['time_provenance'] == 'explicit'
+    assert resolved.echo['filter_selection_error'] == 'selector unavailable'
+
+
+@pytest.mark.asyncio
+async def test_query_path_planner_failure_raises_population_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def failing_plan(*args: Any, **kwargs: Any) -> PlanningResult:
         raise ValueError('the compiler produced no structured document')
 
-    monkeypatch.setattr(population_module, 'compile_query', failing_compile_query)
+    monkeypatch.setattr(population_module, 'plan_query', failing_plan)
     pop = InsightsPopulation(query='refund requests', limit=50)
 
-    with pytest.raises(PopulationError, match='compiling the population query failed'):
+    with pytest.raises(PopulationError, match='planning the population query failed'):
         await resolve_population(pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier')
 
+
+@pytest.mark.asyncio
+async def test_query_path_marks_an_explicit_window_days_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_plan(query: str, population: PopulationRequest, **kwargs: Any) -> PlanningResult:
+        seen.update(population=population, kwargs=kwargs)
+        return PlanningResult(
+            dimensions=(),
+            generated_facets=FacetSelection(),
+            generated_numeric=NumericFilters(),
+            generated_time=None,
+            effective_population=population,
+            selector_response=None,
+            selector_error=None,
+            provenance={'time': 'explicit'},
+            usage={},
+        )
+
+    monkeypatch.setattr(population_module, 'plan_query', fake_plan)
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=())
+    await resolve_population(
+        InsightsPopulation(query='refund requests', window_days=14, time_origin='explicit'),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+    )
+
+    population = seen['population']
+    assert population.time_origin == 'explicit'
+    assert population.end - population.start == timedelta(days=14)
 
 @pytest.mark.asyncio
 async def test_loader_failure_raises_population_error(monkeypatch: pytest.MonkeyPatch) -> None:

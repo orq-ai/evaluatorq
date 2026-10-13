@@ -135,6 +135,7 @@ def range_inputs(
         f'<input id="explorer-range-mode" type="hidden" name="range_mode" value="{range_mode}" form="explorer-load-form" hx-preserve data-explorer-range-mode>'
         f'<input id="explorer-range-seconds" type="hidden" name="range_seconds" value="{range_seconds}" form="explorer-load-form" hx-preserve data-explorer-range-seconds>'
         f'<input id="explorer-time-origin" type="hidden" name="time_origin" value="{initial_origin}" form="explorer-load-form" hx-preserve data-explorer-time-origin>'
+        f'<input type="hidden" name="window_days" value="{window_days}" form="explorer-load-form">'
         '<input type="hidden" name="tz_offset" form="explorer-load-form" data-explorer-tz>'
         f'<details class="xr-time-menu"><summary><span class="xr-time-label" data-explorer-range-label>Custom range</span></summary><div class="xr-time-options"><span class="xr-presets" role="group" aria-label="Relative range">{presets}</span>'
         '<details class="xr-exact"><summary>Custom range</summary><div class="xr-range-fields">'
