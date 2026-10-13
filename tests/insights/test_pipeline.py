@@ -217,6 +217,13 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
     assert manifest.stage_labels['dimension:intent'] == 'Cluster and map intent'
     assert manifest.parallelism == 100
     assert run.cost_by_stage == {}
+    saved = InsightsRun.model_validate_json(files[0].read_text())
+    assert saved.stage_history is not None
+    assert saved.stage_history.planned_stages == manifest.planned_stages
+    history = {record.name: record for record in saved.stage_history.stages}
+    assert history['write'].status.value == 'completed'
+    assert history['write'].ended_at is not None
+    assert {record.status.value for record in history.values()} == {'completed'}
 
 
 _ORQ_SCOPE = {

@@ -26,6 +26,7 @@ from evaluatorq.insights.models import (
     DimensionResult,
     InsightsConfig,
     InsightsRun,
+    InsightsStageHistory,
     LabelAnswer,
     LabelResult,
     LabelSpec,
@@ -594,6 +595,45 @@ def test_insights_overview_shows_saved_stage_progress(tmp_path, monkeypatch):
     failed = client.get('/insights')
     assert 'Summarize traces: error' in failed.text
     assert 'Save run: skipped' in failed.text
+
+
+def test_overview_rebuilds_stages_for_a_run_without_a_sidecar_manifest(tmp_path, minimal_run, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _write_run(tmp_path, minimal_run)
+
+    response = TestClient(build_app()).get('/insights')
+
+    assert response.status_code == 200
+    assert 'Stage history unavailable' not in response.text
+    assert 'Summarize traces: completed' in response.text
+    assert 'Cluster and map intent: completed' in response.text
+    assert 'Save run: completed' in response.text
+
+
+def test_sidecar_manifest_wins_over_the_stored_stage_history(tmp_path, minimal_run, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    now = datetime.now(timezone.utc)
+    minimal_run.stage_history = InsightsStageHistory(
+        planned_stages=['population'],
+        stage_labels={'population': 'Stored stage'},
+        stages=[StageRecord(name='population', status=ManifestStatus.COMPLETED, started_at=now, ended_at=now)],
+    )
+    _write_run(tmp_path, minimal_run)
+    writer = start_manifest(
+        run_id=minimal_run.run_id,
+        surface='insights',
+        run_name=minimal_run.run_name,
+        runs_dir=tmp_path / 'insights-runs',
+        planned_stages=['population', 'write'],
+        stage_labels={'population': 'Sidecar stage', 'write': 'Save run'},
+    )
+    writer.start_stage('population')
+    writer.end_stage('population')
+
+    response = TestClient(build_app()).get('/insights')
+
+    assert 'Sidecar stage: completed' in response.text
+    assert 'Stored stage' not in response.text
 
 
 def test_insights_overview_opens_a_dedicated_run_page(tmp_path, minimal_run, monkeypatch):
