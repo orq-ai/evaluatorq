@@ -3766,6 +3766,47 @@ _PAIRWISE_REPORT_CSS = """
 }
 """
 
+_PAIRWISE_COMPARISONS_CSS = """
+.pw-row-list { --pw-a: #7e22ce; --pw-b: #0092ab; --pw-tie: var(--amber-600); --pw-none: var(--text-faint); }
+.pw-report .pw-strip { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 4px; }
+.pw-report .pw-dot { width: 14px; height: 14px; border-radius: 3px; display: inline-block; box-sizing: border-box; }
+.pw-report .pw-dot.is-split { box-shadow: inset 0 0 0 2px var(--surface-card); outline: 2px solid currentColor; outline-offset: -2px; }
+.pw-report .pw-legend { font-size: 11px; color: var(--text-muted); display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
+.pw-report .pw-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+.pw-report .pw-cmp-table { width: 100%; border-collapse: collapse; }
+.pw-report .pw-cmp-table thead th { text-align: left; font-size: 11px; color: var(--text-muted); font-weight: 600; padding: 6px 8px; }
+.pw-report .pw-cmp-group > tr > td { padding: 0; border-top: 1px solid var(--border-subtle); }
+.pw-report .pw-th-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.pw-report .pw-cmp-summary { display: grid; grid-template-columns: 44px minmax(0, 1fr) 130px minmax(0, 1.4fr) auto; gap: 10px; align-items: center; padding: 8px; cursor: pointer; list-style: none; }
+.pw-report .pw-cmp-summary::-webkit-details-marker { display: none; }
+.pw-report .pw-cmp-summary:hover { background: var(--surface-sunken); }
+.pw-report .pw-cmp-n { font-family: var(--font-mono); color: var(--text-muted); font-size: 12px; }
+.pw-report .pw-cmp-q { overflow-wrap: anywhere; font-size: 13px; }
+.pw-report .pw-cmp-detail { padding: 12px 8px 16px; background: var(--surface-sunken); }
+.pw-report .pw-cmp-detail:empty { display: none; }
+.pw-report .pw-panes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pw-report .pw-pane { background: var(--surface-card); border: 1px solid var(--border-subtle); border-top: 3px solid var(--c); border-radius: 8px; padding: 10px 14px; font-size: 13px; line-height: 1.5; }
+.pw-report .pw-pane h4 { margin: 0 0 6px; font-size: 12px; color: var(--c); }
+.pw-report .pw-pane-body { white-space: pre-wrap; max-height: 320px; overflow: auto; overflow-wrap: anywhere; }
+.pw-report .pw-votes { list-style: none; margin: 14px 0 0; padding: 0; }
+.pw-report .pw-vote { padding: 10px 0; border-top: 1px solid var(--border-subtle); font-size: 13px; }
+.pw-report .pw-vote-head { font-weight: 600; color: var(--text-strong); }
+.pw-report .pw-flip { color: var(--red-600); font-weight: 600; margin-left: 8px; font-size: 12px; }
+.pw-report .pw-standin { color: var(--text-muted); font-weight: 400; margin-left: 6px; font-size: 12px; }
+.pw-report .pw-passes { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-top: 4px; color: var(--text-muted); font-size: 12.5px; }
+.pw-report .pw-passes b { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; color: var(--text-faint); font-weight: 600; margin-right: 6px; }
+.pw-report .pw-chiprow { display: flex; gap: 6px; flex-wrap: wrap; }
+.pw-report .pw-vchip { font-size: 11px; font-weight: 600; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--c); color: var(--c); white-space: nowrap; }
+.pw-report .pw-vchip.is-none { --c: var(--text-faint); text-decoration: line-through; }
+.pw-report .pw-pager { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+.pw-report .pw-pager-btn { background: none; border: 1px solid var(--border-subtle); border-radius: 6px; padding: 2px 10px; font: inherit; cursor: pointer; }
+.pw-report .pw-pager-btn:disabled { opacity: .45; cursor: default; }
+@media (max-width: 760px) {
+  .pw-report .pw-panes, .pw-report .pw-passes { grid-template-columns: 1fr; }
+  .pw-report .pw-cmp-summary { grid-template-columns: 36px minmax(0, 1fr); }
+}
+"""
+
 DASHBOARD_CSS = (
     _DASHBOARD_CSS_HEAD
     + _TAB_RULES
@@ -3782,4 +3823,5 @@ DASHBOARD_CSS = (
     + _INSIGHTS_CSS
     + _COMPRESSION_INSPECTOR_CSS
     + _PAIRWISE_REPORT_CSS
+    + _PAIRWISE_COMPARISONS_CSS
 )
