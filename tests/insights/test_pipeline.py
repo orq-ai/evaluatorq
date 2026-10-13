@@ -217,6 +217,13 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
     assert manifest.stage_labels['dimension:intent'] == 'Cluster and map intent'
     assert manifest.parallelism == 100
     assert run.cost_by_stage == {}
+    saved = InsightsRun.model_validate_json(files[0].read_text())
+    assert saved.stage_history is not None
+    assert saved.stage_history.planned_stages == manifest.planned_stages
+    history = {record.name: record for record in saved.stage_history.stages}
+    assert history['write'].status.value == 'completed'
+    assert history['write'].ended_at is not None
+    assert {record.status.value for record in history.values()} == {'completed'}
 
 
 _ORQ_SCOPE = {
@@ -578,6 +585,11 @@ async def test_saved_callback_that_raises_is_attempted_only_once(
     manifests = list_manifests(tmp_path)
     assert len(manifests) == 1
     assert manifests[0].status.value == 'error'
+    saved_runs = [InsightsRun.model_validate_json(path.read_text()) for path in tmp_path.glob('insights_*.json')]
+    saved = next(saved_run for saved_run in saved_runs if saved_run.status == 'error')
+    assert saved.stage_history is not None
+    write = next(record for record in saved.stage_history.stages if record.name == 'write')
+    assert write.status.value == 'error'
 
 
 @pytest.mark.asyncio

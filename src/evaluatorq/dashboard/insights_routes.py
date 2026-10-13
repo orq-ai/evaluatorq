@@ -85,6 +85,7 @@ from evaluatorq.insights.estimate import StageModels, estimate_run, stage_second
 from evaluatorq.insights.models import InsightsRun, LabelSpec, label_key, population_source, reads_orq
 from evaluatorq.insights.population import PopulationError, preview_snapshot, projection_coverage, snapshot_documents
 from evaluatorq.insights.presets import CODING_CONVERSATION_LABELS, CODING_LABELS, LABEL_PRESETS, SENTIMENT
+from evaluatorq.insights.progress import run_manifest_for
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 from evaluatorq.local_sessions import (
     MAX_SELECTED_SESSIONS,
@@ -179,6 +180,10 @@ def _entries(
         loaded.setdefault(alias, target)
     manifests = list_manifests(directory)
     manifest_by_id = {manifest.run_id: manifest for manifest in manifests if manifest.surface.value == 'insights'}
+    # Runs saved without a sidecar manifest still show their stages: rebuilt from the run file.
+    for _, run in loaded.values():
+        if isinstance(run, InsightsRun) and run.run_id not in manifest_by_id:
+            manifest_by_id[run.run_id] = run_manifest_for(run)
     known = {item[0] for item in entries}
     manifest_entries = []
     for manifest in manifests:
