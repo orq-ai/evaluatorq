@@ -1306,7 +1306,20 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             return _html(await _explorer_html(req, error=rejected))
         keys = tuple(key for key in _form_values(form, 'columns') if key in COLUMNS)
         saved = load_settings()
-        await asyncio.to_thread(save_settings, saved.model_copy(update={'explorer_columns': keys}))
+        try:
+            await asyncio.to_thread(
+                save_settings,
+                saved.model_copy(update={'explorer_columns': keys}),
+                changed_fields={'explorer_columns'},
+            )
+        except (OSError, ValueError) as exc:
+            logger.warning('Could not save explorer columns: {}', type(exc).__name__)
+            return _html(
+                await _explorer_html(
+                    req,
+                    error='Could not save columns because the settings file is unreadable or invalid. Fix or restore the JSON settings file, then try again.',
+                )
+            )
         req.app.state.finder_settings = _settings(req.app).model_copy(update={'explorer_columns': keys})
         return _html(await _explorer_html(req))
 

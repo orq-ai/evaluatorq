@@ -34,9 +34,8 @@ def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
 
     save_settings(settings, path)
 
-    assert load_settings(path) == settings
+    assert load_settings(path).model_dump() == settings.model_dump()
     assert json.loads(path.read_text()) == settings.model_dump()
-
 
 
 def test_older_settings_files_inherit_default_trace_input_cap(tmp_path: Path) -> None:
@@ -46,6 +45,7 @@ def test_older_settings_files_inherit_default_trace_input_cap(tmp_path: Path) ->
     settings = load_settings(path)
 
     assert settings.trace_input_chars == 500_000
+
 
 def test_save_keeps_original_error_if_temporary_cleanup_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def fail_replace(self: Path, target: Path) -> None:
@@ -74,8 +74,19 @@ def test_invalid_settings_file_warns_and_returns_defaults(tmp_path: Path, caplog
     with caplog.at_level('WARNING'):
         settings = load_settings(path)
 
-    assert settings == DashboardSettings.model_validate({})
+    assert settings.model_dump() == DashboardSettings.model_validate({}).model_dump()
     assert 'Could not load dashboard settings' in caplog.text
+
+
+def test_save_loaded_malformed_file_fails_without_changing_bytes(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    original = b'{ malformed settings\n'
+    path.write_bytes(original)
+
+    with pytest.raises(ValueError):
+        save_settings(load_settings(path).with_updates({'fast_model': 'edited/fast'}), path)
+
+    assert path.read_bytes() == original
 
 
 def test_invalid_known_setting_warns_with_field_and_error_type_without_value(tmp_path: Path) -> None:
@@ -88,9 +99,30 @@ def test_invalid_known_setting_warns_with_field_and_error_type_without_value(tmp
     finally:
         logger.remove(sink_id)
 
-    assert settings == DashboardSettings.model_validate({})
+    assert settings.window_days == DashboardSettings.model_fields['window_days'].default
+    assert settings.limit == 64
     assert any('window_days:int_parsing' in message for message in messages)
     assert all('secret-invalid-value' not in message for message in messages)
+
+
+def test_invalid_non_auth_setting_keeps_valid_authentication_group(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(
+        json.dumps({
+            'schema_version': 1,
+            'trace_input_chars': 'invalid-cap',
+            'orq_auth_method': 'cli_profile',
+            'orq_profile': 'saved-profile',
+            'smart_model': 'saved/smart',
+        })
+    )
+
+    settings = load_settings(path)
+
+    assert settings.trace_input_chars == DashboardSettings.model_fields['trace_input_chars'].default
+    assert settings.orq_auth_method == 'cli_profile'
+    assert settings.orq_profile == 'saved-profile'
+    assert settings.smart_model == 'saved/smart'
 
 
 def test_unreadable_settings_file_warns_with_path_and_returns_defaults(
@@ -309,7 +341,150 @@ def test_unversioned_legacy_settings_migrate_and_save_as_v1(tmp_path: Path) -> N
     assert settings.model_overrides == {'finder.compiler': 'custom/compiler'}
     assert settings.orq_auth_method == 'cli_profile'
     save_settings(settings, path)
-    assert json.loads(path.read_text())['schema_version'] == 1
+    saved = json.loads(path.read_text())
+    assert saved['schema_version'] == 1
+    assert 'compiler_model' not in saved
+    assert saved['model_overrides'] == {'finder.compiler': 'custom/compiler'}
+
+
+def test_unversioned_migration_preserves_invalid_overrides_and_legacy_models(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    raw = {'model_overrides': 'invalid-preserve-me', 'compiler_model': 'custom/compiler', 'limit': 64}
+    path.write_text(json.dumps(raw))
+
+    settings = load_settings(path).with_updates({'smart_model': 'edited/smart'})
+    save_settings(settings, path)
+
+    saved = json.loads(path.read_text())
+    assert saved['schema_version'] == 1
+    assert saved['model_overrides'] == 'invalid-preserve-me'
+    assert saved['compiler_model'] == 'custom/compiler'
+    assert saved['limit'] == 64
+
+
+def test_copying_unversioned_settings_migrates_new_destination_only(tmp_path: Path) -> None:
+    source = tmp_path / 'source.json'
+    destination = tmp_path / 'copy.json'
+    original = {
+        'compiler_model': 'custom/compiler',
+        'model_overrides': {'future.task': 'saved/other'},
+        'trace_input_chars': 'invalid-cap',
+        'future_nested': {'keep': [1, None]},
+    }
+    source.write_text(json.dumps(original))
+    source_bytes = source.read_bytes()
+
+    save_settings(load_settings(source), destination)
+
+    assert source.read_bytes() == source_bytes
+    copied = json.loads(destination.read_text())
+    assert copied['schema_version'] == 1
+    assert copied['model_overrides'] == {'finder.compiler': 'custom/compiler', 'future.task': 'saved/other'}
+    assert copied['trace_input_chars'] == 'invalid-cap'
+    assert copied['future_nested'] == original['future_nested']
+    assert load_settings(destination).model_overrides['finder.compiler'] == 'custom/compiler'
+
+
+def test_copying_settings_patches_model_overrides_and_keeps_unknown_tasks(tmp_path: Path) -> None:
+    source = tmp_path / 'source.json'
+    destination = tmp_path / 'copy.json'
+    source.write_text(json.dumps({
+        'schema_version': 1,
+        'model_overrides': {'apply': 'saved/apply', 'future.task': 'opaque'},
+    }))
+    settings = load_settings(source).with_updates({'model_overrides': {'apply': 'edited/apply'}})
+
+    save_settings(settings, destination)
+
+    assert json.loads(destination.read_text())['model_overrides'] == {
+        'apply': 'edited/apply',
+        'future.task': 'opaque',
+    }
+
+
+def test_copying_invalid_auth_source_rejects_explicit_auth_edit_without_creating_file(tmp_path: Path) -> None:
+    source = tmp_path / 'source.json'
+    destination = tmp_path / 'copy.json'
+    original = {
+        'schema_version': 1,
+        'orq_auth_method': 'cli_profile',
+        'orq_profile': 'saved-profile',
+        'orq_profile_host': 123,
+    }
+    source.write_text(json.dumps(original))
+    settings = load_settings(source).with_updates({'orq_auth_method': 'environment'})
+
+    with pytest.raises(ValueError):
+        save_settings(settings, destination)
+
+    assert not destination.exists()
+    assert json.loads(source.read_text()) == original
+
+
+def test_unrelated_settings_edit_preserves_nested_unknown_and_invalid_source_values(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    raw = {
+        'schema_version': 1,
+        'window_days': 'bad',
+        'limit': 64,
+        'model_overrides': {'apply': 'saved/apply', 'future.task': {'opaque': True}},
+        'explorer_columns': ['model', 'future_column'],
+        'future_setting': {'keep': [1, None]},
+    }
+    path.write_text(json.dumps(raw))
+    settings = load_settings(path)
+    updated = settings.with_updates({'fast_model': 'edited/fast'})
+
+    save_settings(updated, path)
+
+    saved = json.loads(path.read_text())
+    assert saved['fast_model'] == 'edited/fast'
+    assert saved['window_days'] == 'bad'
+    assert saved['limit'] == 64
+    assert saved['model_overrides'] == raw['model_overrides']
+    assert saved['explorer_columns'] == raw['explorer_columns']
+    assert saved['future_setting'] == raw['future_setting']
+
+
+def test_stale_settings_save_keeps_latest_unrelated_edits(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'schema_version': 1, 'fast_model': 'old/fast', 'limit': 10}))
+    stale = load_settings(path).with_updates({'fast_model': 'new/fast'})
+    path.write_text(json.dumps({'schema_version': 1, 'fast_model': 'old/fast', 'limit': 64, 'new_key': 'new'}))
+
+    save_settings(stale, path)
+
+    saved = json.loads(path.read_text())
+    assert saved['fast_model'] == 'new/fast'
+    assert saved['limit'] == 64
+    assert saved['new_key'] == 'new'
+
+
+def test_explicit_default_repair_updates_invalid_persisted_value(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'schema_version': 1, 'trace_input_chars': 'bad'}))
+    settings = load_settings(path).with_updates({'trace_input_chars': 500_000}, persistent=False)
+
+    save_settings(settings, path, changed_fields={'trace_input_chars'})
+
+    assert json.loads(path.read_text())['trace_input_chars'] == 500_000
+
+
+def test_runtime_overrides_do_not_persist_when_an_explicit_field_is_saved(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'schema_version': 1, 'limit': 64, 'smart_model': 'saved/smart'}))
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
+    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '42')
+    settings = effective_settings().model_copy(update={'explorer_columns': ('model',)})
+
+    save_settings(settings, path, changed_fields={'explorer_columns'})
+
+    saved = json.loads(path.read_text())
+    assert saved['limit'] == 64
+    assert saved['smart_model'] == 'saved/smart'
+    assert saved['explorer_columns'] == ['model']
 
 
 @pytest.mark.parametrize('version', [0, -1, True, '1', 1.0])
@@ -317,7 +492,7 @@ def test_invalid_schema_versions_fall_back_to_defaults(tmp_path: Path, version: 
     path = tmp_path / 'settings.json'
     path.write_text(json.dumps({'schema_version': version, 'window_days': 21}))
 
-    assert load_settings(path) == DashboardSettings.model_validate({})
+    assert load_settings(path).model_dump() == DashboardSettings.model_validate({}).model_dump()
 
 
 def test_newer_schema_warns_reads_known_values_and_preserves_version_on_save(tmp_path: Path) -> None:
@@ -376,12 +551,13 @@ def test_effective_settings_updates_preserve_future_fields_on_save(
     path.write_text(json.dumps({'schema_version': 3, 'window_days': 8, 'future_field': {'keep': True}}))
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
 
-    settings = effective_settings({'window_days': 13})
+    settings = effective_settings({'window_days': 13}).model_copy(update={'explorer_columns': ('model',)})
     save_settings(settings, path)
 
     saved = json.loads(path.read_text())
     assert saved['schema_version'] == 3
-    assert saved['window_days'] == 13
+    assert saved['window_days'] == 8
+    assert saved['explorer_columns'] == ['model']
     assert saved['future_field'] == {'keep': True}
 
 
@@ -397,12 +573,12 @@ def test_invalid_known_future_setting_falls_back_but_preserves_future_fields_on_
 
     saved = json.loads(path.read_text())
     assert saved['schema_version'] == 2
-    assert saved['window_days'] == 7
+    assert saved['window_days'] == 'invalid'
     assert saved['future_option'] == {'keep': True}
 
 
 @pytest.mark.parametrize('version', [None, 1])
-def test_supported_and_unversioned_files_drop_unknown_fields_on_save(tmp_path: Path, version: int | None) -> None:
+def test_supported_and_unversioned_files_preserve_unknown_fields_on_save(tmp_path: Path, version: int | None) -> None:
     path = tmp_path / 'settings.json'
     raw = {'window_days': 18, 'future_field': 'drop me'}
     if version is not None:
@@ -414,7 +590,7 @@ def test_supported_and_unversioned_files_drop_unknown_fields_on_save(tmp_path: P
     saved = json.loads(path.read_text())
     assert saved['schema_version'] == 1
     assert saved['window_days'] == 18
-    assert 'future_field' not in saved
+    assert saved['future_field'] == 'drop me'
 
 
 def test_persisted_schema_version_round_trip_and_strict_validation(tmp_path: Path) -> None:
@@ -424,7 +600,7 @@ def test_persisted_schema_version_round_trip_and_strict_validation(tmp_path: Pat
     save_settings(settings, path)
 
     assert json.loads(path.read_text())['schema_version'] == 1
-    assert load_settings(path) == settings
+    assert load_settings(path).model_dump() == settings.model_dump()
     with pytest.raises(ValueError, match='int_type'):
         DashboardSettings.model_validate({'schema_version': '1'})
 
@@ -436,6 +612,8 @@ def test_explorer_columns_round_trip_and_unknown_keys_drop(tmp_path: Path) -> No
 
     path.write_text('{"explorer_columns": ["model", "gone"]}', encoding='utf-8')
     assert load_settings(path).explorer_columns == ('model',)
+
+
 def test_old_profile_config_migrates_to_cli_profile_but_explicit_auth_wins() -> None:
     migrated = DashboardSettings.model_validate({'orq_profile': 'research-bauke'})
     explicit = DashboardSettings.model_validate(

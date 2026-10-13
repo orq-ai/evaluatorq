@@ -1538,6 +1538,28 @@ def test_columns_post_saves_choice(explorer_client, tmp_path: Path) -> None:
     assert json.loads((tmp_path / 'settings.json').read_text())['explorer_columns'] == ['model', 'cost']
 
 
+def test_columns_post_reports_unreadable_settings_without_changing_file_or_runtime(
+    explorer_client, tmp_path: Path
+) -> None:
+    store, _, client = explorer_client
+    _load(client)
+    existing_columns = ('trace', 'model')
+    client.app.state.finder_settings = client.app.state.finder_settings.model_copy(
+        update={'explorer_columns': existing_columns}
+    )
+    settings_path = tmp_path / 'settings.json'
+    original = b'{ malformed settings\n'
+    settings_path.write_bytes(original)
+
+    response = client.post('/find/columns', data=csrf_data({'columns': ['model', 'cost']}))
+
+    assert response.status_code == 200
+    assert 'Fix or restore the JSON settings file' in response.text
+    assert settings_path.read_bytes() == original
+    assert client.app.state.finder_settings.explorer_columns == existing_columns
+    assert store.explorer is not None
+
+
 def test_match_column_choice_survives_a_columns_edit_made_before_any_ai_run(explorer_client) -> None:
     from evaluatorq.common.judge import ClassifyQuestion
     from evaluatorq.trace_finder import CompiledQuery, DimensionAnswer, RunSnapshot, TraceClassification, ValueSelection

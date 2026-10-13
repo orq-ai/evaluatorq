@@ -1203,7 +1203,9 @@ def settings_body(
     )
     form = (
         '<form class="settings-form" method="post" action="/settings">'
-        f'{csrf_field()}{saved_html}{form_error}{models_panel}{auth_panel}'
+        f'{csrf_field()}<input type="hidden" name="settings_changed_fields" '
+        f'value="{esc(setting_value("settings_changed_fields"))}">'
+        f'{saved_html}{form_error}{models_panel}{auth_panel}'
         '<button type="submit" class="rt-apply-btn settings-save">Save settings</button>'
         '</form>'
     )
@@ -1222,6 +1224,13 @@ def settings_body(
     auth_fields_script = (
         '<script>document.addEventListener("DOMContentLoaded",function(){'
         'const form=document.querySelector(".settings-form");if(!form)return;'
+        'const changed=form.querySelector("[name=settings_changed_fields]");'
+        'function markChanged(event){const field=event.target;if(!field.name||field.name.startsWith("settings_")||field.name==="csrf")return;'
+        'const names=new Set(changed.value.split(",").filter(Boolean));names.add(field.name);'
+        'if(field.name==="orq_oauth_server"){names.add("orq_workspace");names.add("orq_project_id");}'
+        'if(field.name==="orq_workspace")names.add("orq_project_id");'
+        'changed.value=Array.from(names).join(",");}'
+        'form.addEventListener("input",markChanged);form.addEventListener("change",markChanged);'
         'function syncAuthFields(){'
         'const selected=form.querySelector("input[name=orq_auth_method]:checked");'
         'if(!selected)return;'
