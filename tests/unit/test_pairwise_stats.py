@@ -87,6 +87,26 @@ def test_fleiss_kappa_skips_rows_without_a_full_panel():
     assert fleiss_kappa(r) == (None, 0)
 
 
+def test_fleiss_kappa_is_measured_over_the_panel_despite_a_stand_in():
+    r = _run([(['A'] * 3, 'A', {}), (['B'] * 3, 'B', {}), (['tie'] * 3, 'tie', {})])
+    # j3 failed here and the stand-in s1 voted instead, as run_pairwise records it.
+    r.add(
+        PairwiseComparison(
+            winner='A',
+            votes=[
+                PairwiseVote(model='j1', vote='A'),
+                PairwiseVote(model='j2', vote='A'),
+                PairwiseVote(model='j3', vote=None),
+                PairwiseVote(model='s1', vote='A'),
+            ],
+        ),
+        question='q-standin',
+        response_a='a',
+        response_b='bb',
+    )
+    assert fleiss_kappa(r) == (pytest.approx(1.0), 3)
+
+
 def test_fleiss_kappa_needs_two_judges():
     r = new_run(run_name='r', judges=['solo'])
     r.add(

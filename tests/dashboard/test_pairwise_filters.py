@@ -140,6 +140,15 @@ def test_judge_keeps_entries_where_a_selected_judge_voted() -> None:
     assert _questions(_apply(r, {'judge': JUDGES})) == ['all', 'two', 'one']
 
 
+def test_judge_filter_needs_a_cast_vote_on_real_shaped_runs() -> None:
+    # run_pairwise records a vote object for every panel judge; abstentions carry vote=None.
+    r = new_run(run_name='judges', judges=JUDGES)
+    r.add(_comparison(['A', 'A', 'A'], 'A'), question='voted', response_a='a', response_b='b')
+    r.add(_comparison(['A', 'A', None], 'A'), question='abstained', response_a='a', response_b='b')
+    assert _questions(_apply(r, {'judge': ['judge-three']})) == ['voted']
+    assert _questions(_apply(r, {'judge': ['judge-one']})) == ['voted', 'abstained']
+
+
 def test_winner_and_split_intersect(run: PairwiseRun) -> None:
     assert _questions(_apply(run, {'winner': ['tie'], 'split': ['yes']})) == ['q2']
     assert _apply(run, {'winner': ['prompt-v2'], 'split': ['yes']}) == []

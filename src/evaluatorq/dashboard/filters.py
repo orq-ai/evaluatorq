@@ -407,7 +407,7 @@ def _pairwise_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     for entry in run.entries:
         if narrow_winner and entry.comparison.winner not in winner_keys:
             continue
-        if narrow_judge and not any(v.model in judges for v in entry.comparison.votes):
+        if narrow_judge and not any(v.model in judges and v.vote is not None for v in entry.comparison.votes):
             continue
         if want_split or want_thrown or want_failed:
             flags = comparison_flags(entry, run.judges)

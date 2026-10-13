@@ -241,13 +241,11 @@ eq dashboard
 
 With no path, this scans all three default stores: `.evaluatorq/runs` (red team), `.evaluatorq/sim-runs` (simulation), and `.evaluatorq/pairwise-runs` (pairwise). Open the local URL printed by the command.
 
-The dashboard opens a pairwise run on a verdict (clear winner, too close to call, or no decided comparisons) with a 95% range and a table of signals for how far to trust it. It adds a per-judge table, a filterable list of every comparison, and a page that compares two runs. When tracing is on, each comparison records the `trace_id` of its judging span, and its row links to that trace in Orq. See [Pairwise comparison view](dashboard.md#pairwise-comparison-view).
+The dashboard opens a pairwise run on a verdict (clear winner, too close to call, or no decided comparisons) with a 95% range and a table of signals for how far to trust it. It adds a per-judge table, a filterable list of every comparison where each row expands to the two responses side by side with every judge's vote and rationale, and a page that compares two runs. When tracing is on, each comparison records the `trace_id` of its judging span, and its row links to that trace in Orq. See [Pairwise comparison view](dashboard.md#pairwise-comparison-view).
 
 `label_a` and `label_b` name the two systems being compared. They default to `"A"` and `"B"`, but nothing in the judging data records what was in each slot, so a reader of the dashboard cannot tell what "A won" means. Set them.
 
 A run also records `swap`. Position bias is only meaningful when both orderings ran, so a run saved with `swap=False` shows that column as unavailable rather than as a flattering `0.00`.
-
-The dashboard renders the run as three sections: the consensus win rates for each side, a per-judge table (win rates, tie rate, position bias, and consistency when measurable), and the comparison list, where each row expands to show the two responses side by side with every judge's vote and rationale.
 
 For classify votes, open **Classifier details** inside an expanded comparison in the dashboard or standalone HTML report. Each ordering and repetition shows its choice, confidence and probability distribution when reported. The display converts swapped A/B choices and probability keys back to the run's original A/B frame and uses `label_a` / `label_b`; `tie` is unchanged. Missing confidence or probabilities are omitted, never rendered as zero. Percentages near 50% retain enough precision to show which side they fall on and distinguish close values.
 

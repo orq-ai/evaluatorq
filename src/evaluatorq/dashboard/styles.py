@@ -3744,7 +3744,7 @@ _PAIRWISE_REPORT_CSS = """
 .pw-report .pw-ci-dot { position: absolute; top: -3px; width: 4px; height: 14px; border-radius: 2px; background: var(--c); }
 .pw-report .pw-ci-mid { position: absolute; top: -5px; left: 50%; width: 1px; height: 18px; background: var(--text-faint); }
 .pw-report .pw-ci-cap { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); max-width: 520px; display: flex; justify-content: space-between; }
-.pw-report .pw-grid-2 { display: grid; grid-template-columns: 1fr 1.4fr; gap: 16px; margin: 16px 0; }
+.pw-report .pw-grid-2 { display: grid; grid-template-columns: 1fr 1.4fr; gap: 16px; margin: 16px 0; align-items: start; }
 .pw-report .pw-trust td { text-align: left !important; }
 .pw-report .pw-trust td:first-child { font-weight: 600; color: var(--text-strong); white-space: nowrap; }
 .pw-report .pw-tone-good { color: var(--green-600); }

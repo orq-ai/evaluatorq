@@ -45,6 +45,11 @@ _SHRUNK_TIP = 'reliability weight, shrunk toward the panel mean'
 _RAW_TIP = 'how often the judge agreed with itself across repeated passes'
 
 
+def _aggregation(run: PairwiseRun) -> str:
+    """The aggregation the stored report was built with."""
+    return 'bt-sigma' if run.report is not None and run.report.bt_sigma is not None else 'plurality'
+
+
 def with_entries(run: PairwiseRun, entries: list[PairwiseEntry]) -> PairwiseRun:
     """A copy of *run* carrying only *entries*, with the rollup recomputed.
 
@@ -53,7 +58,7 @@ def with_entries(run: PairwiseRun, entries: list[PairwiseEntry]) -> PairwiseRun:
     header and by several section builders, so leaving the field empty would
     roll the same entries up once per caller.
     """
-    aggregation = 'bt-sigma' if run.report is not None and run.report.bt_sigma is not None else 'plurality'
+    aggregation = _aggregation(run)
     filtered_run = run.model_copy(update={'entries': list(entries), 'report': None})
     rolled = filtered_run.rollup(aggregation=aggregation)
     return filtered_run.model_copy(update={'report': rolled})
@@ -224,7 +229,9 @@ def _tokens_panel(run: PairwiseRun) -> str:
     )
 
 
-def _overview(run: PairwiseRun) -> str:
+def _overview(run: PairwiseRun, *, filtered_empty: bool = False) -> str:
+    if filtered_empty:
+        return _EMPTY_FILTERED
     v = verdict(run)
     return (
         _verdict_card(run, v)
@@ -339,7 +346,9 @@ def _weighted_panel(run: PairwiseRun, consensus: dict[str, Any]) -> str:
     )
 
 
-def _judges(run: PairwiseRun) -> str:
+def _judges(run: PairwiseRun, *, filtered_empty: bool = False) -> str:
+    if filtered_empty:
+        return _EMPTY_FILTERED
     by_kind = {s.kind: s for s in build_report_sections(run)}
     judges = by_kind['pairwise_judges'].data
     consensus = by_kind['pairwise_consensus'].data
@@ -377,7 +386,7 @@ _METHOD_HTML = (
 
 def _config(run: PairwiseRun) -> str:
     panel_judges = list(run.judges) or judge_order(run)
-    aggregation = 'bt-sigma' if run.report is not None and run.report.bt_sigma is not None else 'plurality'
+    aggregation = _aggregation(run)
     grid = meta_grid([
         ('Side A', run.label_a),
         ('Side B', run.label_b),
@@ -416,11 +425,12 @@ def pairwise_report_tabs(
         comparisons = render_pairwise_comparisons(rid, run, view.entries)
     else:
         comparisons = _EMPTY_FILTERED if entries is not None else _EMPTY_RUN
+    filtered_empty = entries is not None and not view.entries
     tabs = _tabs(
         'pwtab',
         [
-            ('Overview', _overview(view)),
-            ('Judges', _judges(view)),
+            ('Overview', _overview(view, filtered_empty=filtered_empty)),
+            ('Judges', _judges(view, filtered_empty=filtered_empty)),
             ('Comparisons', comparisons, f'Comparisons <span class="tab-count">{len(view.entries)}</span>'),
             ('Config', _config(view)),
         ],

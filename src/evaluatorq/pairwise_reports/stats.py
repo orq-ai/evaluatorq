@@ -83,12 +83,13 @@ def verdict(run: PairwiseRun) -> Verdict:
 
 
 def fleiss_kappa(run: PairwiseRun) -> tuple[float | None, int]:
-    """Fleiss' kappa over comparisons where every judge in the panel cast a vote.
+    """Fleiss' kappa over the configured panel, on comparisons where every panel judge voted.
 
-    Returns ``(kappa, rows_used)``; ``(None, 0)`` with fewer than two judges or
-    no full-panel comparison.
+    Stand-in (replacement) judges are not part of the panel; a comparison where a
+    panel judge failed is skipped. Returns ``(kappa, rows_used)``; ``(None, 0)``
+    with fewer than two judges or no full-panel comparison.
     """
-    judges = judge_order(run)
+    judges = list(run.judges or judge_order(run))
     n = len(judges)
     if n < 2:
         return (None, 0)

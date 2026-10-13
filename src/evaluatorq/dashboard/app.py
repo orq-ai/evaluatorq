@@ -855,6 +855,12 @@ def _search(req: Request) -> NotStr:
     return NotStr(search_results(library.scan(roots), q))
 
 
+def _pairwise_hero_actions(rid: str, roots: list[Path] | None) -> str:
+    """The hero 'Compare with' control: the other pairwise runs, capped like the overview picker."""
+    choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'pairwise' and not c.error][:100]
+    return pairwise_run_compare_control(rid, choices)
+
+
 def _report_view(rid: str, req: Request) -> NotStr | Response:
     roots = _roots(req)
     path = library.resolve(rid, roots)
@@ -918,9 +924,8 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
         elif surface == 'pairwise':
             from evaluatorq.dashboard import pairwise_tabs
 
-            choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'pairwise' and not c.error][:100]
             body_html = pairwise_tabs.pairwise_report_tabs(
-                rid, report_obj, hero_actions_html=pairwise_run_compare_control(rid, choices)
+                rid, report_obj, hero_actions_html=_pairwise_hero_actions(rid, roots)
             )
         else:
             body_html = adapter.body(report_obj)
@@ -1008,7 +1013,13 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
         elif surface == 'pairwise':
             from evaluatorq.dashboard import pairwise_tabs
 
-            body_html = await asyncio.to_thread(pairwise_tabs.pairwise_report_tabs, rid, report_obj, filtered)
+            body_html = await asyncio.to_thread(
+                pairwise_tabs.pairwise_report_tabs,
+                rid,
+                report_obj,
+                filtered,
+                hero_actions_html=_pairwise_hero_actions(rid, roots),
+            )
         else:
             body_html = adapter.body_from_results(report_obj, filtered)
 
