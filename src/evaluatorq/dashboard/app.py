@@ -913,6 +913,10 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
             body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
         elif surface == 'redteam':
             body_html = report_tabs.redteam_report_tabs(rid, report_obj)
+        elif surface == 'pairwise':
+            from evaluatorq.dashboard import pairwise_tabs
+
+            body_html = pairwise_tabs.pairwise_report_tabs(rid, report_obj)
         else:
             body_html = adapter.body(report_obj)
 
@@ -996,6 +1000,10 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
 
             filtered_report = rebuild_filtered_report(report_obj, filtered)
             body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
+        elif surface == 'pairwise':
+            from evaluatorq.dashboard import pairwise_tabs
+
+            body_html = await asyncio.to_thread(pairwise_tabs.pairwise_report_tabs, rid, report_obj, filtered)
         else:
             body_html = adapter.body_from_results(report_obj, filtered)
 
