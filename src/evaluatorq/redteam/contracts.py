@@ -1828,6 +1828,65 @@ class JuryReliability(BaseModel):
     )
 
 
+class JuryHealth(BaseModel):
+    """Run-level panel-of-judges operational health across multi-judge samples (RES-1649).
+
+    Complements ``JuryReliability`` (how much the judges agreed) with how well the
+    panel actually ran: how often a configured judge failed, a replacement stood in,
+    the decisive votes tied, the panel went inconclusive, a judge's repetitions
+    produced no usable verdict, or a judge cleanly abstained. Counts are over samples
+    that carried a multi-judge jury (``judges_configured >= 2``). ``None`` for
+    single-judge runs, so the field stays absent on the common path.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    samples: int = Field(ge=0, description='Multi-judge samples considered')
+    samples_with_judge_failure: int = Field(
+        default=0, ge=0, description='Samples where at least one configured judge failed mechanically'
+    )
+    replacements_used: int = Field(default=0, ge=0, description='Total replacement judges invoked across samples')
+    ties: int = Field(default=0, ge=0, description='Samples where the decisive votes tied')
+    inconclusive: int = Field(default=0, ge=0, description='Samples with too few decisive judges to conclude')
+    samples_with_repetition_failure: int = Field(
+        default=0,
+        ge=0,
+        description='Samples where at least one judge had a repetition fail to produce a usable verdict',
+    )
+    samples_with_abstention: int = Field(
+        default=0, ge=0, description='Samples where at least one judge cleanly abstained'
+    )
+    judge_failure_reasons: list[str] = Field(
+        default_factory=list,
+        description='Distinct JuryVote.error strings behind the judge failures, so the report names why a judge did '
+        'not count (RES-1649), not just how many. Deduplicated and capped; empty when no judge failed.',
+    )
+
+    def issue_summary(self) -> str:
+        """One-line issue clause for a report, or ``clean`` when nothing went wrong.
+
+        ``replacements_used`` counts replacement *judges*; the other five fields count *samples*.
+        They are listed as separate clauses so a judge count is never folded into an '(of N samples)'
+        total, which would misread it as a sample count (the bug the P1 review flagged). When a judge
+        failed and carried a reason, the distinct reasons are appended so the report says why, not just
+        how many — the ``JuryVote.error`` half of the ticket's "why a judge did not count".
+        """
+        issues = [
+            (self.samples_with_judge_failure, 'judge-fail'),
+            (self.ties, 'tie'),
+            (self.inconclusive, 'inconclusive'),
+            (self.samples_with_repetition_failure, 'rep-fail'),
+            (self.samples_with_abstention, 'abstained'),
+        ]
+        parts = [f'{count} {label}' for count, label in issues if count]
+        if self.replacements_used:
+            parts.append(f'{self.replacements_used} replacement judge(s)')
+        summary = ', '.join(parts) if parts else 'clean'
+        if self.judge_failure_reasons:
+            summary += f' (judge failures: {"; ".join(self.judge_failure_reasons)})'
+        return summary
+
+
 class ReportSummary(BaseModel):
     """Aggregate summary statistics for a report."""
 
@@ -1875,6 +1934,11 @@ class ReportSummary(BaseModel):
         default=None,
         description='Chance-corrected inter-judge reliability across panel-of-judges samples (RES-739). '
         'None for single-judge runs.',
+    )
+    jury_health: JuryHealth | None = Field(
+        default=None,
+        description='Panel-of-judges operational health across multi-judge samples (RES-1649): judge failures, '
+        'replacements, ties, inconclusive panels, repetition failures, abstentions. None for single-judge runs.',
     )
     datapoint_breakdown: dict[str, int] | None = Field(
         default=None,

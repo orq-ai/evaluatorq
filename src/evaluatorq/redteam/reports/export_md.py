@@ -29,6 +29,7 @@ from evaluatorq.common.reports import truncate as _truncate
 # was imported last in that package's __init__, currently md_helpers's
 # float-only variant — import the None-safe html_helpers one directly instead.
 from evaluatorq.common.reports.html_helpers import pct as _pct
+from evaluatorq.redteam.contracts import JuryHealth
 from evaluatorq.redteam.reports.sections import build_report_sections
 
 if TYPE_CHECKING:
@@ -146,6 +147,11 @@ def _render_summary_section(section: ReportSection) -> str:
         samples = reliability.get('samples', 0)
         cell = 'n/a' if alpha is None else f'alpha = {alpha:.2f}'
         detail_rows.append(['Jury Agreement (Krippendorff alpha)', f'{cell} ({samples} multi-judge samples)'])
+    # Panel-of-judges health (RES-1649) — the operational counts, mirroring the row above.
+    health = data.get('jury_health')
+    if health:
+        h = JuryHealth.model_validate(health)
+        detail_rows.append(['Jury Health', f'{h.issue_summary()} ({h.samples} multi-judge samples)'])
     duration_seconds = data.get('duration_seconds')
     if duration_seconds is not None:
         mins, secs = divmod(int(duration_seconds), 60)
