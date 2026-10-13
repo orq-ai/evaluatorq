@@ -23,7 +23,7 @@ from evaluatorq.openresponses.target import OrqResponsesTarget
 from evaluatorq.simulation.adapters import from_orq_deployment
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.tracing import with_llm_span as simulation_llm_span
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 from tests.simulation.conftest import find_span as _find
 from tests.simulation.conftest import new_collector as _provider
 from tests.simulation.conftest import span_attrs as _attrs

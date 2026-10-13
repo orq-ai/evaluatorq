@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import LLMCallConfig

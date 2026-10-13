@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
-    from evaluatorq.simulation.types import SimulationRecommendation
+    from evaluatorq.simulation.contracts import SimulationRecommendation
 
 __all__ = ['ApplyRecommendationsResult', 'ApplySuggestionsResult', 'apply_suggestions']
 

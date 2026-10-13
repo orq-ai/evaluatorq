@@ -8,7 +8,7 @@ from datetime import datetime
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation import _datapoint_io
 from evaluatorq.simulation._datapoint_io import _as_obj, _extract_single_datapoint
-from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 from evaluatorq.simulation.utils import dataset_export
 from evaluatorq.types import DataPoint
 

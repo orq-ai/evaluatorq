@@ -13,7 +13,7 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Self
 
-from evaluatorq.simulation.types import CriteriaMeta, SimulationResult, TerminatedBy, parse_criteria_meta
+from evaluatorq.simulation.contracts import CriteriaMeta, SimulationResult, TerminatedBy, parse_criteria_meta
 
 # A run that ended this way never reached the judge's criteria audit, so its
 # criteria outcome is unknown — not met. Shared with `api._sim_evaluation_details`

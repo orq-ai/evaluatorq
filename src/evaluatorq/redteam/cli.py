@@ -292,7 +292,7 @@ _RUN_FLAGS: tuple[Flag, ...] = (
     Flag('max_turns'),
     Flag('max_per_category'),
     Flag('attacker_instructions'),
-    Flag('datapoint_parallelism'),
+    Flag('datapoint_parallelism', replaces=('parallelism',)),
     Flag('llm_parallelism'),
     Flag('generate_strategies'),
     Flag('generated_strategy_count'),
@@ -697,7 +697,7 @@ def run(
         str | None,
         typer.Option(
             '--config',
-            metavar='PATH|-',
+            metavar='PATH|JSON|-',
             help=config_option_help('red_team()', 'eq redteam schema'),
         ),
     ] = None,
@@ -805,7 +805,7 @@ def schema(
         ),
     ] = True,
 ) -> None:
-    """Print the JSON schema of `eq redteam run`'s config file or of its JSON report."""
+    """Print the JSON schema of `eq redteam run`'s config or of its JSON report."""
     from evaluatorq.redteam.contracts import RedTeamReport
 
     echo_schema(RedTeamCliConfig if input_schema else RedTeamReport, output=not input_schema)

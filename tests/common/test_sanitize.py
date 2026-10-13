@@ -247,7 +247,7 @@ async def test_datapoint_system_prompt_always_rebuilt():
     """Verify that SimulationRunner.run() rebuilds the system prompt from
     persona + scenario even when the datapoint carries a cached
     user_system_prompt value (JSONL bypass fix)."""
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Persona,
         Scenario,

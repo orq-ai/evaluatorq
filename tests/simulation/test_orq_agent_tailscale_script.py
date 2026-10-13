@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from evaluatorq.contracts import AgentResponse
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 
 
 def _load_script_module():

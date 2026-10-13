@@ -6,7 +6,7 @@ import pytest
 
 from evaluatorq.contracts import AgentResponse, TokenUsage
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import CommunicationStyle, Judgment, Persona, Scenario
+from evaluatorq.simulation.contracts import CommunicationStyle, Judgment, Persona, Scenario
 
 
 class _NeverTerminatingJudge:

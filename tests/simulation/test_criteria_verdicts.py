@@ -18,7 +18,7 @@ from evaluatorq.simulation.agents.base import LLMResult
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.evaluators.scorers import criteria_met_scorer
 from evaluatorq.simulation.runner.simulation import SimulationRunner, _CriteriaTracker
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     CriterionVerdict,

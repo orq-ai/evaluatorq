@@ -16,7 +16,7 @@ from evaluatorq.simulation.reports.apply import (
     ApplySuggestionsResult,
     apply_suggestions,
 )
-from evaluatorq.simulation.types import SimulationRecommendation
+from evaluatorq.simulation.contracts import SimulationRecommendation
 
 _MODULE = 'evaluatorq.simulation.reports.apply'
 

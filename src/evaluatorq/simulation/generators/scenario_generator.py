@@ -12,7 +12,7 @@ from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import token_budget_for_items
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation._usage import UsageTracking
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     Criterion,
     Scenario,
     StartingEmotion,

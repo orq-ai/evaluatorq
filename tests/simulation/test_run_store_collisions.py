@@ -28,7 +28,7 @@ def _make_result(
     scorer_scores: dict[str, float] | None = None,
 ) -> Any:
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
     return SimulationResult(
         messages=[],

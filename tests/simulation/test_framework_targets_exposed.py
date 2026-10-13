@@ -149,11 +149,11 @@ def test_criterion_id_helpers_exposed_from_simulation(name: str) -> None:
     exported the two helpers the CHANGELOG claimed alongside it, so
     `from evaluatorq.simulation import criterion_id_for` raised ImportError."""
     import evaluatorq.simulation as sim
-    from evaluatorq.simulation import types as sim_types
+    from evaluatorq.simulation import contracts as sim_contracts
 
     assert hasattr(sim, name), f"{name} not exposed from evaluatorq.simulation"
     assert name in sim.__all__
-    assert getattr(sim, name) is getattr(sim_types, name)
+    assert getattr(sim, name) is getattr(sim_contracts, name)
 
 
 @pytest.mark.asyncio
@@ -166,7 +166,7 @@ async def test_integration_target_reports_token_usage() -> None:
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.integrations.callable_integration import CallableTarget
     from evaluatorq.simulation.runner.simulation import SimulationRunner
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Persona,
         Scenario,

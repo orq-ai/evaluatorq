@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionMessageParam
 
-    from evaluatorq.simulation.types import Persona, Scenario
+    from evaluatorq.simulation.contracts import Persona, Scenario
 
 from evaluatorq.common.llm_call import execute_response
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason

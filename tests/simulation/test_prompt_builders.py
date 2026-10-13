@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     ConversationStrategy,
     Criterion,
@@ -153,7 +153,7 @@ def test_stable_arc_omits_emotional_section():
 
 
 def test_neutral_culture_omits_cultural_section():
-    from evaluatorq.simulation.types import CulturalContext
+    from evaluatorq.simulation.contracts import CulturalContext
 
     p = _make_persona(cultural_context=CulturalContext.neutral)
     prompt = build_persona_system_prompt(p)

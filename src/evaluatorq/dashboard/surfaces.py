@@ -105,9 +105,9 @@ def _redteam_adapter() -> SurfaceAdapter:
 
 def _sim_adapter() -> SurfaceAdapter:
 
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun
     from evaluatorq.simulation.reports.export_html import export_html, render_report_body
     from evaluatorq.simulation.reports.export_md import export_markdown as _sim_export_md
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun
 
     def _sim_rows(run: SimulationRun, filtered: list[SimulationResult]) -> list[dict[str, Any]]:
         """Build JSON row dicts from filtered SimulationResult objects.

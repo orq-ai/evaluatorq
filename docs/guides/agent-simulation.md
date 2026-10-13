@@ -217,7 +217,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
     import asyncio
 
     from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle, Criterion, EmotionalArc, Persona, Scenario, StartingEmotion,
     )
 
@@ -276,7 +276,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
 
     from evaluatorq.contracts import LLMCallConfig, Message
     from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.types import CommunicationStyle, Criterion, Persona, Scenario
+    from evaluatorq.simulation.contracts import CommunicationStyle, Criterion, Persona, Scenario
 
     client = AsyncOpenAI()
 

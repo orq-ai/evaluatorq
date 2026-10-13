@@ -30,12 +30,12 @@ from loguru import logger
 
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.contracts import ReportSection, Usage
+from evaluatorq.simulation.contracts import CriteriaRow, SimulationEntry, TranscriptMessage, criterion_id_for
 from evaluatorq.simulation.evaluators.scorers import read_criteria_meta
 from evaluatorq.simulation.metrics import TURN_METRICS
-from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage, criterion_id_for
 
 if TYPE_CHECKING:
-    from evaluatorq.simulation.types import SimulationRecommendation, SimulationResult
+    from evaluatorq.simulation.contracts import SimulationRecommendation, SimulationResult
 
 
 # ---------------------------------------------------------------------------

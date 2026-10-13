@@ -61,11 +61,11 @@ from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
 from evaluatorq.common.run_manifest import read_manifest
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
+from evaluatorq.simulation.contracts import DEFAULT_MAX_TURNS, DEFAULT_RUN_NAME
 from evaluatorq.simulation.run_config import (
     GenerateAndSimulateCliConfig,
     SimulateCliConfig,
 )
-from evaluatorq.simulation.types import DEFAULT_MAX_TURNS, DEFAULT_RUN_NAME
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
 from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name
 from evaluatorq.simulation.utils.run_store import write_report as _write_report
@@ -76,7 +76,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from evaluatorq.common.cli_config import ModelT
-    from evaluatorq.simulation.types import SimulationDatapoint, SimulationRun
+    from evaluatorq.simulation.contracts import SimulationDatapoint, SimulationRun
 
 app = typer.Typer(
     name='sim',
@@ -605,10 +605,10 @@ _SHARED_FLAGS: tuple[Flag, ...] = (
     Flag('vercel_url', None, replaces=('target',)),
     Flag('openai_model', None, replaces=('target',)),
     Flag('memory_entity', 'memory_entity_id'),
-    Flag('report_path'),
-    Flag('name', 'run_name'),
+    Flag('report_path', replaces=('report',)),
+    Flag('name', 'run_name', replaces=('evaluation_name',)),
     Flag('max_turns'),
-    Flag('datapoint_parallelism'),
+    Flag('datapoint_parallelism', replaces=('parallelism',)),
     Flag('llm_parallelism'),
     Flag('evaluator', 'evaluator_names'),
     Flag('save'),
@@ -652,7 +652,18 @@ _RUN_FLAGS: tuple[Flag, ...] = (
 
 # Config fields the CLI consumes itself: ``target`` and ``memory_entity_id`` become the resolved target object
 # (the SDK rejects a ``memory_entity_id`` beside an object target), and ``--report`` also accepts a directory.
-_CLI_OWNED_FIELDS = frozenset({'target', 'memory_entity_id', 'report_path'})
+# Aliases are resolved to current names by the config model; internal run functions receive only those names.
+_CLI_OWNED_FIELDS = frozenset({
+    'target',
+    'memory_entity_id',
+    'report_path',
+    'evaluation_name',
+    'evaluation_description',
+    'orq_results_path',
+    'exit_on_failure',
+    'report',
+    'parallelism',
+})
 
 
 def _forwarded_kwargs(cfg: BaseModel) -> dict[str, Any]:
@@ -686,8 +697,8 @@ def schema(
         ),
     ] = 'simulate',
 ) -> None:
-    """Print the JSON schema of `sim simulate` / `sim run`'s config file or of their JSON result."""
-    from evaluatorq.simulation.types import SimulationRun
+    """Print the JSON schema of `sim simulate` / `sim run`'s config or of their JSON result."""
+    from evaluatorq.simulation.contracts import SimulationRun
 
     if not input_schema:
         echo_schema(SimulationRun, output=True)
@@ -988,7 +999,7 @@ def simulate(
     ] = None,
     config_source: Annotated[
         str | None,
-        typer.Option('--config', metavar='PATH|-', help=_SIMULATE_CONFIG_HELP),
+        typer.Option('--config', metavar='PATH|JSON|-', help=_SIMULATE_CONFIG_HELP),
     ] = None,
     llm_config_json: Annotated[
         str | None,
@@ -1019,8 +1030,8 @@ def simulate(
     Note: --target agent:<key> invokes a hosted Orq agent through the Responses
     router. --target deployment:<key> uses the deployment callback path.
 
-    Every option above can also come from --config, a JSON file of simulate() keyword arguments, which
-    additionally accepts inline "datapoints", or "personas" and "scenarios", as the input source.
+    Every option above can also come from --config, which accepts inline JSON, a config path, or "-" for stdin.
+    The config additionally accepts "datapoints", or "personas" and "scenarios", as the input source.
     """
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
@@ -1295,7 +1306,7 @@ def run(
     ] = None,
     config_source: Annotated[
         str | None,
-        typer.Option('--config', metavar='PATH|-', help=_RUN_CONFIG_HELP),
+        typer.Option('--config', metavar='PATH|JSON|-', help=_RUN_CONFIG_HELP),
     ] = None,
     llm_config_json: Annotated[
         str | None,
@@ -1319,8 +1330,8 @@ def run(
     If --target is an agent target, --agent-description may be omitted and is
     fetched from Orq agent context. Other targets require --agent-description.
 
-    Every option above can also come from --config, a JSON file of generate_and_simulate() keyword arguments,
-    which additionally reaches the ones without a flag, such as "edge_case_percentage".
+    Every option above can also come from --config, which accepts inline JSON, a config path, or "-" for stdin.
+    This config object can also reach options without a flag, such as "edge_case_percentage".
     """
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
@@ -1840,7 +1851,7 @@ async def _generate_impl(
 def _load_results_for_export(input_path: Path) -> tuple[list[Any], list[Any]]:
     """Load ``(results, stored_recommendations)`` from a results JSONL or a
     full ``SimulationRun`` report JSON (the ``--report-output`` file)."""
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun
     from evaluatorq.simulation.utils.dataset_export import parse_jsonl
 
     content = input_path.read_text(encoding='utf-8')
@@ -1957,7 +1968,7 @@ def _validate_datapoints(path: Path) -> None:
     if not path.exists():
         raise typer.BadParameter(f'File not found: {path}')
 
-    from evaluatorq.simulation.types import SimulationDatapoint
+    from evaluatorq.simulation.contracts import SimulationDatapoint
 
     try:
         content = path.read_text(encoding='utf-8')

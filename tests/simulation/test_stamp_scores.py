@@ -17,7 +17,7 @@ import pytest
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.api import _notify_evaluator_complete, _stamp_evaluator_scores
 from evaluatorq.simulation.hooks import DefaultHooks
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     SimulationResult,
     TerminatedBy,
 )

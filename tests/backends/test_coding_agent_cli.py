@@ -4,8 +4,8 @@ import os
 import stat
 import subprocess
 from pathlib import Path
+from typing import Any
 
-from click import unstyle
 import pytest
 from typer.testing import CliRunner
 
@@ -45,13 +45,21 @@ def test_build_image_argv(tmp_path: Path) -> None:
     ]
 
 
-def test_build_image_missing_binary(tmp_path: Path) -> None:
-    missing = str(tmp_path / 'missing-docker')
-    result = CliRunner().invoke(app, ['build-image', '--binary', missing])
+def test_build_image_missing_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    missing = tmp_path / 'missing-docker'
+    assert not missing.exists()
+    real_popen = subprocess.Popen
+    started: list[subprocess.Popen[str] | subprocess.Popen[bytes]] = []
+
+    def observe_popen(args: list[str], **kwargs: Any) -> subprocess.Popen[str] | subprocess.Popen[bytes]:
+        process = real_popen(args, **kwargs)
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, 'Popen', observe_popen)
+    result = CliRunner().invoke(app, ['build-image', '--binary', str(missing)])
     assert result.exit_code == 2
-    output = ' '.join(unstyle(result.output).split())
-    assert 'Invalid value for --binary' in output
-    assert 'not' in output and 'found on PATH' in output
+    assert not started
 
 
 def test_build_dir_ships_both_files() -> None:

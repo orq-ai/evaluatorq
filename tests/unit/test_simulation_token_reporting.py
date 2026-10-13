@@ -9,7 +9,7 @@ from evaluatorq.contracts import Message, ReportSection, TokenUsage
 from evaluatorq.simulation.convert import to_open_responses
 from evaluatorq.simulation.reports import export_html, export_markdown
 from evaluatorq.simulation.reports.sections import build_report_sections
-from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TurnMetrics
+from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy, TurnMetrics
 
 
 def _result(token_usage: TokenUsage) -> SimulationResult:

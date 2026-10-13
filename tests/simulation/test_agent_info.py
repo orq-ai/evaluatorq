@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.simulation.types import AgentInfoSnapshot, SimulationRun
+from evaluatorq.simulation.contracts import AgentInfoSnapshot, SimulationRun
 from evaluatorq.simulation.utils.run_store import fetch_agent_info
 
 # ---------------------------------------------------------------------------

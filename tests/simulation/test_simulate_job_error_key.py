@@ -12,7 +12,7 @@ import pytest
 
 from evaluatorq.simulation.api import _build_simulation_job_and_cache
 from evaluatorq.simulation.runner.simulation import _error_result
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     EmotionalArc,
     Message,

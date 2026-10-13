@@ -25,7 +25,7 @@ from pydantic import (
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent, LLMResult
-from evaluatorq.simulation.types import Criterion, CriterionVerdict, Judgment, Message, criterion_id_for
+from evaluatorq.simulation.contracts import Criterion, CriterionVerdict, Judgment, Message, criterion_id_for
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable

@@ -27,7 +27,7 @@ from evaluatorq.dashboard.view import _sim_rowlist_wrapper, render_message_list
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from evaluatorq.simulation.types import SimulationEntry
+    from evaluatorq.simulation.contracts import SimulationEntry
 
 # ---------------------------------------------------------------------------
 # Role label mapping

@@ -7,7 +7,7 @@ import pytest
 
 from evaluatorq.simulation.agents.base import LLMResult
 from evaluatorq.simulation.agents.judge import JUDGE_TOOLS, JudgeAgent, JudgeAgentConfig
-from evaluatorq.simulation.types import Criterion, Message
+from evaluatorq.simulation.contracts import Criterion, Message
 
 
 @pytest.fixture
