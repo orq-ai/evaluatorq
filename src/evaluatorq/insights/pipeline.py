@@ -590,10 +590,20 @@ async def insights(  # noqa: C901
                 'n_matched': len(resolved.traces) if not resolved.compiled else 0,
                 'n_failed_match': 0,
             }
-            if population.query is not None and resolved.echo.get('filter_selection') == 'llm+jev':
-                run.population['finder_classifier_model'] = finder_classifier_model
-            elif population.query is not None and resolved.echo.get('filter_selection') == 'llm':
-                run.population['finder_filter_model'] = resolved.echo['filter_model']
+            if population.query is not None:
+                filter_selection = resolved.echo.get('filter_selection')
+                if filter_selection is None:
+                    # Query resolution normally records the chosen mode. Keep metadata
+                    # complete for legacy/mock resolvers that omit the echo field.
+                    from evaluatorq.trace_finder.settings import effective_settings
+
+                    filter_selection = population.filter_selection or effective_settings().filter_selection
+                if filter_selection == 'llm+jev':
+                    run.population['finder_classifier_model'] = finder_classifier_model
+                elif filter_selection == 'llm':
+                    run.population['finder_filter_model'] = resolved.echo.get(
+                        'filter_model', role_model('fast', task='finder.filters')
+                    )
             if _finder_export_source is not None and population.finder_export is not None:
                 run.population['finder_export'] = str(_finder_export_source)
                 if _finder_export_sha256 is not None:
