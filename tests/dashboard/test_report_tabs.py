@@ -66,7 +66,7 @@ def sim_run():
 @pytest.fixture()
 def sim_run_with_turn_metrics():
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import TurnMetrics
+    from evaluatorq.simulation.contracts import TurnMetrics
 
     def _tm(turn_number: int, response_quality: float, hallucination_risk: float) -> TurnMetrics:
         return TurnMetrics(
@@ -376,7 +376,7 @@ def test_filtered_cohort_template_shows_empty_message_when_no_conversations_matc
 def test_duplicate_persona_names_keep_conversation_cohorts_separate() -> None:
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
     def result(*, patience: float, score: float) -> SimulationResult:
         return SimulationResult(
@@ -464,7 +464,7 @@ def test_sim_turn_quality_single_turn_drops_tab() -> None:
     trend, a one-bar distribution), so the whole Turn quality tab drops out."""
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.types import TurnMetrics
+    from evaluatorq.simulation.contracts import TurnMetrics
 
     def _tm() -> TurnMetrics:
         return TurnMetrics(
@@ -516,7 +516,7 @@ def test_sim_overview_omits_persona_and_scenario_config_panels(sim_run) -> None:
 def test_sim_config_compacts_entities_and_prerenders_modal_details() -> None:
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
     traits = {
         'patience': 0.2,

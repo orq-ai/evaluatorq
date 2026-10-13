@@ -61,6 +61,7 @@ class DashboardSettings(BaseModel):
     orq_project_id: str | None = None
     orq_project_name: str | None = None
     explorer_columns: tuple[str, ...] | None = None
+    compression_inspector_enabled: bool = False
 
     def with_updates(self, updates: dict[str, Any], *, persistent: bool = True) -> DashboardSettings:
         """Validate updates while retaining saved source; caller updates win over saved values."""

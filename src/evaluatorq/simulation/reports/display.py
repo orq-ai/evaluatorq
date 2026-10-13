@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from rich.console import Console
 
     from evaluatorq.contracts import ReportSection, Usage
-    from evaluatorq.simulation.types import SimulationResult
+    from evaluatorq.simulation.contracts import SimulationResult
 
 
 def print_simulation_summary(

@@ -16,7 +16,7 @@ from evaluatorq.simulation.experiments import (
     extend_from_experiment,
 )
 from evaluatorq.simulation.generators import DatapointGenerator
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Persona,
     Scenario,

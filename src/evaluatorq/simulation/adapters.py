@@ -14,7 +14,7 @@ from evaluatorq.contracts import AgentResponse, content_to_text
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from evaluatorq.simulation.types import Message
+    from evaluatorq.simulation.contracts import Message
 
 
 def from_orq_deployment(

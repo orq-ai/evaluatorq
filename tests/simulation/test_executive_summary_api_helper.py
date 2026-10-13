@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from evaluatorq.simulation.types import SimulationRun
+from evaluatorq.simulation.contracts import SimulationRun
 
 
 def _run(results):

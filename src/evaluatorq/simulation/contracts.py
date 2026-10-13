@@ -1,0 +1,805 @@
+"""Core type definitions for the agent simulation framework.
+
+Uses Pydantic models for maximum compatibility with generators/runner/agents.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime  # noqa: TC003
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, computed_field
+from typing_extensions import TypedDict
+
+from evaluatorq.contracts import (
+    DEFAULT_PIPELINE_MODEL,
+    Message,
+    ResponseTrace,
+    RunSummary,
+    StrEnum,
+    TokenUsage,
+)
+
+DEFAULT_MODEL = DEFAULT_PIPELINE_MODEL
+"""The built-in fast model, kept for imports. Simulation call sites resolve their model
+role through ``evaluatorq.common.model_roles`` instead of reading this."""
+
+DEFAULT_MAX_TURNS = 10
+"""Turn cap when the caller names none. The public ``max_turns`` defaults to
+``None`` rather than to this value so a replay can tell "unset" from
+"explicitly 10" and restore the replayed run's cap only in the former case."""
+
+DEFAULT_RUN_NAME = 'sim'
+"""Name a run is saved under when the caller names none."""
+
+
+class AgentInfoSnapshot(TypedDict, total=False):
+    """Best-effort snapshot of an ORQ agent's configuration, as fetched by
+    ``fetch_agent_info`` and stored on ``SimulationRun.agent_info``.
+
+    Deliberately excludes the agent's system prompt / instructions.
+    """
+
+    key: str
+    id: str | None
+    role: str | None
+    description: str | None
+    model: str | None
+    tools: list[str]
+    skills: list[str]
+    knowledge_bases: list[str]
+    memory_stores: list[str]
+    sub_agents: list[str]
+    version: str | None
+    agent_type: str | None
+    engine: str | None
+    workspace_id: str | None
+    workspace_key: str | None
+    base_url: str
+    url: str | None
+
+
+# Default evaluators applied when none are explicitly requested. Single source
+# of truth shared by ``api.simulate`` and the CLI run-store record.
+DEFAULT_EVALUATOR_NAMES = ['goal_achieved', 'criteria_met']
+
+
+# ---------------------------------------------------------------------------
+# Literal union types (StrEnum for Python 3.10 compat)
+# ---------------------------------------------------------------------------
+
+
+class CommunicationStyle(StrEnum):
+    formal = 'formal'
+    casual = 'casual'
+    terse = 'terse'
+    verbose = 'verbose'
+
+
+class StartingEmotion(StrEnum):
+    neutral = 'neutral'
+    frustrated = 'frustrated'
+    confused = 'confused'
+    happy = 'happy'
+    urgent = 'urgent'
+
+
+class EmotionalArc(StrEnum):
+    stable = 'stable'
+    escalating = 'escalating'
+    de_escalating = 'de_escalating'
+    volatile = 'volatile'
+    manipulative = 'manipulative'
+    hostile = 'hostile'
+
+
+class CulturalContext(StrEnum):
+    neutral = 'neutral'
+    direct = 'direct'
+    indirect = 'indirect'
+    high_context = 'high_context'
+    low_context = 'low_context'
+    hierarchical = 'hierarchical'
+
+
+class ConversationStrategy(StrEnum):
+    cooperative = 'cooperative'
+    topic_switching = 'topic_switching'
+    contradictory = 'contradictory'
+    multi_intent = 'multi_intent'
+    evasive = 'evasive'
+    repetitive = 'repetitive'
+    ambiguous = 'ambiguous'
+
+
+class InputFormat(StrEnum):
+    plain_text = 'plain_text'
+    with_url = 'with_url'
+    with_attachment = 'with_attachment'
+    form_data = 'form_data'
+    code_block = 'code_block'
+    mixed_media = 'mixed_media'
+
+
+class TerminatedBy(StrEnum):
+    judge = 'judge'
+    max_turns = 'max_turns'
+    error = 'error'
+    timeout = 'timeout'
+
+
+# ---------------------------------------------------------------------------
+# Constant instruction maps
+# ---------------------------------------------------------------------------
+
+EMOTIONAL_ARC_INSTRUCTIONS: dict[EmotionalArc, str] = {
+    EmotionalArc.stable: '',
+    EmotionalArc.escalating: (
+        'Your emotional intensity escalates over the course of the conversation. '
+        'Start relatively calm but become progressively more frustrated, impatient, or upset '
+        'with each turn, especially if the agent is slow to resolve your issue. '
+        'By the end, you should be noticeably more emotional than at the start.'
+    ),
+    EmotionalArc.de_escalating: (
+        'You start the conversation very upset, frustrated, or angry. As the agent responds '
+        'and shows willingness to help, you gradually calm down. Your tone softens over time, '
+        'and by the end you may even express gratitude. However, any misstep by the agent '
+        'can temporarily reverse this trend.'
+    ),
+    EmotionalArc.volatile: (
+        'Your emotional state is volatile and unpredictable. Swing between being calm, '
+        'frustrated, grateful, and confused within the same conversation. A small positive '
+        'response from the agent might suddenly improve your mood, while a minor setback '
+        'could trigger strong frustration. Your reactions should feel disproportionate.'
+    ),
+    EmotionalArc.manipulative: (
+        'You use emotional manipulation tactics to get what you want. Employ guilt-tripping '
+        "('I've been a loyal customer for years and this is how you treat me?'), flattery "
+        "('You seem so much more competent than the last agent'), threats to escalate "
+        "('I'll leave a bad review'), or appeals to sympathy ('This is ruining my day'). "
+        'Switch between these tactics based on what seems to be working.'
+    ),
+    EmotionalArc.hostile: (
+        'You are genuinely hostile and confrontational. Use aggressive language, make '
+        "unreasonable demands, and challenge the agent's competence. Express contempt and "
+        "refuse to cooperate with standard procedures. This tests the agent's ability to "
+        'maintain professionalism and de-escalate under pressure.'
+    ),
+}
+
+CULTURAL_CONTEXT_INSTRUCTIONS: dict[CulturalContext, str] = {
+    CulturalContext.neutral: '',
+    CulturalContext.direct: (
+        'You communicate in a very direct, low-context style typical of Northern European '
+        'or North American cultures. Say exactly what you mean without hints or implication. '
+        "Get straight to the point. 'No' means 'no' — you don't soften refusals."
+    ),
+    CulturalContext.indirect: (
+        'You communicate indirectly, typical of many East Asian or Southeast Asian cultures. '
+        "Avoid saying 'no' directly — instead use phrases like 'that might be difficult' or "
+        "'I'll think about it.' Hint at problems rather than stating them outright. Use hedging "
+        "language ('perhaps', 'maybe', 'it seems'). Preserving harmony is important."
+    ),
+    CulturalContext.high_context: (
+        'You rely heavily on context and implication rather than explicit statements. '
+        'You expect the agent to read between the lines and understand unstated needs. '
+        'You may reference shared knowledge without explaining it. Use fewer words but '
+        'expect more understanding. Silence can be meaningful.'
+    ),
+    CulturalContext.low_context: (
+        'You spell everything out explicitly and leave nothing to interpretation. '
+        'Provide full context with every message. Repeat important details. '
+        "Don't assume the agent remembers previous context. "
+        'Be thorough and detailed in every message.'
+    ),
+    CulturalContext.hierarchical: (
+        'You approach the interaction with a strong sense of hierarchy, typical of many '
+        'Middle Eastern, East Asian, or South Asian cultures. You may expect formal address, '
+        "defer to authority ('can I speak to a manager?'), and be uncomfortable challenging "
+        "the agent's statements directly. Status and titles matter to you."
+    ),
+}
+
+STRATEGY_INSTRUCTIONS: dict[ConversationStrategy, str] = {
+    ConversationStrategy.cooperative: '',
+    ConversationStrategy.topic_switching: (
+        'You frequently switch topics mid-conversation. After a few exchanges about your main goal, '
+        'bring up unrelated questions or concerns before returning to your original topic. '
+        "This tests the agent's ability to handle context switching."
+    ),
+    ConversationStrategy.contradictory: (
+        'You contradict yourself during the conversation. Say one thing, then later say the opposite '
+        'or change your requirements. For example, first ask for a refund, then say you actually want '
+        "a replacement. This tests the agent's ability to handle inconsistent user input."
+    ),
+    ConversationStrategy.multi_intent: (
+        'You have multiple goals packed into each message. Combine questions, requests, and complaints '
+        'in single messages. For example, ask about your order status while also requesting a password '
+        'reset and complaining about a previous experience.'
+    ),
+    ConversationStrategy.evasive: (
+        "You are evasive and avoid directly answering the agent's questions. Give vague or incomplete "
+        'responses when asked for details. The agent needs to work harder to extract the information '
+        'it needs to help you.'
+    ),
+    ConversationStrategy.repetitive: (
+        'You repeat your requests and questions even after the agent has addressed them. Ask the same '
+        "thing in slightly different ways, as if you didn't understand or weren't satisfied with "
+        "the response. This tests the agent's patience and ability to rephrase explanations."
+    ),
+    ConversationStrategy.ambiguous: (
+        'You are deliberately vague and unclear in your requests. Use imprecise language, '
+        'avoid giving specific details, and make the agent work to understand what you actually need. '
+        'When the agent asks clarifying questions, give partial or still-ambiguous answers. '
+        "For example, say 'the thing isn't working' instead of specifying which product or error."
+    ),
+}
+
+INPUT_FORMAT_INSTRUCTIONS: dict[InputFormat, str] = {
+    InputFormat.plain_text: '',
+    InputFormat.with_url: (
+        'Include relevant URLs in your messages. Reference links to products, order pages, '
+        'screenshots, or documentation.'
+    ),
+    InputFormat.with_attachment: (
+        "Reference file attachments in your messages as if you're uploading them. "
+        'Mention screenshots, receipts, photos, or documents.'
+    ),
+    InputFormat.form_data: (
+        'Structure your messages like filled-out forms or structured data. Include labeled fields, '
+        'order details in a structured format, or table-like information.'
+    ),
+    InputFormat.code_block: (
+        'Include code snippets, error logs, stack traces, or technical output in your messages. '
+        'Wrap technical content in code blocks.'
+    ),
+    InputFormat.mixed_media: (
+        'Mix different input types in your messages. Combine plain text with URLs, '
+        'attachment references, structured data, or code blocks.'
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
+# Persona
+# ---------------------------------------------------------------------------
+
+
+class Persona(BaseModel):
+    """A simulated user profile driving one side of a conversation.
+
+    Usage:
+
+    ```python
+    from evaluatorq.simulation import CommunicationStyle, EmotionalArc, Persona
+
+    persona = Persona(
+        name="Impatient Customer",
+        patience=0.2,
+        assertiveness=0.8,
+        politeness=0.4,
+        technical_level=0.3,
+        communication_style=CommunicationStyle.terse,
+        background="Received the wrong item and wants a refund urgently",
+        emotional_arc=EmotionalArc.escalating,  # optional: tone escalates each turn
+    )
+    ```
+
+    See `Scenario` for the matching goal/criteria half of a simulation datapoint.
+    """
+
+    name: str
+    patience: float
+    assertiveness: float
+    politeness: float
+    technical_level: float
+    communication_style: CommunicationStyle
+    background: str
+    emotional_arc: EmotionalArc | None = None
+    cultural_context: CulturalContext | None = None
+
+
+# ---------------------------------------------------------------------------
+# Criterion
+# ---------------------------------------------------------------------------
+
+
+class Criterion(BaseModel):
+    """A pass/fail check attached to a `Scenario`, scored by the ``criteria_met`` evaluator.
+
+    Usage:
+
+    ```python
+    from evaluatorq.simulation import Criterion
+
+    criteria = [
+        Criterion(description="Agent asks for order details", type="must_happen"),
+        Criterion(description="Agent blames the customer", type="must_not_happen"),
+    ]
+    ```
+    """
+
+    description: str
+    type: Literal['must_happen', 'must_not_happen']
+    evaluator: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Scenario
+# ---------------------------------------------------------------------------
+
+
+class Scenario(BaseModel):
+    """The goal and success criteria a `Persona` pursues in one simulated conversation.
+
+    Usage:
+
+    ```python
+    from evaluatorq.simulation import Criterion, Scenario, StartingEmotion
+
+    scenario = Scenario(
+        name="Wrong Item Refund",
+        goal="Get a full refund for the wrong item received",
+        context="Customer ordered headphones but received a phone case instead",
+        starting_emotion=StartingEmotion.frustrated,
+        criteria=[Criterion(description="Agent asks for order details", type="must_happen")],
+    )
+    ```
+    """
+
+    name: str
+    goal: str
+    context: str | None = None
+    starting_emotion: StartingEmotion | None = None
+    criteria: list[Criterion] | None = None
+    is_edge_case: bool | None = None
+    conversation_strategy: ConversationStrategy | None = None
+    ground_truth: str | None = None
+    input_format: InputFormat | None = None
+
+
+# ---------------------------------------------------------------------------
+# Judgment
+# ---------------------------------------------------------------------------
+
+
+CRITERION_ID_PATTERN = r'^criteria_\d+$'
+"""Shape of a criterion id. Ids are positional (``criteria_0`` is the first
+criterion in `Scenario.criteria`), so this is the one place the format is written
+down; `criterion_id_for` and `CriterionVerdict.index` are the only ways to build
+or read one."""
+
+
+def criterion_id_for(index: int) -> str:
+    """The id of the criterion at `index` in a scenario's criteria list.
+
+    Every id in `rules_broken`, `criteria_results` and `criteria_meta` comes from
+    here. It used to be an inline f-string in nine places, which is nine chances
+    for the prompt, the parser and the report to disagree about what identifies a
+    criterion.
+    """
+    return f'criteria_{index}'
+
+
+class CriterionVerdict(BaseModel):
+    """One criterion's **occurrence** report for a single turn.
+
+    Occurrence, never pass/fail: `occurred` answers "did the described behaviour
+    appear?", which means the same thing for both `Criterion.type` values. A
+    pass/fail flag inverts between them and models get it backwards — gpt-5.4-mini
+    marked a satisfied `must_happen` as unmet while its own reason said otherwise.
+    The type-to-verdict mapping lives in code, where it cannot be confused.
+    """
+
+    criterion_id: str = Field(
+        pattern=CRITERION_ID_PATTERN,
+        description='The criterion id exactly as listed under EVALUATION CRITERIA, e.g. "criteria_0". '
+        'Copy it; do not paraphrase or renumber.',
+    )
+    occurred: bool = Field(
+        description='true if the described behaviour has actually appeared in the conversation so far, '
+        'false if it has not. Answer for the description alone, ignoring whether the criterion is '
+        'must_happen or must_not_happen.'
+    )
+    evidence: str = Field(
+        default='',
+        description='Short quote from the conversation showing the behaviour, or empty when occurred is false.',
+    )
+
+    @property
+    def index(self) -> int:
+        """Position in the scenario's criteria list, for stable ordering.
+
+        Derived from `criterion_id` rather than reported next to it: one value to
+        validate, and the two can never disagree. The id is what crosses the wire
+        because the judge copies it from the prompt, whereas a bare integer makes
+        it *count* — and a miscount lands in range on the neighbouring criterion,
+        which is usually of the opposite type, silently inverting a verdict. An
+        out-of-range id is merely dropped and warned about.
+        """
+        return int(self.criterion_id.removeprefix('criteria_'))
+
+
+class Judgment(BaseModel):
+    should_terminate: bool
+    reason: str
+    goal_achieved: bool
+    rules_broken: list[str]
+    goal_completion_score: float
+    criteria_verdicts: list[CriterionVerdict] | None = None
+    """Per-criterion **occurrence** audit for this turn, ordered by criterion index.
+
+    Three states, all distinct. ``None`` means the judge reported nothing —
+    **unknown, never passed**; the run is marked `criteria_verified=False`. An
+    empty list means it audited and had nothing left to report, which is the
+    normal state once every criterion is settled. A non-empty list is evidence.
+
+    Only a non-empty list marks the run verified. ``[]`` is trusted as "nothing
+    left" precisely because something was already reported, which set the flag —
+    a run whose every turn returned ``[]`` audited nothing, and the judge warns at
+    the turn it happens.
+
+    ``occurred=True`` means the described behaviour has appeared in the
+    conversation so far — regardless of whether the criterion wanted it. Pass/fail
+    is derived from occurrence + `Criterion.type` in code, never asked of the
+    judge: a pass/fail flag inverts between the two types and models get it
+    backwards.
+
+    Pass/fail used to be inferred from the absence of an id in ``rules_broken``,
+    which made a ``must_happen`` criterion structurally unfailable — never
+    occurring is not a violation the judge is asked to report (RES-1308)."""
+    response_quality: float | None = None
+    hallucination_risk: float | None = None
+    tone_appropriateness: float | None = None
+    factual_accuracy: float | None = None
+
+
+class CriteriaMeta(BaseModel):
+    """Persisted, validated detail for one scenario criterion.
+
+    This is the producer/consumer contract for ``SimulationResult.metadata``.
+    Presentation-only fields such as ``state`` and ``safety`` belong to
+    ``CriteriaRow`` and are derived after this model has been validated.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    id: StrictStr
+    description: StrictStr
+    type: Literal['must_happen', 'must_not_happen']
+    passed: StrictBool
+    audited: StrictBool | None = None
+    evidence: StrictStr | None = None
+
+
+def parse_criteria_meta(raw: object) -> tuple[list[CriteriaMeta], list[object]]:
+    """Validate persisted criteria metadata without inventing defaults."""
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        return [], [raw]
+    valid: list[CriteriaMeta] = []
+    invalid: list[object] = []
+
+    def parse_entry(entry: object) -> CriteriaMeta | None:
+        try:
+            return CriteriaMeta.model_validate(entry)
+        except ValidationError:
+            return None
+
+    for entry in raw:
+        parsed = parse_entry(entry)
+        if parsed is None:
+            invalid.append(entry)
+        else:
+            valid.append(parsed)
+    return valid, invalid
+
+
+# ---------------------------------------------------------------------------
+# TurnMetrics
+# ---------------------------------------------------------------------------
+
+
+class TurnMetrics(BaseModel):
+    turn_number: int = Field(description='1-based turn this entry scores.')
+    token_usage: TokenUsage = Field(description='Tokens spent during this turn: user simulator, target and judge.')
+    response_quality: float | None = Field(default=None, description='Judge score 0-1; None when not scored.')
+    hallucination_risk: float | None = Field(
+        default=None, description='Judge score 0-1, higher is riskier; None when not scored.'
+    )
+    tone_appropriateness: float | None = Field(default=None, description='Judge score 0-1; None when not scored.')
+    factual_accuracy: float | None = Field(default=None, description='Judge score 0-1; None when not scored.')
+    judge_reason: str = Field(description="The judge's reasoning for this turn.")
+
+
+# ---------------------------------------------------------------------------
+# SimulationResult
+# ---------------------------------------------------------------------------
+
+
+class SimulationResult(BaseModel):
+    messages: list[Message] = Field(
+        description='The conversation transcript in order: simulated-user turns, target replies (with tool_calls), '
+        "and a role='tool' row for each tool result."
+    )
+    terminated_by: TerminatedBy = Field(description='Why the conversation stopped: judge, max_turns, timeout or error.')
+    reason: str = Field(description='Human-readable explanation of the termination.')
+    goal_achieved: bool = Field(description="Whether the judge found the scenario's goal reached.")
+    goal_completion_score: float = Field(description='Judge estimate 0-1 of how much of the goal was reached.')
+    rules_broken: list[str] = Field(
+        description='Ids (criteria_<n>) of the scenario criteria that failed, when criteria_verified is True; '
+        'otherwise the free-text list from the judge, passed through. See metadata["criteria_meta"] for detail.'
+    )
+    turn_count: int = Field(description='Target replies in the transcript.')
+    token_usage: TokenUsage = Field(description='Tokens spent on this conversation, summed over every call.')
+    token_usage_known: bool = Field(
+        default=True,
+        description='Whether token usage was fully collected. False means the result contains partial usage and '
+        'must be treated as unknown rather than as a zero-cost run.',
+    )
+    turn_metrics: list[TurnMetrics] = Field(description='Per-turn judge scores and token usage.')
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description='Persona, scenario and criteria detail, evaluator scores, and error/error_type on failed '
+        'results. A convention, not a schema: keys may be absent. The output reference guide lists every key.',
+    )
+    criteria_results: dict[str, bool] | None = Field(
+        default=None,
+        description='Criterion description to pass/fail. Two criteria with the same description share a key; '
+        'read metadata["criteria_meta"] for the id-keyed form.',
+    )
+    criteria_verified: bool | None = Field(
+        default=None,
+        description='Whether criteria_results rests on the judge per-criterion occurrence audit. '
+        'False means the audit never arrived (a custom judge that does not report it, or a judge that '
+        'malfunctioned and terminated for safety), so the verdicts fell back to the free-text '
+        'rules_broken list, which cannot fail a must_happen criterion — treat them as unknown, not met. '
+        'None for runs saved before this field existed.',
+    )
+    evaluator_details: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description='Structured raw output from evaluators that provide detail, keyed by evaluator name. '
+        'Built-in criteria_met carries per-criterion audit records and conversation_quality carries its '
+        'component scores and weights; custom evaluator raw output is retained too. The field is included '
+        'in saved SimulationRun and JSONL result exports. Empty when no evaluator provided structured output.',
+    )
+    total_turns: int | None = Field(
+        default=None, description='Legacy field not populated by simulation runs; read turn_count.'
+    )
+    thread_id: str | None = Field(
+        default=None,
+        description='Orq observability thread id for this conversation (deterministic: f"{run_id}:{index}"). '
+        'None for runs saved before thread grouping existed.',
+    )
+    response_traces: list[ResponseTrace] = Field(
+        default_factory=list,
+        description='Per-turn Orq trace/span handles for each successful target-agent response '
+        '(excludes user-simulator and judge calls), in turn order. Empty for non-Orq targets and for '
+        'runs saved before this field existed.',
+    )
+
+    @property
+    def last_trace_id(self) -> str | None:
+        """Trace id of the last successful target response, for the table deep-link."""
+        for rt in reversed(self.response_traces):
+            if rt.trace_id:
+                return rt.trace_id
+        return None
+
+
+# ---------------------------------------------------------------------------
+# SimulationDatapoint
+# ---------------------------------------------------------------------------
+
+
+class SimulationDatapoint(BaseModel):
+    id: str
+    persona: Persona
+    scenario: Scenario
+    user_system_prompt: str
+    """Cached/serialized system prompt. Used for export only — the runner
+    always rebuilds from persona + scenario via ``build_datapoint_system_prompt``."""
+    first_message: str
+
+
+# ---------------------------------------------------------------------------
+# SimulationRecommendation
+# ---------------------------------------------------------------------------
+
+
+class SimulationRecommendation(BaseModel):
+    """LLM-generated remediation suggestion for one failed simulation result.
+
+    ``result_index`` is the position in ``SimulationRun.results`` /
+    the exporter's results list; ``datapoint_id`` is carried from result
+    metadata when available.
+    """
+
+    result_index: int
+    datapoint_id: str | None = None
+    persona: str
+    scenario: str
+    triggers: list[str]
+    """What flagged this result, one ``<kind>: <evidence>`` entry each — e.g.
+    ``rule_broken: quoted internal ticket ID`` or ``low_factual_accuracy:
+    factual_accuracy averaged 0.30 across 4 turns``."""
+    suggestions: list[str]
+
+    @property
+    def recommendations(self) -> list[str]:
+        """Harmonized accessor: the shared apply engine (common.apply) reads
+        actionable bullets as ``recommendations`` on every surface."""
+        return self.suggestions
+
+
+# ---------------------------------------------------------------------------
+# SimulationRun  (run-store record)
+# ---------------------------------------------------------------------------
+
+
+class SimulationRun(BaseModel):
+    run_name: str
+    created_at: datetime
+    mode: Literal['run', 'simulate', 'generate']
+    target_kind: Literal['orq_agent', 'orq_deployment', 'vercel', 'openai_model', 'callback']
+    # The concrete target under test: agent key / deployment key / model id /
+    # 'callback'. ``target_model`` is the model that target used *when the client
+    # knows it* (OpenAI-model targets); for orq agents/deployments the model is
+    # server-side config, so it stays None. Optional for back-compat with runs
+    # saved before these fields existed.
+    target: str | None = None
+    target_model: str | None = None
+    # Configured turn cap for the run. Optional for back-compat with runs saved
+    # before this field existed (older reports simply omit the Config row).
+    max_turns: int | None = None
+    # Snapshot of the ORQ agent's configuration at run time (orq_agent targets
+    # only; None for other target kinds, fetch failures, and pre-existing runs).
+    # Deliberately excludes the system prompt / instructions.
+    agent_info: AgentInfoSnapshot | None = None
+    orq_base_url: str | None = None
+    """The Orq host that served this run (``ORQ_BASE_URL`` or the prod default),
+    recorded so a saved run remembers which deployment — prod / staging / on-prem
+    — it ran against. None when no Orq agent/deployment was used (plain callable /
+    OpenAI-model targets) and for runs saved before this field existed."""
+    evaluator_names: list[str]
+    total_results: int
+    scorer_averages: dict[str, float]
+    results: list[SimulationResult]
+    datapoints: list[SimulationDatapoint] | None = None
+    """The exact cases this run simulated, stored so the run can be replayed
+    verbatim (``previous_run=`` / ``--from-run``). Results alone don't carry
+    enough — they keep persona/scenario *names*, not the objects. None for runs
+    saved before this field existed, which therefore cannot be replayed."""
+    replay_version: int | None = None
+    """Format version of the replay payload above, stamped when ``datapoints`` is
+    written so a future format change reports itself instead of failing
+    structurally. None for runs saved before versioning, which read as v1."""
+    executive_summary: str | None = None
+    token_usage_total: TokenUsage | None = None
+    """Combined priced token usage for the entire run: every datapoint's
+    ``SimulationResult.token_usage`` (``simulate`` and ``generate_and_simulate``
+    both fold this in), plus — for ``generate_and_simulate`` — the GENERATE
+    stage's persona+scenario generation cost, plus the executive summary's own
+    completion cost when one was generated. Set once by ``_simulate_core``
+    right after the per-datapoint total is known, then updated in place after
+    every later post-processing step that can spend tokens (currently the
+    executive summary) — so it always reflects the finished run, never a
+    snapshot taken before generation or the summary ran. A step that fails or
+    reports no usage (no LLM creds, an error, or nothing billed) leaves this
+    field unchanged rather than folding in a zero. ``None`` only for runs
+    saved before this field existed."""
+    run_id: str | None = None
+    """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
+    conversation's ``thread_id`` (``{run_id}:{index}``). Powers the dashboard's
+    'View all run traces' deep link. None for older runs."""
+    experiment_url: str | None = None
+    """Absolute URL of the Orq experiment this run was uploaded to, captured from the
+    results upload. Powers the terminal 'View on Orq' line and the dashboard's
+    'Open experiment' button. None when upload was skipped/failed or for older runs."""
+    recommendations: list[SimulationRecommendation] | None = None
+    """LLM-generated remediation suggestions for remediable failures
+    (see ``reports.recommendations``). None when never generated."""
+    applied_suggestions: list[str] = Field(default_factory=list)
+    """Suggestion strings already applied to the agent via ``reports.apply``.
+    Written back onto the run so the dashboard renders them differently and a
+    later apply skips them instead of re-applying the same fix."""
+
+    def manifest_summary(self) -> RunSummary:
+        """Compact run-list summary stored on this run's ``RunManifest``.
+
+        Single source of truth for the shape: the runner writes it on completion
+        and the dashboard's backfill writes it for legacy runs. `eq sim runs`
+        reads every field here, so a second hand-rolled shape silently blanks
+        columns.
+        """
+        return {
+            'mode': self.mode,
+            'target_kind': self.target_kind,
+            'total_results': self.total_results,
+            'scorer_averages': dict(self.scorer_averages),
+        }
+
+
+# ---------------------------------------------------------------------------
+# View models for individual_results section entries
+# ---------------------------------------------------------------------------
+
+
+class TranscriptMessage(BaseModel):
+    """A single message in a conversation transcript (role + content)."""
+
+    role: str
+    content: str
+
+
+class CriteriaRow(BaseModel):
+    """One criterion row as emitted by _criteria_rows().
+
+    Field order MUST match the key order of the dicts returned by
+    ``_criteria_rows()`` so that ``model_dump(mode='json')`` is byte-identical
+    to the hand-built dict — which it is by construction, because that function
+    builds these objects and dumps them. Computed fields dump last.
+    """
+
+    id: str
+    description: str
+    type: Literal['must_happen', 'must_not_happen'] | None
+    passed: bool
+    safety: bool
+    audited: bool | None = None
+    """Whether the judge actually returned an occurrence verdict for this
+    criterion. ``None`` on runs saved before the field existed."""
+    evidence: str | None = None
+    """Quote from the turn where occurrence first flipped; ``None`` when the
+    criterion never occurred, no quote was given, or the run predates the field."""
+
+    @computed_field
+    @property
+    def state(self) -> Literal['pass', 'fail', 'unknown']:
+        """The rendering verdict every surface must use instead of ``passed``.
+
+        ``'unknown'`` means the criterion passed only by default, because the
+        judge never audited it — a default-passing ``must_not_happen`` nobody
+        checked is exactly the flattering silence RES-1308 is about, and no
+        renderer may paint it green. A failing unaudited criterion stays
+        ``'fail'``; that reading is already conservative. Computed here so the
+        dashboard, the HTML report and the markdown export cannot each invent
+        their own rule.
+        """
+        if self.passed and self.audited is False:
+            return 'unknown'
+        return 'pass' if self.passed else 'fail'
+
+
+class SimulationEntry(BaseModel):
+    """View model for one entry in the individual_results section.
+
+    Field declaration order matches the dict built in
+    ``_build_individual_results_section`` exactly so that
+    ``model_dump(mode='json')`` produces byte-identical output.
+    """
+
+    index: int
+    persona: str
+    scenario: str
+    model: str
+    target_model: str | None
+    terminated_by: str  # stored as .value — plain str, never an enum repr
+    goal_achieved: bool
+    goal_completion_score: float
+    rules_broken: list[str]
+    criteria: list[CriteriaRow]
+    criteria_verified: bool | None
+    """Mirrors ``SimulationResult.criteria_verified``. ``False`` means the judge
+    returned no per-criterion audit, so the whole criteria block is unknown and
+    `criteria_met` scored the run 0.0 — renderers say so instead of showing a
+    tally that contradicts the score. ``None`` on runs saved before the field."""
+    turn_count: int
+    total_tokens: int
+    judge_reason: str
+    error: str | None
+    evaluator_scores: dict[str, float]
+    transcript: list[TranscriptMessage]
+    thread_id: str | None = None
+    last_trace_id: str | None = None

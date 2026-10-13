@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from evaluatorq.simulation.runner.simulation import _build_criteria_meta
-from evaluatorq.simulation.types import Criterion, Judgment, Scenario
+from evaluatorq.simulation.contracts import Criterion, Judgment, Scenario
 
 
 def _scenario() -> Scenario:

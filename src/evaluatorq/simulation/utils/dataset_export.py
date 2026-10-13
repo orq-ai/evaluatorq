@@ -11,7 +11,7 @@ from typing import Any, TypeVar, overload
 from pydantic import BaseModel
 
 from evaluatorq.simulation._datapoint_io import _as_obj
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Persona,
     Scenario,

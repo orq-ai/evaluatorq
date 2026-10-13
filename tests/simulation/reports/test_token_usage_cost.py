@@ -13,7 +13,7 @@ import pytest
 from evaluatorq.contracts import Message, TokenUsage
 from evaluatorq.simulation.reports.sections import _build_token_usage_section
 from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
-from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
 
 def _make_result(*, token_usage: TokenUsage) -> SimulationResult:

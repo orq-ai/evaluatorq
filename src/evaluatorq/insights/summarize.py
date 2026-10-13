@@ -44,6 +44,8 @@ if TYPE_CHECKING:
 
 # Output cap for one summary call; `estimate.py` prices a summary and its embedding from it.
 SUMMARY_MAX_TOKENS = 4096
+# Each tool call and the start and end of its result, so a failed command is visible to the `failure` dimension.
+SUMMARY_TOOL_RESULT_CHARS = 300
 
 # Ported from `trace_intelligence/core/summarization.py::DEFAULT_SUMMARY_PROMPT`.
 # The scalar fields upstream packed into this schema (`user_frustration`,

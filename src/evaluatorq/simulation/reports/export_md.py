@@ -43,7 +43,7 @@ from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import ReportSection, Usage
-    from evaluatorq.simulation.types import SimulationRecommendation, SimulationResult
+    from evaluatorq.simulation.contracts import SimulationRecommendation, SimulationResult
 
 # ---------------------------------------------------------------------------
 # Section renderers

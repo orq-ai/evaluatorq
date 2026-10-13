@@ -31,11 +31,13 @@ def test_runs_lists_manifest_backed_status_and_stats(tmp_path: Path) -> None:
         },
     )
 
-    result = CliRunner().invoke(redteam_app, ['runs', str(runs)])
+    result = CliRunner().invoke(redteam_app, ['runs', str(runs), '--json'])
     assert result.exit_code == 0, result.output
-    assert 'manifest-run' in result.stdout
-    assert 'completed' in result.stdout
-    assert '40%' in result.stdout
+    row = json.loads(result.stdout)[0]
+    assert row['run_name'] == 'manifest-run'
+    assert row['status'] == 'completed'
+    assert row['total_attacks'] == 5
+    assert row['vulnerability_rate'] == 0.4
 
 
 def test_runs_shows_in_flight_run_status(tmp_path: Path) -> None:

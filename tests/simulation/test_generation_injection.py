@@ -6,7 +6,7 @@ import pytest
 
 from evaluatorq.contracts import AgentContext, LLMCallConfig
 from evaluatorq.simulation.api import generate, generate_and_simulate, simulate
-from evaluatorq.simulation.types import CommunicationStyle, Judgment, Persona, Scenario, SimulationDatapoint
+from evaluatorq.simulation.contracts import CommunicationStyle, Judgment, Persona, Scenario, SimulationDatapoint
 
 
 def _persona() -> Persona:

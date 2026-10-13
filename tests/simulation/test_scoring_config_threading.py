@@ -24,7 +24,7 @@ import pytest
 
 from evaluatorq.simulation.api import generate_and_simulate, simulate
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Judgment,
     Persona,
@@ -33,7 +33,7 @@ from evaluatorq.simulation.types import (
     SimulationResult,
     TerminatedBy,
 )
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     TokenUsage as _TU,
 )
 

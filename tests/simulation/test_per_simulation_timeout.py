@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from evaluatorq.simulation.api import simulate
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Judgment,
     Persona,
@@ -22,7 +22,7 @@ from evaluatorq.simulation.types import (
     SimulationDatapoint,
     TerminatedBy,
 )
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     TokenUsage as _TU,
 )
 

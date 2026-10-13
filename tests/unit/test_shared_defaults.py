@@ -15,7 +15,7 @@ from evaluatorq.contracts import (
 )
 from evaluatorq.llm_jury import DEFAULT_JUDGE_MODEL
 from evaluatorq.simulation.agents.base import DEFAULT_MAX_TOKENS
-from evaluatorq.simulation.types import DEFAULT_MODEL
+from evaluatorq.simulation.contracts import DEFAULT_MODEL
 
 
 def test_shared_default_is_provider_prefixed():

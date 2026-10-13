@@ -22,7 +22,7 @@ from evaluatorq.simulation.quality.message_perturbation import apply_random_pert
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
 if TYPE_CHECKING:
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         Persona,
         Scenario,
         SimulationDatapoint,

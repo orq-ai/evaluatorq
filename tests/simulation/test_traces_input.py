@@ -22,7 +22,7 @@ from evaluatorq.simulation.traces import (
     fetch_trace_conversations,
     summarize_conversations,
 )
-from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 from evaluatorq.types import Trace, TraceInput
 
 

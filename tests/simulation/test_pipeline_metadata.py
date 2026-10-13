@@ -19,7 +19,7 @@ from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pip
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.agents.base import BaseAgent
 from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
-from evaluatorq.simulation.types import CommunicationStyle, Message, Persona, Scenario
+from evaluatorq.simulation.contracts import CommunicationStyle, Message, Persona, Scenario
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 _ORQ_ROUTER_BASE_URL = 'https://my.orq.ai/v3/router'

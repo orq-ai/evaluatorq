@@ -102,7 +102,7 @@ def _write_rt_report(path: Path) -> None:
 def _sim_run():
     """Build a minimal SimulationRun with results across TWO personas."""
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
     def _result(persona: str, goal_achieved: bool = True) -> SimulationResult:
         return SimulationResult(
@@ -778,7 +778,7 @@ def _sim_metric_run():
                total_tokens=15.
     """
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy, TurnMetrics
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy, TurnMetrics
 
     def _turn(**scores) -> TurnMetrics:
         return TurnMetrics(
@@ -929,7 +929,7 @@ class TestSimMetricFilters:
     def test_full_options_hides_unavailable_metrics(self) -> None:
         from evaluatorq.contracts import TokenUsage
         from evaluatorq.dashboard.filters import _sim_full_options
-        from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+        from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
         result = SimulationResult(
             messages=[],

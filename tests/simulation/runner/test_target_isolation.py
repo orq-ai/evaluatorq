@@ -18,7 +18,7 @@ import pytest
 
 from evaluatorq.contracts import AgentResponse, AgentTarget, Message
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Persona,
     Scenario,
@@ -114,7 +114,7 @@ class _FakeUserSimulator:
 
 class _FakeJudge:
     async def evaluate(self, messages):
-        from evaluatorq.simulation.types import Judgment
+        from evaluatorq.simulation.contracts import Judgment
 
         return Judgment(
             should_terminate=True,

@@ -51,6 +51,63 @@ def test_population_allows_equal_window_bounds() -> None:
     assert InsightsPopulation(start=bound, end=bound).start == bound
 
 
+def test_population_unified_filters_split_into_facets_and_numeric() -> None:
+    population = InsightsPopulation(filters={'agent_name': ['support-bot'], 'tokens_min': 100})
+
+    assert population.facets == FacetSelection(agent_name=frozenset({'support-bot'}))
+    assert population.numeric == NumericFilters(tokens_min=100)
+    assert population.model_dump()['facets']['agent_name'] == frozenset({'support-bot'})
+    assert population.model_dump()['numeric']['tokens_min'] == 100
+    assert 'filters' not in population.model_dump()
+    assert InsightsPopulation.model_validate_json(population.model_dump_json()) == population
+
+
+@pytest.mark.parametrize('values', [['support-bot'], {'support-bot'}])
+def test_population_unified_filters_accept_lists_and_sets(values: list[str] | set[str]) -> None:
+    population = InsightsPopulation(filters={'agent_name': values})
+
+    assert population.facets.agent_name == frozenset({'support-bot'})
+
+
+def test_population_unified_filters_accept_empty_dictionary() -> None:
+    assert InsightsPopulation(filters={}) == InsightsPopulation()
+
+
+@pytest.mark.parametrize('filters', ['agent_name=support-bot', 42])
+def test_population_unified_filters_reject_non_dictionaries(filters: Any) -> None:
+    with pytest.raises(ValidationError, match='filters must be a dictionary'):
+        InsightsPopulation.model_validate({'filters': filters})
+
+
+def test_population_unified_filters_preserve_file_source_exclusion() -> None:
+    with pytest.raises(ValueError, match='facets'):
+        InsightsPopulation(snapshot_path=Path('snapshot.json'), filters={'agent_name': ['support-bot']})
+
+
+def test_population_unified_filters_reuse_numeric_range_validation() -> None:
+    with pytest.raises(ValueError, match='tokens_min must be less than or equal to tokens_max'):
+        InsightsPopulation(filters={'tokens_min': 200, 'tokens_max': 100})
+
+
+def test_population_unified_filters_reject_unknown_keys() -> None:
+    with pytest.raises(ValueError, match='unknown filter keys: agent'):
+        InsightsPopulation(filters={'agent': ['support-bot']})
+
+
+def test_population_unified_filters_reject_non_string_unknown_keys() -> None:
+    with pytest.raises(ValueError, match='unknown filter keys: 1'):
+        InsightsPopulation.model_validate({'filters': {1: 'unexpected'}})
+
+
+@pytest.mark.parametrize('legacy', ['facets', 'numeric'])
+def test_population_unified_filters_reject_conflicting_legacy_arguments(legacy: str) -> None:
+    with pytest.raises(ValueError, match='filters cannot be combined with legacy facets or numeric arguments'):
+        if legacy == 'facets':
+            InsightsPopulation(filters={'agent_name': ['support-bot']}, facets=FacetSelection())
+        else:
+            InsightsPopulation(filters={'agent_name': ['support-bot']}, numeric=NumericFilters())
+
+
 @pytest.mark.parametrize(
     ('field', 'value'),
     [

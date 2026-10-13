@@ -27,7 +27,7 @@ import pytest
 from evaluatorq.contracts import DEFAULT_TARGET_MAX_TOKENS, LLMCallConfig
 from evaluatorq.simulation.agents import base as base_module
 from evaluatorq.simulation.agents.base import BaseAgent
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 
 CONFIG_ADVICE = "raise max_tokens on this agent's LLMCallConfig"
 CALL_ADVICE = 'raise the max_tokens argument passed to this call'

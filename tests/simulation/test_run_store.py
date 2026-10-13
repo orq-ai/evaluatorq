@@ -29,7 +29,7 @@ def _make_result(
     scorer_scores: dict[str, float] | None = None,
 ) -> Any:
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
     return SimulationResult(
         messages=[],
@@ -372,7 +372,7 @@ def test_sim_runs_dir_name_is_path() -> None:
 
 
 def _make_datapoint() -> Any:
-    from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario, SimulationDatapoint
+    from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario, SimulationDatapoint
 
     persona = Persona(
         name="T",

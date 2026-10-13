@@ -1,9 +1,4 @@
-"""Every data-shaped SDK keyword argument is reachable from the CLI's ``--config`` file.
-
-``eq redteam run``, ``eq sim simulate`` and ``eq sim run`` validate ``--config`` against a model that mirrors
-the SDK signature. A keyword added to the SDK without a field there is unreachable from the CLI, so this
-test fails until the field is added or the keyword is named below with the reason it cannot be JSON.
-"""
+"""Every JSON-expressible SDK keyword argument is reachable from the CLI's ``--config`` model."""
 
 from __future__ import annotations
 
@@ -29,6 +24,7 @@ from evaluatorq.simulation.run_config import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from pydantic import BaseModel
 
@@ -39,12 +35,6 @@ _SIMULATION_NOT_JSON: dict[str, str] = {
     'judge': 'a BaseAgent instance',
     'hooks': 'SimulationHooks objects',
     'generation_client': 'an AsyncOpenAI client',
-    'parallelism': 'deprecated alias of datapoint_parallelism',
-    'evaluation_name': 'older spelling of run_name',
-    'evaluation_description': 'older spelling of experiment_description',
-    'orq_results_path': 'older spelling of orq_folder_path',
-    'exit_on_failure': 'older spelling of raise_on_execution_failure',
-    'report': 'older spelling of report_path',
 }
 
 CASES: list[tuple[Callable[..., Any], type[BaseModel], dict[str, str]]] = [
@@ -54,7 +44,6 @@ CASES: list[tuple[Callable[..., Any], type[BaseModel], dict[str, str]]] = [
         {
             'llm_client': 'an AsyncOpenAI client',
             'hooks': 'a PipelineHooks object',
-            'parallelism': 'deprecated alias of datapoint_parallelism',
         },
     ),
     (simulate, SimulateRunConfig, _SIMULATION_NOT_JSON),
@@ -147,3 +136,108 @@ def test_config_backed_flags_declare_no_default(app: typer.Typer, command: str, 
 def test_every_default_exemption_names_a_flag_that_exists() -> None:
     params = {flag.param for _, _, flags in _FLAG_TABLES for flag in flags}
     assert set(_FLAG_DEFAULT_EXEMPT) <= params, 'a renamed flag leaves a stale exemption'
+
+
+@pytest.mark.parametrize('model', [SimulateCliConfig, GenerateAndSimulateCliConfig])
+def test_simulation_aliases_resolve_to_the_same_run_options(
+    model: type[SimulateCliConfig | GenerateAndSimulateCliConfig], tmp_path: Path
+) -> None:
+    config = model.model_validate({
+        'evaluation_name': 'legacy-run',
+        'evaluation_description': 'legacy description',
+        'orq_results_path': 'team/runs',
+        'exit_on_failure': False,
+        'parallelism': 3,
+        'report': str(tmp_path / 'report.json'),
+    })
+
+    assert config.run_name == 'legacy-run'
+    assert config.experiment_description == 'legacy description'
+    assert config.orq_folder_path == 'team/runs'
+    assert config.raise_on_execution_failure is False
+    assert config.datapoint_parallelism == 3
+    assert config.report_path == tmp_path / 'report.json'
+
+
+@pytest.mark.parametrize('model', [SimulateCliConfig, GenerateAndSimulateCliConfig])
+@pytest.mark.parametrize(('alias', 'canonical', 'old', 'new'), [
+    ('evaluation_name', 'run_name', 'old', 'new'),
+    ('evaluation_description', 'experiment_description', 'old', 'new'),
+    ('orq_results_path', 'orq_folder_path', 'old', 'new'),
+    ('exit_on_failure', 'raise_on_execution_failure', False, True),
+    ('report', 'report_path', 'old.json', 'new.json'),
+])
+def test_conflicting_simulation_alias_names_fail_validation(
+    model: type[SimulateCliConfig | GenerateAndSimulateCliConfig],
+    alias: str, canonical: str, old: Any, new: Any,
+) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match='must match'):
+        model.model_validate({alias: old, canonical: new})
+
+
+@pytest.mark.parametrize('model', [SimulateCliConfig, GenerateAndSimulateCliConfig])
+def test_explicit_cli_name_overrides_config_alias(
+    model: type[SimulateCliConfig | GenerateAndSimulateCliConfig]
+) -> None:
+    from click.core import ParameterSource
+    from evaluatorq.common.cli_config import resolve_config
+
+    ctx = click.Context(click.Command('test'))
+    ctx.set_parameter_source('name', ParameterSource.COMMANDLINE)
+    config = resolve_config(
+        ctx, model, sim_cli._SHARED_FLAGS, {'name': 'cli-run'},
+        config_source='{"evaluation_name":"configured-run"}',
+    )
+
+    assert config.run_name == 'cli-run'
+
+
+@pytest.mark.parametrize('model', [SimulateCliConfig, GenerateAndSimulateCliConfig])
+def test_canonical_parallelism_wins_over_alias(
+    model: type[SimulateCliConfig | GenerateAndSimulateCliConfig],
+) -> None:
+    with pytest.warns(DeprecationWarning):
+        config = model.model_validate({'parallelism': 2, 'datapoint_parallelism': 4})
+    assert config.datapoint_parallelism == 4
+
+
+@pytest.mark.parametrize('model', [RedTeamCliConfig, SimulateCliConfig, GenerateAndSimulateCliConfig])
+def test_explicit_cli_parallelism_overrides_config_alias(model: type[BaseModel]) -> None:
+    from click.core import ParameterSource
+    from evaluatorq.common.cli_config import resolve_config
+
+    ctx = click.Context(click.Command('test'))
+    ctx.set_parameter_source('datapoint_parallelism', ParameterSource.COMMANDLINE)
+    flags = redteam_cli._RUN_FLAGS if model is RedTeamCliConfig else sim_cli._SHARED_FLAGS
+    config = resolve_config(
+        ctx, model, flags, {'datapoint_parallelism': 4},
+        config_source='{"parallelism":2}',
+    )
+    assert getattr(config, 'datapoint_parallelism') == 4
+
+
+@pytest.mark.parametrize('model', [SimulateCliConfig, GenerateAndSimulateCliConfig])
+def test_explicit_cli_report_overrides_config_alias(
+    model: type[SimulateCliConfig | GenerateAndSimulateCliConfig], tmp_path: Path,
+) -> None:
+    from click.core import ParameterSource
+    from evaluatorq.common.cli_config import resolve_config
+
+    output = tmp_path / 'cli.json'
+    ctx = click.Context(click.Command('test'))
+    ctx.set_parameter_source('report_path', ParameterSource.COMMANDLINE)
+    config = resolve_config(
+        ctx, model, sim_cli._SHARED_FLAGS, {'report_path': output},
+        config_source='{"report":"configured.json"}',
+    )
+    assert config.report_path == output
+
+
+@pytest.mark.parametrize('model', [SimulateCliConfig, GenerateAndSimulateCliConfig])
+def test_explicit_empty_alias_name_is_not_replaced_by_the_default(
+    model: type[SimulateCliConfig | GenerateAndSimulateCliConfig],
+) -> None:
+    config = model.model_validate({'evaluation_name': ''})
+    assert config.run_name == ''

@@ -56,13 +56,14 @@ from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close
 from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
+from evaluatorq.dashboard.compression_inspector import register_compression_inspector_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
 from evaluatorq.dashboard.orq_scope import OAuthScopes, discover_oauth_scopes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
-from evaluatorq.dashboard.security import request_rejected
-from evaluatorq.dashboard.shell import dashboard_css, dashboard_css_version, page
+from evaluatorq.dashboard.security import CSRF_FIELD, request_rejected
+from evaluatorq.dashboard.shell import current_sidebar_html, dashboard_css, dashboard_css_version, page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
@@ -478,11 +479,18 @@ def _settings_model_auth_recovery(*, method: str) -> str:
     return f'Orq credentials need attention, so the model list cannot load. {detail} You can still type a model id.'
 
 
+def _autosaving(req: Request) -> bool:
+    """Whether the settings page is saving in place (a fetch) rather than submitting the form."""
+    return req.headers.get('x-autosave') == '1'
+
+
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     """Validate and persist the settings form, or render field errors."""
     form_data = await req.form()
     rejected = request_rejected(req, form_data)
     if rejected:
+        if _autosaving(req):
+            return JSONResponse({'errors': {'form': rejected}}, status_code=403)
         roots = _roots(req)
         config = await asyncio.to_thread(_settings_config, roots)
         body = settings_body(config, effective_settings(), errors={'form': rejected})
@@ -494,10 +502,22 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     try:
         changed_fields = _settings_changed_fields(form_data, current)
     except ValueError:
+        if _autosaving(req):
+            return JSONResponse({'errors': {'form': 'The submitted changed-field list is invalid.'}}, status_code=422)
         body = settings_body(
             _settings_config(roots), values, errors={'form': 'The submitted changed-field list is invalid.'}
         )
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
+    legacy_full_form = set(MODEL_FIELDS) <= form_data.keys()
+    if (
+        form_data.get('settings_changed_fields') is None
+        and 'compression_inspector_enabled' not in form_data
+        and current.compression_inspector_enabled
+        and (legacy_full_form or set(form_data.keys()) <= {CSRF_FIELD})
+    ):
+        # Older full-form clients omit unchecked checkboxes. Modern autosaves
+        # carry a dirty marker, so an unrelated edit cannot clear this toggle.
+        changed_fields.add('compression_inspector_enabled')
     # The browser marker describes only controls the user changed. Keep it
     # separate from derived persistence paths so a validation rerender can
     # safely submit the same marker again.
@@ -667,6 +687,8 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
             }
         )
     if settings is None or errors:
+        if _autosaving(req):
+            return JSONResponse({'errors': errors}, status_code=422)
         body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
@@ -674,14 +696,13 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
         await asyncio.to_thread(save_settings, settings, changed_fields=changed_fields)
     except (OSError, ValueError) as exc:
         logger.warning('Could not save dashboard settings: {}', type(exc).__name__)
-        body = settings_body(
-            _settings_config(roots),
-            values,
-            errors={
-                'form': 'Could not save settings because the saved file is unreadable or invalid. Fix or restore the JSON settings file, then try again.',
-            },
-            profiles=profiles,
+        message = (
+            'Could not save settings because the saved file is unreadable or invalid. '
+            'Fix or restore the JSON settings file, then try again.'
         )
+        if _autosaving(req):
+            return JSONResponse({'errors': {'form': message}}, status_code=422)
+        body = settings_body(_settings_config(roots), values, errors={'form': message}, profiles=profiles)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
     async with req.app.state.finder_store_lock:
         req.app.state.finder_profile = selected_profile
@@ -708,6 +729,8 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     # Retire stores after removing them from app state so new requests cannot acquire them.
     await _close_finder_stores(*old_session_stores, old_legacy_store, old_search_store)
     req.app.state.finder_unavailable_reason = None
+    if _autosaving(req):
+        return JSONResponse({'sidebar': current_sidebar_html('settings')})
     return RedirectResponse('/settings?saved=1', status_code=303)
 
 
@@ -771,6 +794,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_project_id'] = form_data.get('orq_project_id') if values['orq_auth_method'] == 'cli_oauth' else None
     values['orq_project_name'] = None
     values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
+    values['compression_inspector_enabled'] = form_data.get('compression_inspector_enabled') in ('on', 'true')
     raw_input_cap = form_data.get('trace_input_chars')
     if raw_input_cap is None:
         values['trace_input_chars'] = current.trace_input_chars
@@ -800,7 +824,7 @@ def _settings_changed_fields(form_data: Any, current: DashboardSettings) -> set[
         'orq_api_key_entry',
         'orq_stored_key_host',
     }
-    allowed = set(MODEL_FIELDS) | {'ask_ai_mode', 'trace_input_chars'} | auth_inputs
+    allowed = set(MODEL_FIELDS) | {'ask_ai_mode', 'trace_input_chars', 'compression_inspector_enabled'} | auth_inputs
     marker = form_data.get('settings_changed_fields')
     if marker is not None:
         names = {name for name in str(marker).split(',') if name}
@@ -813,7 +837,9 @@ def _settings_changed_fields(form_data: Any, current: DashboardSettings) -> set[
             continue
         value = form_data.get(name)
         saved = getattr(current, name)
-        if isinstance(saved, int):
+        if name == 'compression_inspector_enabled':
+            normalized: Any = value in ('on', 'true')
+        elif isinstance(saved, int):
             try:
                 normalized: Any = int(str(value).strip())
             except (TypeError, ValueError):
@@ -1276,6 +1302,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: /insights — read-only trace intelligence review
     # ------------------------------------------------------------------
     register_insights_routes(app)
+    register_compression_inspector_routes(app)
 
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page

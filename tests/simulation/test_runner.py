@@ -8,7 +8,7 @@ from evaluatorq.simulation.runner.simulation import (
     SimulationRunner,
     _invert_roles_for_simulator,
 )
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Message,
     Persona,

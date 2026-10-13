@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.contracts import AgentResponse, LLMCallConfig
     from evaluatorq.simulation.agents.base import BaseAgent
-    from evaluatorq.simulation.types import Message
+    from evaluatorq.simulation.contracts import Message
     from evaluatorq.types import DataPoint
 
 logger = logging.getLogger(__name__)

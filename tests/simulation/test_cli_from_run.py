@@ -53,7 +53,7 @@ def test_from_run_is_forwarded_as_previous_run(monkeypatch) -> None:
 
 
 def test_input_and_from_run_are_mutually_exclusive(tmp_path: Path) -> None:
-    from evaluatorq.simulation.types import SimulationDatapoint
+    from evaluatorq.simulation.contracts import SimulationDatapoint
 
     dp = tmp_path / 'dp.jsonl'
     dp.write_text(

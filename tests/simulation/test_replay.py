@@ -12,7 +12,7 @@ import pytest
 from evaluatorq.common.replay import ReplayError
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.replay import load_simulation_replay
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     Persona,

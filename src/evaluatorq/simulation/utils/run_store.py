@@ -24,7 +24,7 @@ from evaluatorq.common.llm_client import orq_base_url as _orq_base_url
 from evaluatorq.common.replay import REPLAY_VERSION
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import _coerce_text
-from evaluatorq.simulation.types import DEFAULT_RUN_NAME, AgentInfoSnapshot, SimulationRun
+from evaluatorq.simulation.contracts import DEFAULT_RUN_NAME, AgentInfoSnapshot, SimulationRun
 
 logger = logging.getLogger(__name__)
 
