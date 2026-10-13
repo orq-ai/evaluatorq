@@ -155,9 +155,29 @@ def test_scan_lists_the_run_with_a_comparison_headline(saved: tuple[Path, Path])
     cards = [c for c in scan([runs_dir]) if c.surface == 'pairwise']
     assert len(cards) == 1
     assert cards[0].name == 'v2 vs v3'
-    assert cards[0].headline == '4 comparisons'
+    assert cards[0].headline == '4 comparisons · even'
     assert cards[0].error is None
     assert cards[0].id == report_id(path)
+
+
+def _headline(tmp_path: Path, winners: list[str]) -> str:
+    r = new_run(run_name='h', label_a='prompt-v2', label_b='prompt-v3', judges=JUDGES, criteria='x')
+    for i, w in enumerate(winners):
+        r.add(_comparison(['A', 'A', 'A'], w), question=f'q{i}', response_a='a', response_b='b')
+    r.save(tmp_path / 'h.json')
+    return next(c for c in scan([tmp_path]) if c.surface == 'pairwise').headline
+
+
+def test_headline_names_the_leading_side(tmp_path: Path) -> None:
+    assert _headline(tmp_path, ['A', 'B', 'B', 'B']) == '4 comparisons · prompt-v3 leads 75%'
+
+
+def test_headline_even_and_undecided(tmp_path: Path) -> None:
+    assert _headline(tmp_path, ['A', 'B']) == '2 comparisons · even'
+
+
+def test_headline_without_decided_comparison(tmp_path: Path) -> None:
+    assert _headline(tmp_path, ['tie']) == '1 comparison'
 
 
 def test_scan_flags_a_run_missing_its_entries(tmp_path: Path) -> None:

@@ -177,8 +177,22 @@ def _card(path: Path) -> ReportCard | None:
         headline = ''
     elif surface == 'pairwise':
         entries = data.get('entries')
-        count = len(entries) if isinstance(entries, list) else 0
-        headline = f'{count} comparisons'
+        entries = entries if isinstance(entries, list) else []
+        count = len(entries)
+        headline = f'{count} comparison{"s" if count != 1 else ""}'
+        winners = [
+            e['comparison'].get('winner')
+            for e in entries
+            if isinstance(e, dict) and isinstance(e.get('comparison'), dict)
+        ]
+        a_wins, b_wins = winners.count('A'), winners.count('B')
+        if a_wins + b_wins:
+            if a_wins == b_wins:
+                headline += ' · even'
+            else:
+                b_leads = b_wins > a_wins
+                label = data.get('label_b' if b_leads else 'label_a') or ('B' if b_leads else 'A')
+                headline += f' · {label} leads {max(a_wins, b_wins) / (a_wins + b_wins):.0%}'
     else:
         headline = f'{data.get("total_results", 0)} {"attacks" if surface == "redteam" else "conversations"}'
     return ReportCard(report_id(path), surface, str(name), created_at, headline, path, error)
