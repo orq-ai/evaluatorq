@@ -4,18 +4,7 @@
 
 A run moves from population selection through labels and summaries to discovered dimensions, then saves a result for the dashboard. Signals are computed locally from each normalized trace before labeling and summarizing. A semantic query may make model calls while the population is selected.
 
-```mermaid
-flowchart TD
-    A["Population source<br/>Orq filters or query<br/>Finder export or local snapshot"] --> B["Compile query and select filters when needed"]
-    B --> C["Load and normalize as TraceDocument"]
-    C --> D["Compute deterministic signals locally"]
-    D --> E["Classifier answers labels and query match"]
-    E --> F["Keep query matches; without a query, keep all selected traces"]
-    F --> G["Summarize retained traces"]
-    G --> H["For each dimension: embed, cluster, name, merge, project"]
-    H --> I["Optional priority matrix"]
-    I --> J["Save run result for the dashboard"]
-```
+![Trace Insights run flow: select the population, read each trace (signals, classifier, query-match gate, summary), then embed, cluster, name, merge and project each dimension before saving the run](assets/insights-flow.svg)
 
 The classifier and summary model read different inputs. The classifier reads its model-specific trace state plus the selected questions. The summary model reads the detailed conversation view. A query match controls which traces continue to summaries and dimensions; label answers do not change membership.
 
