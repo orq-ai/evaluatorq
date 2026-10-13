@@ -3718,6 +3718,23 @@ _COMPRESSION_INSPECTOR_CSS = """
 @media (max-width:480px) { .compression-source,.compression-limits,.compression-preview { padding:12px; }.compression-date-fields { grid-template-columns:minmax(0,1fr); }.compression-session { grid-template-columns:minmax(0,1fr); align-items:start; }.compression-session button { width:100%; }.compression-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }.compression-source input,.compression-source button,.compression-session button,.compression-knob input,.compression-knob select,.compression-reset { min-height:44px; }.compression-source input,.compression-knob input,.compression-knob select { font-size:16px; }.compression-knob-grid { grid-template-columns:minmax(0,1fr); } }
 """
 
+_PAIRWISE_COMPARE_CSS = """
+.pw-compare{--pw-a:#7e22ce;--pw-b:#0092ab;--pw-tie:var(--amber-600);--pw-none:var(--text-faint)}
+.pw-compare .pw-cmp-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.pw-compare .pw-cmp-cols>.rk-panel:first-child .rk-panel-title{color:var(--pw-a)}
+.pw-compare .pw-cmp-cols>.rk-panel:last-child .rk-panel-title{color:var(--pw-b)}
+.pw-compare .pw-cmp-verdict{font-weight:600;margin:0 0 8px}
+.pw-compare .pw-cmp-facts{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0}
+.pw-compare .pw-cmp-facts dd{margin:0}
+.pw-compare .pw-cmp-table{width:100%;border-collapse:collapse}
+.pw-compare .pw-cmp-table th,.pw-compare .pw-cmp-table td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border,#e5e7eb);vertical-align:top}
+.pw-compare .pw-cmp-q{max-width:480px;overflow-wrap:anywhere}
+.pw-compare .pw-changed{color:var(--pw-tie);font-weight:600}
+.pw-compare .pw-empty{color:var(--pw-none);margin:0}
+@media (max-width:800px){.pw-compare .pw-cmp-cols{grid-template-columns:1fr}}
+"""
+
+
 DASHBOARD_CSS = (
     _DASHBOARD_CSS_HEAD
     + _TAB_RULES
@@ -3733,4 +3750,5 @@ DASHBOARD_CSS = (
     + _TRACES_DENSITY_CSS
     + _INSIGHTS_CSS
     + _COMPRESSION_INSPECTOR_CSS
+    + _PAIRWISE_COMPARE_CSS
 )
