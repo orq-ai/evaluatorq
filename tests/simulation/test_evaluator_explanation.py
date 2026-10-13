@@ -16,7 +16,7 @@ import pytest
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.api import _adapt_simulation_scorer
 from evaluatorq.simulation.evaluators import get_evaluator
-from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 from evaluatorq.types import DataPoint, EvaluationResult
 
 
@@ -197,7 +197,7 @@ def _result_with_criteria() -> SimulationResult:
 
 @pytest.mark.asyncio
 async def test_criteria_met_raw_output_validates_back_into_criteria_meta() -> None:
-    from evaluatorq.simulation.types import CriteriaMeta
+    from evaluatorq.simulation.contracts import CriteriaMeta
 
     score = await _score('criteria_met', _result_with_criteria())
 

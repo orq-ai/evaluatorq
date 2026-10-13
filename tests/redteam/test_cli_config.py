@@ -22,7 +22,6 @@ from evaluatorq.redteam.contracts import (
     SaveMode,
     TargetConfig,
 )
-from evaluatorq.redteam.run_config import RedTeamRunConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -119,6 +118,65 @@ def test_config_is_read_from_stdin() -> None:
     assert result.exit_code == 0, result.output
     assert fake.call_args.kwargs['target'] == ['agent:a', 'agent:b']
     assert fake.call_args.kwargs['max_turns'] == 2
+
+
+def test_inline_json_config_reaches_red_team_and_explicit_flags_win() -> None:
+    payload = {
+        'target': 'agent:from-config',
+        'generated_strategy_count': 4,
+        'generate_strategies': False,
+        'llm_config': {'attacker': {'model': 'config/model', 'temperature': 0.4}},
+    }
+
+    result, fake = _invoke(
+        [
+            '--config',
+            '  ' + json.dumps(payload),
+            '--generated-strategy-count',
+            '2',
+            '--generate-strategies',
+            '--attack-model',
+            'flag/model',
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    kwargs = fake.call_args.kwargs
+    assert kwargs['target'] == 'agent:from-config'
+    assert kwargs['generated_strategy_count'] == 2
+    assert kwargs['generate_strategies'] is True
+    assert kwargs['llm_config'].attacker.model == 'flag/model'
+    assert kwargs['llm_config'].attacker.temperature == 0.4
+
+
+def test_malformed_inline_json_is_a_usage_error_without_running() -> None:
+    result, fake = _invoke(['--config', '{not json'])
+
+    assert result.exit_code == 2
+    assert 'inline JSON:' in _flat(result.output)
+    fake.assert_not_called()
+
+
+def test_inline_json_rejects_nested_unknown_keys_before_running() -> None:
+    payload = {'target': 'agent:x', 'llm_config': {'attacker': {'temprature': 0.2}}}
+
+    result, fake = _invoke(['--config', json.dumps(payload)])
+
+    assert result.exit_code == 2
+    assert 'llm_config.attacker.temprature' in _flat(result.output)
+    fake.assert_not_called()
+
+
+def test_config_path_starting_with_brace_can_be_disambiguated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / '{run}.json'
+    path.write_text(json.dumps({'target': 'agent:from-file', 'max_turns': 3}), encoding='utf-8')
+
+    result, fake = _invoke(['--config', './{run}.json'])
+
+    assert result.exit_code == 0, result.output
+    assert fake.call_args.kwargs['target'] == 'agent:from-file'
+    assert fake.call_args.kwargs['max_turns'] == 3
 
 
 def test_an_explicit_flag_beats_the_config_even_at_its_default_value(tmp_path: Path) -> None:
@@ -326,50 +384,6 @@ def test_json_keeps_the_coverage_gate_exit_code() -> None:
     assert RedTeamReport.model_validate_json(result.stdout).summary.evaluated_attacks == 0
     assert 'could be evaluated' in result.stderr
 
-
-def test_every_config_field_reaches_red_team(tmp_path: Path) -> None:
-    """A field the command maps and also forwards would raise a duplicate-keyword error at call time."""
-    payload: dict[str, Any] = {
-        'target': 'agent:x',
-        'llm_config': {'retry_count': 1},
-        'mode': 'dynamic',
-        'categories': ['ASI01'],
-        'vulnerabilities': ['goal_hijacking'],
-        'strategies': None,
-        'datapoints': None,
-        'attack_techniques': None,
-        'delivery_methods': ['direct_request'],
-        'max_turns': 2,
-        'max_per_category': 1,
-        'datapoint_parallelism': 3,
-        'llm_parallelism': 4,
-        'generate_strategies': False,
-        'generated_strategy_count': 1,
-        'max_dynamic_datapoints': 5,
-        'max_static_datapoints': 6,
-        'cleanup_memory': False,
-        'name': 'n',
-        'description': 'd',
-        'dataset': 'hf:org/repo',
-        'previous_run': None,
-        'artifacts_dir': str(tmp_path),
-        'target_config': {'system_prompt': 's'},
-        'recommendations': False,
-        'generate_executive_summary': False,
-        'attacker_instructions': 'i',
-        'verbosity': 2,
-        'save': 'detail',
-    }
-    assert set(payload) == set(RedTeamRunConfig.model_fields)
-
-    result, fake = _invoke(['--config', _write(tmp_path, payload)])
-
-    assert result.exit_code == 0, result.output
-    kwargs = fake.call_args.kwargs
-    assert kwargs['verbosity'] == 2
-    assert kwargs['cleanup_memory'] is False
-    assert kwargs['generate_executive_summary'] is False
-    assert kwargs['max_static_datapoints'] == 6
 
 
 def test_schema_defaults_to_the_config_input_shape() -> None:

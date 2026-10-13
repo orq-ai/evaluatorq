@@ -39,7 +39,7 @@ from evaluatorq.common.structured_output import (
     usage_from_exception,
 )
 from evaluatorq.common.trace_input import load_traces, partition_traces
-from evaluatorq.simulation.types import (  # noqa: TC001 — pydantic resolves these at runtime
+from evaluatorq.simulation.contracts import (  # noqa: TC001 — pydantic resolves these at runtime
     Persona,
     Scenario,
     SimulationDatapoint,

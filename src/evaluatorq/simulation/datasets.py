@@ -17,7 +17,7 @@ from evaluatorq.simulation._seed_extension import require_orq_api_key
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import LLMCallConfig
-    from evaluatorq.simulation.types import SimulationDatapoint
+    from evaluatorq.simulation.contracts import SimulationDatapoint
 
 
 async def datapoints_from_dataset(

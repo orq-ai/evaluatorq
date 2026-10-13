@@ -42,7 +42,7 @@ load_dotenv()
 
 from evaluatorq.integrations.crewai_integration import CrewAITarget
 from evaluatorq.simulation import simulate
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     Persona,

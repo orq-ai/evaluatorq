@@ -2,7 +2,7 @@ import logging
 
 from evaluatorq.contracts import AgentResponse, TextOutputItem, ToolCallOutputItem
 from evaluatorq.openresponses.input_items import messages_to_responses_input
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 from evaluatorq.simulation.runner.simulation import _invert_roles_for_simulator, build_assistant_message
 
 

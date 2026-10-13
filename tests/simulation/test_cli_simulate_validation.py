@@ -15,7 +15,7 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from evaluatorq.simulation.cli import app
-from evaluatorq.simulation.types import SimulationDatapoint
+from evaluatorq.simulation.contracts import SimulationDatapoint
 
 
 runner = CliRunner()

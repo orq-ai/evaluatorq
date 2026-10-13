@@ -19,7 +19,7 @@ from evaluatorq.common.template_engine import render_template
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import LLMCallConfig
-    from evaluatorq.simulation.types import SimulationDatapoint
+    from evaluatorq.simulation.contracts import SimulationDatapoint
 
 
 def require_orq_api_key(api_key: str | None, *, purpose: str) -> str:

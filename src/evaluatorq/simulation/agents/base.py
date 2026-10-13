@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
-    from evaluatorq.simulation.types import Message
+    from evaluatorq.simulation.contracts import Message
 
 logger = logging.getLogger(__name__)
 

@@ -33,7 +33,7 @@ def _result(
     msgs: list[tuple[str, str]] | None = None,
 ):
     from evaluatorq.contracts import Message, TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
     return SimulationResult(
         messages=[Message(role=r, content=c) for r, c in (msgs or [])],
@@ -50,7 +50,7 @@ def _result(
 
 
 def _run(name: str, results: list, averages: dict[str, float]):
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun
 
     return SimulationRun(
         run_name=name,

@@ -28,6 +28,7 @@ from evaluatorq.common.structured_output import (
     sum_structured_usage,
     usage_from_exception,
 )
+from evaluatorq.simulation.contracts import SimulationRecommendation
 from evaluatorq.simulation.reports.sections import (
     _criteria_rows,
     _is_errored,
@@ -35,13 +36,12 @@ from evaluatorq.simulation.reports.sections import (
     _scenario_name,
 )
 from evaluatorq.simulation.tracing import with_simulation_span
-from evaluatorq.simulation.types import SimulationRecommendation
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
     from evaluatorq.contracts import LLMCallConfig, TokenUsage
-    from evaluatorq.simulation.types import SimulationResult
+    from evaluatorq.simulation.contracts import SimulationResult
 
 
 class _SuggestionsLLMResponse(BaseModel):

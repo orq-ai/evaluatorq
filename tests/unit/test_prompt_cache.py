@@ -16,7 +16,7 @@ from evaluatorq.common.prompt_cache import (
     responses_volatile_items,
 )
 from evaluatorq.common.tracing import _serialize_messages
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 
 # Every fixture must clear the size guard, or the helpers correctly place nothing
 # and an assertion about placement would pass for the wrong reason.

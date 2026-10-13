@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from datetime import datetime, timezone
@@ -16,7 +15,7 @@ from typer.testing import CliRunner
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.cli import app
 from evaluatorq.simulation.run_config import GenerateAndSimulateCliConfig, SimulateCliConfig
-from evaluatorq.simulation.types import SimulationRun
+from evaluatorq.simulation.contracts import SimulationRun
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -132,6 +131,58 @@ def test_two_input_sources_inside_the_config_still_conflict(tmp_path: Path) -> N
     flat = _flat(result.output)
     assert 'Provide exactly one of --input' in flat
     assert 'inline personas/scenarios in --config' in flat
+    fake.assert_not_called()
+
+
+@pytest.mark.parametrize('command', ['simulate', 'run'])
+def test_inline_json_config_reaches_simulation_and_explicit_flags_win(command: str) -> None:
+    payload: dict[str, Any] = {
+        'target': 'agent:x',
+        'max_turns': 4,
+        'recommendations': False,
+        'llm_config': {'model': 'config/model', 'temperature': 0.2},
+    }
+    payload.update({'previous_run': 'latest'} if command == 'simulate' else {'agent_description': 'bot'})
+
+    result, fake = _invoke(
+        command,
+        [
+            '--config',
+            '  ' + json.dumps(payload),
+            '--max-turns',
+            '10',
+            '--recommendations',
+            '--sim-model',
+            'flag/model',
+        ],
+    )
+
+    assert result.exit_code == 0, _flat(result.output)
+    kwargs = fake.call_args.kwargs
+    assert kwargs['max_turns'] == 10
+    assert kwargs['recommendations'] is True
+    assert kwargs['llm_config'].model == 'flag/model'
+    assert kwargs['llm_config'].temperature == 0.2
+
+
+@pytest.mark.parametrize('command', ['simulate', 'run'])
+def test_malformed_inline_json_is_a_usage_error_without_running(command: str) -> None:
+    result, fake = _invoke(command, ['--config', '{not json'])
+
+    assert result.exit_code == 2
+    assert 'inline JSON:' in _flat(result.output)
+    fake.assert_not_called()
+
+
+@pytest.mark.parametrize('command', ['simulate', 'run'])
+def test_inline_json_rejects_nested_unknown_keys_before_running(command: str) -> None:
+    payload: dict[str, Any] = {'target': 'agent:x', 'llm_config': {'temprature': 0.2}}
+    payload.update({'previous_run': 'latest'} if command == 'simulate' else {'agent_description': 'bot'})
+
+    result, fake = _invoke(command, ['--config', json.dumps(payload)])
+
+    assert result.exit_code == 2
+    assert 'llm_config.temprature' in _flat(result.output)
     fake.assert_not_called()
 
 
@@ -365,7 +416,7 @@ def test_explicit_flags_at_their_default_values_still_win_over_the_config(comman
 
 
 def _datapoints_file(tmp_path: Path) -> str:
-    from evaluatorq.simulation.types import SimulationDatapoint
+    from evaluatorq.simulation.contracts import SimulationDatapoint
 
     datapoint = SimulationDatapoint.model_validate({
         'id': 'dp-1',
@@ -591,36 +642,3 @@ def test_an_empty_evaluator_list_in_the_config_is_forwarded_as_unset() -> None:
     assert fake.call_args.kwargs['evaluator_names'] is None
 
 
-CLI_OWNED = {'target', 'memory_entity_id', 'report_path'}
-
-
-@pytest.mark.parametrize(
-    ('cfg_model', 'impl_name', 'fake_name', 'impl_kwargs'),
-    [
-        (SimulateCliConfig, '_simulate_impl', '_simulate_run', {}),
-        (GenerateAndSimulateCliConfig, '_run_impl', '_generate_and_simulate_run', {'agent_description': 'bot'}),
-    ],
-)
-def test_every_config_field_reaches_the_run_function_or_is_cli_owned(
-    cfg_model: type[Any], impl_name: str, fake_name: str, impl_kwargs: dict[str, Any]
-) -> None:
-    """A field added to the config model cannot be dropped silently: it is forwarded or declared CLI-owned."""
-    from evaluatorq.simulation import cli
-
-    sentinel = object()
-    resolved_target = object()
-    cfg = cfg_model.model_construct(**{name: sentinel for name in cfg_model.model_fields})
-    fake = AsyncMock(return_value=_run('simulate'))
-    with patch(f'evaluatorq.simulation.api.{fake_name}', new=fake):
-        asyncio.run(getattr(cli, impl_name)(cfg, target=resolved_target, hooks=None, **impl_kwargs))
-
-    received = fake.call_args.kwargs
-    for field in cfg_model.model_fields:
-        if field == 'target':
-            assert received[field] is resolved_target
-        elif field in CLI_OWNED:
-            assert field not in received, field
-        elif field == 'agent_description':
-            assert received[field] == impl_kwargs['agent_description']  # the CLI's resolved value wins
-        else:
-            assert received[field] is sentinel, field

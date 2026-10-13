@@ -18,7 +18,7 @@ from evaluatorq.simulation.hooks import (
     SimulationHooks,
     SimulationRunMeta,
 )
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Judgment,
     Persona,

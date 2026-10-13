@@ -24,7 +24,7 @@ from starlette.testclient import TestClient
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id
-from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +517,7 @@ def _entry(
     transcript: list | None = None,
     criteria_verified: bool | None = None,
 ):
-    from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage
+    from evaluatorq.simulation.contracts import CriteriaRow, SimulationEntry, TranscriptMessage
 
     if criteria is None:
         criteria = [
@@ -566,7 +566,7 @@ def sim_entries():
 
 @pytest.fixture()
 def sim_entry_with_safety_criterion():
-    from evaluatorq.simulation.types import CriteriaRow
+    from evaluatorq.simulation.contracts import CriteriaRow
 
     return _entry(
         criteria=[
@@ -595,7 +595,7 @@ def sim_entry_with_transcript():
 
 @pytest.fixture()
 def sim_entry_xss_criterion():
-    from evaluatorq.simulation.types import CriteriaRow
+    from evaluatorq.simulation.contracts import CriteriaRow
 
     return _entry(
         criteria=[
@@ -885,7 +885,7 @@ class TestFilteredConversationDrawerIndex:
         """
         from evaluatorq.contracts import Message, TokenUsage
         from evaluatorq.dashboard.app import build_app
-        from evaluatorq.simulation.types import (
+        from evaluatorq.simulation.contracts import (
             SimulationResult,
             SimulationRun,
             TerminatedBy,

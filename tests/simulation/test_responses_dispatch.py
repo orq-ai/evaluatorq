@@ -17,7 +17,7 @@ from openai import BadRequestError
 
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.agents.base import BaseAgent, LLMResult
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 
 # ---------------------------------------------------------------------------
 # Concrete subclass for testing (BaseAgent is abstract)

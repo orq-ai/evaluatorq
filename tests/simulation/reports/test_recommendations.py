@@ -31,7 +31,7 @@ from evaluatorq.simulation.reports.recommendations import (
     generate_recommendations,
 )
 from evaluatorq.simulation.reports.sections import build_report_sections
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     SimulationRecommendation,
     SimulationResult,
     TerminatedBy,

@@ -43,7 +43,7 @@ from evaluatorq.simulation.api import (
     generate_scenarios,
     simulate,
 )
-from evaluatorq.simulation.types import DEFAULT_MODEL
+from evaluatorq.simulation.contracts import DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)  # noqa: RUF067
 
@@ -64,6 +64,27 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent
     from evaluatorq.simulation.agents.judge import JudgeAgent
     from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
+    from evaluatorq.simulation.contracts import (
+        CRITERION_ID_PATTERN,
+        CommunicationStyle,
+        ConversationStrategy,
+        Criterion,
+        CriterionVerdict,
+        CulturalContext,
+        EmotionalArc,
+        InputFormat,
+        Judgment,
+        Message,
+        Persona,
+        Scenario,
+        SimulationDatapoint,
+        SimulationResult,
+        SimulationRun,
+        StartingEmotion,
+        TerminatedBy,
+        TurnMetrics,
+        criterion_id_for,
+    )
     from evaluatorq.simulation.convert import to_open_responses
     from evaluatorq.simulation.datasets import (
         datapoints_from_dataset,
@@ -112,27 +133,6 @@ if TYPE_CHECKING:
         fetch_trace_conversations,
         summarize_conversations,
     )
-    from evaluatorq.simulation.types import (
-        CRITERION_ID_PATTERN,
-        CommunicationStyle,
-        ConversationStrategy,
-        Criterion,
-        CriterionVerdict,
-        CulturalContext,
-        EmotionalArc,
-        InputFormat,
-        Judgment,
-        Message,
-        Persona,
-        Scenario,
-        SimulationDatapoint,
-        SimulationResult,
-        SimulationRun,
-        StartingEmotion,
-        TerminatedBy,
-        TurnMetrics,
-        criterion_id_for,
-    )
     from evaluatorq.simulation.utils.dataset_export import (
         export_datapoints_to_jsonl,
         export_results_to_jsonl,
@@ -152,7 +152,7 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.wrap_agent import wrap_simulation_agent
 
 
-_LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
+_LAZY_IMPORTS: dict[str, tuple[str, str | None]] = {  # noqa: RUF067
     'LLMCallConfig': ('evaluatorq.contracts', 'LLMCallConfig'),
     'from_chat_completions': ('evaluatorq.simulation.adapters', 'from_chat_completions'),
     'from_orq_deployment': ('evaluatorq.simulation.adapters', 'from_orq_deployment'),
@@ -228,30 +228,30 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     'OpenAIAgentTarget': ('evaluatorq.integrations.openai_agents_integration', 'OpenAIAgentTarget'),
     'PydanticAITarget': ('evaluatorq.integrations.pydantic_ai_integration', 'PydanticAITarget'),
     'VercelAISdkTarget': ('evaluatorq.integrations.vercel_ai_sdk_integration', 'VercelAISdkTarget'),
-    'DEFAULT_MODEL': ('evaluatorq.simulation.types', 'DEFAULT_MODEL'),
-    'CommunicationStyle': ('evaluatorq.simulation.types', 'CommunicationStyle'),
+    'DEFAULT_MODEL': ('evaluatorq.simulation.contracts', 'DEFAULT_MODEL'),
+    'CommunicationStyle': ('evaluatorq.simulation.contracts', 'CommunicationStyle'),
     'ConversationStrategy': (
-        'evaluatorq.simulation.types',
+        'evaluatorq.simulation.contracts',
         'ConversationStrategy',
     ),
-    'Criterion': ('evaluatorq.simulation.types', 'Criterion'),
-    'CriterionVerdict': ('evaluatorq.simulation.types', 'CriterionVerdict'),
-    'CRITERION_ID_PATTERN': ('evaluatorq.simulation.types', 'CRITERION_ID_PATTERN'),
-    'criterion_id_for': ('evaluatorq.simulation.types', 'criterion_id_for'),
-    'CulturalContext': ('evaluatorq.simulation.types', 'CulturalContext'),
-    'SimulationDatapoint': ('evaluatorq.simulation.types', 'SimulationDatapoint'),
-    'EmotionalArc': ('evaluatorq.simulation.types', 'EmotionalArc'),
-    'InputFormat': ('evaluatorq.simulation.types', 'InputFormat'),
-    'Judgment': ('evaluatorq.simulation.types', 'Judgment'),
-    'Message': ('evaluatorq.simulation.types', 'Message'),
-    'Persona': ('evaluatorq.simulation.types', 'Persona'),
-    'Scenario': ('evaluatorq.simulation.types', 'Scenario'),
-    'SimulationResult': ('evaluatorq.simulation.types', 'SimulationResult'),
-    'SimulationRun': ('evaluatorq.simulation.types', 'SimulationRun'),
-    'StartingEmotion': ('evaluatorq.simulation.types', 'StartingEmotion'),
-    'TerminatedBy': ('evaluatorq.simulation.types', 'TerminatedBy'),
+    'Criterion': ('evaluatorq.simulation.contracts', 'Criterion'),
+    'CriterionVerdict': ('evaluatorq.simulation.contracts', 'CriterionVerdict'),
+    'CRITERION_ID_PATTERN': ('evaluatorq.simulation.contracts', 'CRITERION_ID_PATTERN'),
+    'criterion_id_for': ('evaluatorq.simulation.contracts', 'criterion_id_for'),
+    'CulturalContext': ('evaluatorq.simulation.contracts', 'CulturalContext'),
+    'SimulationDatapoint': ('evaluatorq.simulation.contracts', 'SimulationDatapoint'),
+    'EmotionalArc': ('evaluatorq.simulation.contracts', 'EmotionalArc'),
+    'InputFormat': ('evaluatorq.simulation.contracts', 'InputFormat'),
+    'Judgment': ('evaluatorq.simulation.contracts', 'Judgment'),
+    'Message': ('evaluatorq.simulation.contracts', 'Message'),
+    'Persona': ('evaluatorq.simulation.contracts', 'Persona'),
+    'Scenario': ('evaluatorq.simulation.contracts', 'Scenario'),
+    'SimulationResult': ('evaluatorq.simulation.contracts', 'SimulationResult'),
+    'SimulationRun': ('evaluatorq.simulation.contracts', 'SimulationRun'),
+    'StartingEmotion': ('evaluatorq.simulation.contracts', 'StartingEmotion'),
+    'TerminatedBy': ('evaluatorq.simulation.contracts', 'TerminatedBy'),
     'TokenUsage': ('evaluatorq.contracts', 'TokenUsage'),
-    'TurnMetrics': ('evaluatorq.simulation.types', 'TurnMetrics'),
+    'TurnMetrics': ('evaluatorq.simulation.contracts', 'TurnMetrics'),
     'export_datapoints_to_jsonl': (
         'evaluatorq.simulation.utils.dataset_export',
         'export_datapoints_to_jsonl',
@@ -302,6 +302,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'evaluatorq.simulation.wrap_agent',
         'wrap_simulation_agent',
     ),
+    'types': ('evaluatorq.simulation.types', None),
 }
 
 
@@ -320,7 +321,8 @@ def __getattr__(name: str) -> Any:
 
     module_name, attr_name = _LAZY_IMPORTS[name]
     try:
-        value = getattr(importlib.import_module(module_name), attr_name)
+        module = importlib.import_module(module_name)
+        value = module if attr_name is None else getattr(module, attr_name)
     except ModuleNotFoundError as exc:
         extra = _OPTIONAL_TARGET_EXTRAS.get(name)
         if extra is not None:
@@ -339,7 +341,6 @@ __all__ = [
     'DEFAULT_MODEL',
     # Evaluators
     'SIMULATION_EVALUATORS',
-    # Utils
     'SIM_RUNS_DIR_NAME',
     # Agents
     'AgentConfig',

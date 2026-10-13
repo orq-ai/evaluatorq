@@ -33,7 +33,7 @@ from evaluatorq.openresponses.target import OrqResponsesTarget
 from evaluatorq.redteam.backends.registry import resolve_backend
 from evaluatorq.simulation import auto_save_run, build_simulation_run, generate_and_simulate
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
-from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, Message  # noqa: TC001
+from evaluatorq.simulation.contracts import DEFAULT_EVALUATOR_NAMES, Message  # noqa: TC001
 
 load_dotenv()
 

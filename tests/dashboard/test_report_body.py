@@ -78,7 +78,7 @@ def _make_redteam_report():
 def _make_sim_results():
     """Build a minimal list of SimulationResults for testing."""
     from evaluatorq.contracts import Message, TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TurnMetrics
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy, TurnMetrics
 
     return [
         SimulationResult(
@@ -300,7 +300,7 @@ class TestSimRenderReportBody:
 def test_sim_dashboard_adapter_preserves_full_run_narrative() -> None:
     """The saved run's narrative must reach its unfiltered dashboard report."""
     from evaluatorq.dashboard.surfaces import ADAPTERS
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun
 
     results = _make_sim_results()
     run = SimulationRun(
@@ -329,7 +329,7 @@ def test_sim_dashboard_adapter_passes_experiment_url_through() -> None:
     """The run's experiment_url must reach the dashboard body, body_from_results,
     and export outputs as an "Open experiment in Orq" link."""
     from evaluatorq.dashboard.surfaces import ADAPTERS
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun
 
     results = _make_sim_results()
     url = 'https://my.orq.ai/workspace/experiments/abc123'
@@ -353,7 +353,7 @@ def test_sim_dashboard_adapter_passes_experiment_url_through() -> None:
 
 def test_sim_dashboard_adapter_omits_experiment_url_when_unset() -> None:
     from evaluatorq.dashboard.surfaces import ADAPTERS
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun
 
     results = _make_sim_results()
     run = SimulationRun(
@@ -375,7 +375,7 @@ def test_sim_dashboard_adapter_omits_experiment_url_when_unset() -> None:
 
 def test_sim_tabbed_dashboard_always_shows_run_narrative() -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun
 
     results = _make_sim_results()
     run = SimulationRun(
@@ -400,7 +400,7 @@ def test_sim_tabbed_dashboard_always_shows_run_narrative() -> None:
 
 def test_sim_overview_empty_filter_keeps_outcomes_and_quality() -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun
 
     results = _make_sim_results()
     run = SimulationRun(
@@ -422,7 +422,7 @@ def test_sim_overview_empty_filter_keeps_outcomes_and_quality() -> None:
 
 def test_sim_empty_filter_keeps_data_tabs() -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun
 
     results = _make_sim_results()
     run = SimulationRun(
@@ -449,7 +449,7 @@ def test_sim_exec_summary_survives_empty_filter_without_saved_narrative() -> Non
     # built from the filtered subset → total 0 → ''). It must now render the
     # whole-run computed summary, labeled as whole-run context.
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun
 
     results = _make_sim_results()
     run = SimulationRun(

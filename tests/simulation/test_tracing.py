@@ -554,7 +554,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Message,
         Persona,
@@ -717,7 +717,7 @@ async def test_run_span_carries_no_usage_and_result_carries_the_aggregate(
 
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.runner.simulation import SimulationRunner
-    from evaluatorq.simulation.types import CommunicationStyle, Message, Persona, Scenario, SimulationDatapoint
+    from evaluatorq.simulation.contracts import CommunicationStyle, Message, Persona, Scenario, SimulationDatapoint
 
     def _judgment(*, terminate: bool) -> MagicMock:
         j = MagicMock()
@@ -790,7 +790,7 @@ async def test_pipeline_aggregate_span_carries_summed_call_count(
     from evaluatorq.common.tracing import record_token_usage
     from evaluatorq.contracts import Usage
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
     def _result(calls: int) -> SimulationResult:
         return SimulationResult(
@@ -860,7 +860,7 @@ async def test_traceparent_injected_into_chat_completions_call(
 
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.simulation.types import Message
+    from evaluatorq.simulation.contracts import Message
 
     class _A(BaseAgent):
         @property
@@ -917,7 +917,7 @@ async def test_traceparent_injected_into_first_message_generation_call(
         FirstMessageGenerator,
     )
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Persona,
         Scenario,
@@ -977,7 +977,7 @@ async def test_generated_datapoint_first_message_has_simulation_span(
         FirstMessageGenerator,
     )
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Persona,
         Scenario,
@@ -1023,7 +1023,7 @@ async def test_run_span_records_error_metadata_and_usage(
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Message,
         Persona,
@@ -1101,7 +1101,7 @@ async def test_target_agent_usage_aggregated_into_run_result(
     from evaluatorq.contracts import AgentResponse, AgentTarget, Message, TokenUsage
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Persona,
         Scenario,
@@ -1226,7 +1226,7 @@ async def test_run_span_records_cancellation_metadata_and_usage(
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Message,
         Persona,
@@ -1435,7 +1435,7 @@ async def test_batched_first_message_generation_uses_one_span(
     fake_client.responses.create = AsyncMock(return_value=_Resp())
 
     from evaluatorq.simulation.api import _resolve_or_generate_datapoints
-    from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+    from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 
     personas = [
         Persona(
@@ -1495,7 +1495,7 @@ async def test_first_message_generation_span_records_failures(
     fake_client.responses.create = AsyncMock(side_effect=FirstMessageGenerationError('no usable message'))
 
     from evaluatorq.simulation.api import _resolve_or_generate_datapoints
-    from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+    from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 
     persona = Persona(
         name='P0',
