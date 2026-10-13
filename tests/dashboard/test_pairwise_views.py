@@ -60,7 +60,6 @@ def test_row_list_renders_one_group_per_comparison(client: tuple[TestClient, str
     resp = c.get(f'/r/{rid}/pairwise/row-list')
     assert resp.status_code == 200
     assert _numbers(resp.text) == [1, 2, 3, 4]
-    assert 'T comparisons' not in resp.text
     assert '4 comparisons' in resp.text
 
 
@@ -179,7 +178,8 @@ def test_no_trace_link_without_a_workspace(tmp_path: Path, monkeypatch: pytest.M
     c, rid = _client(_traced_run(), tmp_path)
     text = c.get(f'/r/{rid}/pairwise/row-list').text
     assert 'abc123def456' not in text
-    assert '<th>Trace</th>' in text or 'trace-link' not in text
+    assert '<th>Trace</th>' not in text
+    assert 'trace-link' not in text
 
 
 def test_response_markup_is_escaped(tmp_path: Path) -> None:

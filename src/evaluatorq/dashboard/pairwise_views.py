@@ -166,7 +166,7 @@ def render_pairwise_row_list(
     shown = numbered[(page - 1) * page_size : page * page_size]
 
     judges = judge_order(run)
-    with_trace = any(e.comparison.trace_id for _, e in shown)
+    with_trace = any(single_trace_url(e.comparison.trace_id) for _, e in shown)
     head = (
         '<thead><tr>'
         f'<th>{_sort_button(rid, "#", "index", sort, direction)}</th>'
