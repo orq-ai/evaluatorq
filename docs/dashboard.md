@@ -228,7 +228,7 @@ A pairwise run opens on a verdict: which side won, and whether the run has enoug
 
 **Comparisons.** A strip of dots, one per comparison and coloured by winner, sits above a paged list of 25 rows. A ringed dot marks a comparison where the judges split. Click a dot to open the report on the Comparisons tab with that comparison's page loaded and its row expanded, or sort the list by number or winner. Rows load their detail only when opened, so a large run stays fast: each row expands to the two responses side by side with every judge's vote, each ordering's pass, and the rationale. A vote thrown out because the judge changed its answer when the sides were swapped carries a `flipped` tag, and a replacement judge is marked `stand-in`. Row numbers stay the same under any filter or sort, so `#14` is always the same comparison.
 
-![The Comparisons tab with two expanded rows: a split panel and one the panel could not decide, each showing both responses and every judge's vote.](assets/dashboard-pairwise-comparison.png){ .dashboard-shot }
+![The Comparisons tab: the strip of comparison dots above the paged list, with the first comparison expanded to show both responses side by side and each judge's vote in both orderings, one of them thrown out as flipped.](assets/dashboard-pairwise-comparison.png){ .dashboard-shot }
 
 When the run was judged with tracing on, each comparison records the `trace_id` of its judging span and its row links to that trace in Orq. The link needs an Orq workspace in Settings; without one the row shows no link, and a run saved with tracing off has no `trace_id` at all.
 
