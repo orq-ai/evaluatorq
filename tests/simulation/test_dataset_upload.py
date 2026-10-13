@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from evaluatorq.simulation._datapoint_io import _extract_single_datapoint
 from evaluatorq.simulation.cli import app
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     EmotionalArc,
     Persona,

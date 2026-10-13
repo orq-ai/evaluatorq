@@ -217,7 +217,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
     import asyncio
 
     from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle, Criterion, EmotionalArc, Persona, Scenario, StartingEmotion,
     )
 
@@ -276,7 +276,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
 
     from evaluatorq.contracts import LLMCallConfig, Message
     from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.types import CommunicationStyle, Criterion, Persona, Scenario
+    from evaluatorq.simulation.contracts import CommunicationStyle, Criterion, Persona, Scenario
 
     client = AsyncOpenAI()
 
@@ -442,6 +442,31 @@ results = await simulate(
 
 - cliffs that are not ordered — turn thresholds must strictly increase and scores must not increase with them, so a longer conversation can never score higher than a shorter one;
 - weights that do not sum to `1.0`.
+
+### Scoring results yourself
+
+Every built-in is a `SimulationScorer`, which is just a type alias:
+
+```python
+SimulationScorer = Callable[[SimulationResult], float]
+```
+
+`get_evaluator(name, config)` returns one, and `get_all_evaluators(config)` returns all four keyed by name, so you can rescore saved results under a different policy without rerunning the conversations. `evaluator_names` only accepts the built-in names. For a check of your own, write a function with the same shape and run it over the returned results:
+
+```python
+from evaluatorq.simulation import SimulationResult, SimulationScoringConfig, get_evaluator
+
+
+def no_handoff(result: SimulationResult) -> float:
+    """1.0 when the agent never handed the user off to a human."""
+    replies = [m.content for m in result.messages if m.role == "assistant" and isinstance(m.content, str)]
+    return 0.0 if any("transfer you" in r.lower() for r in replies) else 1.0
+
+
+strict = get_evaluator("turn_efficiency", SimulationScoringConfig(turn_efficiency_cliffs=((1, 1.0), (2, 0.5))))
+for r in results:
+    print(r.turn_count, strict(r), no_handoff(r))
+```
 
 ## Hooks receive failed evaluator outcomes
 
@@ -722,6 +747,46 @@ The seed is a steer, not a transcript: generation fills in the persona traits an
 
 !!! note "Seeds are a deliberate choice, not the only route"
     Writing seed phrases by hand means you decide which archetypes matter, rather than inheriting whatever your recent traffic happened to contain. When you'd rather start from real traffic, use `eq sim from-traces` above — it infers the personas and scenarios for you.
+
+## Noisy first messages
+
+Real users paste text with zero-width spaces, send half a sentence, or drop markdown into a chat box. `DatapointGenerator.generate_from_description()` can rewrite a share of the generated opening messages that way. `perturbation_rate` is the probability, per datapoint, that its `first_message` gets one randomly chosen perturbation; it defaults to `0.0`:
+
+```python
+from evaluatorq.simulation import DatapointGenerator, simulate
+
+generator = DatapointGenerator()
+try:
+    datapoints = await generator.generate_from_description(
+        agent_description="Customer support agent for an online bookstore",
+        perturbation_rate=0.3,
+    )
+finally:
+    await generator.close()
+
+results = await simulate(target="agent:my-support-agent", datapoints=datapoints)
+```
+
+Only the first message is perturbed; later user turns come from the simulator unchanged. Which perturbation was applied is not stored on the datapoint, so compare `first_message` against an unperturbed run when you need to know.
+
+The perturbations are plain string functions with no LLM call, so you can apply them to your own datapoints as well:
+
+```python
+from evaluatorq.simulation import PerturbationType, apply_perturbation, apply_random_perturbation
+
+apply_perturbation("Where is my order?", PerturbationType.truncate)
+text, kind = apply_random_perturbation("Where is my order?")
+```
+
+| `PerturbationType` | What it does to the message |
+|---|---|
+| `unicode_noise` | Inserts copy-paste artifacts: zero-width and non-breaking spaces, direction marks, curly quotes, a BOM. |
+| `truncate` | Cuts the message at 40 to 80 percent of its length, as if sent too early. Messages of 10 characters or fewer are left alone. |
+| `markdown_injection` | Adds markdown such as a heading, a fenced "SYSTEM" block, or a `javascript:` link. |
+| `code_injection` | Adds a code-shaped payload: a fake system-role JSON message, a script tag, SQL, a template expression. |
+| `mixed_language` | Mixes in a phrase from another language. |
+
+`apply_perturbations_batch(messages, perturbation_rate=0.3)` does the same over a list and returns `(message, type or None)` pairs.
 
 ## Reading a run in the dashboard
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 from evaluatorq.common.sanitize import delimit
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CULTURAL_CONTEXT_INSTRUCTIONS,
     EMOTIONAL_ARC_INSTRUCTIONS,
     INPUT_FORMAT_INSTRUCTIONS,

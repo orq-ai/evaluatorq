@@ -32,7 +32,7 @@ load_dotenv()
 
 from evaluatorq.contracts import Message
 from evaluatorq.simulation import simulate
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     EmotionalArc,

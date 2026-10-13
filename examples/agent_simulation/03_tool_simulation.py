@@ -43,7 +43,7 @@ except ImportError as e:
     ) from e
 from evaluatorq.contracts import Message
 from evaluatorq.simulation import simulate
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     Persona,

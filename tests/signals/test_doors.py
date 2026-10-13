@@ -247,7 +247,7 @@ _ORQ_URL = 'https://my.orq.ai/v3/router'
 
 @pytest.fixture
 def jev_router(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[float]]:
-    """Route the classifier model to /classify and record backoff waits instead of sleeping."""
+    """Route the classifier model to /decisions and record backoff waits instead of sleeping."""
     model_catalogue.reset_catalogue_cache()
     entry = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=True)
 
@@ -274,7 +274,7 @@ def _router_client(*post_results: Any) -> Any:
 
 
 def _status_error(cls: type[APIStatusError], status: int) -> APIStatusError:
-    response = httpx.Response(status, request=httpx.Request('POST', f'{_ORQ_URL}/classify'))
+    response = httpx.Response(status, request=httpx.Request('POST', f'{_ORQ_URL}/decisions'))
     return cls('failed', response=response, body=None)
 
 

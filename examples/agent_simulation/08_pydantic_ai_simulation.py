@@ -34,7 +34,7 @@ load_dotenv()
 
 from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
 from evaluatorq.simulation import simulate
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     Persona,

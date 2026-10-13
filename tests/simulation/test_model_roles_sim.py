@@ -30,7 +30,7 @@ def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 
 def _persona():
-    from evaluatorq.simulation.types import CommunicationStyle, Persona
+    from evaluatorq.simulation.contracts import CommunicationStyle, Persona
 
     return Persona(
         name='Test User',
@@ -44,7 +44,7 @@ def _persona():
 
 
 def _scenario():
-    from evaluatorq.simulation.types import Scenario
+    from evaluatorq.simulation.contracts import Scenario
 
     return Scenario(name='S', goal='g')
 

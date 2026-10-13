@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.replay import ReplayError, load_run_payload
-from evaluatorq.simulation.types import SimulationDatapoint
+from evaluatorq.simulation.contracts import SimulationDatapoint
 
 if TYPE_CHECKING:
     from pathlib import Path

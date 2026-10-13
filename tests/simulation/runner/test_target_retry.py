@@ -25,7 +25,7 @@ from evaluatorq.contracts import (
     TokenUsage,
 )
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     CriterionVerdict,

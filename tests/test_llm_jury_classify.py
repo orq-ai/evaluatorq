@@ -1,6 +1,6 @@
 """A classify judge (Jev) can be seated on `llm_jury` / `llm_jury_pairwise` panels.
 
-The jury layer never calls ``/classify`` itself: it builds the `ClassifyQuestion` and
+The jury layer never calls ``/decisions`` itself: it builds the `ClassifyQuestion` and
 hands it to `run_judge`, which decides the endpoint. These tests therefore capture the
 ``classify=`` keyword rather than any request body, and pin the one guarantee the change
 had to keep — a panel with plain list labels and no ``levels`` produces exactly the

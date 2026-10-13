@@ -111,7 +111,7 @@ class LabelSpec(BaseModel):
     noul_threshold: BoundedRatio = 0.5
 
     def to_question(self, state: dict[str, Any] | str | list[Any]) -> ClassifyQuestion:
-        """Build the `/classify` question for this label against `state`, validating the criteria/kind shape."""
+        """Build the `/decisions` question for this label against `state`, validating the criteria/kind shape."""
         return ClassifyQuestion(
             kind=self.kind,
             instructions=self.instructions,
@@ -126,7 +126,8 @@ class InsightsPopulation(BaseModel):
 
     Either filtered live through `trace_finder` (`query`/`facets`/`numeric`/window/limit),
     hydrated from a finder export, or read from a local `Snapshot` JSON file.
-    File sources fix the population and cannot be combined with live selection.
+    File sources fix the population and cannot be combined with live selection. `filters` is an input-only
+    shorthand for facet and numeric fields; persisted runs retain the `facets` and `numeric` shape.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -134,6 +135,7 @@ class InsightsPopulation(BaseModel):
     query: str | None = None
     facets: FacetSelection = FacetSelection()
     numeric: NumericFilters = NumericFilters()
+    filters: dict[str, Any] | None = Field(default=None, exclude=True)
     start: datetime | None = None
     end: datetime | None = None
     time_origin: Literal['default', 'explicit'] = 'default'
@@ -143,6 +145,33 @@ class InsightsPopulation(BaseModel):
     finder_export: Path | None = None
     snapshot_path: Path | None = None
     _finder_export_snapshot: RunExport | None = PrivateAttr(default=None)
+
+    @model_validator(mode='before')
+    @classmethod
+    def _unpack_unified_filters(cls, value: Any) -> Any:
+        """Split unified facet/numeric filters through their canonical validators."""
+        if not isinstance(value, dict) or value.get('filters') is None:
+            return value
+        filters = value['filters']
+        if not isinstance(filters, dict):
+            raise ValueError('filters must be a dictionary')  # noqa: TRY004 — Pydantic must report validation errors.
+        if 'facets' in value or 'numeric' in value:
+            raise ValueError('filters cannot be combined with legacy facets or numeric arguments')
+
+        facet_fields = set(FacetSelection.model_fields)
+        numeric_fields = set(NumericFilters.model_fields)
+        unknown = set(filters) - facet_fields - numeric_fields
+        if unknown:
+            raise ValueError(f'unknown filter keys: {", ".join(sorted(map(str, unknown)))}')
+
+        facet_values = {key: item for key, item in filters.items() if key in facet_fields}
+        numeric_values = {key: item for key, item in filters.items() if key in numeric_fields}
+        return {
+            **value,
+            'filters': None,
+            'facets': FacetSelection.model_validate(facet_values),
+            'numeric': NumericFilters.model_validate(numeric_values),
+        }
 
     @model_validator(mode='after')
     def _file_source_excludes_live_selection(self) -> Self:

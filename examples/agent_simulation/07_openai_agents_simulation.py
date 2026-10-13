@@ -41,7 +41,7 @@ load_dotenv()
 
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
 from evaluatorq.simulation import simulate
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     Persona,

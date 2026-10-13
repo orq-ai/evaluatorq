@@ -20,7 +20,7 @@ from evaluatorq.simulation.hooks import (
     SimulationHooks,
     SimulationRunMeta,
 )
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Persona,
     Scenario,
@@ -104,7 +104,7 @@ def _turn_metrics() -> TurnMetrics:
 
 from evaluatorq.contracts import TokenUsage as _TU
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import Judgment, Message
+from evaluatorq.simulation.contracts import Judgment, Message
 
 
 class _StubUserSim:

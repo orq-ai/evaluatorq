@@ -15,7 +15,7 @@ from evaluatorq.common.model_input import (
     jev_state,
     source_text_ranges,
 )
-from evaluatorq.common.trace_document import prompt_messages
+from evaluatorq.common.trace_document import to_chat_messages
 from evaluatorq.contracts import tool_result_to_text
 from evaluatorq.trace_finder.settings import MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
 
@@ -63,7 +63,7 @@ def project_trace(
             f'trace_input_chars must be between {MIN_TRACE_INPUT_CHARS} and {MAX_TRACE_INPUT_CHARS} characters'
         )
     if is_jev_model(model):
-        source = prompt_messages(trace)
+        source = to_chat_messages(trace)
         empty_state = {'messages': []}
         state_overhead = len(serialize_projection({'trace_status': trace.status, **empty_state})) - len(
             serialize_projection(empty_state)
@@ -133,7 +133,7 @@ def _project_full_conversation(
         for line_start, line_end, index in message_spans
         if any(line_start < range_end and line_end > range_start for range_start, range_end in represented_ranges)
     }
-    source = prompt_messages(trace)
+    source = to_chat_messages(trace)
     source_bytes = sum(_source_message_bytes(message) for message in source)
     if conversation != original_conversation:
         logger.warning(

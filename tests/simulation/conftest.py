@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
 from evaluatorq.contracts import TokenUsage
-from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
 
 class CollectingExporter(SpanExporter):

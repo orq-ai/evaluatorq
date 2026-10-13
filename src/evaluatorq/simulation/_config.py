@@ -37,10 +37,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # names in this module's namespace and can't live behind `TYPE_CHECKING`.
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
 from evaluatorq.contracts import DEFAULT_TARGET_TIMEOUT_MS, AgentTarget, LLMCallConfig, TokenUsage
+from evaluatorq.simulation.contracts import Message, Persona, Scenario, SimulationDatapoint  # noqa: TC001
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
-from evaluatorq.simulation.types import Message, Persona, Scenario, SimulationDatapoint  # noqa: TC001
 
 # Named because every `simulate` overload repeats them; as literals they drifted one
 # signature at a time. DEFAULT_DATAPOINT_PARALLELISM is shared with red team, so it lives in common.

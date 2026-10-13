@@ -16,7 +16,7 @@ from evaluatorq.openresponses.convert_models import (
     Usage as ORUsage,
 )
 from evaluatorq.simulation.convert import to_open_responses
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CriteriaMeta,
     Message,
     SimulationResult,

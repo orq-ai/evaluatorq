@@ -1,4 +1,4 @@
-"""Label pass: one `/classify` request per trace, carrying every requested label plus the optional population-match question.
+"""Label pass: one `/decisions` request per trace, carrying every requested label plus the optional population-match question.
 
 One retry layer: `with_retry` wraps `run_classify`, retried only for
 `JudgeError.TIMEOUT`/`JudgeError.API_CONNECTION` outcomes (mirroring their
@@ -34,11 +34,11 @@ from evaluatorq.common.model_input import (
     jev_text_state,
 )
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.trace_document import prompt_messages
+from evaluatorq.common.trace_document import to_chat_messages
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.insights.models import LabelAnswer, LabelSpec
 from evaluatorq.insights.presets import CODING_AGENT, CODING_CONVERSATION_LABELS, CODING_TOOL_LABELS
-from evaluatorq.insights.transcript import full_conversation_view, tool_activity_chunks, tool_inventory
+from evaluatorq.insights.transcript import DETAILED, full_conversation_view, tool_activity_chunks, tool_inventory
 from evaluatorq.trace_finder.classifier import matches_selection
 
 if TYPE_CHECKING:
@@ -64,7 +64,7 @@ _RETRYABLE_ERROR_KINDS = frozenset({JudgeError.TIMEOUT, JudgeError.API_CONNECTIO
 
 @dataclass
 class LabelOutcome:
-    """One trace's labels from a single `/classify` round trip, plus the optional population-match verdict."""
+    """One trace's labels from a single `/decisions` round trip, plus the optional population-match verdict."""
 
     trace: TraceRecord | TraceDocument
     answers: dict[str, LabelAnswer]
@@ -89,6 +89,13 @@ def _map_answer(question: ClassifyQuestion, answer: ClassifyAnswer) -> LabelAnsw
     `answer.type`, an out-of-criteria choice, an out-of-range score) is
     unreadable and reported as `error`, never guessed; the caller logs it.
     """
+    if answer.type == 'refusal':
+        return LabelAnswer(
+            value=None,
+            confidence=None,
+            probabilities=None,
+            error=f'classify model refused to answer the {question.kind} question',
+        )
     if answer.type != question.kind:
         return LabelAnswer(
             value=None,
@@ -188,7 +195,7 @@ async def _ask(
     what: str,
     trace_input_chars: int | None = None,
 ) -> tuple[dict[str, LabelAnswer], str | None]:
-    """Ask `specs` about the bounded state in one `/classify` call."""
+    """Ask `specs` about the bounded state in one `/decisions` call."""
     trace_input_chars = trace_input_chars if trace_input_chars is not None else effective_trace_input_chars()
     state = _prepare_state(state, model, trace_input_chars)
     questions = {spec.name: spec.to_question(state) for spec in specs}
@@ -233,8 +240,8 @@ def _prepare_state(
 def prepare_classifier_state(trace: TraceRecord | TraceDocument, *, model: str, char_cap: int) -> str | dict[str, Any]:
     """Build the main Insights classifier state before any Jev question-capacity fit."""
     if is_jev_model(model):
-        return jev_state(prompt_messages(trace), global_char_cap=char_cap)
-    return _prepare_state(full_conversation_view(trace, char_cap), model, char_cap)
+        return jev_state(to_chat_messages(trace), global_char_cap=char_cap)
+    return _prepare_state(full_conversation_view(trace, char_cap, DETAILED), model, char_cap)
 
 
 # ponytail: the two chunked tool labels, named here; move onto LabelSpec if other labels ever chunk.
@@ -482,7 +489,7 @@ async def label_traces(
     coding_labels: Sequence[LabelSpec] | None = None,
     trace_input_chars: int | None = None,
 ) -> list[LabelOutcome]:
-    """Label every trace, bounded by `parallelism` concurrent `/classify` calls.
+    """Label every trace, bounded by `parallelism` concurrent `/decisions` calls.
 
     Per trace: prepare the classifier state from the full transcript or indexed Jev messages, ask
     every label's question plus (when `compiled` is given) the population-match

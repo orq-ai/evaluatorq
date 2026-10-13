@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from evaluatorq.contracts import TokenUsage
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CULTURAL_CONTEXT_INSTRUCTIONS,
     EMOTIONAL_ARC_INSTRUCTIONS,
     INPUT_FORMAT_INSTRUCTIONS,

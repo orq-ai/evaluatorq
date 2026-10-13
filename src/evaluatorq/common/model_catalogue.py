@@ -13,7 +13,7 @@ Fetched once per process (per host) from ``GET /v2/models`` and used for four th
 * **Knowing which models serve Responses at all.** Entries carry
   ``metadata.supports_responses_api``, so a caller can ask before it calls
   instead of discovering it from a 400.
-* **Knowing which models serve ``/classify``.** Entries carry
+* **Knowing which models serve ``/decisions``.** Entries carry
   ``metadata.supports_classify``, which is how a judge is seated on the classify
   endpoint instead of a chat one (`supports_classify`).
 
@@ -63,7 +63,7 @@ class _ModelInfoFields(NamedTuple):
     # Accepted ``reasoning.effort`` values. ``None`` means the catalogue does not say
     # — absence is "unknown", never "empty".
     reasoning_efforts: frozenset[str] | None = None
-    # Whether the model serves the router's ``/classify`` endpoint rather than a
+    # Whether the model serves the router's ``/decisions`` endpoint rather than a
     # chat/responses one. Defaulted so the positional call sites keep working.
     supports_classify: bool = False
     # The catalogue's ``model_type`` (``chat``, ``embedding``, ``tts``, …); ``''`` when unstated.
@@ -510,7 +510,7 @@ async def models_by_provider(
 ) -> dict[str, list[str]]:
     """Catalogue ids as ``provider/model``, grouped by provider, both levels sorted.
 
-    ``kind='classify'`` lists the models that serve ``/classify``, ``'embedding'`` the
+    ``kind='classify'`` lists the models that serve ``/decisions``, ``'embedding'`` the
     embedding models and ``'chat'`` the chat models. Empty when the catalogue is unavailable, so a caller can fall back to
     free text. Set ``strict=True`` to propagate request errors and raise ``ModelCatalogueError`` for malformed
     payloads; strict calls reuse successful non-OAuth cache entries and retry failed ones. OAuth results are never cached.
@@ -593,7 +593,7 @@ def is_known_classify_model(model: str) -> bool:
 
 
 async def supports_classify(model: str, client: AsyncOpenAI | None = None) -> bool:
-    """Whether ``model`` serves the router's ``/classify`` endpoint.
+    """Whether ``model`` serves the router's ``/decisions`` endpoint.
 
     The catalogue is the authority: an entry answers for itself, including saying
     ``False``. `KNOWN_CLASSIFY_MODELS` answers only when there is no entry at all —

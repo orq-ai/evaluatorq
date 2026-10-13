@@ -4,13 +4,15 @@ A **classify judge** scores structured state by answering a typed question inste
 
 Use one when you want a fast, inexpensive vote for a yes/no, fixed-label, ordered-scale or pairwise decision. Use a prompted LLM judge when you need model-written reasoning or a verdict outside those four shapes.
 
+If you want typed answers without a panel around them, call the endpoint directly — see [the classify endpoint](classify-endpoint.md).
+
 ## How a classifier fits into a jury
 
 An evaluatorq **jury** is a panel of judge models whose votes are aggregated into one result. A classify judge occupies an ordinary seat beside prompted LLM judges, but the request and response differ:
 
 | | Prompted LLM judge | Classify judge |
 | --- | --- | --- |
-| Endpoint | Responses or Chat Completions | Orq router `POST /v3/router/classify` |
+| Endpoint | Responses or Chat Completions | Orq router `POST /v3/router/decisions` |
 | Input | Rendered system and user prompts | Structured state plus one typed question |
 | Output | Schema-constrained verdict and written explanation | Probability, choice or score |
 | Explanation | Written by the model | Synthesised by evaluatorq from the returned numbers |
@@ -136,6 +138,7 @@ Tracing is a second observability surface: the judge span records `judge.confide
 | The model is sent as an ordinary chat judge and fails | The client does not route through Orq | Set `ORQ_API_KEY` or use only prompted judges |
 | The classifier warns that state is empty | None of the selected paths exists on the datapoint | Correct `state_fields` or add the needed placeholders to the prompt template |
 | A custom sampling setting is named as ignored | The classifier cannot use text-generation settings | Keep the setting for prompted seats or remove it on a classifier-only panel |
+| A classify seat drops out of the tally and nothing is recorded as an error | The model answered `refusal`. That abstains rather than failing, so the seat is excluded from the decisive tally, gets no replacement judge, and a panel where every seat abstained is `inconclusive` with no error payload. The refusal is recorded on the outcome's `error_message`, and the raw reply is logged at warning level | Read the vote's `explanation` (`classify model refused to answer the <kind> question`), then rephrase the question's `instructions` or move the question to a classify model that answers it |
 | Pairwise evaluation makes more calls than expected | `repetitions` duplicates each deterministic ordering; `swap` creates the separate reverse ordering | Keep `swap` for bias correction and leave `repetitions=1` |
 
 ## Routing and fallbacks

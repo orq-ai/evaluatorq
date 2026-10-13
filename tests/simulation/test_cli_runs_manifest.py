@@ -32,11 +32,13 @@ def test_runs_lists_manifest_backed_status_and_stats(tmp_path: Path) -> None:
         },
     )
 
-    result = runner.invoke(sim_app, ['runs', str(runs)])
+    result = runner.invoke(sim_app, ['runs', str(runs), '--json'])
     assert result.exit_code == 0, result.output
-    assert 'manifest-sim' in result.stdout
-    assert 'completed' in result.stdout
-    assert 'goal_achieved' in result.stdout
+    row = json.loads(result.stdout)[0]
+    assert row['run_name'] == 'manifest-sim'
+    assert row['status'] == 'completed'
+    assert row['total_results'] == 4
+    assert row['scorer_averages'] == {'goal_achieved': 0.75}
 
 
 def test_runs_shows_in_flight_run(tmp_path: Path) -> None:

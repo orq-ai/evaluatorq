@@ -18,7 +18,7 @@ import pytest
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.evaluators.scorers import criteria_met_scorer
 from evaluatorq.simulation.reports.sections import _criteria_rows, individual_entries
-from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
 
 def _meta(*, audited: bool | None, passed: bool = True, evidence: str | None = None) -> list[dict[str, object]]:

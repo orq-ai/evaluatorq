@@ -134,7 +134,7 @@ class TraceDocument(BaseModel):
     @property
     def messages(self) -> tuple[dict[str, Any], ...]:
         """Compatibility view, freshly rendered from the trajectory on access."""
-        return tuple(prompt_messages(self))
+        return tuple(to_chat_messages(self))
 
     @property
     def source_coverage(self) -> dict[str, Any]:
@@ -267,8 +267,12 @@ def _source_coverage_projection(capture: Mapping[str, Any]) -> dict[str, Any]:
     return projected
 
 
-def prompt_messages(document: TraceDocument | TraceRecord) -> list[dict[str, Any]]:
-    """Rebuild the historical message dictionaries from ATIF native fields and rendering annotations."""
+def to_chat_messages(document: TraceDocument | TraceRecord) -> list[dict[str, Any]]:
+    """Rebuild the historical message dictionaries from ATIF native fields and rendering annotations.
+
+    A step's native `reasoning_content` is copied onto its message when the message has none of its own; renderers
+    decide whether to show it.
+    """
     doc = ensure_trace_document(document)
     ordered: list[tuple[int, dict[str, Any]]] = []
     for step in doc.trajectory.steps:
@@ -290,6 +294,8 @@ def prompt_messages(document: TraceDocument | TraceRecord) -> list[dict[str, Any
             calls = [_render_call(call) for call in step.tool_calls or []]
             if calls:
                 message['tool_calls'] = calls
+            if step.reasoning_content and 'reasoning_content' not in message:
+                message['reasoning_content'] = step.reasoning_content
             ordered.append((order, message))
         for result in step.observation.results if step.observation else []:
             result_extra = result.extra or {}

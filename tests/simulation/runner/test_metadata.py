@@ -1,5 +1,5 @@
 from evaluatorq.simulation.runner.simulation import _build_simulation_metadata
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     Persona,
@@ -39,7 +39,7 @@ def test_metadata_handles_missing_persona_and_scenario():
 
 
 def test_metadata_partial_persona_only_and_scenario_only():
-    from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+    from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 
     persona = Persona(
         name='P', patience=0.5, assertiveness=0.5, politeness=0.5,

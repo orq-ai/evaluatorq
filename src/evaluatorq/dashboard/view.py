@@ -1086,9 +1086,11 @@ def settings_body(
         f'<span class="config-val"><span class="settings-select"><select id="filter_selection" name="filter_selection">{filter_options}</select></span>'
         '<span class="settings-auth-hint">Choose how natural-language trace metadata filters are selected.</span></span></div>'
     )
-    saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
-    if preview:
-        saved_html += '<p class="settings-saved" role="status">Profile preview. Save settings to use it.</p>'
+    toast_text = 'Profile preview. Change a setting to save it.' if preview else 'Settings saved' if saved else ''
+    toast_html = (
+        f'<div id="settings-toast" class="settings-toast{" show" if toast_text else ""}" role="status" aria-live="polite">'
+        f'{toast_text}</div>'
+    )
     form_error = f'<p class="settings-error" role="alert">{esc(errors["form"])}</p>' if 'form' in errors else ''
     auth_rows: list[str] = []
     chosen = setting_value('orq_profile')
@@ -1211,11 +1213,23 @@ def settings_body(
         f'<div class="config-list">{"".join(auth_rows)}</div>',
         cls='settings-auth-panel',
     )
+    inspector_checked = ' checked' if setting_value('compression_inspector_enabled').lower() == 'true' else ''
+    advanced_panel = (
+        '<details class="settings-advanced"><summary>Advanced</summary>'
+        '<div class="settings-auth-choices settings-advanced-choices"><div class="settings-auth-choice">'
+        '<label class="settings-auth-card settings-switch-card"><input id="compression_inspector_enabled" '
+        f'name="compression_inspector_enabled" type="checkbox" role="switch" value="true"{inspector_checked}>'
+        '<span class="settings-auth-card-copy"><strong>Compression inspector</strong>'
+        '<small>Adds a sidebar page that shows a trace next to the compressed text a model would read. '
+        'Local previews may expose sensitive original content. Previews do not call models.</small></span>'
+        '<span class="settings-switch" aria-hidden="true"></span></label></div></div></details>'
+    )
+
     form = (
         '<form class="settings-form" method="post" action="/settings">'
-        f'{csrf_field()}{saved_html}{form_error}{models_panel}{auth_panel}'
-        '<button type="submit" class="rt-apply-btn settings-save">Save settings</button>'
+        f'{csrf_field()}{form_error}{models_panel}{auth_panel}{advanced_panel}'
         '</form>'
+        f'{toast_html}'
     )
 
     def val_html(v: str | list[str]) -> str:
@@ -1240,8 +1254,39 @@ def settings_body(
         'panel.querySelectorAll("input,select,textarea").forEach(function(field){field.disabled=inactive;});'
         '});'
         '}'
+        'const toast=document.getElementById("settings-toast");let hideTimer=null;'
+        'function showToast(text,isError){'
+        'toast.textContent=text;toast.classList.toggle("is-error",!!isError);toast.classList.add("show");'
+        'clearTimeout(hideTimer);hideTimer=setTimeout(function(){toast.classList.remove("show");},isError?6000:2200);'
+        '}'
+        'if(toast.textContent)showToast(toast.textContent,false);'
+        'let saving=false,again=false,timer=null,scopeChanged=false;'
+        'function save(){'
+        'if(saving){again=true;return;}'
+        'saving=true;'
+        'fetch("/settings",{method:"POST",body:new FormData(form),headers:{"X-Autosave":"1"}})'
+        '.then(function(response){return response.json().then(function(data){return {ok:response.ok,data:data};});})'
+        '.then(function(result){'
+        'if(result.ok){'
+        'document.querySelector(".app-sidebar").outerHTML=result.data.sidebar;'
+        'const key=form.querySelector("[name=orq_api_key_entry]");if(key)key.value="";'
+        'showToast("Settings saved",false);'
+        '}else{showToast(Object.values(result.data.errors||{}).join(" ")||"Could not save settings",true);}'
+        '})'
+        '.catch(function(){showToast("Could not save settings",true);})'
+        '.finally(function(){saving=false;if(again){again=false;save();}});'
+        '}'
+        'function scheduleSave(){clearTimeout(timer);timer=setTimeout(save,250);}'
+        'form.addEventListener("submit",function(event){event.preventDefault();scheduleSave();});'
         'form.addEventListener("change",function(event){'
-        'if(event.target.name==="orq_auth_method")syncAuthFields();});'
+        'const name=event.target.name;'
+        'if(name==="orq_auth_method")syncAuthFields();'
+        'if(name==="orq_oauth_server"||name==="orq_workspace"){scopeChanged=true;return;}'
+        'scheduleSave();'
+        '});'
+        'document.body.addEventListener("htmx:afterSettle",function(event){'
+        'if(scopeChanged&&event.target.id==="oauth-scope"){scopeChanged=false;scheduleSave();}'
+        '});'
         'form.addEventListener("htmx:load",syncAuthFields);'
         'syncAuthFields();'
         '});</script>'

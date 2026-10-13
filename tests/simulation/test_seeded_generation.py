@@ -20,7 +20,7 @@ from evaluatorq.simulation import (
     generate_scenario,
     generate_scenarios,
 )
-from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 
 
 class _Parsed:

@@ -17,7 +17,7 @@ from evaluatorq.simulation.evaluators import (
     goal_achieved_scorer,
     turn_efficiency_scorer,
 )
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     SimulationResult,
     TerminatedBy,
 )

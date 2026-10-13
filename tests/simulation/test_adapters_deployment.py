@@ -11,7 +11,7 @@ from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pip
 from evaluatorq.contracts import AgentResponse, TokenUsage
 from evaluatorq.deployment import DeploymentResponse
 from evaluatorq.simulation.adapters import from_orq_deployment
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 
 _deployment_module = importlib.import_module('evaluatorq.deployment')
 

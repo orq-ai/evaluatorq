@@ -55,6 +55,7 @@ class DashboardSettings(BaseModel):
     orq_project_id: str | None = None
     orq_project_name: str | None = None
     explorer_columns: tuple[str, ...] | None = None
+    compression_inspector_enabled: bool = False
 
     @field_validator('explorer_columns', mode='after')
     @classmethod

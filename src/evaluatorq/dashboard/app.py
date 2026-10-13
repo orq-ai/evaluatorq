@@ -56,13 +56,14 @@ from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close
 from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
+from evaluatorq.dashboard.compression_inspector import register_compression_inspector_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
 from evaluatorq.dashboard.orq_scope import OAuthScopes, discover_oauth_scopes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
-from evaluatorq.dashboard.shell import dashboard_css, dashboard_css_version, page
+from evaluatorq.dashboard.shell import current_sidebar_html, dashboard_css, dashboard_css_version, page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
@@ -478,11 +479,18 @@ def _settings_model_auth_recovery(*, method: str) -> str:
     return f'Orq credentials need attention, so the model list cannot load. {detail} You can still type a model id.'
 
 
+def _autosaving(req: Request) -> bool:
+    """Whether the settings page is saving in place (a fetch) rather than submitting the form."""
+    return req.headers.get('x-autosave') == '1'
+
+
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     """Validate and persist the settings form, or render field errors."""
     form_data = await req.form()
     rejected = request_rejected(req, form_data)
     if rejected:
+        if _autosaving(req):
+            return JSONResponse({'errors': {'form': rejected}}, status_code=403)
         roots = _roots(req)
         config = await asyncio.to_thread(_settings_config, roots)
         body = settings_body(config, effective_settings(), errors={'form': rejected})
@@ -590,6 +598,8 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
             }
         )
     if settings is None or errors:
+        if _autosaving(req):
+            return JSONResponse({'errors': errors}, status_code=422)
         body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
@@ -619,6 +629,8 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     # Retire stores after removing them from app state so new requests cannot acquire them.
     await _close_finder_stores(*old_session_stores, old_legacy_store, old_search_store)
     req.app.state.finder_unavailable_reason = None
+    if _autosaving(req):
+        return JSONResponse({'sidebar': current_sidebar_html('settings')})
     return RedirectResponse('/settings?saved=1', status_code=303)
 
 
@@ -683,6 +695,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_project_name'] = None
     values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
     values['filter_selection'] = form_data.get('filter_selection', current.filter_selection)
+    values['compression_inspector_enabled'] = form_data.get('compression_inspector_enabled') in ('on', 'true')
     raw_input_cap = form_data.get('trace_input_chars')
     if raw_input_cap is None:
         values['trace_input_chars'] = current.trace_input_chars
@@ -1146,6 +1159,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: /insights — read-only trace intelligence review
     # ------------------------------------------------------------------
     register_insights_routes(app)
+    register_compression_inspector_routes(app)
 
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page
