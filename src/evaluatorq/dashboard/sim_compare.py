@@ -559,13 +559,14 @@ def resolve_run(rid: str, roots: list[Path] | None, surface: str) -> tuple[str, 
         return 'error', None
 
 
-def _error_page(message: str, status: int) -> Response:
+def error_page(message: str, status: int, surface: str) -> Response:
+    """Full-page compare error for *surface* ('sim' or 'pairwise')."""
     body = (
         '<header class="report-hero"><h2 class="report-hero-title">Run comparison</h2></header>'
         f'<p class="sim-empty">{esc(message)}</p>'
     )
     return Response(
-        page('Compare', body, active_surface='sim', back_html=report_back_link('sim')),
+        page('Compare', body, active_surface=surface, back_html=report_back_link(surface)),
         status_code=status,
         media_type='text/html',
     )
@@ -584,18 +585,18 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
         rid_a = req.query_params.get('a') or ''
         rid_b = req.query_params.get('b') or ''
         if not rid_a or not rid_b:
-            return _error_page('Pick two runs to compare.', 400)
+            return error_page('Pick two runs to compare.', 400, 'sim')
         if rid_a == rid_b:
-            return _error_page('Pick two different runs to compare.', 400)
+            return error_page('Pick two different runs to compare.', 400, 'sim')
 
         status_a, run_a = resolve_run(rid_a, roots, 'sim')
         status_b, run_b = resolve_run(rid_b, roots, 'sim')
         if 'error' in (status_a, status_b):
             which = 'A' if status_a == 'error' else 'B'
-            return _error_page(f'Run {which} could not be loaded (the report may be corrupt).', 422)
+            return error_page(f'Run {which} could not be loaded (the report may be corrupt).', 422, 'sim')
         if run_a is None or run_b is None:
             which = 'A' if run_a is None else 'B'
-            return _error_page(f'Run {which} was not found or is not a simulation run.', 404)
+            return error_page(f'Run {which} was not found or is not a simulation run.', 404, 'sim')
 
         body = render_compare_page(rid_a, rid_b, run_a, run_b)
         return Response(

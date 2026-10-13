@@ -3771,11 +3771,15 @@ _PAIRWISE_COMPARISONS_CSS = """
 .pw-report .pw-dot { width: 14px; height: 14px; border-radius: 3px; display: inline-block; box-sizing: border-box; }
 .pw-report .pw-dot.is-split { box-shadow: inset 0 0 0 2px var(--surface-card); outline: 2px solid currentColor; outline-offset: -2px; }
 .pw-report .pw-legend { font-size: 11px; color: var(--text-muted); display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
-.pw-report .pw-cmp-table { width: 100%; border-collapse: collapse; }
-.pw-report .pw-cmp-table thead th { text-align: left; font-size: 11px; color: var(--text-muted); font-weight: 600; padding: 6px 8px; }
-.pw-report .pw-cmp-group > tr > td { padding: 0; border-top: 1px solid var(--border-subtle); }
-.pw-report .pw-th-sort { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
-.pw-report .pw-cmp-summary { display: grid; grid-template-columns: 44px minmax(0, 1fr) 130px minmax(0, 1.4fr) auto; gap: 10px; align-items: center; padding: 8px; cursor: pointer; list-style: none; }
+/* The header row and every summary share one grid template so the columns line up. */
+.pw-report .pw-cmp-list { width: 100%; border-collapse: collapse; --pw-cmp-cols: 44px minmax(0, 1fr) 130px minmax(0, 1.4fr); }
+.pw-report .pw-cmp-list.has-trace { --pw-cmp-cols: 44px minmax(0, 1fr) 130px minmax(0, 1.4fr) 88px; }
+.pw-report .pw-cmp-list thead th { padding: 0; text-align: left; }
+.pw-report .pw-cmp-head { display: grid; grid-template-columns: var(--pw-cmp-cols); gap: 10px; align-items: center; padding: 8px; }
+.pw-report .pw-cmp-group > tr > td { padding: 0; border-top: 1px solid var(--border-subtle); text-align: left; }
+.pw-report .pw-th-sort { background: none; border: 0; padding: 0; margin: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; text-align: left; cursor: pointer; }
+.pw-report .pw-th-sort:hover { color: var(--text-muted); }
+.pw-report .pw-cmp-summary { display: grid; grid-template-columns: var(--pw-cmp-cols); gap: 10px; align-items: center; padding: 8px; cursor: pointer; list-style: none; }
 .pw-report .pw-cmp-summary::-webkit-details-marker { display: none; }
 .pw-report .pw-cmp-summary:hover { background: var(--surface-sunken); }
 .pw-report .pw-cmp-n { font-family: var(--font-mono); color: var(--text-muted); font-size: 12px; }
@@ -3801,13 +3805,15 @@ _PAIRWISE_COMPARISONS_CSS = """
 .pw-report .pw-pager-btn:disabled { opacity: .45; cursor: default; }
 @media (max-width: 760px) {
   .pw-report .pw-panes, .pw-report .pw-passes { grid-template-columns: 1fr; }
-  .pw-report .pw-cmp-summary { grid-template-columns: 36px minmax(0, 1fr); }
+  .pw-report .pw-cmp-list, .pw-report .pw-cmp-list.has-trace { --pw-cmp-cols: 36px minmax(0, 1fr); }
+  .pw-report .pw-cmp-head { grid-template-columns: 36px auto; justify-content: start; gap: 18px; }
+  .pw-report .pw-cmp-head > span { display: none; }
 }
 """
 
 _PAIRWISE_COMPARE_CSS = """
 .pw-compare{--pw-a:#7e22ce;--pw-b:#0092ab;--pw-tie:var(--amber-600);--pw-none:var(--text-faint)}
-.pw-compare .pw-cmp-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.pw-compare .pw-cmp-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0;align-items:start}
 .pw-compare .pw-cmp-cols>.rk-panel:first-child .rk-panel-title{color:var(--pw-a)}
 .pw-compare .pw-cmp-cols>.rk-panel:last-child .rk-panel-title{color:var(--pw-b)}
 .pw-compare .pw-cmp-verdict{font-weight:600;margin:0 0 8px}
@@ -3815,6 +3821,8 @@ _PAIRWISE_COMPARE_CSS = """
 .pw-compare .pw-cmp-facts dd{margin:0}
 .pw-compare .pw-cmp-table{width:100%;border-collapse:collapse}
 .pw-compare .pw-cmp-table th,.pw-compare .pw-cmp-table td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border,#e5e7eb);vertical-align:top}
+/* .report-aligned right-aligns every column after the first; every column here is text. */
+.pw-compare .pw-cmp-table thead th:not(:first-child),.pw-compare .pw-cmp-table tbody td:not(:first-child){text-align:left}
 .pw-compare .pw-cmp-q{max-width:480px;overflow-wrap:anywhere}
 .pw-compare .pw-changed{color:var(--pw-tie);font-weight:600}
 .pw-compare .pw-empty{color:var(--pw-none);margin:0}

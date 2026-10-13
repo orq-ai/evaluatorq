@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.reports import esc, kpi_cards
 from evaluatorq.dashboard.pairwise_palette import pw_side_colour
-from evaluatorq.dashboard.pairwise_views import render_pairwise_comparisons
+from evaluatorq.dashboard.pairwise_views import render_pairwise_comparisons, valid_focus
 from evaluatorq.dashboard.report_kit import bar_rows, donut, meta_grid, panel
 from evaluatorq.dashboard.report_tabs import _tabs
 from evaluatorq.pairwise_reports.export_html import _bias_cell, _consistency_cell, _rate
@@ -404,16 +404,22 @@ def pairwise_report_tabs(
     entries: list[PairwiseEntry] | None = None,
     *,
     hero_actions_html: str = '',
+    focus: int | None = None,
 ) -> str:
     """Render the pairwise report body as tabs.
 
     Pass ``entries`` to render a filtered subset: every number on the page is
     then computed over a copy of the run carrying only those entries.
     The Comparisons tab lists the same entries.
+
+    ``focus`` is a 1-based comparison number: when it numbers one of the listed
+    entries, the Comparisons tab is the active tab, on the page holding that row
+    with the row open.
     """
     view = run if entries is None else with_entries(run, entries)
+    focus = valid_focus(run, view.entries, focus)
     if view.entries:
-        comparisons = render_pairwise_comparisons(rid, run, view.entries)
+        comparisons = render_pairwise_comparisons(rid, run, view.entries, focus=focus)
     else:
         comparisons = _EMPTY_FILTERED if entries is not None else _EMPTY_RUN
     tabs = _tabs(
@@ -424,5 +430,6 @@ def pairwise_report_tabs(
             ('Comparisons', comparisons, f'Comparisons <span class="tab-count">{len(view.entries)}</span>'),
             ('Config', _config(view)),
         ],
+        active='Comparisons' if focus is not None else None,
     )
     return f'<div class="report-aligned pw-report">{_hero(view, hero_actions_html)}{tabs}</div>'

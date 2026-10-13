@@ -19,9 +19,10 @@ from starlette.responses import Response
 
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+from evaluatorq.dashboard.pairwise_palette import pw_side_label, verdict_eyebrow
 from evaluatorq.dashboard.report_kit import panel
 from evaluatorq.dashboard.shell import page
-from evaluatorq.dashboard.sim_compare import resolve_run
+from evaluatorq.dashboard.sim_compare import error_page, resolve_run
 from evaluatorq.dashboard.view import report_back_link
 from evaluatorq.pairwise_reports.stats import fleiss_kappa, kappa_label, verdict
 
@@ -78,22 +79,12 @@ def match_comparisons(a: PairwiseRun, b: PairwiseRun) -> PairwiseMatching:
 # ---------------------------------------------------------------------------
 
 
-def _winner_label(run: PairwiseRun, winner: str) -> str:
-    if winner == 'A':
-        return run.label_a
-    if winner == 'B':
-        return run.label_b
-    return winner
-
-
 def _headline(run: PairwiseRun) -> str:
     v = verdict(run)
-    if v.state == 'no_decided':
-        return 'No decided comparisons'
+    eyebrow = verdict_eyebrow(v.state)
     if v.leader_label is None:
-        return 'Even'
-    prefix = '✓ Clear winner' if v.state == 'clear' else '⚠ Too close to call'
-    return f'{prefix}: {v.leader_label}'
+        return eyebrow
+    return f'{eyebrow}: {v.leader_label}'
 
 
 def _run_panel(side: str, run: PairwiseRun) -> str:
@@ -118,7 +109,7 @@ def _run_panel(side: str, run: PairwiseRun) -> str:
 
 
 def _link(rid: str, n: int) -> str:
-    return f'<a href="/r/{esc(rid)}#cmp-{n}">#{n}</a>'
+    return f'<a href="/r/{esc(rid)}?cmp={n}">#{n}</a>'
 
 
 def _diff_table(rid_a: str, rid_b: str, run_a: PairwiseRun, run_b: PairwiseRun, m: PairwiseMatching) -> str:
@@ -127,8 +118,8 @@ def _diff_table(rid_a: str, rid_b: str, run_a: PairwiseRun, run_b: PairwiseRun, 
     rows: list[str] = []
     for i, j in m.matched:
         ea, eb = run_a.entries[i], run_b.entries[j]
-        wa = _winner_label(run_a, ea.comparison.winner)
-        wb = _winner_label(run_b, eb.comparison.winner)
+        wa = pw_side_label(ea.comparison.winner, run_a)
+        wb = pw_side_label(eb.comparison.winner, run_b)
         changed = '<span class="tag pw-changed">changed</span>' if wa != wb else ''
         rows.append(
             f'<tr><td>{_link(rid_a, i + 1)}</td><td>{_link(rid_b, j + 1)}</td>'
@@ -173,37 +164,9 @@ def render_pairwise_compare_page(rid_a: str, rid_b: str, run_a: PairwiseRun, run
     )
 
 
-def pairwise_run_compare_control(rid: str, choices: list[tuple[str, str]]) -> str:
-    """On-report compare control: this run is A, pick B from the other runs."""
-    others = [(r, name) for r, name in choices if r != rid]
-    if not others:
-        return ''
-    opts = ''.join(f'<option value="{esc(r)}">{esc(name)}</option>' for r, name in others)
-    return (
-        '<form class="cmp-bar" action="/compare/pairwise" method="get">'
-        f'<input type="hidden" name="a" value="{esc(rid)}">'
-        '<span class="cmp-bar-label">Compare with</span>'
-        f'<select name="b" aria-label="Run B">{opts}</select>'
-        '<button type="submit" class="btn-secondary">Compare</button>'
-        '</form>'
-    )
-
-
 # ---------------------------------------------------------------------------
 # Loading and routes
 # ---------------------------------------------------------------------------
-
-
-def _error_page(message: str, status: int) -> Response:
-    body = (
-        '<header class="report-hero"><h2 class="report-hero-title">Run comparison</h2></header>'
-        f'<p class="sim-empty">{esc(message)}</p>'
-    )
-    return Response(
-        page('Compare', body, active_surface='pairwise', back_html=report_back_link('pairwise')),
-        status_code=status,
-        media_type='text/html',
-    )
 
 
 def register_pairwise_compare_routes(app: Any, roots: list[Path] | None = None) -> None:
@@ -214,18 +177,18 @@ def register_pairwise_compare_routes(app: Any, roots: list[Path] | None = None) 
         rid_a = req.query_params.get('a') or ''
         rid_b = req.query_params.get('b') or ''
         if not rid_a or not rid_b:
-            return _error_page('Pick two runs to compare.', 400)
+            return error_page('Pick two runs to compare.', 400, 'pairwise')
         if rid_a == rid_b:
-            return _error_page('Pick two different runs to compare.', 400)
+            return error_page('Pick two different runs to compare.', 400, 'pairwise')
 
         status_a, run_a = resolve_run(rid_a, roots, 'pairwise')
         status_b, run_b = resolve_run(rid_b, roots, 'pairwise')
         if 'error' in (status_a, status_b):
             which = 'A' if status_a == 'error' else 'B'
-            return _error_page(f'Run {which} could not be loaded (the report may be corrupt).', 422)
+            return error_page(f'Run {which} could not be loaded (the report may be corrupt).', 422, 'pairwise')
         if run_a is None or run_b is None:
             which = 'A' if run_a is None else 'B'
-            return _error_page(f'Run {which} was not found or is not a pairwise run.', 404)
+            return error_page(f'Run {which} was not found or is not a pairwise run.', 404, 'pairwise')
 
         body = render_pairwise_compare_page(rid_a, rid_b, run_a, run_b)
         return Response(

@@ -61,7 +61,7 @@ from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
 from evaluatorq.dashboard.orq_scope import OAuthScopes, discover_oauth_scopes
-from evaluatorq.dashboard.pairwise_compare import pairwise_run_compare_control, register_pairwise_compare_routes
+from evaluatorq.dashboard.pairwise_compare import register_pairwise_compare_routes
 from evaluatorq.dashboard.pairwise_views import register_pairwise_view_routes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import CSRF_FIELD, request_rejected
@@ -907,20 +907,30 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
 
     with cli_slug_render_scope():
         if surface == 'sim':
-            from evaluatorq.dashboard.view import sim_run_compare_control
+            from evaluatorq.dashboard.view import run_compare_control
 
             # Same choice list as the overview picker (sim only, no error runs,
             # capped); the control itself drops the current run from the options.
             choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-            body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
+            body_html = report_tabs.sim_report_tabs(
+                rid, report_obj, compare_html=run_compare_control(rid, choices, '/compare/sim')
+            )
         elif surface == 'redteam':
             body_html = report_tabs.redteam_report_tabs(rid, report_obj)
         elif surface == 'pairwise':
             from evaluatorq.dashboard import pairwise_tabs
+            from evaluatorq.dashboard.view import run_compare_control
 
             choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'pairwise' and not c.error][:100]
+            try:
+                focus: int | None = int(req.query_params.get('cmp', ''))
+            except ValueError:
+                focus = None
             body_html = pairwise_tabs.pairwise_report_tabs(
-                rid, report_obj, hero_actions_html=pairwise_run_compare_control(rid, choices)
+                rid,
+                report_obj,
+                hero_actions_html=run_compare_control(rid, choices, '/compare/pairwise'),
+                focus=focus,
             )
         else:
             body_html = adapter.body(report_obj)

@@ -10,11 +10,8 @@ from starlette.testclient import TestClient
 
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id
-from evaluatorq.dashboard.pairwise_compare import (
-    match_comparisons,
-    pairwise_run_compare_control,
-    render_pairwise_compare_page,
-)
+from evaluatorq.dashboard.pairwise_compare import match_comparisons, render_pairwise_compare_page
+from evaluatorq.dashboard.view import run_compare_control
 from evaluatorq.pairwise import PairwiseComparison, PairwiseVote
 from evaluatorq.pairwise_run import PairwiseRun, new_run
 
@@ -87,7 +84,8 @@ def test_route_renders_both_run_names(client_and_ids: tuple[TestClient, str, str
     resp = client.get(f'/compare/pairwise?a={a}&b={b}')
     assert resp.status_code == 200
     assert 'alpha run' in resp.text and 'beta run' in resp.text
-    assert f'/r/{a}#cmp-1' in resp.text
+    assert f'/r/{a}?cmp=1' in resp.text
+    assert f'/r/{b}?cmp=2' in resp.text
 
 
 def test_route_400_when_b_missing_or_same(client_and_ids: tuple[TestClient, str, str, Path]) -> None:
@@ -112,7 +110,60 @@ def test_route_422_for_corrupt_run(client_and_ids: tuple[TestClient, str, str, P
 
 
 def test_control_omits_current_run_and_hides_when_alone() -> None:
-    html = pairwise_run_compare_control('r1', [('r1', 'one'), ('r2', 'two')])
+    html = run_compare_control('r1', [('r1', 'one'), ('r2', 'two')], '/compare/pairwise')
     assert 'action="/compare/pairwise"' in html
     assert 'value="r2"' in html and 'value="r1">' not in html.split('<select')[1]
-    assert pairwise_run_compare_control('r1', [('r1', 'one')]) == ''
+    assert run_compare_control('r1', [('r1', 'one')], '/compare/pairwise') == ''
+
+
+def test_control_posts_to_the_given_action() -> None:
+    html = run_compare_control('r1', [('r1', 'one'), ('r2', 'two')], '/compare/sim')
+    assert 'action="/compare/sim"' in html
+
+
+def test_compare_links_open_the_report_on_that_comparison(tmp_path: Path) -> None:
+    d = tmp_path / 'runs'
+    d.mkdir()
+    rows = [(f'q{i}', 'A') for i in range(30)]
+    pa = _run('alpha', rows).save(d / 'a.json')
+    pb = _run('beta', rows).save(d / 'b.json')
+    client = TestClient(build_app([d]))
+    page = client.get(f'/compare/pairwise?a={report_id(pa)}&b={report_id(pb)}').text
+    link = f'/r/{report_id(pa)}?cmp=30'
+    assert link in page
+    report = client.get(link).text
+    assert 'id="cmp-30"' in report
+
+
+def _tied_run() -> PairwiseRun:
+    return _run('tied', [('q1', 'A'), ('q2', 'B')])
+
+
+def test_run_without_a_leader_uses_the_reports_verdict_wording() -> None:
+    from evaluatorq.dashboard.pairwise_palette import verdict_eyebrow
+    from evaluatorq.dashboard.pairwise_tabs import _verdict_text
+    from evaluatorq.pairwise_reports.stats import verdict
+
+    v = verdict(_tied_run())
+    assert v.leader is None
+    assert verdict_eyebrow(v.state) == _verdict_text(v)[0]
+    html = render_pairwise_compare_page('ra', 'rb', _tied_run(), _tied_run())
+    assert verdict_eyebrow(v.state) in html
+
+
+@pytest.mark.parametrize('rows', [[('q', 'A')] * 12, [('q', 'A'), ('q', 'B')], [('q', 'tie')]])
+def test_verdict_eyebrow_matches_the_report_for_every_state(rows: list[tuple[str, str]]) -> None:
+    from evaluatorq.dashboard.pairwise_palette import verdict_eyebrow
+    from evaluatorq.dashboard.pairwise_tabs import _verdict_text
+    from evaluatorq.pairwise_reports.stats import verdict
+
+    v = verdict(_run('x', rows))
+    assert verdict_eyebrow(v.state) == _verdict_text(v)[0]
+
+
+def test_corrupt_pairwise_file_gets_the_compare_error_page(client_and_ids: tuple[TestClient, str, str, Path]) -> None:
+    client, a, _, d = client_and_ids
+    bad = d / 'invalid.json'
+    bad.write_text('{"judging": "pairwise", "entries": "nope"}')
+    resp = client.get(f'/compare/pairwise?a={a}&b={report_id(bad)}')
+    assert resp.status_code == 422
