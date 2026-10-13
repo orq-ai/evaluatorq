@@ -535,6 +535,27 @@ class TestTranscriptOrderRoundTrip:
         expected[1] = ("assistant", "", ["call_9"], None)
         assert self._shape(decoded) == expected
 
+    def test_distinct_adjacent_assistant_turns_and_combined_tool_turn_round_trip(self):
+        from evaluatorq.common.output_adapters import responses_transcript
+        from evaluatorq.contracts import FunctionCall, StrategyToolCall
+
+        messages = [
+            Message(role="assistant", content="first turn"),
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    StrategyToolCall(id="call_1", function=FunctionCall(name="first", arguments="{}")),
+                    StrategyToolCall(id="call_2", function=FunctionCall(name="second", arguments="{}")),
+                ],
+            ),
+        ]
+        response = to_open_responses(_make_result(messages=messages))
+        decoded = responses_transcript(response)
+        assert decoded is not None
+        assert self._shape(decoded) == self._shape(messages)
+
+
     def test_empty_transcript_emits_empty_order(self):
         out = to_open_responses(_make_result(messages=[]))
         assert out["metadata"]["item_order"] == []

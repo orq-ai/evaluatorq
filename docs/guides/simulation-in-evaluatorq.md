@@ -193,6 +193,7 @@ The job's output is an OpenResponses response dict. The transcript is in `input`
 | `datapoint_id` | `str \| None` | The simulation datapoint identifier. Always present; `None` when the result carries no datapoint id. |
 | `turn_metrics` | `list[dict]` | Per-turn latency and token detail. Present only when metrics were collected. |
 | `item_order` | `list[str]` | One entry per `input` and `output` item, each `"input"` or `"output"`, in transcript order. Walk it with one cursor per list to rebuild the conversation; `orq_evaluator` uses it to send the full conversation. |
+| `assistant_turn_order` | `list[int \| None]` | One entry per `output` item: the source message index for assistant text and tool calls, or `None` for a tool result. Equal indexes keep one assistant message together; different indexes preserve separate assistant turns. Older exports without this key retain adjacent-assistant grouping. |
 
 `criteria_results` and `turn_metrics` are optional, so read them with a default rather than by subscript. The audit and error keys listed as always present are different: their `None` value carries meaning, so preserve it instead of treating it as an empty collection.
 

@@ -571,6 +571,18 @@ def test_generated_time_is_retained_intersected_and_resolves_open_bounds() -> No
         within_results=False,
         reference=now,
     ) == (datetime(2026, 10, 1, tzinfo=timezone.utc), now)
+    assert normalize_generated_time(
+        TimeFilters(end=now - timedelta(days=20)),
+        population=PopulationRequest(start=now - timedelta(days=1), time_origin='default'),
+        within_results=False,
+        reference=now,
+    ) == (retention_start, now - timedelta(days=20))
+    assert normalize_generated_time(
+        TimeFilters(end=now - timedelta(days=20)),
+        population=PopulationRequest(start=now - timedelta(days=1), time_origin='within_results'),
+        within_results=True,
+        reference=now,
+    ) == (now - timedelta(days=1), now - timedelta(days=20))
 
 
 def test_time_filters_normalize_date_only_end_to_exclusive_next_midnight() -> None:

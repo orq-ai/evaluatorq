@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping  # noqa: TC003
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime  # noqa: TC003
 from types import MappingProxyType
@@ -202,10 +202,23 @@ class PopulationRequest(BaseModel):
 
     start: datetime | None = None
     end: datetime | None = None
-    time_origin: Literal['default', 'explicit', 'within_results'] = 'explicit'
+    time_origin: Literal['default', 'explicit', 'within_results'] = 'default'
+    end_exclusive: bool = False
     facets: FacetSelection = FacetSelection()
     numeric: NumericFilters = NumericFilters()
     limit: int = Field(default=500, ge=1, le=5000)
+
+    @model_validator(mode='before')
+    @classmethod
+    def infer_time_origin_from_bounds(cls, values: Any) -> Any:
+        """Treat bounds as caller-explicit unless a request explicitly declares another origin."""
+        if (
+            isinstance(values, Mapping)
+            and 'time_origin' not in values
+            and (values.get('start') is not None or values.get('end') is not None)
+        ):
+            return {**values, 'time_origin': 'explicit'}
+        return values
 
     @field_validator('start', 'end')
     @classmethod

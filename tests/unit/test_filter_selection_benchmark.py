@@ -141,3 +141,23 @@ def test_load_inputs_validation_survives_python_optimization(tmp_path):
     )
     result = subprocess.run([sys.executable, "-O", "-c", code], cwd=ROOT, capture_output=True, text=True)
     assert result.returncode == 42, result.stderr
+
+
+@pytest.mark.parametrize("target", [
+    'https://example.test/"onmouseover="alert',
+    'https://example.test/?x=1&y=2',
+    'https://example.test/&#34;onmouseover=&#34;alert',
+])
+def test_analysis_links_keep_untrusted_targets_inside_href(target: str):
+    from html.parser import HTMLParser
+
+    links = []
+
+    class Links(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == "a":
+                links.append(dict(attrs))
+
+    parser = Links()
+    parser.feed(report.markdown_to_html(f"[open]({target})"))
+    assert links == [{"href": target, "rel": "noreferrer"}]

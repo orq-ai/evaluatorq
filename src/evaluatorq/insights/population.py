@@ -17,9 +17,9 @@ Four mutually exclusive paths, matching `InsightsPopulation`'s own fields:
 No retry layer here: the shared planner and `OrqTraceSource.load_async` each own
 their retry layer; this module does not wrap them a second time.
 
-Filter *selection* failing (facet catalogue or classify unavailable) is not fatal —
-mirroring `trace_finder/pipeline.py`'s `filter_selector`, it degrades to no generated
-filters with a `logger.warning` naming the cause, recorded in `ResolvedPopulation.echo`.
+An initial facet-catalogue failure preserves the compiled query and records the
+selection error in ``ResolvedPopulation.echo``, but returns an empty population
+without loading traces. This prevents a broader search when filter selection is unavailable.
 Everything else that can go wrong here (compiling the query, reading/parsing a finder
 export, loading traces) raises `PopulationError`, which the insights pipeline turns
 into a `StageFailure` for the `'population'` stage.
@@ -358,14 +358,21 @@ async def _resolve_from_query(
         raise PopulationError(f'planning the population query failed: {error}') from error
 
     effective = planned.effective_population
-    traces = await _load_traces(
-        orq,
-        start=effective.start,
-        end=effective.end,
-        limit=effective.limit,
-        facets=effective.facets,
-        numeric=effective.numeric,
-    )
+    if planned.empty_match:
+        logger.warning(
+            'Population query selected no traces: {}',
+            planned.selector_error or 'generated time window has no retained overlap',
+        )
+        traces = ()
+    else:
+        traces = await _load_traces(
+            orq,
+            start=effective.start,
+            end=effective.end,
+            limit=effective.limit,
+            facets=effective.facets,
+            numeric=effective.numeric,
+        )
     echo: dict[str, Any] = {
         'mode': 'query',
         'query': pop.query,
@@ -388,6 +395,8 @@ async def _resolve_from_query(
         'start': effective.start.isoformat() if effective.start is not None else None,
         'end': effective.end.isoformat() if effective.end is not None else None,
         'time_origin': effective.time_origin,
+        'end_exclusive': effective.end_exclusive,
+        'empty_match': planned.empty_match,
         'generated_time': (
             [bound.isoformat() if bound is not None else None for bound in planned.generated_time]
             if planned.generated_time is not None

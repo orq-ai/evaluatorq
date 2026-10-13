@@ -813,3 +813,37 @@ async def test_export_path_bad_json_raises_population_error(tmp_path: Any) -> No
 
     with pytest.raises(PopulationError, match='loading finder export'):
         await resolve_population(pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('selection_error', ['catalogue unavailable', None])
+async def test_empty_query_plan_does_not_load_a_broader_population(monkeypatch, selection_error):
+    from evaluatorq.common.judge import ClassifyQuestion
+
+    dimension = CompiledQuery(
+        task=ClassifyQuestion(kind='noul', instructions='The user requests a refund.', state={}),
+        selection=ValueSelection(kind='values', values=(True,)),
+    )
+
+    async def empty_plan(query, population, **kwargs):
+        return PlanningResult(
+            dimensions=(dimension,), generated_facets=FacetSelection(),
+            generated_numeric=NumericFilters(), generated_time=None,
+            effective_population=population, selector_response=None,
+            selector_error=selection_error, provenance={'time': 'default'}, usage={},
+            empty_match=True,
+        )
+
+    async def forbidden_load(*args, **kwargs):
+        pytest.fail('An empty plan must not load a broader population.')
+
+    monkeypatch.setattr(population_module, 'plan_query', empty_plan)
+    monkeypatch.setattr(population_module, '_load_traces', forbidden_load)
+    resolved = await resolve_population(
+        InsightsPopulation(query='refund requests'), orq=_orq(), client=_client(),
+        compiler_model='compiler', classifier_model='classifier',
+    )
+    assert resolved.traces == []
+    assert resolved.n_scanned == 0
+    assert resolved.compiled == (dimension,)
+    assert resolved.echo['filter_selection_error'] == selection_error

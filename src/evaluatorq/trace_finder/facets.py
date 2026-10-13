@@ -121,6 +121,8 @@ async def load_facet_catalogue_cached(
     loader: Callable[..., Awaitable[FacetCatalogue]] | None = None,
 ) -> FacetCatalogue:
     """Load all returned facet values from a bounded five-minute, single-flight cache."""
+    if loader is not None:
+        return await loader(client, start=start, end=end, limit=limit)
     if default_window:
         anchor = now or datetime.now(timezone.utc)
         stable_start = anchor - timedelta(days=1)

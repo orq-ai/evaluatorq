@@ -211,7 +211,10 @@ def _inline(text: str) -> str:
 
     text = _INLINE_CODE.sub(stash, text)
     text = html.escape(text, quote=False)
-    text = _LINK.sub(lambda m: f'<a href="{m.group(2)}" rel="noreferrer">{m.group(1)}</a>', text)
+    text = _LINK.sub(
+        lambda m: f'<a href="{html.escape(html.unescape(m.group(2)), quote=True)}" rel="noreferrer">{m.group(1)}</a>',
+        text,
+    )
     text = _BOLD.sub(r"<strong>\1</strong>", text)
     text = _ITALIC.sub(r"<em>\1</em>", text)
     return re.sub(r"\x00(\d+)\x00", lambda m: codes[int(m.group(1))], text)

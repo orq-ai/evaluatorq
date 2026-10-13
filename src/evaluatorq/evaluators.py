@@ -171,7 +171,7 @@ def orq_evaluator(
             query = content_to_text(messages[latest_user_index].content)
         history = messages[:latest_user_index] if latest_user_index is not None else list(messages)
         output_text = output_to_text(params['output'])
-        if not raw_messages and query is None:
+        if 'messages' not in data.inputs and query is None:
             transcript = responses_transcript(params['output']) or []
             transcript_user_index = next(
                 (index for index in range(len(transcript) - 1, -1, -1) if transcript[index].role == 'user'),

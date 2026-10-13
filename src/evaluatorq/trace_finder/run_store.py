@@ -418,7 +418,11 @@ class RunStore:
                         total=0,
                         completed=0,
                         results={},
-                        plan_warning='The query time window does not overlap the loaded results; no traces were selected.',
+                        plan_warning=(
+                            f'Trace filter selection failed; no traces were selected: {filter_result.error}'
+                            if filter_result.error
+                            else 'The query time window does not overlap the loaded results; no traces were selected.'
+                        ),
                     )
                     self._finish('completed')
                     self._task = None
@@ -989,11 +993,14 @@ def _narrowed(
 
 
 def _within_time(trace: TraceRecord, population: PopulationRequest) -> bool:
-    """Apply an effective time window locally without widening or reloading loaded rows."""
+    """Apply generated-exclusive or caller-inclusive effective bounds locally."""
 
     return not (
         (population.start is not None and trace.timestamp < population.start)
-        or (population.end is not None and trace.timestamp > population.end)
+        or (
+            population.end is not None
+            and (trace.timestamp >= population.end if population.end_exclusive else trace.timestamp > population.end)
+        )
     )
 
 

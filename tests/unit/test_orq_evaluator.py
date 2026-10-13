@@ -357,3 +357,34 @@ async def test_orq_evaluator_explicit_messages_win_over_simulation_output() -> N
     assert sent['query'] == 'explicit question'
     assert sent['messages'] == [{'role': 'user', 'content': 'earlier'}]
     assert 'Sure, what is the reason?' in sent['output']
+
+
+@pytest.mark.asyncio
+async def test_orq_evaluator_explicit_empty_messages_do_not_restore_transcript() -> None:
+    client = _Client({'type': 'number', 'value': 1.0})
+    evaluator = orq_evaluator(evaluator_id='eval-sim', client=client)
+
+    await evaluator['scorer']({
+        'data': DataPoint(inputs={'messages': []}),
+        'output': _two_turn_simulation_output(),
+    })
+
+    sent = client.evals.calls[0]
+    assert sent['query'] is None
+    assert sent['messages'] == []
+    assert 'Refund issued.' in sent['output']
+
+
+@pytest.mark.asyncio
+async def test_orq_evaluator_does_not_guess_history_from_malformed_turn_groups(caplog) -> None:
+    client = _Client({'type': 'number', 'value': 1.0})
+    evaluator = orq_evaluator(evaluator_id='eval-sim', client=client)
+    output = _two_turn_simulation_output()
+    output['metadata']['assistant_turn_order'] = None
+
+    await evaluator['scorer']({'data': DataPoint(inputs={}), 'output': output})
+
+    sent = client.evals.calls[0]
+    assert sent['query'] is None
+    assert sent['messages'] == []
+    assert 'assistant_turn_order' in caplog.text

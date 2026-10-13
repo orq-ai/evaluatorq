@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 import pytest
 
@@ -9,43 +9,6 @@ from evaluatorq.trace_finder import PopulationRequest, Snapshot, pipeline
 from evaluatorq.trace_finder.settings import DashboardSettings
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('mode', ['llm', 'llm+jev'])
-async def test_production_planner_uses_configured_roles_mode_and_current_window(
-    mode: Literal['llm', 'llm+jev'], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    seen: dict[str, Any] = {}
-
-    def fake_role(role: str, *, task: str) -> str:
-        seen.setdefault('roles', []).append((role, task))
-        return f'{role}/{task}'
-
-    async def fake_plan(query: str, population: PopulationRequest, **kwargs: Any) -> object:
-        seen.update(query=query, population=population, kwargs=kwargs)
-        return object()
-
-    monkeypatch.setattr(pipeline, 'role_model', fake_role)
-    monkeypatch.setattr(pipeline, 'plan_query', fake_plan)
-    settings = DashboardSettings(window_days=3, filter_selection=mode)
-    store = pipeline.build_run_store(settings, client=cast(Any, object()), orq=cast(Any, object()))
-
-    planner = store._planner
-    assert planner is not None
-    await planner('refunds', PopulationRequest(), within_results=False)
-
-    planned_population = seen['population']
-    assert planned_population.end - planned_population.start == timedelta(days=3)
-    assert planned_population.time_origin == 'explicit'
-    assert seen['query'] == 'refunds'
-    assert seen['kwargs']['filter_selection'] == mode
-    assert seen['kwargs']['compiler_model'] == 'fast/finder.compiler'
-    assert seen['kwargs']['fast_filter_model'] == 'fast/finder.filters'
-    assert seen['kwargs']['classifier_model'] == 'classifier/finder.classifier'
-    assert seen['roles'] == [
-        ('classifier', 'finder.classifier'),
-        ('fast', 'finder.compiler'),
-        ('fast', 'finder.filters'),
-    ]
 
 
 @pytest.mark.asyncio

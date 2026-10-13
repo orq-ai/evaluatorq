@@ -276,17 +276,20 @@ RESPONSES_ITEM_ORDER_KEY = 'item_order'
 """``metadata`` key under which ``simulation.convert.to_open_responses`` records,
 one entry per emitted item, whether it went to ``input[]`` or ``output[]``."""
 
+RESPONSES_ASSISTANT_TURN_ORDER_KEY = 'assistant_turn_order'
+"""``metadata`` key recording the source message index for each assistant output item."""
+
 
 def responses_transcript(output: Any) -> list[Message] | None:
     """Rebuild the ordered chat transcript from a simulation OpenResponses dict.
 
-    Exact inverse of ``simulation.convert.to_open_responses``. Returns ``None``
-    unless ``output`` is a dict with ``object == 'response'`` whose
+    Preserves emitted source-message grouping when the optional
+    ``assistant_turn_order`` metadata is present. Returns ``None`` unless
+    ``output`` is a dict with ``object == 'response'`` whose
     ``metadata[RESPONSES_ITEM_ORDER_KEY]`` is a list of ``'input'``/``'output'``
     strings whose counts match ``len(input)`` and ``len(output)``. A malformed
-    order (or item) also logs a warning and returns ``None``. An assistant text
-    turn directly followed by a tool-only assistant turn decodes as one
-    assistant message, because the encoded form cannot tell them apart.
+    order or turn grouping logs a warning and returns ``None``. Older responses
+    without turn grouping retain the historical adjacent-assistant grouping.
     """
     if not isinstance(output, dict) or output.get('object') != 'response':
         return None
@@ -307,14 +310,37 @@ def responses_transcript(output: Any) -> list[Message] | None:
         logger.warning(f'ignoring malformed OpenResponses {RESPONSES_ITEM_ORDER_KEY!r}: does not match input/output')
         return None
 
+    assistant_turn_order = metadata.get(RESPONSES_ASSISTANT_TURN_ORDER_KEY)
+    if RESPONSES_ASSISTANT_TURN_ORDER_KEY in metadata and (
+        not isinstance(assistant_turn_order, list)
+        or len(assistant_turn_order) != len(outputs)
+        or any(
+            value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0)
+            for value in assistant_turn_order
+        )
+    ):
+        logger.warning("ignoring malformed OpenResponses 'assistant_turn_order': does not match output items")
+        return None
+
     cursors = {'input': iter(inputs), 'output': iter(outputs)}
+    output_index = 0
     messages: list[Message] = []
+    last_assistant_group: int | None = None
     try:
         for entry in order:
             item = next(cursors[entry])
+            current_group = None
+            if entry == 'output':
+                if assistant_turn_order is not None:
+                    current_group = assistant_turn_order[output_index]
+                output_index += 1
             item_type = item.get('type')
             if item_type == 'message':
                 messages.append(Message(role=item['role'], content=coerce_content_text(item.get('content'))))
+                if item['role'] == 'assistant' and entry == 'output':
+                    last_assistant_group = current_group
+                elif item['role'] != 'assistant':
+                    last_assistant_group = None
             elif item_type == 'function_call':
                 tool_call = StrategyToolCall(
                     id=item['call_id'],
@@ -322,10 +348,17 @@ def responses_transcript(output: Any) -> list[Message] | None:
                     item_id=item.get('id'),
                 )
                 previous = messages[-1] if messages else None
-                if previous is not None and previous.role == 'assistant':
+                previous_group = last_assistant_group
+                if (
+                    previous is not None
+                    and previous.role == 'assistant'
+                    and (assistant_turn_order is None or previous_group == current_group)
+                    and (assistant_turn_order is None or current_group is not None)
+                ):
                     previous.tool_calls = [*(previous.tool_calls or []), tool_call]
                 else:
                     messages.append(Message(role='assistant', content='', tool_calls=[tool_call]))
+                last_assistant_group = current_group
             elif item_type == 'function_call_output':
                 messages.append(
                     Message(role='tool', tool_call_id=item['call_id'], content=coerce_content_text(item.get('output')))

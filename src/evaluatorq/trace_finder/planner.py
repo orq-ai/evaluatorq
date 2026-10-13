@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
-from .compiler import compile_query, normalize_generated_time
+from .compiler import canonical_generated_end, compile_query, normalize_generated_time
 from .facets import facet_catalogue_cache_hit, load_facet_catalogue_cached
 from .filter_selector import FilterSelectionResult, select_filters_with_response, select_llm_filters_with_response
 from .models import FACET_NAMES, FacetCatalogue, FacetName, FacetSelection, NumericFilters, PopulationRequest
@@ -77,7 +77,9 @@ async def plan_query(
 
     async def load_catalogue(start: datetime, end: datetime) -> FacetCatalogue:
         started = time.monotonic()
-        cache_hit = facet_catalogue_cache_hit(orq, start, end, 50, default_window=default_window)
+        cache_hit = not catalogue_loader and facet_catalogue_cache_hit(
+            orq, start, end, 50, default_window=default_window
+        )
         try:
             return await load_facet_catalogue_cached(
                 orq,
@@ -107,8 +109,18 @@ async def plan_query(
         )
         if initial_time and not (within_results or population.time_origin == 'within_results'):
             initial_start, initial_end = initial_time
-    catalogue = await load_catalogue(initial_start, initial_end) if initial_start < initial_end else FacetCatalogue()
+    initial_catalogue_error: str | None = None
     try:
+        catalogue = (
+            await load_catalogue(initial_start, initial_end) if initial_start < initial_end else FacetCatalogue()
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed while retaining the compiled semantic plan
+        logger.warning('Trace filter catalogue load failed: {}', exc)
+        catalogue = FacetCatalogue()
+        initial_catalogue_error = str(exc)
+    try:
+        if initial_catalogue_error is not None:
+            raise RuntimeError(initial_catalogue_error)
         selected = await _select_from_catalogue(
             query,
             catalogue,
@@ -151,6 +163,13 @@ async def plan_query(
         selector_usage_events=selector_usage_events,
         loader=load_catalogue,
     )
+    generated_exclusive_end = (
+        canonical_generated_end(time_filter, selector_output=filter_selection == 'llm')
+        if effective_time is not None and time_filter is not None and time_filter.calendar_day
+        else None
+    )
+    if initial_catalogue_error is not None:
+        catalogue_valid = False
 
     generated_numeric = getattr(selected, 'numeric', None)
     if filter_selection == 'llm+jev':
@@ -187,7 +206,21 @@ async def plan_query(
         force_empty=not catalogue_valid,
     )
     effective = population.model_copy(
-        update={'start': start, 'end': end, 'time_origin': origin, 'facets': facets, 'numeric': numeric},
+        update={
+            'start': start,
+            'end': end,
+            'time_origin': origin,
+            'end_exclusive': bool(
+                (
+                    generated_exclusive_end is not None
+                    and generated_exclusive_end.time() == datetime.min.time()
+                    and end == generated_exclusive_end
+                )
+                or (population.end_exclusive and end == population.end)
+            ),
+            'facets': facets,
+            'numeric': numeric,
+        },
         deep=True,
     )
     response = selected.response

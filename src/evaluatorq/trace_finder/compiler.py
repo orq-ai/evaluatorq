@@ -130,6 +130,15 @@ class TimeFilters(BaseModel):
     end: datetime | None = None
     calendar_day: bool = False
 
+    @model_validator(mode='before')
+    @classmethod
+    def retain_date_only_end_intent(cls, values: object) -> object:
+        """Retain the exclusive calendar boundary when normalizing a date-only end."""
+        if isinstance(values, dict) and isinstance(values.get('end'), str):
+            if re.fullmatch(r'\d{4}-\d{2}-\d{2}', values['end']):
+                return {**values, 'calendar_day': True}
+        return values
+
     @field_validator('start', mode='before')
     @classmethod
     def normalize_calendar_start(cls, value: object) -> object:
@@ -172,6 +181,20 @@ class CompileError(RuntimeError):
     """The compiler did not return an OpenAI structured-output document."""
 
 
+def canonical_generated_end(generated: TimeFilters, *, selector_output: bool = False) -> datetime | None:
+    """Return the declared upper bound before retention or population clipping."""
+    end = generated.end
+    if selector_output and generated.calendar_day and generated.start is not None and end is not None:
+        midnight_after_end_date = datetime.combine(end.date() + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        if (
+            generated.start.time() == time.min
+            and generated.start < midnight_after_end_date
+            and end.time() in (time(23, 59, 59), time(23, 59, 59, 999999))
+        ):
+            return midnight_after_end_date
+    return end
+
+
 def normalize_generated_time(
     generated: TimeFilters | None,
     *,
@@ -190,18 +213,8 @@ def normalize_generated_time(
         return None
 
     retention_start = reference - timedelta(days=default_window_days)
-    generated_start = generated.start or population.start or retention_start
-    generated_end = generated.end or population.end or reference
-    if selector_output and generated.calendar_day and generated.start is not None and generated.end is not None:
-        start = generated.start.astimezone(timezone.utc)
-        end = generated.end.astimezone(timezone.utc)
-        midnight_after_end_date = datetime.combine(end.date() + timedelta(days=1), time.min, tzinfo=timezone.utc)
-        if (
-            start.time() == time.min
-            and start < midnight_after_end_date
-            and end.time() in (time(23, 59, 59), time(23, 59, 59, 999999))
-        ):
-            generated_end = midnight_after_end_date
+    generated_start = generated.start or retention_start
+    generated_end = canonical_generated_end(generated, selector_output=selector_output) or population.end or reference
     generated_start = max(generated_start, retention_start)
     generated_end = min(generated_end, reference)
     if within_results or population.time_origin == 'within_results':

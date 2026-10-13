@@ -123,6 +123,80 @@ async def test_default_window_cache_isolates_different_window_lengths(monkeypatc
     await invalidate_facet_catalogue_cache()
 
 
+@pytest.mark.asyncio
+async def test_injected_catalogue_loaders_do_not_share_cached_results():
+    client = _client()
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+    async def first_loader(*_args, **_kwargs):
+        return FacetCatalogue(model=('first-loader',))
+
+    async def second_loader(*_args, **_kwargs):
+        return FacetCatalogue(model=('second-loader',))
+
+    first = await load_facet_catalogue_cached(client, start, end, loader=first_loader)
+    second = await load_facet_catalogue_cached(client, start, end, loader=second_loader)
+
+    assert first.model == ('first-loader',)
+    assert second.model == ('second-loader',)
+
+
+@pytest.mark.asyncio
+async def test_calendar_end_is_exclusive_only_when_it_is_the_effective_upper_bound(monkeypatch):
+    from evaluatorq.trace_finder import planner
+
+    start = datetime(2026, 10, 12, tzinfo=timezone.utc)
+    generated_end = datetime(2026, 10, 13, tzinfo=timezone.utc)
+
+    async def compile_stub(*_args, **_kwargs):
+        return SimpleNamespace(
+            dimensions=(),
+            numeric=NumericFilters(),
+            time=TimeFilters(start=start, end=generated_end, calendar_day=True),
+            unsupported_reason=None,
+        )
+
+    async def loader(*_args, **_kwargs):
+        return FacetCatalogue()
+
+    async def selector(*_args, **_kwargs):
+        return FilterSelectionResult(FacetSelection())
+
+    monkeypatch.setattr(planner, 'compile_query', compile_stub)
+    monkeypatch.setattr(planner, 'select_filters_with_response', selector)
+    await invalidate_facet_catalogue_cache()
+    base: dict[str, Any] = dict(
+        query='find traces',
+        client=cast(Any, object()),
+        orq=cast(Any, _client()),
+        compiler_model='compiler',
+        classifier_model='classifier',
+        fast_filter_model='fast',
+        catalogue_loader=loader,
+        within_results=True,
+        now=generated_end,
+    )
+    earlier = await planner.plan_query(
+        population=PopulationRequest(
+            start=start - timedelta(days=1),
+            end=generated_end - timedelta(hours=1),
+            time_origin='within_results',
+        ),
+        **base,
+    )
+    equal = await planner.plan_query(
+        population=PopulationRequest(start=start, end=generated_end, time_origin='within_results'),
+        **base,
+    )
+
+    assert earlier.effective_population.end == generated_end - timedelta(hours=1)
+    assert earlier.effective_population.end_exclusive is False
+    assert equal.effective_population.end == generated_end
+    assert equal.effective_population.end_exclusive is True
+    await invalidate_facet_catalogue_cache()
+
+
 def test_time_bounds_intersect_and_named_value_matching_is_longest_first():
     lower = datetime(2026, 1, 2, tzinfo=timezone.utc)
     upper = datetime(2026, 1, 10, tzinfo=timezone.utc)
@@ -461,3 +535,114 @@ async def test_generated_time_outside_retention_returns_empty_without_reloading_
     assert result.effective_population.start == population_start
     assert result.effective_population.end == population_end
     await invalidate_facet_catalogue_cache()
+
+
+@pytest.mark.asyncio
+async def test_initial_catalogue_failure_keeps_compiled_semantics_and_fails_closed(monkeypatch):
+    from evaluatorq.trace_finder import planner
+
+    semantic_dimension = cast(Any, object())
+    async def compile_stub(*_args, **_kwargs):
+        return SimpleNamespace(
+            dimensions=(semantic_dimension,),
+            numeric=NumericFilters(),
+            time=None,
+            unsupported_reason=None,
+        )
+
+    async def broken_loader(*_args, **_kwargs):
+        raise RuntimeError('catalogue unavailable')
+
+    monkeypatch.setattr(planner, 'compile_query', compile_stub)
+    await invalidate_facet_catalogue_cache()
+    result = await planner.plan_query(
+        'find semantic traces',
+        PopulationRequest(time_origin='default'),
+        client=cast(Any, object()),
+        orq=cast(Any, _client()),
+        compiler_model='compiler',
+        classifier_model='classifier',
+        fast_filter_model='fast',
+        catalogue_loader=broken_loader,
+    )
+
+    assert result.dimensions == (semantic_dimension,)
+    assert result.selector_error == 'catalogue unavailable'
+    assert result.empty_match is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('supplied_bounds', [False, True])
+async def test_inferred_population_origin_preserves_only_supplied_bounds(monkeypatch, supplied_bounds):
+    from evaluatorq.trace_finder import planner
+
+    anchor = datetime(2026, 5, 31, 12, tzinfo=timezone.utc)
+    start, end = anchor - timedelta(days=7), anchor
+    generated = TimeFilters(start=anchor - timedelta(days=2), end=anchor - timedelta(days=1))
+    population = PopulationRequest(start=start, end=end) if supplied_bounds else PopulationRequest()
+    population = PopulationRequest.model_validate_json(population.model_dump_json())
+
+    async def compile_stub(*_args, **_kwargs):
+        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=generated, unsupported_reason=None)
+
+    async def loader(*_args, **_kwargs):
+        return FacetCatalogue()
+
+    async def selector(*_args, **_kwargs):
+        return FilterSelectionResult(FacetSelection())
+
+    monkeypatch.setattr(planner, 'compile_query', compile_stub)
+    monkeypatch.setattr(planner, 'select_filters_with_response', selector)
+    result = await planner.plan_query(
+        'from yesterday', population, client=cast(Any, object()), orq=cast(Any, _client()),
+        compiler_model='compiler', classifier_model='classifier', fast_filter_model='fast',
+        now=anchor, catalogue_loader=loader,
+    )
+    expected = (start, end) if supplied_bounds else (generated.start, generated.end)
+    assert (result.effective_population.start, result.effective_population.end) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case', ['inherited', 'clipped', 'date_only', 'caller_inclusive'])
+async def test_effective_end_retains_actual_boundary_semantics(monkeypatch, case):
+    from evaluatorq.trace_finder import planner
+    from evaluatorq.trace_finder.run_store import _within_time
+
+    anchor = datetime(2026, 5, 31, 12, tzinfo=timezone.utc)
+    start = anchor - timedelta(days=3)
+    end = datetime(2026, 5, 30, tzinfo=timezone.utc)
+    if case == 'inherited':
+        population = PopulationRequest(start=start, end=end, end_exclusive=True, time_origin='within_results')
+        generated = None
+        expected_kept = False
+    elif case == 'clipped':
+        population = PopulationRequest()
+        generated = TimeFilters(start=start, end=anchor + timedelta(days=1), calendar_day=True)
+        expected_kept = True
+    elif case == 'date_only':
+        population = PopulationRequest(start=start, end=anchor, time_origin='within_results')
+        generated = TimeFilters.model_validate({'start': start, 'end': '2026-05-29'})
+        expected_kept = False
+    else:
+        population = PopulationRequest(start=start, end=end)
+        generated = TimeFilters(start=start, end=end, calendar_day=True)
+        expected_kept = True
+
+    async def compile_stub(*_args, **_kwargs):
+        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=generated, unsupported_reason=None)
+
+    async def loader(*_args, **_kwargs):
+        return FacetCatalogue()
+
+    async def selector(*_args, **_kwargs):
+        return FilterSelectionResult(FacetSelection())
+
+    monkeypatch.setattr(planner, 'compile_query', compile_stub)
+    monkeypatch.setattr(planner, 'select_filters_with_response', selector)
+    result = await planner.plan_query(
+        'filter loaded traces', population, client=cast(Any, object()), orq=cast(Any, _client()),
+        compiler_model='compiler', classifier_model='classifier', fast_filter_model='fast',
+        now=anchor, catalogue_loader=loader,
+    )
+    boundary_trace = cast(Any, SimpleNamespace(timestamp=result.effective_population.end))
+    assert _within_time(boundary_trace, result.effective_population) is expected_kept

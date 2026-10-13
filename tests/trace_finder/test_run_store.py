@@ -1349,3 +1349,55 @@ async def test_shared_planner_preserves_explicit_population_window() -> None:
     assert snapshot.request is not None
     assert snapshot.request.population.time_origin == 'explicit'
     assert snapshot.generated_time is not None
+
+
+def test_local_population_bounds_respect_generated_exclusive_and_explicit_inclusive_ends() -> None:
+    from evaluatorq.trace_finder.run_store import _within_time
+
+    midnight = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    selected = trace(1).model_copy(update={'timestamp': midnight})
+    generated_day = PopulationRequest(
+        start=midnight - timedelta(days=1),
+        end=midnight,
+        time_origin='explicit',
+        end_exclusive=True,
+    )
+    caller_window = generated_day.model_copy(update={'end_exclusive': False})
+
+    assert not _within_time(selected, generated_day)
+    assert _within_time(selected, caller_window)
+
+
+@pytest.mark.asyncio
+async def test_empty_catalogue_plan_preserves_semantics_without_loading_population() -> None:
+    loader = Loader()
+    selection_error = 'catalogue unavailable'
+
+    async def plan(query: str, population: PopulationRequest, *, within_results: bool) -> PlanningResult:
+        del query, within_results
+        return PlanningResult(
+            dimensions=(compiled_query(),),
+            generated_facets=FacetSelection(),
+            generated_numeric=NumericFilters(),
+            generated_time=None,
+            effective_population=population,
+            selector_response=None,
+            selector_error=selection_error,
+            provenance={'dimensions': 'compiler'},
+            usage={},
+            empty_match=True,
+        )
+
+    store = RunStore(
+        planner=plan,
+        population_loader=loader,
+        run_classifier=Runner(),
+    )
+    snapshot = await store.compile(request(mode='review'))
+
+    assert loader.calls == []
+    assert snapshot.dimensions == (compiled_query(),)
+    assert snapshot.filter_selection_error == selection_error
+    assert snapshot.total == 0
+    assert snapshot.plan_warning is not None
+    assert selection_error in snapshot.plan_warning
