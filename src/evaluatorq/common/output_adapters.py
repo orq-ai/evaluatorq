@@ -277,15 +277,6 @@ RESPONSES_ITEM_ORDER_KEY = 'item_order'
 one entry per emitted item, whether it went to ``input[]`` or ``output[]``."""
 
 
-def _responses_item_text(item: dict[str, Any]) -> str:
-    content = item.get('content')
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return ''
-    return ''.join(part['text'] for part in content if isinstance(part, dict) and isinstance(part.get('text'), str))
-
-
 def responses_transcript(output: Any) -> list[Message] | None:
     """Rebuild the ordered chat transcript from a simulation OpenResponses dict.
 
@@ -323,7 +314,7 @@ def responses_transcript(output: Any) -> list[Message] | None:
             item = next(cursors[entry])
             item_type = item.get('type')
             if item_type == 'message':
-                messages.append(Message(role=item['role'], content=_responses_item_text(item)))
+                messages.append(Message(role=item['role'], content=coerce_content_text(item.get('content'))))
             elif item_type == 'function_call':
                 tool_call = StrategyToolCall(
                     id=item['call_id'],
@@ -336,7 +327,9 @@ def responses_transcript(output: Any) -> list[Message] | None:
                 else:
                     messages.append(Message(role='assistant', content='', tool_calls=[tool_call]))
             elif item_type == 'function_call_output':
-                messages.append(Message(role='tool', tool_call_id=item['call_id'], content=item.get('output')))
+                messages.append(
+                    Message(role='tool', tool_call_id=item['call_id'], content=coerce_content_text(item.get('output')))
+                )
             else:
                 logger.warning(f'ignoring OpenResponses transcript with unknown item type {item_type!r}')
                 return None

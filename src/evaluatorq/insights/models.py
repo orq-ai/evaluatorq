@@ -181,6 +181,8 @@ class InsightsPopulation(BaseModel):
                 raise ValueError(f'{name} must be timezone-aware')
         if self.start is not None and self.end is not None and self.start > self.end:
             raise ValueError('start must not be later than end')
+        if self.filter_selection is not None and self.query is None:
+            raise ValueError('filter_selection requires query')
 
         if self.finder_export is None and self.snapshot_path is None:
             return self

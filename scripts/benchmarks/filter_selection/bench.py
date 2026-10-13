@@ -277,6 +277,8 @@ async def fake_generate(client, *, model, messages, response_format, **_: Any) -
             if time_expected
             else None
         )
+    if 'calendar_day' in fields:
+        document['calendar_day'] = False
     if 'start' in fields and 'end' in fields:
         document['start'] = time_expected.get('start')
         document['end'] = time_expected.get('end')
@@ -1345,21 +1347,27 @@ def load_inputs(args) -> tuple[list[dict[str, Any]], FacetCatalogue, datetime, d
     snapshot = json.loads(catalogue_path.read_text(encoding='utf-8'))
     catalogue = FacetCatalogue.model_validate(snapshot['catalogue'])
     datapoints = [json.loads(line) for line in dataset_path.read_text(encoding='utf-8').splitlines() if line.strip()]
-    assert datapoints, f'{dataset_path} has no datapoints'
+    if not datapoints:
+        raise SystemExit(f'{dataset_path} has no datapoints')
     for dp in datapoints:
         for facet, values in dp['expected'].get('facets', {}).items():
-            assert facet in FACET_NAMES, f'{dp["id"]}: unknown facet {facet!r}'
+            if facet not in FACET_NAMES:
+                raise SystemExit(f'{dp["id"]}: unknown facet {facet!r}')
             for value in values:
-                assert value in getattr(catalogue, facet), f'{dp["id"]}: {facet}={value!r} is not in the catalogue'
+                if value not in getattr(catalogue, facet):
+                    raise SystemExit(f'{dp["id"]}: {facet}={value!r} is not in the catalogue')
     nows = {dp['now'] for dp in datapoints}
-    assert len(nows) == 1, f'datapoints disagree on now: {nows}'
+    if len(nows) != 1:
+        raise SystemExit(f'datapoints disagree on now: {nows}')
     now = parse_time(nows.pop())
-    assert now is not None
+    if now is None:
+        raise SystemExit('unparseable now')
     if args.ids:
         wanted = [i.strip() for i in args.ids.split(',') if i.strip()]
         by_id = {dp['id']: dp for dp in datapoints}
         missing = [i for i in wanted if i not in by_id]
-        assert not missing, f'unknown datapoint ids {missing}'
+        if missing:
+            raise SystemExit(f'unknown datapoint ids {missing}')
         datapoints = [by_id[i] for i in wanted]
     if args.limit_datapoints:
         datapoints = datapoints[: args.limit_datapoints]

@@ -424,7 +424,7 @@ def _kv(rows: list[tuple[str, str]]) -> str:
 def sec_setup(run: Run) -> str:
     m = run.meta
     s = run.summary
-    cat_lat = s.get("catalogue_latency_ms") or {}
+    scenarios = s.get("cache_scenarios") or {}
     sha = str(m.get("git_sha") or "")
     pk = m.get("packages") or {}
     pk_txt = ", ".join(f"{esc(k)} {esc(v)}" for k, v in pk.items())
@@ -451,8 +451,6 @@ def sec_setup(run: Run) -> str:
         conc_txt = "1: arms ran one at a time; latency measured sequentially"
     else:
         conc_txt = f"{f_int(conc)}: arms ran concurrently, so latency is <strong>not comparable to a sequential run</strong> (accuracy and token figures still valid)"
-    win = m.get("catalogue_window_days")
-    win_txt = f"last {f_int(win)} days of traces (only for the catalogue load-latency measurement)" if _num(win) is not None else DASH
     sn = run.snapshot
     snap_txt = (
         f"<code>{esc(sn.get('window_start') or DASH)}</code> → <code>{esc(sn.get('window_end') or DASH)}</code>, captured <code>{esc(sn.get('captured_at') or DASH)}</code>"
@@ -462,12 +460,28 @@ def sec_setup(run: Run) -> str:
     n_dp = m.get("n_datapoints")
     if n_dp is None:
         n_dp = len({str(q["id"]) for q in run.queries}) or None
-    cat_n = _num(cat_lat.get("n")) if cat_lat else None
-    cat_txt = (
-        f"p50 {f_ms(cat_lat.get('p50'))}, p95 {f_ms(cat_lat.get('p95'))} over {f_int(cat_n)} loads"
-        if cat_lat and cat_n
-        else "not measured in this run"
-    )
+    cache_arms = s.get("arms") or {}
+    cache_recorded = any(_num(arm.get("catalogue_cache_events")) for arm in cache_arms.values())
+    scenario_lines = []
+    for mode, states in scenarios.items():
+        if mode not in cache_arms:
+            continue
+        for state in ("cold", "warm"):
+            scenario = (states or {}).get(state) or {}
+            wall_p50, wall_p95 = scenario.get("wall_ms_p50"), scenario.get("wall_ms_p95")
+            if _num(wall_p50) is None and _num(wall_p95) is None:
+                continue
+            cache_hit = scenario.get("catalogue_cache_hit")
+            hit_txt = "hit" if cache_hit is True else "miss" if cache_hit is False else "unknown"
+            cache_detail = (
+                f"cache {hit_txt}; miss-load p50 {f_ms(scenario.get('catalogue_cache_miss_elapsed_ms_p50'))}"
+                if scenario.get("catalogue_cache_events")
+                else f"cache {hit_txt}"
+            )
+            scenario_lines.append(
+                f"{esc(mode)} {state}: wall p50 {f_ms(wall_p50)}, p95 {f_ms(wall_p95)}; {cache_detail}"
+            )
+    scenario_txt = "<br>".join(scenario_lines) if scenario_lines else "not measured in this run"
     rows: list[tuple[str, str]] = [
         ("Arms", " ".join(chip(a, run) for a in run.arms) or DASH),
         *model_rows,
@@ -486,8 +500,8 @@ def sec_setup(run: Run) -> str:
         *([("Role models", "; ".join(f"{esc(k)}: <code>{esc((v or {}).get('role_model'))}</code> ({esc((v or {}).get('source'))})" for k, v in (m.get("role_models") or {}).items()))] if m.get("role_models") else []),
         *([("Settings snapshot", f"<code>{esc(m.get('settings_path'))}</code> (sha256 <code>{esc(str(m.get('settings_sha256') or DASH)[:16])}</code>)")] if m.get("settings_path") else []),
         ("Other bench processes", f"{f_int(m.get('other_bench_processes_at_start'))} at start, {f_int(m.get('other_bench_processes_at_end'))} at end" if m.get("other_bench_processes_at_start") is not None else DASH),
-        ("Catalogue cache", "production cache hit/miss and elapsed time recorded per query" if m.get("cache_telemetry") else "not recorded"),
-        ("Catalogue load latency", cat_txt),
+        ("Catalogue cache", "production cache hit/miss and elapsed time recorded per query" if cache_recorded else "not recorded"),
+        ("Cold/warm cache scenarios (n=1)", scenario_txt),
         ("Workload clock (now)", f"<code>{esc(m.get('now') or DASH)}</code>"),
         ("Profile", f"<code>{esc(m.get('profile'))}</code>" if m.get("profile") else "none (no network access)" if m.get("dry_run") else DASH),
         ("Git SHA", f"<code>{esc(sha[:12] or DASH)}</code>"),
@@ -559,8 +573,6 @@ HEADLINE: list[tuple[str, list[tuple[str, Any, Any, str | None, str]]]] = [
             ("Cache-hit load p95", _g("catalogue_cache_hit_elapsed_ms_p95"), f_ms, "low", "ms"),
             ("Cache-miss load p50", _g("catalogue_cache_miss_elapsed_ms_p50"), f_ms, "low", "ms"),
             ("Cache-miss load p95", _g("catalogue_cache_miss_elapsed_ms_p95"), f_ms, "low", "ms"),
-            ("Measured cold-cache e2e p50", _g("cold_e2e_latency_ms_p50"), f_ms, "low", "ms"),
-            ("Measured warm-cache e2e p50", _g("warm_e2e_latency_ms_p50"), f_ms, "low", "ms"),
         ],
     ),
     (
@@ -944,10 +956,12 @@ def sec_diagnostics(run: Run) -> str:
 
 
 def sec_glance(run: Run) -> str:
-    """Summary above the detail: change vs baseline for the three decision metrics."""
+    """Summary above the detail: change vs baseline for the decision metrics."""
     if BASELINE not in run.arms:
         return ""
+    scenarios = run.summary.get("cache_scenarios") or {}
     base = run.arm_summary(BASELINE)
+    base_warm = _num(_g(f"cache_scenarios.{BASELINE}.warm.wall_ms_p50")(run.summary))
     cards: list[str] = []
     for arm in run.arms:
         if arm == BASELINE:
@@ -956,10 +970,15 @@ def sec_glance(run: Run) -> str:
         parts = []
         for label, key, kind, better, fmt in (
             ("Headline A mean pass rate", "headline_a.mean_pass_rate", "rate", "high", f_pct),
-            ("Measured warm-cache e2e p50", "warm_e2e_latency_ms_p50", "rel", "low", f_ms),
+            ("Warm-cache scenario wall p50 (n=1)", "cache_scenarios", "rel", "low", f_ms),
             ("Reported $ / query", "cost_per_query_reported_usd", "rel", "low", f_usd),
         ):
-            v, b = _num(_g(key)(sm)), _num(_g(key)(base))
+            if key == "cache_scenarios":
+                mode = arm.split("@", 1)[0]
+                v = _num(_g(f"cache_scenarios.{mode}.warm.wall_ms_p50")(run.summary)) if mode in scenarios else None
+                b = base_warm
+            else:
+                v, b = _num(_g(key)(sm)), _num(_g(key)(base))
             if v is None or b is None:
                 parts.append(
                     f'<div class="stat"><span class="k">{esc(label)}</span><span class="v">{esc(fmt(v))}</span><span class="d flat">no baseline value</span></div>'
@@ -987,6 +1006,7 @@ def _heat_cell(v: Any, n: Any, invert: bool = False) -> str:
     return f'<td class="hm" style="--v:{shade:.3f}">{f_pct(f)}{n_txt}</td>'
 
 
+def _category_n(run: Run, arm: str, cat: str) -> int:
     return sum(1 for q in run.queries_for(arm) if str(q.get("category")) == cat)
 
 

@@ -1107,9 +1107,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                         )
                     )
                 base = _run_request(form, settings)
-                base = base.model_copy(
-                    update={'population': base.population.model_copy(update={'time_origin': 'within_results'})}
-                )
+                # The AI trace limit caps how many rows are judged, not how many the table loaded.
                 limit = min(len(explorer_view.rows), base.population.limit)
                 request = base.model_copy(
                     update={

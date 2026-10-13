@@ -548,7 +548,15 @@ async def test_query_path_planner_failure_raises_population_error(monkeypatch: p
 
 
 @pytest.mark.asyncio
-async def test_query_path_marks_an_explicit_window_days_override(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ('origin', 'expected_origin'),
+    [('default', 'default'), ('explicit', 'explicit'), (None, 'explicit')],
+)
+async def test_query_path_respects_declared_window_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    origin: Literal['default', 'explicit'] | None,
+    expected_origin: Literal['default', 'explicit'],
+) -> None:
     seen: dict[str, Any] = {}
 
     async def fake_plan(query: str, population: PopulationRequest, **kwargs: Any) -> PlanningResult:
@@ -561,15 +569,18 @@ async def test_query_path_marks_an_explicit_window_days_override(monkeypatch: py
             effective_population=population,
             selector_response=None,
             selector_error=None,
-            provenance={'time': 'explicit'},
+            provenance={'time': expected_origin},
             usage={},
         )
 
     monkeypatch.setattr(population_module, 'plan_query', fake_plan)
     monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
     FakeSource.snapshot = Snapshot(traces=())
+    population = InsightsPopulation(query='refund requests', window_days=14)
+    if origin is not None:
+        population = InsightsPopulation(query='refund requests', window_days=14, time_origin=origin)
     await resolve_population(
-        InsightsPopulation(query='refund requests', window_days=14, time_origin='explicit'),
+        population,
         orq=_orq(),
         client=_client(),
         compiler_model='compiler',
@@ -577,7 +588,7 @@ async def test_query_path_marks_an_explicit_window_days_override(monkeypatch: py
     )
 
     population = seen['population']
-    assert population.time_origin == 'explicit'
+    assert population.time_origin == expected_origin
     assert population.end - population.start == timedelta(days=14)
 
 @pytest.mark.asyncio

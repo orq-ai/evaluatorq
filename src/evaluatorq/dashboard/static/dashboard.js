@@ -1427,6 +1427,7 @@
       const origin = document.querySelector('[data-explorer-time-origin]');
       if (mode) mode.value = 'exact';
       if (origin) origin.value = 'explicit';
+      document.querySelectorAll('[data-explorer-preset]').forEach((b) => b.setAttribute('aria-pressed', 'false'));
       document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = true; });
       explorerUpdateRangeLabel();
       const menu = evt.target.closest('.xr-time-menu');

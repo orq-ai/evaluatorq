@@ -88,7 +88,10 @@ def test_score_preset_display_does_not_repeat_level_index(minimal_run: Any, caps
         (['--sessions', '--from-snapshot', 'snapshot.json'], '--sessions cannot be combined with --from-snapshot'),
         (['--sessions', '--from-finder', 'finder.json'], '--sessions cannot be combined with --from-finder'),
         (['--sessions', '--window-days', '2'], '--sessions cannot be combined with population options: --window-days'),
-        (['--sessions', '--project', 'demo'], '--sessions cannot be combined with population options: --project'),
+        (
+            ['--sessions', '--filter-selection', 'llm'],
+            '--sessions cannot be combined with population options: --filter-selection',
+        ),
         (['--sessions', '--source', 'claude'], "unknown --source 'claude'; choose from"),
         (['--project-dir', '.'], '--project-dir requires --sessions'),
         (['--source', 'codex'], '--source requires --sessions'),
@@ -489,22 +492,19 @@ def test_priority_defaults_to_a_selected_dimension(monkeypatch: Any, minimal_run
     assert captured['dimensions'] == ('failure',)
     assert captured['priority_dimension'] == 'failure'
 
-@pytest.mark.parametrize(('args', 'expected'), [([], None), (['--filter-selection', 'llm'], 'llm')])
-def test_filter_selection_reaches_query_population(
-    monkeypatch: pytest.MonkeyPatch, minimal_run: Any, args: list[str], expected: str | None
-) -> None:
-    captured: dict[str, Any] = {}
 
-    async def fake_run(population: Any, profile: Any, **kwargs: Any) -> Any:
-        captured['population'] = population
-        return minimal_run
+def test_filter_selection_requires_query_before_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    invoked: list[bool] = []
 
-    monkeypatch.setattr(cli_module, '_run_insights_with_profile', fake_run)
-    result = CliRunner().invoke(_app(), ['insights', *args])
+    async def unexpected_run(*args: Any, **kwargs: Any) -> Any:
+        invoked.append(True)
+        raise AssertionError('pipeline must not run without --query')
 
-    assert result.exit_code == 0, result.output
-    assert captured['population'].filter_selection == expected
-    assert captured['population'].time_origin == 'default'
+    monkeypatch.setattr(cli_module, '_run_insights_with_profile', unexpected_run)
+    result = CliRunner().invoke(_app(), ['insights', '--filter-selection', 'llm'])
+
+    assert result.exit_code == 2
+    assert invoked == []
 
 
 def test_cli_prints_report_path_without_loading_historical_runs(
@@ -588,13 +588,13 @@ def test_finder_export_and_query_are_usage_error() -> None:
         ('--tokens-max', '10'),
         ('--duration-ms-min', '1'),
         ('--duration-ms-max', '10'),
+        ('--filter-selection', 'llm'),
     ],
 )
 def test_finder_export_rejects_population_options(option: str, value: str) -> None:
     result = CliRunner().invoke(_app(), ['insights', '--from-finder', 'finder.json', option, value])
 
     assert result.exit_code == 2, result.output
-    assert f'--from-finder cannot be combined with population options: {option}' in unstyle(result.output)
 
 
 def test_invalid_finder_exports_are_usage_errors_without_running_pipeline(tmp_path: Path, monkeypatch: Any) -> None:

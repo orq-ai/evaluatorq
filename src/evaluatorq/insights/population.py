@@ -326,9 +326,13 @@ async def _resolve_from_query(
 ) -> ResolvedPopulation:
     assert pop.query is not None  # noqa: S101 - guarded by the caller's dispatch before this is reached
     start, end = _window(pop)
+    declared_origin = 'time_origin' in pop.model_fields_set
     time_origin = (
         'explicit'
-        if pop.time_origin == 'explicit' or pop.start is not None or pop.end is not None or pop.window_days != 7
+        if pop.time_origin == 'explicit'
+        or pop.start is not None
+        or pop.end is not None
+        or (not declared_origin and pop.window_days != 7)
         else 'default'
     )
     population = PopulationRequest(

@@ -291,3 +291,48 @@ def test_responses_transcript_none_on_count_mismatch() -> None:
         'metadata': {'item_order': ['input', 'output']},
     }
     assert responses_transcript(output) is None
+
+
+def test_responses_transcript_preserves_refusal_media_and_structured_tool_result() -> None:
+    from evaluatorq.common.output_adapters import responses_transcript
+
+    output = {
+        'object': 'response',
+        'input': [
+            {
+                'type': 'message',
+                'role': 'user',
+                'content': [
+                    {'type': 'input_text', 'text': 'Please inspect'},
+                    {'type': 'input_image', 'image_url': 'https://example.com/photo.png'},
+                    {'type': 'input_file', 'file_id': 'file-example'},
+                ],
+            },
+        ],
+        'output': [
+            {
+                'type': 'message',
+                'role': 'assistant',
+                'content': [{'type': 'refusal', 'refusal': 'I cannot help with that request.'}],
+            },
+            {'type': 'function_call', 'call_id': 'call-example', 'name': 'lookup', 'arguments': '{}'},
+            {
+                'type': 'function_call_output',
+                'call_id': 'call-example',
+                'output': [{'type': 'input_text', 'text': 'The package shipped.'}],
+            },
+        ],
+        'metadata': {'item_order': ['input', 'output', 'output', 'output']},
+    }
+
+    transcript = responses_transcript(output)
+    assert transcript is not None
+    rendered = messages_to_text(transcript)
+    assert 'Please inspect' in rendered
+    assert '[image]' in rendered
+    assert '[file]' in rendered
+    assert 'I cannot help with that request.' in rendered
+    assert 'The package shipped.' in rendered
+    assert transcript[-1].role == 'tool'
+    assert transcript[-1].content == 'The package shipped.'
+    assert transcript[-1].tool_call_id == 'call-example'
