@@ -128,11 +128,23 @@ def _interval_bar(v: Verdict) -> str:
         return ''
     colour = pw_side_colour(v.leader or 'tie')
     who = v.leader_label or 'Either side'
+    description = (
+        f'{who} won {v.win_rate:.0%} of {v.decided} decided comparisons. '
+        f'95% uncertainty range: {v.low:.0%} to {v.high:.0%}. 50% means equal wins.'
+    )
     return (
-        f'<div class="pw-ci" style="--c:{colour}"><div class="pw-ci-mid"></div>'
+        f'<figure class="pw-ci-figure" style="--c:{colour}">'
+        f'<figcaption class="pw-ci-title">{esc(who)} win rate</figcaption>'
+        '<div class="pw-ci-readout">'
+        f'<span><i class="pw-ci-key-dot" aria-hidden="true"></i>Observed <strong>{v.win_rate:.0%}</strong></span>'
+        f'<span><i class="pw-ci-key-range" aria-hidden="true"></i>95% range '
+        f'<strong>{v.low:.0%}\u2013{v.high:.0%}</strong></span></div>'
+        f'<div class="pw-ci" role="img" aria-label="{esc(description)}">'
         f'<div class="pw-ci-range" style="left:{v.low * 100:.1f}%;width:{(v.high - v.low) * 100:.1f}%"></div>'
+        '<div class="pw-ci-mid"></div>'
         f'<div class="pw-ci-dot" style="left:{v.win_rate * 100:.1f}%"></div></div>'
-        f'<div class="pw-ci-cap"><span>0%</span><span>{esc(who)} win rate · 50%</span><span>100%</span></div>'
+        '<div class="pw-ci-cap"><span>0%</span><span>50% · equal wins</span><span>100%</span></div>'
+        '</figure>'
     )
 
 
