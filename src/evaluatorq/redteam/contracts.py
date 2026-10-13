@@ -1823,13 +1823,20 @@ class JuryHealth(BaseModel):
     samples_with_abstention: int = Field(
         default=0, ge=0, description='Samples where at least one judge cleanly abstained'
     )
+    judge_failure_reasons: list[str] = Field(
+        default_factory=list,
+        description='Distinct JuryVote.error strings behind the judge failures, so the report names why a judge did '
+        'not count (RES-1649), not just how many. Deduplicated and capped; empty when no judge failed.',
+    )
 
     def issue_summary(self) -> str:
         """One-line issue clause for a report, or ``clean`` when nothing went wrong.
 
         ``replacements_used`` counts replacement *judges*; the other five fields count *samples*.
         They are listed as separate clauses so a judge count is never folded into an '(of N samples)'
-        total, which would misread it as a sample count (the bug the P1 review flagged).
+        total, which would misread it as a sample count (the bug the P1 review flagged). When a judge
+        failed and carried a reason, the distinct reasons are appended so the report says why, not just
+        how many — the ``JuryVote.error`` half of the ticket's "why a judge did not count".
         """
         issues = [
             (self.samples_with_judge_failure, 'judge-fail'),
@@ -1841,7 +1848,10 @@ class JuryHealth(BaseModel):
         parts = [f'{count} {label}' for count, label in issues if count]
         if self.replacements_used:
             parts.append(f'{self.replacements_used} replacement judge(s)')
-        return ', '.join(parts) if parts else 'clean'
+        summary = ', '.join(parts) if parts else 'clean'
+        if self.judge_failure_reasons:
+            summary += f' (judge failures: {"; ".join(self.judge_failure_reasons)})'
+        return summary
 
 
 class ReportSummary(BaseModel):

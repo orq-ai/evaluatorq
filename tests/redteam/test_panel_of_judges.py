@@ -887,6 +887,8 @@ class TestJuryHealthAggregator:
         assert health.inconclusive == 0
         assert health.samples_with_repetition_failure == 1
         assert health.samples_with_abstention == 1
+        # The JuryVote.error behind the failure is surfaced, not just its count.
+        assert health.judge_failure_reasons == ['timeout']
 
     def test_counts_inconclusive_samples(self):
         # A dedicated inconclusive sample, so the inconclusive count is actually exercised:
@@ -921,6 +923,49 @@ class TestJuryHealthAggregator:
         assert '1 tie' in clause
         assert '3 replacement judge(s)' in clause
         assert JuryHealth(samples=3).issue_summary() == 'clean'
+
+    def test_issue_summary_names_judge_failure_reasons(self):
+        # The JuryVote.error half of "why a judge did not count" reaches the report.
+        from evaluatorq.redteam.contracts import JuryHealth
+
+        h = JuryHealth(samples=4, samples_with_judge_failure=2, judge_failure_reasons=['timeout', 'rate limited'])
+        clause = h.issue_summary()
+        assert '2 judge-fail' in clause
+        assert 'judge failures: timeout; rate limited' in clause
+        # No failures, no reasons clause.
+        assert '(judge failures' not in JuryHealth(samples=3).issue_summary()
+
+    def test_compute_jury_health_caps_and_dedupes_failure_reasons(self):
+        from types import SimpleNamespace
+
+        from evaluatorq.redteam.contracts import JuryResult, JuryVote
+        from evaluatorq.redteam.reports.converters import _compute_jury_health
+
+        def failed_sample(reason: str) -> Any:
+            jr = JuryResult(
+                judges_configured=2,
+                judges_succeeded=1,
+                judges_failed=1,
+                votes=[
+                    JuryVote(model='m0', success=True, value=True),
+                    JuryVote(model='m1', success=False, value=None, error=reason),
+                ],
+            )
+            return SimpleNamespace(evaluation=SimpleNamespace(jury=jr))
+
+        # Five distinct reasons, one duplicated — expect 3 shown + a "+N more" marker.
+        results: list[Any] = [failed_sample(r) for r in ['a', 'b', 'c', 'd', 'e', 'a']]
+        health = _compute_jury_health(results)
+        assert health is not None
+        assert health.judge_failure_reasons == ['a', 'b', 'c', '+2 more']
+
+        # A reason longer than the cap is truncated with an ellipsis.
+        long_reason = 'x' * 200
+        health_long = _compute_jury_health([failed_sample(long_reason)])
+        assert health_long is not None
+        assert len(health_long.judge_failure_reasons) == 1
+        assert health_long.judge_failure_reasons[0].endswith('…')
+        assert len(health_long.judge_failure_reasons[0]) == 80
 
 
 class TestConfigLevelMinSuccessfulValidation:
