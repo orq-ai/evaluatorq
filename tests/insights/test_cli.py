@@ -300,6 +300,7 @@ def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert result.output.count('Model input coverage:') == 1
 
 
+
 def test_local_send_reports_an_unreadable_snapshot_instead_of_a_traceback(tmp_path: Path) -> None:
     with pytest.raises(typer.Exit) as raised:
         cli_module._print_local_send(

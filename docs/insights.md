@@ -419,7 +419,9 @@ A cap on a type the preset leaves out does nothing, silently: `full_conversation
 
 Combining `tools='collapsed'` with `tool_result` in `include` raises a `ValueError` rather than dropping the results, and so does naming one type in both `include` and `exclude`.
 
-The whole view is then cut to `budget`, which defaults to the `trace_input_chars` setting, so even `WHOLE` loses text on a very long trace. That cut drops whole entries from the middle and leaves a marker such as `[... 4 messages (1-4) left out ...]`. When the entry at either edge of the cut is too long to keep, the cut lands inside it, marked as `[... N chars of message M left out ...]`.
+The whole view is then cut to `budget`, which defaults to the `trace_input_chars` setting, so even `WHOLE` can omit entries on a very long trace. The cut drops whole rendered entries from the middle and leaves a marker such as `[... 4 messages (1-4) left out ...]`. If an entry at either boundary is too large for the remaining budget, the renderer keeps its beginning and end and marks the omitted text, for example `[... 5,000 chars of message 7 left out ...]`.
+
+`ReadableStyle` opt-in formatting and reductions compose with any preset; the default style leaves the production view unchanged. `blocks=True` gives each entry its own header and indents its body, while `pair_results=True` moves each matched tool result beside its call when block layout is enabled. `plain_tool_input=True` formats object arguments as `key: value` lines, and `labelled_cuts=True` puts the kind and exact omission count in a bounded cut marker. Reductions can strip ANSI/progress redraw noise, shorten an explicitly recorded working directory, collapse consecutive repeated calls/results, or replace long encoded blobs with size markers. Secrets are scrubbed before reductions and cuts.
 
 ## Trace signals
 

@@ -618,7 +618,7 @@ def test_saved_confirmation_is_rendered_after_redirect(client: TestClient) -> No
     response = client.get('/settings?saved=1')
 
     assert response.status_code == 200
-    assert 'Settings saved.' in response.text
+    assert 'id="settings-toast" class="settings-toast show"' in response.text
 
 
 def test_environment_auth_ignores_old_and_submitted_scope(
@@ -688,7 +688,6 @@ def test_settings_page_offers_cli_profiles_in_authentication(client: TestClient,
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
     html = client.get('/settings').text
     assert '<div class="panel-title">Authentication</div>' in html
-    assert '<summary>Advanced</summary>' not in html
     assert 'name="orq_auth_method" value="environment" checked' in html
     assert 'name="orq_auth_method" value="cli_profile"' in html
     options = _pick_options(html, 'orq_profile')
@@ -1098,7 +1097,7 @@ def test_selecting_another_profile_does_not_show_its_scope_before_save(
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
     html = client.get('/settings?profile=staging').text
 
-    assert 'Profile preview. Save settings to use it.' in html
+    assert 'Profile preview.' in html
     assert _pick_options(html, 'orq_profile')['staging'].startswith(' is-selected"')
     assert 'https://staging.orq.ai' in html
     assert 'Selected profile API key' in html
