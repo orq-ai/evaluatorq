@@ -638,16 +638,6 @@ def test_landing_omits_a_kind_with_no_runs(saved: tuple[Path, Path]) -> None:
     assert landing.by_kind == [('Pairwise', 1)]
 
 
-def test_no_filter_rail_is_rendered_for_pairwise(client: tuple[TestClient, str]) -> None:
-    """Pairwise has no dimensions, so an empty 'Filters' panel must not appear."""
-    c, rid = client
-    r = c.get(f'/r/{rid}')
-    # 'filter-rail' also appears in the always-inlined stylesheet, so assert on
-    # the rail's markup and its POST wiring rather than the bare class name.
-    assert 'class="filter-rail"' not in r.text
-    assert 'hx-post' not in r.text
-
-
 def test_csv_export_neutralises_formula_injection(tmp_path: Path) -> None:
     """A question starting with '=' must not execute when the CSV opens in Excel."""
     r = new_run(run_name='injection', judges=JUDGES)

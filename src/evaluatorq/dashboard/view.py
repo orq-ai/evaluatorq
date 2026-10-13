@@ -1385,8 +1385,11 @@ _FILTER_CHEVRON = (
 _GOAL_OUTCOME_DOT_CLASS: dict[str, str] = {'Achieved': 'chip-dot-green', 'Not achieved': 'chip-dot-red'}
 
 
-def _chip(name: str, value: str, *, checked: bool, dot_cls: str) -> str:
-    """One chip toggle: a <label>-wrapped visually-hidden checkbox."""
+def _chip(name: str, value: str, *, checked: bool, dot_cls: str, label: str | None = None) -> str:
+    """One chip toggle: a <label>-wrapped visually-hidden checkbox.
+
+    *label* is the visible text; it defaults to *value* (the submitted value).
+    """
     checked_attr = ' checked' if checked else ''
     active_cls = ' is-active' if checked else ''
     return (
@@ -1394,7 +1397,7 @@ def _chip(name: str, value: str, *, checked: bool, dot_cls: str) -> str:
         f'<input type="checkbox" class="filter-chip-input" name="{esc(name)}" value="{esc(value)}"{checked_attr}>'
         f'<span class="filter-chip-dot {dot_cls}"></span>'
         f'<span class="filter-chip-check {dot_cls}">✓</span>'
-        f'<span class="filter-chip-label">{esc(value)}</span>'
+        f'<span class="filter-chip-label">{esc(value if label is None else label)}</span>'
         f'</label>'
     )
 
@@ -1792,6 +1795,69 @@ def _render_redteam_filter_rail(
     )
 
 
+def _render_pairwise_filter_rail(
+    rid: str,
+    opts: dict[str, list[str]],
+    selections: dict[str, list[str]],
+    *,
+    shown: int | None,
+    total: int | None,
+) -> str:
+    """Render the pairwise filter rail: winner chips, panel chips, judge dropdown, counter.
+
+    ``opts['winner']`` is ``[label_a, label_b, 'tie', 'inconclusive']`` in that
+    order, so the dot colour is picked by position (the side labels are free
+    text and may collide with the outcome words). Like the sim rail's
+    "Terminated by" chips, no selection renders every winner chip checked.
+    """
+    winner_dots = ('chip-dot-gray', 'chip-dot-jade', 'chip-dot-amber', 'chip-dot-gray')
+    winner_opts = opts.get('winner', [])
+    winner_sel = set(selections.get('winner', [])) or set(winner_opts)
+    winner_chips = ''.join(
+        _chip('winner', opt, checked=(opt in winner_sel), dot_cls=dot)
+        for opt, dot in zip(winner_opts, winner_dots, strict=False)
+    )
+
+    panel_chips = ''.join(
+        _chip(dim, 'yes', checked=('yes' in selections.get(dim, [])), dot_cls=dot, label=label)
+        for dim, label, dot in (
+            ('split', 'Judges split', 'chip-dot-amber'),
+            ('thrown_out', 'Vote thrown out', 'chip-dot-red'),
+            ('judge_failed', 'Judge failed', 'chip-dot-red'),
+        )
+    )
+
+    judge_dd = _dropdown('judge', 'Judge', opts.get('judge', []), selections.get('judge', []))
+
+    if shown is not None and total is not None and shown < total:
+        counter = f'{shown} of {total} comparisons'
+    else:
+        counter = 'Showing all comparisons'
+
+    inner = (
+        f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        f'<div class="filter-group" data-dim="winner">'
+        f'<label class="filter-label">Winner</label>'
+        f'<div class="filter-chip-row">{winner_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="panel">'
+        f'<label class="filter-label">Panel</label>'
+        f'<div class="filter-chip-row">{panel_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="judge">{judge_dd}</div>'
+        f'<div class="filter-rail-footer">{esc(counter)}</div>'
+    )
+    return (
+        f'<form id="filter-form" class="filter-form filter-form--sim filter-form--pairwise"'
+        f' hx-post="/r/{esc(rid)}/filter"'
+        f' hx-trigger="change"'
+        f' hx-target="#filter-swap"'
+        f' hx-swap="outerHTML">'
+        f'{inner}'
+        f'</form>'
+    )
+
+
 def render_filter_form(
     rid: str,
     surface: str,
@@ -1809,7 +1875,7 @@ def render_filter_form(
 
     Args:
         rid:        Report ID (used to construct the POST URL).
-        surface:    Surface key (``'redteam'`` | ``'sim'``).
+        surface:    Surface key (``'redteam'`` | ``'sim'`` | ``'pairwise'``).
         opts:       Option lists per dimension (from ``FilterDef.options``).
         selections: Currently active selections per dimension.
         shown:      Count of currently-shown results (sim rail footer counter).
@@ -1823,13 +1889,15 @@ def render_filter_form(
         return _render_sim_filter_rail(rid, opts, selections, shown=shown, total=total)
     if surface == 'redteam':
         return _render_redteam_filter_rail(rid, opts, selections, shown=shown, total=total)
+    if surface == 'pairwise':
+        return _render_pairwise_filter_rail(rid, opts, selections, shown=shown, total=total)
 
     from evaluatorq.dashboard.filters import FILTERS
 
     filter_def = FILTERS.get(surface)
     if filter_def is None or not filter_def.dimensions:
-        # A surface with no dimensions (pairwise) would otherwise render an
-        # empty rail titled "Filters" with nothing under it.
+        # A surface with no dimensions would otherwise render an empty rail
+        # titled "Filters" with nothing under it.
         return ''
 
     parts: list[str] = []
