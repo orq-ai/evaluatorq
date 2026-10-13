@@ -81,6 +81,29 @@ await evaluatorq(
 )
 ```
 
+### What a job can return
+
+A job's return value is its output, typed as `Output`:
+
+```python
+Output = str | int | float | bool | dict[str, Any] | list[Message] | AgentResponse | None
+```
+
+A job that produces structured data can return a dict instead of flattening it into a string. Scorers receive it unchanged as `params["output"]`, so they can read fields directly:
+
+```python
+@job("extract")
+async def extract(data: DataPoint, _row: int) -> dict:
+    return {"city": data.inputs["text"].split()[-1], "confidence": 0.9}
+
+
+async def city_correct(params: ScorerParameter) -> EvaluationResult:
+    output = params["output"]  # the dict above, not a string
+    return EvaluationResult(value=output["city"] == params["data"].expected_output)
+```
+
+On the way out (the Orq upload and JSON result dumps) a dict output is serialized with `json.dumps`, so the platform shows it as a JSON string. The exception is a dict with `"object": "response"`, which is an OpenResponses payload and is sent as-is. Pydantic models inside the dict are dumped to dicts first; anything else that is not JSON-serializable becomes its `str()`.
+
 ### Reporting a failure the job handled
 
 A job that lets a failure raise needs nothing: `process_job` records it and the row counts as failed. A job that *catches* its failure to keep the rest of the batch alive — a target that answered `401`, a simulation the runner ended in `error` — must say so, because a returned dict looks like a clean run:
