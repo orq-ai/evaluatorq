@@ -123,12 +123,17 @@ def _row(
         f'{trace_cell}'
         '</summary>'
     )
-    # A details element parsed with ``open`` fires ``toggle`` once it is inserted,
-    # which loads the lazy detail below.
-    open_attr = ' open' if is_open else ''
+    # A focused row arrives open with its detail already rendered: the ``toggle``
+    # a parsed ``open`` fires lands before htmx has bound the lazy trigger.
+    if is_open:
+        return (
+            f'<tbody class="pw-cmp-group" id="cmp-{n}"><tr><td><details class="pw-cmp-row" open>'
+            f'{summary}<div class="pw-cmp-detail">{render_pairwise_comparison_detail(run, n - 1)}</div>'
+            '</details></td></tr></tbody>'
+        )
     return (
         f'<tbody class="pw-cmp-group" id="cmp-{n}"><tr><td>'
-        f'<details class="pw-cmp-row"{open_attr}'
+        '<details class="pw-cmp-row"'
         f' hx-get="/r/{esc(rid)}/pairwise/comparison?idx={n - 1}"'
         ' hx-trigger="toggle once" hx-target="find .pw-cmp-detail" hx-swap="innerHTML">'
         f'{summary}<div class="pw-cmp-detail"></div></details></td></tr></tbody>'

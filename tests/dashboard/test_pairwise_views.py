@@ -238,9 +238,12 @@ def _rows(html: str) -> dict[int, bool]:
 
 def test_focus_renders_the_page_holding_the_row_with_it_open(tmp_path: Path) -> None:
     c, rid = _client(_big_run(), tmp_path)
-    rows = _rows(c.get(f'/r/{rid}/pairwise/row-list?focus=30').text)
+    html = c.get(f'/r/{rid}/pairwise/row-list?focus=30').text
+    rows = _rows(html)
     assert list(rows) == [26, 27, 28, 29, 30]
     assert [n for n, is_open in rows.items() if is_open] == [30]
+    # The open row already carries its detail: a parsed ``open`` toggles before htmx can lazy-load it.
+    assert c.get(f'/r/{rid}/pairwise/comparison?idx=29').text in html
 
 
 def test_focus_overrides_the_page_parameter(tmp_path: Path) -> None:

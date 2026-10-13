@@ -109,7 +109,7 @@ def _run_panel(side: str, run: PairwiseRun) -> str:
 
 
 def _link(rid: str, n: int) -> str:
-    return f'<a href="/r/{esc(rid)}?cmp={n}">#{n}</a>'
+    return f'<a href="/r/{esc(rid)}?cmp={n}#cmp-{n}">#{n}</a>'
 
 
 def _diff_table(rid_a: str, rid_b: str, run_a: PairwiseRun, run_b: PairwiseRun, m: PairwiseMatching) -> str:
