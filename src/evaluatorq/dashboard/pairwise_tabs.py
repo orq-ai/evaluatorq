@@ -16,8 +16,8 @@ from itertools import starmap
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.reports import esc, kpi_cards
-from evaluatorq.dashboard.pairwise_palette import pw_side_colour
-from evaluatorq.dashboard.pairwise_views import render_pairwise_comparisons
+from evaluatorq.dashboard.pairwise_palette import pw_side_colour, verdict_eyebrow
+from evaluatorq.dashboard.pairwise_views import render_pairwise_comparisons, valid_focus
 from evaluatorq.dashboard.report_kit import bar_rows, donut, meta_grid, panel
 from evaluatorq.dashboard.report_tabs import _tabs
 from evaluatorq.pairwise_reports.export_html import _bias_cell, _consistency_cell, _rate
@@ -106,11 +106,11 @@ def _verdict_text(v: Verdict) -> tuple[str, str, str]:
             if v.total
             else 'This run has no comparisons.'
         )
-        return ('No decided comparisons', 'No comparison was decided, so there is no winner to report.', detail)
+        return (verdict_eyebrow(v.state), 'No comparison was decided, so there is no winner to report.', detail)
     interval = f'95% range {v.low:.0%}\u2013{v.high:.0%} over {v.decided} decided comparisons'
     if v.state == 'clear':
         return (
-            '✓ Clear winner',
+            verdict_eyebrow(v.state),
             f'{v.leader_label} wins {v.win_rate:.0%} of decided comparisons.',
             f'{interval} stays above 50%. {left_out}',
         )
@@ -120,7 +120,7 @@ def _verdict_text(v: Verdict) -> tuple[str, str, str]:
         if v.leader is None
         else f'{v.leader_label} leads with {v.win_rate:.0%} of decided comparisons, but this run can\u2019t call it yet.'
     )
-    return ('⚠ Too close to call', headline, crossing + left_out)
+    return (verdict_eyebrow(v.state), headline, crossing + left_out)
 
 
 def _interval_bar(v: Verdict) -> str:
@@ -413,16 +413,22 @@ def pairwise_report_tabs(
     entries: list[PairwiseEntry] | None = None,
     *,
     hero_actions_html: str = '',
+    focus: int | None = None,
 ) -> str:
     """Render the pairwise report body as tabs.
 
     Pass ``entries`` to render a filtered subset: every number on the page is
     then computed over a copy of the run carrying only those entries.
     The Comparisons tab lists the same entries.
+
+    ``focus`` is a 1-based comparison number: when it numbers one of the listed
+    entries, the Comparisons tab is the active tab, on the page holding that row
+    with the row open.
     """
     view = run if entries is None else with_entries(run, entries)
+    focus = valid_focus(run, view.entries, focus)
     if view.entries:
-        comparisons = render_pairwise_comparisons(rid, run, view.entries)
+        comparisons = render_pairwise_comparisons(rid, run, view.entries, focus=focus)
     else:
         comparisons = _EMPTY_FILTERED if entries is not None else _EMPTY_RUN
     filtered_empty = entries is not None and not view.entries
@@ -434,5 +440,6 @@ def pairwise_report_tabs(
             ('Comparisons', comparisons, f'Comparisons <span class="tab-count">{len(view.entries)}</span>'),
             ('Config', _config(view)),
         ],
+        active='Comparisons' if focus is not None else None,
     )
     return f'<div class="report-aligned pw-report">{_hero(view, hero_actions_html)}{tabs}</div>'

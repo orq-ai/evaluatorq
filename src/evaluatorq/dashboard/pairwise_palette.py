@@ -28,3 +28,12 @@ def pw_side_label(value: str | None, run: PairwiseRun) -> str:
     if value in ('tie', 'inconclusive'):
         return value
     return 'abstain'
+
+
+def verdict_eyebrow(state: str) -> str:
+    """Verdict label for a ``Verdict.state``; the report's verdict card uses the same wording."""
+    if state == 'clear':
+        return '✓ Clear winner'
+    if state == 'no_decided':
+        return 'No decided comparisons'
+    return '⚠ Too close to call'

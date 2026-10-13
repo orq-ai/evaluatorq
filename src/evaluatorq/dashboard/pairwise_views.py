@@ -2,7 +2,9 @@
 
 Routes (HTML fragments, no page shell):
 
-    GET /r/{rid}/pairwise/row-list   → filtered, sorted, paged row list
+    GET /r/{rid}/pairwise/row-list   → filtered, sorted, paged row list; ``focus=N``
+                                       (1-based full-run number) shows the page holding
+                                       comparison N with that row open
     GET /r/{rid}/pairwise/comparison → one comparison's detail (full-run index)
 """
 
@@ -17,8 +19,10 @@ from starlette.responses import Response
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
+from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 from evaluatorq.dashboard.pairwise_palette import pw_side_colour, pw_side_label
 from evaluatorq.dashboard.report_kit import panel
+from evaluatorq.dashboard.sim_compare import resolve_run
 from evaluatorq.dashboard.trace_links import single_trace_url, trace_link_button
 from evaluatorq.pairwise_reports.export_html import _classify_details
 from evaluatorq.pairwise_reports.sections import _classify_observations, judge_order
@@ -90,7 +94,16 @@ def _pager(rid: str, sort: str, direction: str, page: int, pages: int, total: in
     )
 
 
-def _row(rid: str, run: PairwiseRun, judges: list[str], n: int, entry: PairwiseEntry, *, with_trace: bool) -> str:
+def _row(
+    rid: str,
+    run: PairwiseRun,
+    judges: list[str],
+    n: int,
+    entry: PairwiseEntry,
+    *,
+    with_trace: bool,
+    is_open: bool,
+) -> str:
     winner = entry.comparison.winner
     trace = ''
     if with_trace:
@@ -99,6 +112,7 @@ def _row(rid: str, run: PairwiseRun, judges: list[str], n: int, entry: PairwiseE
             'Trace ↗',
             onclick='event.stopPropagation()',
         )
+    trace_cell = f'<span class="pw-cmp-trace">{trace}</span>' if with_trace else ''
     summary = (
         '<summary class="pw-cmp-summary">'
         f'<span class="pw-cmp-n">{n}</span>'
@@ -106,17 +120,32 @@ def _row(rid: str, run: PairwiseRun, judges: list[str], n: int, entry: PairwiseE
         f'<span class="pw-cmp-win"><span class="pw-vchip" style="--c:{pw_side_colour(winner)}">'
         f'{esc(pw_side_label(winner, run))}</span></span>'
         f'<span class="pw-chiprow">{_chips(entry, run, judges)}</span>'
-        f'<span class="pw-cmp-trace">{trace}</span>'
+        f'{trace_cell}'
         '</summary>'
     )
-    cols = 5 if with_trace else 4
+    # A details element parsed with ``open`` fires ``toggle`` once it is inserted,
+    # which loads the lazy detail below.
+    open_attr = ' open' if is_open else ''
     return (
-        f'<tbody class="pw-cmp-group" id="cmp-{n}"><tr><td colspan="{cols}">'
-        '<details class="pw-cmp-row"'
+        f'<tbody class="pw-cmp-group" id="cmp-{n}"><tr><td>'
+        f'<details class="pw-cmp-row"{open_attr}'
         f' hx-get="/r/{esc(rid)}/pairwise/comparison?idx={n - 1}"'
         ' hx-trigger="toggle once" hx-target="find .pw-cmp-detail" hx-swap="innerHTML">'
         f'{summary}<div class="pw-cmp-detail"></div></details></td></tr></tbody>'
     )
+
+
+def _numbers(run: PairwiseRun, entries: list[PairwiseEntry]) -> list[tuple[int, PairwiseEntry]]:
+    """``(1-based full-run number, entry)`` pairs; numbering survives filtering."""
+    position = {id(e): i + 1 for i, e in enumerate(run.entries)}
+    return [(position.get(id(e), i + 1), e) for i, e in enumerate(entries)]
+
+
+def valid_focus(run: PairwiseRun, entries: list[PairwiseEntry], focus: int | None) -> int | None:
+    """``focus`` when it numbers one of ``entries``, else ``None``."""
+    if focus is None:
+        return None
+    return focus if any(n == focus for n, _ in _numbers(run, entries)) else None
 
 
 def render_pairwise_row_list(
@@ -128,16 +157,20 @@ def render_pairwise_row_list(
     direction: str = 'asc',
     page: int = 1,
     page_size: int = _PAGE_SIZE,
+    focus: int | None = None,
 ) -> str:
-    """Render the paged row list for ``entries`` (a subset of ``run.entries``)."""
+    """Render the paged row list for ``entries`` (a subset of ``run.entries``).
+
+    A ``focus`` that numbers one of ``entries`` selects the page holding it (``page``
+    is then ignored) and renders that row open; any other ``focus`` is ignored.
+    """
     sort = sort if sort in _SORTS else 'index'
     direction = direction if direction in ('asc', 'desc') else 'asc'
     wrapper = f'<section class="pw-row-list" id="pw-row-list-{esc(rid)}">'
     if not entries:
         return f'{wrapper}<p class="sim-empty">No comparisons match the current filter.</p></section>'
 
-    position = {id(e): i + 1 for i, e in enumerate(run.entries)}
-    numbered = [(position.get(id(e), i + 1), e) for i, e in enumerate(entries)]
+    numbered = _numbers(run, entries)
     if sort == 'winner':
         numbered.sort(key=lambda t: (_WINNER_ORDER.get(t[1].comparison.winner, 4), t[0]), reverse=direction == 'desc')
     else:
@@ -145,36 +178,47 @@ def render_pairwise_row_list(
 
     total = len(numbered)
     pages = max(1, -(-total // page_size))
+    focused = next((i for i, (n, _) in enumerate(numbered) if n == focus), None) if focus is not None else None
+    if focused is not None:
+        page = focused // page_size + 1
     page = min(max(page, 1), pages)
     shown = numbered[(page - 1) * page_size : page * page_size]
 
     judges = judge_order(run)
     with_trace = any(single_trace_url(e.comparison.trace_id) for _, e in shown)
+    trace_head = '<span>Trace</span>' if with_trace else ''
     head = (
-        '<thead><tr>'
-        f'<th>{_sort_button(rid, "#", "index", sort, direction)}</th>'
-        '<th>Question</th>'
-        f'<th>{_sort_button(rid, "Winner", "winner", sort, direction)}</th>'
-        '<th>Judges</th>' + ('<th>Trace</th>' if with_trace else '') + '</tr></thead>'
+        '<thead><tr><th><div class="pw-cmp-head">'
+        f'{_sort_button(rid, "#", "index", sort, direction)}'
+        '<span>Question</span>'
+        f'{_sort_button(rid, "Winner", "winner", sort, direction)}'
+        f'<span>Judges</span>{trace_head}'
+        '</div></th></tr></thead>'
     )
-    body = ''.join(_row(rid, run, judges, n, e, with_trace=with_trace) for n, e in shown)
+    body = ''.join(
+        _row(rid, run, judges, n, e, with_trace=with_trace, is_open=focused is not None and n == focus)
+        for n, e in shown
+    )
+    table_class = 'pw-cmp-list has-trace' if with_trace else 'pw-cmp-list'
     return (
-        f'{wrapper}<table class="pw-cmp-table">{head}{body}</table>'
+        f'{wrapper}<table class="{table_class}">{head}{body}</table>'
         f'{_pager(rid, sort, direction, page, pages, total)}</section>'
     )
 
 
-def _dot_strip(run: PairwiseRun, entries: list[PairwiseEntry]) -> str:
+def _dot_strip(rid: str, run: PairwiseRun, entries: list[PairwiseEntry]) -> str:
     judges = judge_order(run)
-    position = {id(e): i + 1 for i, e in enumerate(run.entries)}
     dots = []
-    for i, entry in enumerate(entries):
-        n = position.get(id(entry), i + 1)
+    for n, entry in _numbers(run, entries):
         winner = entry.comparison.winner
         split = ' is-split' if comparison_flags(entry, judges).split else ''
         colour = pw_side_colour(winner)
+        # The row may be on another page, sorted away or not rendered yet: fetch the
+        # list focused on it, then scroll to it. The href is the no-JS fallback.
         dots.append(
             f'<a class="pw-dot{split}" href="#cmp-{n}" title="#{n} · {esc(pw_side_label(winner, run))}"'
+            f' hx-get="/r/{esc(rid)}/pairwise/row-list?focus={n}" hx-include="#filter-form"'
+            f' hx-target="#pw-row-list-{esc(rid)}" hx-swap="outerHTML show:#cmp-{n}:top"'
             f' style="background:{colour};color:{colour}"></a>'
         )
     legend = (
@@ -188,9 +232,11 @@ def _dot_strip(run: PairwiseRun, entries: list[PairwiseEntry]) -> str:
     return panel('Every comparison', f'<div class="pw-strip">{"".join(dots)}</div>{legend}')
 
 
-def render_pairwise_comparisons(rid: str, run: PairwiseRun, entries: list[PairwiseEntry]) -> str:
-    """Dot strip panel plus page 1 of the row list."""
-    return _dot_strip(run, entries) + render_pairwise_row_list(rid, run, entries)
+def render_pairwise_comparisons(
+    rid: str, run: PairwiseRun, entries: list[PairwiseEntry], *, focus: int | None = None
+) -> str:
+    """Dot strip panel plus the row list (page 1, or the page holding ``focus``)."""
+    return _dot_strip(rid, run, entries) + render_pairwise_row_list(rid, run, entries, focus=focus)
 
 
 # ---------------------------------------------------------------------------
@@ -245,19 +291,6 @@ def render_pairwise_comparison_detail(run: PairwiseRun, idx: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _load_run(rid: str, roots: list[Path] | None) -> Any | None:
-    from evaluatorq.dashboard import library
-    from evaluatorq.dashboard.surfaces import ADAPTERS
-
-    path = library.resolve(rid, roots)
-    if path is None:
-        return None
-    surface, _raw = library.load_surface(path)
-    if surface != 'pairwise':
-        return None
-    return ADAPTERS['pairwise'].load(path)
-
-
 def _404() -> Response:
     return Response('404 Not Found', 404, media_type='text/plain')
 
@@ -267,7 +300,7 @@ def register_pairwise_view_routes(app: Any, roots: list[Path] | None = None) -> 
 
     @app.get('/r/{rid}/pairwise/row-list')
     def pairwise_row_list(rid: str, req: Request) -> Response:
-        run = _load_run(rid, roots)
+        _, run = resolve_run(rid, roots, 'pairwise')
         if run is None:
             return _404()
         entries = apply_or_all(run, 'pairwise', parse_selections(req, 'pairwise'))
@@ -275,19 +308,25 @@ def register_pairwise_view_routes(app: Any, roots: list[Path] | None = None) -> 
             page = int(req.query_params.get('page', '1'))
         except (ValueError, TypeError):
             page = 1
-        html = render_pairwise_row_list(
-            rid,
-            run,
-            entries,
-            sort=req.query_params.get('sort', 'index'),
-            direction=req.query_params.get('dir', 'asc'),
-            page=page,
-        )
+        try:
+            focus: int | None = int(req.query_params.get('focus', ''))
+        except (ValueError, TypeError):
+            focus = None
+        with cli_slug_render_scope():
+            html = render_pairwise_row_list(
+                rid,
+                run,
+                entries,
+                sort=req.query_params.get('sort', 'index'),
+                direction=req.query_params.get('dir', 'asc'),
+                page=page,
+                focus=focus,
+            )
         return Response(html, media_type='text/html')
 
     @app.get('/r/{rid}/pairwise/comparison')
     def pairwise_comparison(rid: str, req: Request) -> Response:
-        run = _load_run(rid, roots)
+        _, run = resolve_run(rid, roots, 'pairwise')
         if run is None:
             return _404()
         try:
