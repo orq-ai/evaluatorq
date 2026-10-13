@@ -137,6 +137,10 @@ class PairwiseComparison(BaseModel):
     token_usage: TokenUsage | None = Field(
         default=None, description='Summed token usage across both orderings and any replacements'
     )
+    trace_id: str | None = Field(
+        default=None,
+        description='OTel trace id (32-char hex) of the orq.pairwise_jury span that judged this pair; None when tracing was off',
+    )
 
 
 class JudgeStats(BaseModel):
@@ -937,6 +941,11 @@ async def run_pairwise(
     jury_ctx: object | None = None
 
     async with with_span('orq.pairwise_jury') as jury_span:
+        trace_id = None
+        if jury_span is not None:
+            span_ctx = jury_span.get_span_context()
+            if span_ctx.is_valid:
+                trace_id = format(span_ctx.trace_id, '032x')
         # Captured before any judge runs so every judge span (both orderings,
         # replacements included) parents to this one comparison-level span.
         jury_ctx = current_otel_context()
@@ -993,7 +1002,7 @@ async def run_pairwise(
 
         decisive = [v.vote for v in votes if v.vote is not None]
         winner = 'inconclusive' if len(decisive) < max(1, min_successful_judges) else pairwise_consensus(decisive)
-        comparison = PairwiseComparison(winner=winner, votes=votes, token_usage=_sum_usage(usages))
+        comparison = PairwiseComparison(winner=winner, votes=votes, token_usage=_sum_usage(usages), trace_id=trace_id)
         _record_pairwise_span(
             jury_span,
             comparison,
