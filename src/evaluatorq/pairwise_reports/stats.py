@@ -226,11 +226,12 @@ def trust_signals(run: PairwiseRun) -> list[TrustSignal]:
     if observed_swap(run):
         report = run.rollup()
         measured = {v.model for e in run.entries for v in e.comparison.votes if v.completed}
-        flagged = [s.model for s in report.per_judge if s.model in measured and s.position_bias >= POSITION_BIAS_WARN]
+        measured_stats = [s for s in report.per_judge if s.model in measured]
+        flagged = [s.model for s in measured_stats if s.position_bias >= POSITION_BIAS_WARN]
         out.append(
             TrustSignal(
                 'Position bias',
-                f'{len(flagged)} of {len(report.per_judge)} judges',
+                f'{len(flagged)} of {len(measured_stats)} judges',
                 f'flagged at a flip rate of {POSITION_BIAS_WARN:g} or more',
                 'warn' if flagged else 'good',
             )
@@ -245,7 +246,7 @@ def trust_signals(run: PairwiseRun) -> list[TrustSignal]:
             TrustSignal(
                 'Length',
                 f'{"longer" if longer else "shorter"} won {wins / lean.compared:.0%}',
-                f'({wins}/{lean.compared}) of decided comparisons with answers of different length',
+                f'{wins} of {lean.compared} decided comparisons with answers of different length',
                 '',
             )
         )

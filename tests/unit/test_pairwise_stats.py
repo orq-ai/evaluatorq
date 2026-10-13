@@ -180,3 +180,29 @@ def test_trust_signals_omit_position_bias_when_swap_was_never_observed():
         response_b='b',
     )
     assert 'Position bias' not in [s.label for s in trust_signals(r)]
+
+
+def test_position_bias_row_warns_and_counts_only_measured_judges():
+    def entry(j1_flipped: bool):
+        votes = [
+            PairwiseVote(model='j1', vote=None if j1_flipped else 'A', flipped=j1_flipped, completed=True),
+            PairwiseVote(model='j2', vote='A', completed=True),
+            # Never completed both orderings, so a flip was never observable for j3.
+            PairwiseVote(model='j3', vote='A', completed=False),
+        ]
+        return PairwiseComparison(winner='A', votes=votes)
+
+    r = new_run(run_name='r', judges=J)
+    for i, flipped in enumerate([True, False, False, False]):
+        r.add(entry(flipped), question=f'q{i}', response_a='a', response_b='bb')
+    row = next(s for s in trust_signals(r) if s.label == 'Position bias')
+    assert row.tone == 'warn'
+    # j1 flips on 1 of 4 completed pairs (0.25 >= the cut-off); j3 is unmeasured and not counted.
+    assert row.value == '1 of 2 judges'
+
+
+def test_length_row_reads_as_one_sentence():
+    r = _run([(['B'] * 3, 'B', {'ra': 'a', 'rb': 'bbbb'}), (['A'] * 3, 'A', {'ra': 'aaaa', 'rb': 'b'})])
+    row = next(s for s in trust_signals(r) if s.label == 'Length')
+    assert row.value == 'longer won 100%'
+    assert row.detail == '2 of 2 decided comparisons with answers of different length'
