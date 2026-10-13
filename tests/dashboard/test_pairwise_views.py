@@ -63,6 +63,12 @@ def test_row_list_renders_one_group_per_comparison(client: tuple[TestClient, str
     assert '4 comparisons' in resp.text
 
 
+def test_split_filter_narrows_the_list_and_keeps_numbering(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    # Comparison 2 has judges disagreeing; comparison 4 has a vote thrown out.
+    assert _numbers(c.get(f'/r/{rid}/pairwise/row-list?split=yes').text) == [2, 4]
+
+
 def test_sort_by_winner_orders_a_b_tie_inconclusive(client: tuple[TestClient, str]) -> None:
     c, rid = client
     # winners by original index: 1=B, 2=tie, 3=A, 4=inconclusive

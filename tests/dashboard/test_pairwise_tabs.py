@@ -11,10 +11,9 @@ from starlette.testclient import TestClient
 from evaluatorq.contracts import Usage
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id
+from evaluatorq.dashboard.pairwise_palette import pw_side_colour, pw_side_label
 from evaluatorq.dashboard.pairwise_tabs import (
     pairwise_report_tabs,
-    pw_side_colour,
-    pw_side_label,
     with_entries,
 )
 from evaluatorq.pairwise import PairwiseComparison, PairwiseVote
@@ -140,10 +139,30 @@ def test_empty_run_still_renders_every_tab() -> None:
     assert 'No comparisons in this run.' in html
 
 
-def test_comparisons_html_fills_the_comparisons_tab(run: PairwiseRun) -> None:
-    html = pairwise_report_tabs('rid', run, comparisons_html='<div id="cmp-body"></div>')
-    assert '<div id="cmp-body"></div>' in html
+def test_comparisons_tab_lists_the_entries(run: PairwiseRun) -> None:
+    html = pairwise_report_tabs('rid', run)
+    assert 'id="cmp-4"' in html
     assert 'No comparisons in this run.' not in html
+
+
+def test_filtered_render_changes_the_verdict(run: PairwiseRun) -> None:
+    # Full run: one A win and one B win, so the sides are level.
+    assert 'won the same number of decided comparisons' in pairwise_report_tabs('rid', run)
+    only_b = [e for e in run.entries if e.comparison.winner == 'B']
+    html = pairwise_report_tabs('rid', run, entries=only_b)
+    assert 'won the same number' not in html
+    assert 'prompt-v3 leads with 100%' in html
+    # Original numbering is kept: the B win is comparison 3 of the full run.
+    assert 'id="cmp-3"' in html and 'id="cmp-1"' not in html
+
+
+def test_token_subline_says_when_only_some_comparisons_have_usage() -> None:
+    r = _run(['A', 'B'], usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    r.add(_comparison(['A', 'A', 'A'], 'A'), question='q9', response_a='a', response_b='b')
+    assert '(2 of 3)' in pairwise_report_tabs('rid', r)
+    assert 'of 2)' not in pairwise_report_tabs(
+        'rid', _run(['A', 'B'], usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    )
 
 
 def test_single_ordering_run_explains_the_missing_position_bias() -> None:
@@ -214,3 +233,29 @@ def test_filter_route_returns_the_tabbed_body(client: tuple[TestClient, str]) ->
     assert resp.status_code == 200
     assert 'class="report-aligned pw-report"' in resp.text
     assert _kpis(resp.text)['Comparisons'] == '4'
+
+
+def test_report_page_has_the_comparisons_list(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    html = c.get(f'/r/{rid}').text
+    assert 'pw-row-list-' in html
+    assert 'id="cmp-1"' in html
+
+
+def test_filter_by_winner_narrows_the_comparisons_tab(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    html = c.post(f'/r/{rid}/filter', data={'winner': 'prompt-v3'}).text
+    assert 'Comparisons <span class="tab-count">1</span>' in html
+    assert 'id="cmp-3"' in html and 'id="cmp-1"' not in html
+    assert 'prompt-v3 leads with 100%' in html
+
+
+def test_compare_control_needs_a_second_pairwise_run(run: PairwiseRun, tmp_path: Path) -> None:
+    runs_dir = tmp_path / 'runs'
+    runs_dir.mkdir()
+    rid = report_id(run.save(runs_dir / 'one.json'))
+    c = TestClient(build_app(roots=[runs_dir]))
+    assert 'action="/compare/pairwise"' not in c.get(f'/r/{rid}').text
+    run.save(runs_dir / 'two.json')
+    c = TestClient(build_app(roots=[runs_dir]))
+    assert 'action="/compare/pairwise"' in c.get(f'/r/{rid}').text

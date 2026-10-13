@@ -12,9 +12,12 @@ what a judge did.
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
+from itertools import starmap
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.reports import esc, kpi_cards
+from evaluatorq.dashboard.pairwise_palette import pw_side_colour
+from evaluatorq.dashboard.pairwise_views import render_pairwise_comparisons
 from evaluatorq.dashboard.report_kit import bar_rows, donut, meta_grid, panel
 from evaluatorq.dashboard.report_tabs import _tabs
 from evaluatorq.pairwise_reports.export_html import _bias_cell, _consistency_cell, _rate
@@ -54,28 +57,6 @@ def with_entries(run: PairwiseRun, entries: list[PairwiseEntry]) -> PairwiseRun:
     filtered_run = run.model_copy(update={'entries': list(entries), 'report': None})
     rolled = filtered_run.rollup(aggregation=aggregation)
     return filtered_run.model_copy(update={'report': rolled})
-
-
-def pw_side_colour(value: str | None) -> str:
-    """CSS colour for a winner or vote value; anything but A, B or tie reads as "none"."""
-    if value == 'A':
-        return 'var(--pw-a)'
-    if value == 'B':
-        return 'var(--pw-b)'
-    if value == 'tie':
-        return 'var(--pw-tie)'
-    return 'var(--pw-none)'
-
-
-def pw_side_label(value: str | None, run: PairwiseRun) -> str:
-    """Display name for a winner or vote value, using the run's side labels."""
-    if value == 'A':
-        return run.label_a
-    if value == 'B':
-        return run.label_b
-    if value in ('tie', 'inconclusive'):
-        return value
-    return 'abstain'
 
 
 def _swatch(side: str, label: str) -> str:
@@ -221,7 +202,12 @@ def _tokens_panel(run: PairwiseRun) -> str:
     usage = judge_usage(run)
     if usage.with_usage == 0:
         return ''
-    sub = f'{usage.total_tokens:,} total · {usage.total_tokens / usage.with_usage:,.0f}/comparison'
+    average = usage.total_tokens / usage.with_usage
+    n = len(run.entries)
+    if usage.with_usage < n:
+        sub = f'{usage.total_tokens:,} total · {average:,.0f} per comparison with usage ({usage.with_usage} of {n})'
+    else:
+        sub = f'{usage.total_tokens:,} total · {average:,.0f}/comparison'
     if usage.cost is not None:
         sub += f' · ${usage.cost:.2f}'
     return panel(
@@ -291,29 +277,20 @@ def _judges_panel(run: PairwiseRun, data: dict[str, Any]) -> str:
             failed[vote.model] = failed.get(vote.model, 0) + vote.repetition_failures
     observed = bool(data.get('observed_swap'))
     show_consistency = bool(data.get('observed_consistency'))
-    heads = [
-        _th('Judge', 'Judge'),
-        _th(f'<span class="pw-side-a">{esc(run.label_a)}</span> rate', f'{run.label_a} rate'),
-        _th(f'<span class="pw-side-b">{esc(run.label_b)}</span> rate', f'{run.label_b} rate'),
-        _th('Tie rate', 'Tie rate'),
-        _th('Position bias ⓘ', 'Position bias', _BIAS_HEADER_TIP),
-        _th('Failed passes', 'Failed passes'),
+    columns: list[tuple[str, str, str | None]] = [
+        ('Judge', 'Judge', None),
+        (f'<span class="pw-side-a">{esc(run.label_a)}</span> rate', f'{run.label_a} rate', None),
+        (f'<span class="pw-side-b">{esc(run.label_b)}</span> rate', f'{run.label_b} rate', None),
+        ('Tie rate', 'Tie rate', None),
+        ('Position bias ⓘ', 'Position bias', _BIAS_HEADER_TIP),
+        ('Failed passes', 'Failed passes', None),
     ]
     if show_consistency:
-        heads.extend((
-            _th('Consistency (shrunk)', 'Consistency (shrunk)', _SHRUNK_TIP),
-            _th('Consistency (raw)', 'Consistency (raw)', _RAW_TIP),
+        columns.extend((
+            ('Consistency (shrunk)', 'Consistency (shrunk)', _SHRUNK_TIP),
+            ('Consistency (raw)', 'Consistency (raw)', _RAW_TIP),
         ))
-    labels = [
-        'Judge',
-        f'{run.label_a} rate',
-        f'{run.label_b} rate',
-        'Tie rate',
-        'Position bias',
-        'Failed passes',
-        'Consistency (shrunk)',
-        'Consistency (raw)',
-    ]
+    heads = list(starmap(_th, columns))
     body: list[str] = []
     for r in rows:
         cells = [
@@ -327,7 +304,9 @@ def _judges_panel(run: PairwiseRun, data: dict[str, Any]) -> str:
         if show_consistency:
             cells.extend((_consistency_cell(r.get('consistency')), _consistency_cell(r.get('consistency_raw'))))
         body.append(
-            '<tr>' + ''.join(f'<td data-label="{esc(labels[i])}">{c}</td>' for i, c in enumerate(cells)) + '</tr>'
+            '<tr>'
+            + ''.join(f'<td data-label="{esc(column[1])}">{c}</td>' for column, c in zip(columns, cells, strict=True))
+            + '</tr>'
         )
     table = f'<table><thead><tr>{"".join(heads)}</tr></thead><tbody>{"".join(body)}</tbody></table>'
     return panel('Judges', table + _judge_notes(data), sub=sub)
@@ -424,18 +403,19 @@ def pairwise_report_tabs(
     run: PairwiseRun,
     entries: list[PairwiseEntry] | None = None,
     *,
-    comparisons_html: str = '',
     hero_actions_html: str = '',
 ) -> str:
     """Render the pairwise report body as tabs.
 
     Pass ``entries`` to render a filtered subset: every number on the page is
     then computed over a copy of the run carrying only those entries.
-    ``comparisons_html`` is the Comparisons tab body.
+    The Comparisons tab lists the same entries.
     """
-    del rid  # Reserved for the interactive Comparisons tab, which builds its own URLs.
     view = run if entries is None else with_entries(run, entries)
-    comparisons = comparisons_html or (_EMPTY_FILTERED if entries is not None else _EMPTY_RUN)
+    if view.entries:
+        comparisons = render_pairwise_comparisons(rid, run, view.entries)
+    else:
+        comparisons = _EMPTY_FILTERED if entries is not None else _EMPTY_RUN
     tabs = _tabs(
         'pwtab',
         [

@@ -17,10 +17,11 @@ from starlette.responses import Response
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
+from evaluatorq.dashboard.pairwise_palette import pw_side_colour, pw_side_label
 from evaluatorq.dashboard.report_kit import panel
 from evaluatorq.dashboard.trace_links import single_trace_url, trace_link_button
 from evaluatorq.pairwise_reports.export_html import _classify_details
-from evaluatorq.pairwise_reports.sections import _classify_observations, judge_order, vote_label
+from evaluatorq.pairwise_reports.sections import _classify_observations, judge_order
 from evaluatorq.pairwise_reports.stats import comparison_flags
 
 if TYPE_CHECKING:
@@ -32,24 +33,6 @@ if TYPE_CHECKING:
 _PAGE_SIZE = 25
 _SORTS = ('index', 'winner')
 _WINNER_ORDER = {'A': 0, 'B': 1, 'tie': 2, 'inconclusive': 3}
-
-
-def _side_colour(value: str | None) -> str:
-    if value == 'A':
-        return 'var(--pw-a)'
-    if value == 'B':
-        return 'var(--pw-b)'
-    if value == 'tie':
-        return 'var(--pw-tie)'
-    return 'var(--pw-none)'
-
-
-def _side_label(value: str | None, run: PairwiseRun) -> str:
-    if value is None:
-        return 'abstain'
-    if value in ('tie', 'inconclusive'):
-        return value
-    return vote_label(value, run)
 
 
 def _short(model: str) -> str:
@@ -69,8 +52,8 @@ def _chips(entry: PairwiseEntry, run: PairwiseRun, judges: list[str]) -> str:
         value = vote.vote if vote else None
         cls = 'pw-vchip is-none' if value is None else 'pw-vchip'
         chips.append(
-            f'<span class="{cls}" style="--c:{_side_colour(value)}" title="{esc(judge)}">'
-            f'{esc(_short(judge))} → {esc(_side_label(value, run))}</span>'
+            f'<span class="{cls}" style="--c:{pw_side_colour(value)}" title="{esc(judge)}">'
+            f'{esc(_short(judge))} → {esc(pw_side_label(value, run))}</span>'
         )
     return ''.join(chips)
 
@@ -120,8 +103,8 @@ def _row(rid: str, run: PairwiseRun, judges: list[str], n: int, entry: PairwiseE
         '<summary class="pw-cmp-summary">'
         f'<span class="pw-cmp-n">{n}</span>'
         f'<span class="pw-cmp-q">{esc(entry.question)}</span>'
-        f'<span class="pw-cmp-win"><span class="pw-vchip" style="--c:{_side_colour(winner)}">'
-        f'{esc(_side_label(winner, run))}</span></span>'
+        f'<span class="pw-cmp-win"><span class="pw-vchip" style="--c:{pw_side_colour(winner)}">'
+        f'{esc(pw_side_label(winner, run))}</span></span>'
         f'<span class="pw-chiprow">{_chips(entry, run, judges)}</span>'
         f'<span class="pw-cmp-trace">{trace}</span>'
         '</summary>'
@@ -189,9 +172,9 @@ def _dot_strip(run: PairwiseRun, entries: list[PairwiseEntry]) -> str:
         n = position.get(id(entry), i + 1)
         winner = entry.comparison.winner
         split = ' is-split' if comparison_flags(entry, judges).split else ''
-        colour = _side_colour(winner)
+        colour = pw_side_colour(winner)
         dots.append(
-            f'<a class="pw-dot{split}" href="#cmp-{n}" title="#{n} · {esc(_side_label(winner, run))}"'
+            f'<a class="pw-dot{split}" href="#cmp-{n}" title="#{n} · {esc(pw_side_label(winner, run))}"'
             f' style="background:{colour};color:{colour}"></a>'
         )
     legend = (
@@ -217,7 +200,7 @@ def render_pairwise_comparisons(rid: str, run: PairwiseRun, entries: list[Pairwi
 
 def _vote_item(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> str:
     value = vote.vote if vote else None
-    head = f'{esc(_short(model))} → {esc(_side_label(value, run))}'
+    head = f'{esc(_short(model))} → {esc(pw_side_label(value, run))}'
     tags = ''
     body = ''
     if vote is None:
@@ -233,13 +216,13 @@ def _vote_item(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> str:
             order = 'original order' if o.ordering == 'ab' else 'swapped order'
             if multi:
                 order += f' · pass {o.repetition + 1}'
-            lines.append(f'<div><b>{order}</b> {esc(_side_label(o.verdict, run))} · {esc(o.explanation or "")}</div>')
+            lines.append(f'<div><b>{order}</b> {esc(pw_side_label(o.verdict, run))} · {esc(o.explanation or "")}</div>')
         if not lines and vote.explanation:
             lines.append(f'<div>{esc(vote.explanation)}</div>')
         body = f'<div class="pw-passes">{"".join(lines)}</div>' if lines else ''
         classify = _classify_details({'classify_observations': _classify_observations(vote, run)})
         body += classify
-    return f'<li class="pw-vote"><div class="pw-vote-head" style="color:{_side_colour(value)}">{head}{tags}</div>{body}</li>'
+    return f'<li class="pw-vote"><div class="pw-vote-head" style="color:{pw_side_colour(value)}">{head}{tags}</div>{body}</li>'
 
 
 def render_pairwise_comparison_detail(run: PairwiseRun, idx: int) -> str:

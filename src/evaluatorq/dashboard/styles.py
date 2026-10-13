@@ -3767,12 +3767,10 @@ _PAIRWISE_REPORT_CSS = """
 """
 
 _PAIRWISE_COMPARISONS_CSS = """
-.pw-row-list { --pw-a: #7e22ce; --pw-b: #0092ab; --pw-tie: var(--amber-600); --pw-none: var(--text-faint); }
 .pw-report .pw-strip { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 4px; }
 .pw-report .pw-dot { width: 14px; height: 14px; border-radius: 3px; display: inline-block; box-sizing: border-box; }
 .pw-report .pw-dot.is-split { box-shadow: inset 0 0 0 2px var(--surface-card); outline: 2px solid currentColor; outline-offset: -2px; }
 .pw-report .pw-legend { font-size: 11px; color: var(--text-muted); display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
-.pw-report .pw-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
 .pw-report .pw-cmp-table { width: 100%; border-collapse: collapse; }
 .pw-report .pw-cmp-table thead th { text-align: left; font-size: 11px; color: var(--text-muted); font-weight: 600; padding: 6px 8px; }
 .pw-report .pw-cmp-group > tr > td { padding: 0; border-top: 1px solid var(--border-subtle); }

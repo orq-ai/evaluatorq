@@ -108,6 +108,7 @@ Because classify verdicts are deterministic, `repetitions > 1` warns. Swapping s
 ```python
 comparison.winner        # "A" | "B" | "tie" | "inconclusive"
 comparison.token_usage   # summed across both orderings and any replacements
+comparison.trace_id      # 32-char hex OTel trace id of the judging span; None when tracing is off
 
 for vote in comparison.votes:
     vote.model        # judge model ID
@@ -239,6 +240,8 @@ eq dashboard
 ```
 
 With no path, this scans all three default stores: `.evaluatorq/runs` (red team), `.evaluatorq/sim-runs` (simulation), and `.evaluatorq/pairwise-runs` (pairwise). Open the local URL printed by the command.
+
+The dashboard opens a pairwise run on a verdict (clear winner, too close to call, or no decided comparisons) with a 95% range and a table of signals for how far to trust it. It adds a per-judge table, a filterable list of every comparison, and a page that compares two runs. When tracing is on, each comparison records the `trace_id` of its judging span, and its row links to that trace in Orq. See [Pairwise comparison view](dashboard.md#pairwise-comparison-view).
 
 `label_a` and `label_b` name the two systems being compared. They default to `"A"` and `"B"`, but nothing in the judging data records what was in each slot, so a reader of the dashboard cannot tell what "A won" means. Set them.
 
