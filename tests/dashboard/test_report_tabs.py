@@ -1004,6 +1004,9 @@ def test_rt_config_has_metagrid_and_jury(rt_report_multi):
     assert 'Run configuration' in html or 'rk-meta' in html
     assert 'Methodology' in html
     assert 'JURY RELIABILITY' in html  # deviation #12: jury block replaces mockup's JURY string
+    # RES-1649: jury_health renders alongside reliability, matching the md/html exports.
+    assert 'JURY HEALTH' in html
+    assert '1 judge-fail' in html
 
 
 _AGENT_INFO = {

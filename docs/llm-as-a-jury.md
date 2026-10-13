@@ -288,7 +288,7 @@ if health:
     print(health.samples_with_judge_failure, health.replacements_used, health.ties)
 ```
 
-The red-team report renders `jury_health` as a `Jury Health` line alongside `Jury Agreement`: a count of how many multi-judge samples had a judge fail, used a replacement, tied, went inconclusive, had a repetition fail to produce a verdict, or had a judge abstain. It is `None` for single-judge runs.
+The red-team report renders `jury_health` as a `Jury Health` line alongside `Jury Agreement`: a count of how many multi-judge samples had a judge fail, tied, went inconclusive, had a repetition fail to produce a verdict, or had a judge abstain, plus the total number of replacement judges invoked across those samples. The replacement figure counts judges, not samples, so it is reported as its own clause rather than folded into the sample counts. It is `None` for single-judge runs.
 
 ## Reliability, in short
 

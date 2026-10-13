@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from evaluatorq.redteam.contracts import Pipeline, RedTeamReport, ReportSummary
+from evaluatorq.redteam.contracts import JuryHealth, Pipeline, RedTeamReport, ReportSummary
 from evaluatorq.redteam.reports import export_html, export_markdown
 
 
-def _make_empty_report() -> RedTeamReport:
+def _make_empty_report(summary: ReportSummary | None = None) -> RedTeamReport:
     """Smallest valid RedTeamReport — no attacks run yet."""
     return RedTeamReport(
         created_at=datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc),
@@ -25,7 +25,7 @@ def _make_empty_report() -> RedTeamReport:
         tested_agents=["agent:test"],
         total_results=0,
         results=[],
-        summary=ReportSummary(),
+        summary=summary or ReportSummary(),
     )
 
 
@@ -47,6 +47,27 @@ def test_redteam_export_html_smoke():
     assert "<style>" in html
     # The %% bug regression: rendered CSS must not contain '%%'.
     assert "%%" not in html
+
+
+def test_redteam_export_markdown_renders_jury_health():
+    """md export surfaces jury_health as a Jury Health row (RES-1649)."""
+    report = _make_empty_report(
+        ReportSummary(jury_health=JuryHealth(samples=5, samples_with_judge_failure=2, ties=1, replacements_used=3))
+    )
+    md = export_markdown(report)
+    assert "Jury Health" in md
+    assert "2 judge-fail" in md
+    assert "3 replacement judge(s)" in md
+    assert "5 multi-judge samples" in md
+
+
+def test_redteam_export_html_renders_jury_health():
+    """html export surfaces jury_health as a KPI card (RES-1649)."""
+    report = _make_empty_report(ReportSummary(jury_health=JuryHealth(samples=4, inconclusive=1)))
+    html = export_html(report)
+    assert "Jury Health" in html
+    assert "1 inconclusive" in html
+    assert "4 multi-judge samples" in html
 
 
 def test_write_report_helpers_exit_on_oserror(tmp_path, monkeypatch):
