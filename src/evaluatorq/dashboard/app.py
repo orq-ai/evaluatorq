@@ -61,6 +61,7 @@ from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
 from evaluatorq.dashboard.orq_scope import OAuthScopes, discover_oauth_scopes
+from evaluatorq.dashboard.pairwise_compare import register_pairwise_compare_routes
 from evaluatorq.dashboard.pairwise_views import register_pairwise_view_routes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import CSRF_FIELD, request_rejected
@@ -1292,6 +1293,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: GET /compare/sim*  — side-by-side sim run comparison
     # ------------------------------------------------------------------
     register_sim_compare_routes(app, roots)
+    register_pairwise_compare_routes(app, roots)
 
     # ------------------------------------------------------------------
     # Routes: /find — classifier trace finder

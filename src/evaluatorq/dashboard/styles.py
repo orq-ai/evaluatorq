@@ -3807,6 +3807,22 @@ _PAIRWISE_COMPARISONS_CSS = """
 }
 """
 
+_PAIRWISE_COMPARE_CSS = """
+.pw-compare{--pw-a:#7e22ce;--pw-b:#0092ab;--pw-tie:var(--amber-600);--pw-none:var(--text-faint)}
+.pw-compare .pw-cmp-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.pw-compare .pw-cmp-cols>.rk-panel:first-child .rk-panel-title{color:var(--pw-a)}
+.pw-compare .pw-cmp-cols>.rk-panel:last-child .rk-panel-title{color:var(--pw-b)}
+.pw-compare .pw-cmp-verdict{font-weight:600;margin:0 0 8px}
+.pw-compare .pw-cmp-facts{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:0}
+.pw-compare .pw-cmp-facts dd{margin:0}
+.pw-compare .pw-cmp-table{width:100%;border-collapse:collapse}
+.pw-compare .pw-cmp-table th,.pw-compare .pw-cmp-table td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border,#e5e7eb);vertical-align:top}
+.pw-compare .pw-cmp-q{max-width:480px;overflow-wrap:anywhere}
+.pw-compare .pw-changed{color:var(--pw-tie);font-weight:600}
+.pw-compare .pw-empty{color:var(--pw-none);margin:0}
+@media (max-width:800px){.pw-compare .pw-cmp-cols{grid-template-columns:1fr}}
+"""
+
 DASHBOARD_CSS = (
     _DASHBOARD_CSS_HEAD
     + _TAB_RULES
@@ -3824,4 +3840,5 @@ DASHBOARD_CSS = (
     + _COMPRESSION_INSPECTOR_CSS
     + _PAIRWISE_REPORT_CSS
     + _PAIRWISE_COMPARISONS_CSS
+    + _PAIRWISE_COMPARE_CSS
 )
