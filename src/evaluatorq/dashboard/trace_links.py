@@ -84,7 +84,8 @@ def single_trace_url(trace_id: str | None, experiment_url: str | None = None) ->
     """
     if not trace_id:
         return None
-    return _traces_url(f'trace_id:is:{trace_id}', experiment_url)
+    base = _traces_base_url(experiment_url)
+    return f'{base}/(trace:{quote(trace_id, safe="")})' if base else None
 
 
 def trace_span_url(trace_id: str | None, span_id: str | None, experiment_url: str | None = None) -> str | None:
