@@ -367,10 +367,13 @@ _PAIRWISE_DIMS = ['winner', 'split', 'thrown_out', 'judge_failed', 'judge']
 def _pairwise_winner_labels(run: Any) -> list[tuple[str, str]]:
     """``(option label, winner key)`` pairs, in rail order.
 
-    Two sides with the same label would be indistinguishable in the rail, so
-    both fall back to the slot letters.
+    Any collision among the four option values (equal side labels, or a side
+    labelled ``tie`` / ``inconclusive``) would make chips indistinguishable, so
+    both sides fall back to the slot letters.
     """
-    label_a, label_b = (run.label_a, run.label_b) if run.label_a != run.label_b else ('A', 'B')
+    label_a, label_b = run.label_a, run.label_b
+    if len({label_a, label_b, 'tie', 'inconclusive'}) < 4:
+        label_a, label_b = 'A', 'B'
     return [(label_a, 'A'), (label_b, 'B'), ('tie', 'tie'), ('inconclusive', 'inconclusive')]
 
 

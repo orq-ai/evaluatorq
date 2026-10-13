@@ -185,3 +185,11 @@ def test_filter_route_without_selections_shows_all(client: tuple[TestClient, str
     r = c.post(f'/r/{rid}/filter', data={})
     assert r.status_code == 200
     assert 'Showing all comparisons' in r.text
+
+
+def test_side_label_colliding_with_an_outcome_falls_back_to_slot_letters() -> None:
+    r = new_run(run_name='collide', label_a='tie', label_b='B2', judges=JUDGES)
+    r.add(_comparison(['A', 'A', 'A'], 'A'), question='qa', response_a='a', response_b='b')
+    r.add(_comparison(['A', 'B', 'tie'], 'tie'), question='qt', response_a='a', response_b='b')
+    assert FILTERS['pairwise'].options(r)['winner'] == ['A', 'B', 'tie', 'inconclusive']
+    assert _questions(_apply(r, {'winner': ['tie']})) == ['qt']
