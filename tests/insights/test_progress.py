@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
+import pytest
 from evaluatorq.contracts import ManifestStatus
 from evaluatorq.insights.models import DimensionName, InsightsConfig, InsightsPopulation, InsightsRun, StageFailure
 from evaluatorq.insights.progress import run_manifest_for, stage_plan
@@ -98,3 +101,58 @@ def test_legacy_population_failure_never_reached_priority(minimal_run: InsightsR
     manifest = run_manifest_for(_legacy_run(minimal_run, dimensions=['intent'], failures=[failure]))
 
     assert _statuses(manifest) == {'population': 'error', 'write': 'completed'}
+
+
+@pytest.mark.parametrize('selection', [
+    {'facets': {'provider': ['openai']}},
+    {'numeric': {'tokens_min': 0}},
+    {'limit': 100},
+    {'window_days': 3},
+    {'start': '2026-10-01T00:00:00+00:00', 'end': '2026-10-04T00:00:00+00:00'},
+])
+def test_legacy_filter_selection_preserves_stage_names(
+    minimal_run: InsightsRun, selection: dict[str, object]
+) -> None:
+    run = _legacy_run(minimal_run, dimensions=[])
+    run.population = {'mode': 'filter', **selection}
+    manifest = run_manifest_for(run)
+    assert manifest.stage_labels['population'] == 'Filter recent traces'
+    assert manifest.stage_labels['label'] == 'Keep selected traces'
+
+
+def test_resolved_default_window_is_not_an_explicit_filter(minimal_run: InsightsRun) -> None:
+    run = _legacy_run(minimal_run, dimensions=[])
+    run.population = {
+        'mode': 'filter',
+        'facets': FacetSelection().model_dump(mode='json'),
+        'numeric': {},
+        'start': (run.created_at - timedelta(days=7)).isoformat(),
+        'end': run.created_at.isoformat(),
+        'limit': 500,
+    }
+    manifest = run_manifest_for(run)
+    assert manifest.stage_labels['population'] == 'Load recent traces'
+    assert manifest.stage_labels['label'] == 'Prepare traces'
+
+
+@pytest.mark.parametrize('scanned, expected', [
+    (0, {'population': 'completed', 'priority': 'completed', 'write': 'completed'}),
+    (4, {'population': 'completed', 'label': 'completed', 'priority': 'completed', 'write': 'completed'}),
+])
+def test_legacy_empty_query_preserves_only_stages_that_ran(
+    minimal_run: InsightsRun, scanned: int, expected: dict[str, str]
+) -> None:
+    run = _legacy_run(minimal_run, dimensions=['intent'])
+    run.population = {'mode': 'query', 'n_scanned': scanned}
+    run.traces = []
+    assert _statuses(run_manifest_for(run)) == expected
+
+
+def test_legacy_setup_failure_does_not_complete_analysis(minimal_run: InsightsRun) -> None:
+    run = _legacy_run(minimal_run, dimensions=['intent'], failures=[StageFailure(stage='setup', message='client failed')])
+    assert _statuses(run_manifest_for(run)) == {'write': 'completed'}
+
+
+def test_legacy_stage_duration_is_unknown(minimal_run: InsightsRun) -> None:
+    manifest = run_manifest_for(_legacy_run(minimal_run, dimensions=['intent']))
+    assert all(record.duration_seconds is None for record in manifest.stages)

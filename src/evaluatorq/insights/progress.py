@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest, StageRecord
@@ -15,6 +15,25 @@ if TYPE_CHECKING:
     from evaluatorq.insights.models import DimensionName, InsightsPopulation, InsightsRun, LabelSpec
 
 _HALTING_STAGES = frozenset({'population', 'label', 'summary'})
+
+
+def _selection_labels(mode: str | None, *, has_filters: bool, has_labels: bool) -> tuple[str | None, str]:
+    source = {
+        'snapshot': 'Load local traces',
+        'export': 'Load Finder matches',
+        'query': 'Find matching traces',
+        'filter': 'Filter recent traces' if has_filters else 'Load recent traces',
+    }.get(mode)
+    classify = (
+        ('Match and classify traces' if has_labels else 'Match traces')
+        if mode == 'query'
+        else 'Classify traces'
+        if has_labels
+        else 'Keep selected traces'
+        if has_filters
+        else 'Prepare traces'
+    )
+    return source, classify
 
 
 def stage_plan(
@@ -34,28 +53,18 @@ def stage_plan(
         or population.window_days != 7
         or population.limit != 500
     )
-    source = (
-        'Load local traces'
+    mode = (
+        'snapshot'
         if population.snapshot_path is not None
-        else 'Load Finder matches'
+        else 'export'
         if population.finder_export is not None
-        else 'Find matching traces'
+        else 'query'
         if population.query is not None
-        else 'Filter recent traces'
-        if has_filters
-        else 'Load recent traces'
+        else 'filter'
     )
-    classify = (
-        'Match and classify traces'
-        if population.query is not None and has_labels
-        else 'Match traces'
-        if population.query is not None
-        else 'Classify traces'
-        if has_labels
-        else 'Keep selected traces'
-        if has_filters
-        else 'Prepare traces'
-    )
+    source, classify = _selection_labels(mode, has_filters=has_filters, has_labels=has_labels)
+    if source is None:
+        raise ValueError(f'Unknown Insights population mode: {mode}')
     plan = [('population', source), ('label', classify), ('summary', 'Summarize traces')]
     plan.extend((f'dimension:{name}', f'Cluster and map {name}') for name in dimensions)
     priority_ready = priority_dimension in dimensions and any(spec.name == 'customer_satisfaction' for spec in labels)
@@ -66,18 +75,22 @@ def stage_plan(
     return plan
 
 
-def stage_history_for_save(manifest: RunManifest, *, failed: bool) -> InsightsStageHistory:
-    """Snapshot the live *manifest* for the run file, closing stages that are still open.
+def stage_history_for_save(manifest: RunManifest, *, failed_stage: str | None) -> InsightsStageHistory:
+    """Snapshot the live manifest, closing open stages without hiding a write failure.
 
-    The save itself is the ``write`` stage, so an open ``write`` record is completed; any other open
-    record belongs to a stage the run died in and is closed as errored (or completed on a clean run).
+    An open write is completed when saving the run unless write itself failed. Other open stages
+    are errored when the run failed.
     """
     now = datetime.now(tz=timezone.utc)
     stages = [stage.model_copy(deep=True) for stage in manifest.stages]
     for stage in stages:
         if stage.ended_at is not None:
             continue
-        stage.status = ManifestStatus.ERROR if failed and stage.name != 'write' else ManifestStatus.COMPLETED
+        stage.status = (
+            ManifestStatus.ERROR
+            if failed_stage is not None and (stage.name != 'write' or failed_stage == 'write')
+            else ManifestStatus.COMPLETED
+        )
         stage.ended_at = now
     return InsightsStageHistory(
         planned_stages=list(manifest.planned_stages),
@@ -92,22 +105,18 @@ def _rebuilt_labels(run: InsightsRun) -> dict[str, str]:
     dimensions = config.dimensions
     has_labels = bool(config.labels or config.coding_labels or config.coding_analysis) or 'sentiment' in dimensions
     mode = run.population.get('mode')
-    source = (
-        {
-            'snapshot': 'Load local traces',
-            'export': 'Load Finder matches',
-            'query': 'Find matching traces',
-            'filter': 'Load recent traces',
-        }.get(mode)
-        if isinstance(mode, str)
-        else None
+    has_filters = (
+        FacetSelection.model_validate(run.population.get('facets') or {}) != FacetSelection()
+        or NumericFilters.model_validate(run.population.get('numeric') or {}) != NumericFilters()
+        or run.population.get('window_days', 7) != 7
+        or run.population.get('limit', 500) != 500
     )
-    classify = (
-        ('Match and classify traces' if has_labels else 'Match traces')
-        if mode == 'query'
-        else 'Classify traces'
-        if has_labels
-        else 'Prepare traces'
+    start, end = run.population.get('start'), run.population.get('end')
+    # Resolved dates exist even for default runs; only a non-default span proves a selection.
+    if isinstance(start, str) and isinstance(end, str):
+        has_filters |= datetime.fromisoformat(end) - datetime.fromisoformat(start) != timedelta(days=7)
+    source, classify = _selection_labels(
+        mode if isinstance(mode, str) else None, has_filters=has_filters, has_labels=has_labels
     )
     priority_ready = config.priority_dimension in dimensions and any(
         spec.name == 'customer_satisfaction' for spec in config.labels
@@ -144,18 +153,30 @@ def run_manifest_for(run: InsightsRun) -> RunManifest:
         # A failed dimension never stops the pipeline; a failed population, label or summary stage
         # stops the analysis stages after it, while priority and write still run.
         halting = [index for index, name in enumerate(planned) if name in failures and name in _HALTING_STAGES]
-        first_halt = min(halting) if halting else None
+        first_halt = -1 if 'setup' in failures else min(halting) if halting else None
         stages = []
         for index, name in enumerate(planned):
             if name in failures:
                 status = ManifestStatus.ERROR
+            elif not run.traces and (
+                name == 'summary'
+                or name.startswith('dimension:')
+                or (
+                    name == 'label'
+                    and not (run.population.get('mode') == 'query' and run.population.get('n_scanned', 0) > 0)
+                )
+            ):
+                continue
             elif (
-                name == 'write' or (name == 'priority' and first_halt != 0) or first_halt is None or index < first_halt
+                name == 'write'
+                or (name == 'priority' and first_halt not in (-1, 0))
+                or first_halt is None
+                or index < first_halt
             ):
                 status = ManifestStatus.COMPLETED
             else:
                 continue
-            stages.append(StageRecord(name=name, status=status, started_at=run.created_at, ended_at=run.created_at))
+            stages.append(StageRecord(name=name, status=status, started_at=run.created_at))
     last_failure = run.stage_failures[-1] if failed and run.stage_failures else None
     return RunManifest(
         run_id=run.run_id,

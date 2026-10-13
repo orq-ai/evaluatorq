@@ -585,6 +585,11 @@ async def test_saved_callback_that_raises_is_attempted_only_once(
     manifests = list_manifests(tmp_path)
     assert len(manifests) == 1
     assert manifests[0].status.value == 'error'
+    saved_runs = [InsightsRun.model_validate_json(path.read_text()) for path in tmp_path.glob('insights_*.json')]
+    saved = next(saved_run for saved_run in saved_runs if saved_run.status == 'error')
+    assert saved.stage_history is not None
+    write = next(record for record in saved.stage_history.stages if record.name == 'write')
+    assert write.status.value == 'error'
 
 
 @pytest.mark.asyncio
