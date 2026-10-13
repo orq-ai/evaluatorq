@@ -49,7 +49,7 @@ from evaluatorq.insights.presets import (
     SENTIMENT,
 )
 from evaluatorq.insights.priority import priority_points
-from evaluatorq.insights.progress import stage_plan
+from evaluatorq.insights.progress import stage_history_for_save, stage_plan
 from evaluatorq.insights.store import get_insights_runs_dir, save_run
 from evaluatorq.insights.summarize import summarize_traces
 from evaluatorq.insights.transcript import tool_stats
@@ -810,6 +810,9 @@ async def insights(  # noqa: C901
         _stage_end(writer, 'priority')
         _stage(writer, 'write')
         run.cost_by_stage = ledger.totals()
+        run.stage_history = stage_history_for_save(
+            writer.manifest, failed_stage=run.stage_failures[-1].stage if run.status == 'error' else None
+        )
         run_path = save_run(run, directory)
         notify_saved(run_path)
         _stage_end(writer, 'write')
@@ -845,6 +848,9 @@ async def insights(  # noqa: C901
             try:
                 run.counts = run.counts or {'n_traces': len(run.traces), 'n_failed_traces': 0, 'per_stage_failed': 0}
                 run.cost_by_stage = ledger.totals()
+                run.stage_history = stage_history_for_save(
+                    writer.manifest, failed_stage=run.stage_failures[-1].stage if run.status == 'error' else None
+                )
                 report = save_run(run, directory)
                 notify_saved(report)
                 if run.status == 'error':
