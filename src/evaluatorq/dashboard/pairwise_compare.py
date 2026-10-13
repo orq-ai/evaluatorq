@@ -10,12 +10,10 @@ status codes mirror ``/compare/sim``.
 
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects at runtime
 from starlette.responses import Response
 
@@ -23,6 +21,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.html_helpers import kpi_cards, pct
 from evaluatorq.dashboard.report_kit import panel
 from evaluatorq.dashboard.shell import page
+from evaluatorq.dashboard.sim_compare import resolve_run
 from evaluatorq.dashboard.view import report_back_link
 from evaluatorq.pairwise_reports.stats import fleiss_kappa, kappa_label, verdict
 
@@ -44,7 +43,7 @@ class PairwiseMatching:
     matched: list[tuple[int, int]]
     a_only: list[int]
     b_only: list[int]
-    total: int = 0
+    total: int
 
     @property
     def match_rate(self) -> float:
@@ -115,7 +114,7 @@ def _run_panel(side: str, run: PairwiseRun) -> str:
         f'<dt>Judge agreement (κ)</dt><dd>{kappa_txt}</dd>'
         '</dl>'
     )
-    return panel(f'{side} · {run.run_name}', body, sub=f'{esc(run.label_a)} vs {esc(run.label_b)}')
+    return panel(f'{side} · {run.run_name}', body, sub=f'{run.label_a} vs {run.label_b}')
 
 
 def _link(rid: str, n: int) -> str:
@@ -195,31 +194,6 @@ def pairwise_run_compare_control(rid: str, choices: list[tuple[str, str]]) -> st
 # ---------------------------------------------------------------------------
 
 
-def _resolve_run(rid: str, roots: list[Path] | None) -> tuple[str, Any | None]:
-    """Load a pairwise run: ``('ok', run)``, ``('missing', None)`` or ``('error', None)``."""
-    from evaluatorq.dashboard import library
-    from evaluatorq.dashboard.surfaces import ADAPTERS
-
-    path = library.resolve(rid, roots)
-    if path is None:
-        return 'missing', None
-    try:
-        surface, _raw = library.load_surface_strict(path)
-    except (json.JSONDecodeError, OSError):
-        logger.opt(exception=True).warning('compare: corrupt/unreadable pairwise report {}', rid)
-        return 'error', None
-    if surface != 'pairwise':
-        return 'missing', None
-    adapter = ADAPTERS.get('pairwise')
-    if adapter is None:
-        return 'missing', None
-    try:
-        return 'ok', adapter.load(path)
-    except Exception:  # noqa: BLE001 — any loader failure is a 422, logged with stack
-        logger.opt(exception=True).warning('compare: failed to load pairwise report {}', rid)
-        return 'error', None
-
-
 def _error_page(message: str, status: int) -> Response:
     body = (
         '<header class="report-hero"><h2 class="report-hero-title">Run comparison</h2></header>'
@@ -244,8 +218,8 @@ def register_pairwise_compare_routes(app: Any, roots: list[Path] | None = None) 
         if rid_a == rid_b:
             return _error_page('Pick two different runs to compare.', 400)
 
-        status_a, run_a = _resolve_run(rid_a, roots)
-        status_b, run_b = _resolve_run(rid_b, roots)
+        status_a, run_a = resolve_run(rid_a, roots, 'pairwise')
+        status_b, run_b = resolve_run(rid_b, roots, 'pairwise')
         if 'error' in (status_a, status_b):
             which = 'A' if status_a == 'error' else 'B'
             return _error_page(f'Run {which} could not be loaded (the report may be corrupt).', 422)

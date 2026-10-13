@@ -523,8 +523,8 @@ def render_compare_page(rid_a: str, rid_b: str, run_a: SimulationRun, run_b: Sim
 # ---------------------------------------------------------------------------
 
 
-def _resolve_run(rid: str, roots: list[Path] | None) -> tuple[str, Any | None]:
-    """Load a sim run by report id.
+def resolve_run(rid: str, roots: list[Path] | None, surface: str) -> tuple[str, Any | None]:
+    """Load a run of the given *surface* ('sim' or 'pairwise') by report id.
 
     Returns ``('ok', run)``, ``('missing', None)`` when the id resolves to no
     file or a valid-but-non-sim report, or ``('error', None)`` when a matching
@@ -543,19 +543,19 @@ def _resolve_run(rid: str, roots: list[Path] | None) -> tuple[str, Any | None]:
     # Strict read: a corrupt/unreadable file must surface as an error, not be masked
     # as an unknown surface (which load_surface does for lenient directory scans).
     try:
-        surface, _raw = library.load_surface_strict(path)
+        found, _raw = library.load_surface_strict(path)
     except (json.JSONDecodeError, OSError):
-        logger.opt(exception=True).warning('compare: corrupt/unreadable sim report {}', rid)
+        logger.opt(exception=True).warning('compare: corrupt/unreadable {} report {}', surface, rid)
         return 'error', None
-    if surface != 'sim':
+    if found != surface:
         return 'missing', None
-    adapter = ADAPTERS.get('sim')
+    adapter = ADAPTERS.get(surface)
     if adapter is None:
         return 'missing', None
     try:
         return 'ok', adapter.load(path)
     except Exception:
-        logger.opt(exception=True).warning('compare: failed to load sim report {}', rid)
+        logger.opt(exception=True).warning('compare: failed to load {} report {}', surface, rid)
         return 'error', None
 
 
@@ -588,8 +588,8 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
         if rid_a == rid_b:
             return _error_page('Pick two different runs to compare.', 400)
 
-        status_a, run_a = _resolve_run(rid_a, roots)
-        status_b, run_b = _resolve_run(rid_b, roots)
+        status_a, run_a = resolve_run(rid_a, roots, 'sim')
+        status_b, run_b = resolve_run(rid_b, roots, 'sim')
         if 'error' in (status_a, status_b):
             which = 'A' if status_a == 'error' else 'B'
             return _error_page(f'Run {which} could not be loaded (the report may be corrupt).', 422)
@@ -614,8 +614,8 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
                 '<p class="sim-empty">Invalid conversation index.</p>', status_code=400, media_type='text/html'
             )
 
-        status_a, run_a = _resolve_run(rid_a, roots)
-        status_b, run_b = _resolve_run(rid_b, roots)
+        status_a, run_a = resolve_run(rid_a, roots, 'sim')
+        status_b, run_b = resolve_run(rid_b, roots, 'sim')
         if 'error' in (status_a, status_b):
             return Response(
                 '<p class="sim-empty">A run could not be loaded (report may be corrupt).</p>',

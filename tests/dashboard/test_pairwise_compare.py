@@ -64,11 +64,13 @@ def test_changed_winner_is_tagged_by_side_label() -> None:
 
 
 def test_user_strings_are_escaped() -> None:
-    a = _run('<b>x</b>', [('<script>q</script>', 'A')])
+    a = _run('<b>x</b>', [('<script>q</script>', 'A')], a='a&b <i>')
     b = _run('y', [('<script>q</script>', 'A')])
     html = render_pairwise_compare_page('ra', 'rb', a, b)
     assert '<script>' not in html
     assert '&lt;script&gt;' in html
+    assert 'a&amp;b &lt;i&gt;' in html
+    assert '&amp;amp;' not in html
 
 
 @pytest.fixture
