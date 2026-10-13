@@ -1,16 +1,16 @@
 """Tabbed pairwise report for the dashboard.
 
-Overview, Judges, Comparisons and Config, in the same CSS-only tab group the
+Overview, Performance, Judges, Comparisons and Config, in the same CSS-only tab group the
 simulation and red-team reports use. The standalone export
 (``pairwise_reports.export_html``) is a separate, flat rendering of the same
-run and is deliberately left alone; this module reads the numbers from
+run and is deliberately left alone; this module reads metrics from
 ``pairwise_reports.stats`` and the judge section data from
-``pairwise_reports.sections``, so the page and the export cannot disagree about
-what a judge did.
+``pairwise_reports.sections``.
 """
 
 from __future__ import annotations
 
+import math
 from importlib.metadata import PackageNotFoundError, version
 from itertools import starmap
 from typing import TYPE_CHECKING, Any
@@ -28,7 +28,7 @@ from evaluatorq.pairwise_reports.sections import (
     judge_order,
     observed_swap,
 )
-from evaluatorq.pairwise_reports.stats import judge_usage, trust_signals, verdict
+from evaluatorq.pairwise_reports.stats import generation_metrics, judge_usage, trust_signals, verdict
 
 if TYPE_CHECKING:
     from evaluatorq.pairwise_reports.stats import TrustSignal, Verdict
@@ -174,20 +174,12 @@ def _verdict_card(run: PairwiseRun, v: Verdict) -> str:
 
 
 def _kpis(run: PairwiseRun, v: Verdict) -> str:
-    usage = judge_usage(run)
     inconclusive_status = 'warn' if v.total and v.inconclusive / v.total > INCONCLUSIVE_WARN else 'neutral'
-    if usage.with_usage == 0:
-        spend = {'label': 'Judge cost', 'value': 'not recorded', 'status': 'neutral'}
-    elif usage.cost is not None:
-        spend = {'label': 'Judge cost', 'value': f'${usage.cost:.2f}', 'status': 'neutral'}
-    else:
-        spend = {'label': 'Judge tokens', 'value': f'{usage.total_tokens:,}', 'status': 'neutral'}
     return kpi_cards([
         {'label': 'Comparisons', 'value': str(v.total), 'status': 'neutral'},
         {'label': 'Decided', 'value': str(v.decided), 'status': 'neutral'},
         {'label': 'Ties', 'value': str(v.ties), 'status': 'neutral'},
         {'label': 'Inconclusive', 'value': str(v.inconclusive), 'status': inconclusive_status},
-        spend,
     ])
 
 
@@ -215,29 +207,93 @@ def _trust_row(signal: TrustSignal) -> str:
     return f'<tr><td>{esc(signal.label)}</td><td{cls}><b>{esc(signal.value)}</b> {esc(signal.detail)}</td></tr>'
 
 
-def _tokens_panel(run: PairwiseRun) -> str:
-    usage = judge_usage(run)
-    if usage.with_usage == 0:
-        return ''
-    average = usage.total_tokens / usage.with_usage
-    n = len(run.entries)
-    if usage.with_usage < n:
-        sub = f'{usage.total_tokens:,} total · {average:,.0f} per comparison with usage ({usage.with_usage} of {n})'
-    else:
-        sub = f'{usage.total_tokens:,} total · {average:,.0f}/comparison'
-    if usage.cost is not None:
-        sub += f' · ${usage.cost:.2f}'
+def _cost_text(value: float | None, *, partial: bool, recorded: int, total: int) -> str:
+    if value is None:
+        return 'Not recorded'
+    formatted = f'${value:.6f}'
+    if value > 0 and formatted == '$0.000000':
+        formatted = f'${value:.6g}'
+    return f'{formatted} recorded subtotal ({recorded} of {total})' if partial else formatted
+
+
+def _generation_panel(run: PairwiseRun) -> str:
+    stats = generation_metrics(run)
+    a_cost = _cost_text(
+        stats.a_cost, partial=stats.a_cost_partial, recorded=stats.a_cost_recorded, total=len(run.entries)
+    )
+    b_cost = _cost_text(
+        stats.b_cost, partial=stats.b_cost_partial, recorded=stats.b_cost_recorded, total=len(run.entries)
+    )
+    a_latency = (
+        f'{stats.a_latency_ms / stats.a_latency_recorded:.2f} ms mean ({stats.a_latency_recorded} measured)'
+        if stats.a_latency_ms is not None and stats.a_latency_recorded
+        else 'Not recorded'
+    )
+    b_latency = (
+        f'{stats.b_latency_ms / stats.b_latency_recorded:.2f} ms mean ({stats.b_latency_recorded} measured)'
+        if stats.b_latency_ms is not None and stats.b_latency_recorded
+        else 'Not recorded'
+    )
+    table = (
+        '<div class="pw-performance-table-wrap"><table class="pw-performance-table"><thead><tr>'
+        f'<th>Metric</th><th class="pw-side-a">{esc(run.label_a)}</th><th class="pw-side-b">{esc(run.label_b)}</th>'
+        '</tr></thead><tbody>'
+        f'<tr><th scope="row">Generation cost</th><td>{esc(a_cost)}</td><td>{esc(b_cost)}</td></tr>'
+        f'<tr><th scope="row">Generation latency</th><td>{esc(a_latency)}</td><td>{esc(b_latency)}</td></tr>'
+        '</tbody></table></div>'
+    )
+    total = len(run.entries)
+    note = (
+        f'<p class="pw-note">Fully priced A/B pairs: {stats.paired_cost_entries} of {total}. '
+        f'Paired generation latencies: {stats.paired_latency_entries} of {total}.</p>'
+    )
+    if stats.paired_cost_entries < max(stats.a_cost_recorded, stats.b_cost_recorded):
+        note += '<p class="pw-note">Generation costs are not like-for-like: pricing is incomplete or the measured comparisons differ.</p>'
+    if stats.paired_latency_entries < max(stats.a_latency_recorded, stats.b_latency_recorded):
+        note += '<p class="pw-note">Generation latencies are not like-for-like: the measured comparisons differ.</p>'
     return panel(
-        'Judge tokens',
-        bar_rows(
+        'Response generation',
+        table + note,
+        info='Cost uses recorded response usage; partial pricing and missing comparisons are shown as recorded subtotals. Latency is mean response-generation time, not judging time.',
+    )
+
+
+def _performance(run: PairwiseRun, *, filtered_empty: bool = False) -> str:
+    if filtered_empty:
+        return _EMPTY_FILTERED
+    if not run.entries:
+        return _EMPTY_RUN
+    usage = judge_usage(run)
+    cost = _cost_text(usage.cost, partial=usage.cost_partial, recorded=usage.cost_recorded, total=len(run.entries))
+    judge_latency = [e.comparison.judge_latency_ms for e in run.entries if e.comparison.judge_latency_ms is not None]
+    latency = (
+        f'{math.fsum(judge_latency) / len(judge_latency):.2f} ms mean ({len(judge_latency)} measured)'
+        if judge_latency
+        else 'Not recorded'
+    )
+    if usage.with_usage:
+        average = usage.total_tokens / usage.with_usage
+        sub = f'{usage.total_tokens:,} total · {average:,.0f} per comparison with usage ({usage.with_usage} of {len(run.entries)})'
+        tokens = bar_rows(
             [('Input', usage.input_tokens), ('Output', usage.output_tokens)],
             width=520,
             label_w=70,
             color='var(--chart-2)',
             fmt=lambda value: f'{int(value):,}',
-        ),
-        sub=sub,
-        info='Answer-generation tokens are not stored on a pairwise run, so only the judges are counted.',
+        )
+        judge_usage_panel = panel('Judge tokens', tokens, sub=sub)
+    else:
+        judge_usage_panel = panel('Judge tokens', '<p class="pw-note">Not recorded</p>')
+    judge_cost_panel = panel('Judging cost', f'<p class="pw-performance-value">{esc(cost)}</p>')
+    judge_latency_panel = panel(
+        'Judging latency',
+        f'<p class="pw-performance-value">{esc(latency)}</p>',
+        info='Mean end-to-end judging wall time per comparison, including swapped and replacement judgements; not run elapsed time.',
+    )
+    return (
+        _generation_panel(run)
+        + f'<div class="pw-grid-2 pw-performance-overhead">{judge_cost_panel}{judge_latency_panel}</div>'
+        + judge_usage_panel
     )
 
 
@@ -249,7 +305,6 @@ def _overview(run: PairwiseRun, *, filtered_empty: bool = False) -> str:
         _verdict_card(run, v)
         + _kpis(run, v)
         + f'<div class="pw-grid-2">{_outcomes_panel(run, v)}{_trust_panel(run)}</div>'
-        + _tokens_panel(run)
     )
 
 
@@ -448,6 +503,7 @@ def pairwise_report_tabs(
         'pwtab',
         [
             ('Overview', _overview(view, filtered_empty=filtered_empty)),
+            ('Performance', _performance(view, filtered_empty=filtered_empty)),
             ('Judges', _judges(view, filtered_empty=filtered_empty)),
             ('Comparisons', comparisons, f'Comparisons <span class="tab-count">{len(view.entries)}</span>'),
             ('Config', _config(view)),

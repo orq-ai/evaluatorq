@@ -3775,6 +3775,13 @@ _PAIRWISE_REPORT_CSS = """
 @media (max-width: 760px) {
   .pw-report .pw-grid-2, .pw-report .pw-verdict-sides { grid-template-columns: minmax(0, 1fr); }
 }
+.pw-report .pw-performance-table-wrap { overflow-x: auto; }
+.pw-report .pw-performance-overhead > .rk-panel { margin: 0; }
+.pw-report .pw-performance-table { width: 100%; border-collapse: collapse; }
+.pw-report .pw-performance-table th, .pw-report .pw-performance-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); overflow-wrap: anywhere; }
+.pw-report .pw-performance-table th:first-child { color: var(--text-muted); }
+.pw-report .pw-performance-table td { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.pw-report .pw-performance-value { margin: 0; color: var(--text-strong); font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 """
 
 _PAIRWISE_COMPARISONS_CSS = """

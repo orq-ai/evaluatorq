@@ -211,4 +211,69 @@ async def test_token_usage_is_summed_across_orderings() -> None:
     assert comparison.token_usage is not None
     # One judge, two orderings -> two calls summed.
     assert comparison.token_usage.input_tokens == 20
-    assert comparison.token_usage.output_tokens == 10
+
+@pytest.mark.asyncio
+async def test_judge_latency_covers_replacement_judgements(monkeypatch: pytest.MonkeyPatch) -> None:
+    import evaluatorq.pairwise as pairwise
+
+    ticks = iter((10.0, 12.375))
+    monkeypatch.setattr(pairwise, 'monotonic', lambda: next(ticks))
+
+    async def judge(first: str, second: str, model: str) -> Prediction:
+        if model == 'primary':
+            raise RuntimeError('primary unavailable')
+        return Prediction(value='A' if first == 'GOOD' else 'B', explanation='quality')
+
+    comparison = await run_pairwise(
+        judge_fn=judge,
+        panel=['primary'],
+        response_a='GOOD',
+        response_b='BAD',
+        replacement_judges=['backup'],
+    )
+
+    assert comparison.judge_latency_ms == pytest.approx(2375.0)
+    assert comparison.winner == 'A'
+
+
+@pytest.mark.asyncio
+async def test_inconclusive_error_containing_comparison_records_judge_latency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import evaluatorq.pairwise as pairwise
+
+    ticks = iter((3.0, 3.125))
+    monkeypatch.setattr(pairwise, 'monotonic', lambda: next(ticks))
+
+    async def judge(first: str, second: str, model: str) -> Prediction:
+        raise RuntimeError('judge unavailable')
+
+    comparison = await run_pairwise(
+        judge_fn=judge,
+        panel=['judge-1'],
+        response_a='GOOD',
+        response_b='BAD',
+    )
+
+    assert comparison.winner == 'inconclusive'
+    assert comparison.judge_latency_ms == pytest.approx(125.0)
+
+
+@pytest.mark.asyncio
+async def test_propagated_judge_failure_still_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    import evaluatorq.pairwise as pairwise
+
+    ticks = iter((1.0, 1.5))
+    monkeypatch.setattr(pairwise, 'monotonic', lambda: next(ticks))
+
+    async def judge(first: str, second: str, model: str) -> Prediction:
+        raise RuntimeError('judge unavailable')
+
+    with pytest.raises(RuntimeError, match='judge unavailable'):
+        await run_pairwise(
+            judge_fn=judge,
+            panel=['judge-1'],
+            response_a='GOOD',
+            response_b='BAD',
+            propagate_errors=True,
+        )

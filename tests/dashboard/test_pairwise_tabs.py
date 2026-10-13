@@ -51,10 +51,22 @@ def _kpis(html: str) -> dict[str, str]:
     }
 
 
-def test_the_four_tabs_render_in_order(run: PairwiseRun) -> None:
+def test_performance_preserves_tiny_costs_and_zero_latency() -> None:
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run(['A'])
+    run.entries[0].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.000001), latency_ms=0)
+    run.entries[0].metrics_b = PairwiseResponseMetrics(usage=Usage(total_cost=0), latency_ms=0)
+    run.entries[0].comparison.judge_latency_ms = 0
     html = pairwise_report_tabs('rid', run)
-    assert re.findall(r'<input class="tab-radio"[^>]*id="(pwtab-\d)"', html) == [f'pwtab-{i}' for i in range(4)]
-    assert html.count('<section class="tab-panel">') == 4
+    assert '$0.000001' in html and '$0.000000' in html
+    assert '0.00 ms mean (1 measured)' in html
+
+
+def test_performance_filtered_empty_is_explicit() -> None:
+    html = pairwise_report_tabs('rid', _run(['A']), entries=[])
+    assert html.count('No comparisons match the current filter.') >= 1
+
 
 
 @pytest.mark.parametrize(
@@ -80,10 +92,10 @@ def test_trust_table_lists_the_six_signals(run: PairwiseRun) -> None:
     ]
 
 
-def test_kpi_tiles_show_the_counts(run: PairwiseRun) -> None:
+def test_kpi_tiles_show_quality_counts_without_judge_spend(run: PairwiseRun) -> None:
     kpis = _kpis(pairwise_report_tabs('rid', run))
     assert (kpis['Comparisons'], kpis['Decided'], kpis['Ties'], kpis['Inconclusive']) == ('4', '2', '1', '1')
-    assert kpis['Judge cost'] == 'not recorded'
+    assert 'Judge cost' not in kpis and 'Judge tokens' not in kpis
 
 
 def test_entries_narrow_every_number(run: PairwiseRun) -> None:
@@ -101,8 +113,8 @@ def test_with_entries_recomputes_the_rollup(run: PairwiseRun) -> None:
     assert len(run.entries) == 4
 
 
-def test_judge_tokens_panel_is_absent_without_usage(run: PairwiseRun) -> None:
-    assert 'Judge tokens' not in pairwise_report_tabs('rid', run)
+def test_judge_tokens_panel_is_present_with_explicit_unknown_usage(run: PairwiseRun) -> None:
+    assert 'Judge tokens' in pairwise_report_tabs('rid', run)
 
 
 def test_judge_tokens_panel_sums_recorded_usage() -> None:
@@ -110,13 +122,33 @@ def test_judge_tokens_panel_sums_recorded_usage() -> None:
     html = pairwise_report_tabs('rid', _run(['A', 'B'], usage=usage))
     assert 'Judge tokens' in html
     assert '2,400 total' in html
-    assert _kpis(html)['Judge tokens'] == '2,400'
+    assert 'Judge tokens' not in _kpis(html)
 
 
 def test_priced_usage_shows_the_cost() -> None:
     usage = Usage(input_tokens=1000, output_tokens=200, total_tokens=1200, total_cost=0.25)
     html = pairwise_report_tabs('rid', _run(['A', 'B'], usage=usage))
-    assert _kpis(html)['Judge cost'] == '$0.50'
+    assert '$0.500000' in html
+
+def test_hostile_performance_labels_are_escaped() -> None:
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run(['A'])
+    run.label_a = '<img src=x>'
+    run.label_b = '<svg onload=alert(1)>'
+    run.entries[0].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.01), latency_ms=10)
+    html = pairwise_report_tabs('rid', run)
+    assert '<img src=x>' not in html and '<svg onload=alert(1)>' not in html
+    assert '&lt;img src=x&gt;' in html and '&lt;svg onload=alert(1)&gt;' in html
+
+def test_extremely_small_nonzero_cost_does_not_display_as_zero() -> None:
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run(['A'])
+    run.entries[0].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.00000001))
+    assert '$1e-08' in pairwise_report_tabs('rid', run)
+
+
 
 
 def test_run_name_and_labels_are_escaped() -> None:
@@ -130,7 +162,8 @@ def test_run_name_and_labels_are_escaped() -> None:
 
 def test_empty_run_still_renders_every_tab() -> None:
     html = pairwise_report_tabs('rid', new_run(run_name='empty'))
-    assert html.count('class="tab-label"') == 4
+    assert html.count('class="tab-label"') == 5
+    assert 'No comparisons in this run.' in html
 
 
 def test_comparisons_tab_lists_the_entries(run: PairwiseRun) -> None:
@@ -154,15 +187,6 @@ def test_a_filter_matching_nothing_shows_the_note_not_a_verdict(run: PairwiseRun
     assert _kpis(html) == {}
     # An unfiltered render of the same run does show the verdict KPIs.
     assert _kpis(pairwise_report_tabs('rid', run))
-
-
-def test_token_subline_says_when_only_some_comparisons_have_usage() -> None:
-    r = _run(['A', 'B'], usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
-    r.add(_comparison(['A', 'A', 'A'], 'A'), question='q9', response_a='a', response_b='b')
-    assert '(2 of 3)' in pairwise_report_tabs('rid', r)
-    assert 'of 2)' not in pairwise_report_tabs(
-        'rid', _run(['A', 'B'], usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
-    )
 
 
 def test_single_ordering_run_has_no_position_bias_signal() -> None:

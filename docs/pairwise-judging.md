@@ -251,6 +251,84 @@ For classify votes, open **Classifier details** inside an expanded comparison in
 
 Saved `PairwiseRun` JSON preserves each observation's provider-order `raw_output`; display conversion does not rewrite it. This is local report data. `send_results_to_orq()` strips evaluator `raw_output`, so the hosted Orq experiment view does not receive these classifier details.
 
+### Recording generation cost and latency
+
+The dashboard's **Performance** tab separates the cost and latency of generating responses A and B from the overhead of judging them. Pass `PairwiseResponseMetrics` through `metrics_a` and `metrics_b` when adding each comparison. Its `usage` is the shared `Usage` object from the generation call; `latency_ms` is measured end-to-end generation wall time.
+
+This runnable example generates three A/B pairs through Orq, captures their usage and latency, judges them, and saves a dashboard run. Set `ORQ_API_KEY` first. It compares two prompts on the same model rather than two different models:
+
+```python
+import asyncio
+from time import perf_counter
+
+from evaluatorq import llm_jury_pairwise
+from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.tracing import with_llm_span
+from evaluatorq.pairwise_run import PairwiseResponseMetrics, new_run
+from evaluatorq.tracing import flush_tracing, init_tracing_if_needed
+
+MODEL = "openai/gpt-6-luna"
+QUESTIONS = [
+    "How do I reset a forgotten password without sharing it with support?",
+    "What does Python range(3) produce?",
+    "Does HTTPS alone prove that a website is trustworthy?",
+]
+
+
+async def main() -> None:
+    await init_tracing_if_needed()
+    client = resolve_llm_client(require_orq=True, max_retries=0).client
+    comparator = llm_jury_pairwise(
+        judges=[MODEL], client=client,
+        criteria="Prefer the accurate, useful answer that directly addresses the question.",
+    )
+    run = new_run(
+        run_name="Measured pairwise preview: concise vs detailed",
+        label_a="Concise prompt", label_b="Detailed prompt", judges=[MODEL],
+        criteria="Prefer the accurate, useful answer that directly addresses the question.",
+    )
+
+    async def generate(question: str, instruction: str):
+        messages = [{"role": "system", "content": instruction}, {"role": "user", "content": question}]
+        started = perf_counter()
+        async with with_llm_span(model=MODEL, input_messages=messages) as span:
+            response, usage = await execute_chat_completion(
+                client=client, model=MODEL, messages=messages, span=span,
+                timeout_s=60, max_completion_tokens=384, reasoning_effort="none",
+            )
+        text = response.choices[0].message.content
+        if not text:
+            raise RuntimeError("The model returned no answer; do not save it as a successful response.")
+        return text, PairwiseResponseMetrics(usage=usage, latency_ms=(perf_counter() - started) * 1000)
+
+    try:
+        for question in QUESTIONS:
+            (a, metrics_a), (b, metrics_b) = await asyncio.gather(
+                generate(question=question, instruction="Answer accurately in one concise sentence."),
+                generate(
+                    question=question,
+                    instruction="Answer accurately with a short explanation and practical details, under 100 words.",
+                ),
+            )
+            comparison = await comparator.compare(question=question, response_a=a, response_b=b)
+            run.add(
+                comparison=comparison, question=question, response_a=a, response_b=b,
+                metrics_a=metrics_a, metrics_b=metrics_b,
+            )
+        print(run.save(), flush=True)
+    finally:
+        await flush_tracing()
+        await client.close()
+
+
+asyncio.run(main())
+```
+
+New comparisons record `judge_latency_ms` automatically around the complete judging phase, including swapped orderings and replacement judges. Its mean in the dashboard is time per comparison, not summed provider latency or total run duration.
+
+Missing measurements stay `None` and read **Not recorded**; passing zero means you actually measured zero. A recorded cost with missing response prices, partial pricing or an unknown priced-call count is a subtotal, never a complete run cost. Capture each side's measurements independently, and preserve `Usage.calls` and `Usage.priced_calls` when combining multiple generation calls. The Performance tab reports fully priced A/B pairs and paired latency measurements, including zero coverage, and marks values from different or incompletely priced samples as not like-for-like. Filters aggregate only the matching entries. Older text-only runs remain readable, but their generation cost and latency cannot be reconstructed from their answer strings.
+
 ## The lower-level core
 
 `run_pairwise()` is the ordering-independent engine underneath the comparator. It takes any async `judge_fn(first, second, model)` rather than building LLM calls itself, so you can drive the swap-and-reconcile logic with your own judge. `reconcile_pair()` and `pairwise_consensus()` are exposed for the same reason. Most callers want `llm_jury_pairwise()`; reach for `run_pairwise()` when you are plugging in a non-LLM judge or testing the reconciliation directly.

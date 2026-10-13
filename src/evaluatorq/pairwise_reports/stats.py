@@ -16,6 +16,7 @@ from evaluatorq.pairwise_reports.sections import POSITION_BIAS_WARN, is_split, o
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from evaluatorq.contracts import Usage
     from evaluatorq.pairwise_run import PairwiseEntry, PairwiseRun
 
 Tone = Literal['good', 'warn', '']
@@ -159,19 +160,94 @@ class UsageTotals:
     output_tokens: int
     total_tokens: int
     cost: float | None
-    with_usage: int
+    cost_recorded: int = 0
+    cost_partial: bool = False
+    cost_complete: bool = False
+    with_usage: int = 0
+
+
+def _pricing_is_incomplete(usage: Usage) -> bool:
+    """Require a known call count and a price for every call."""
+    return usage.calls <= 0 or usage.priced_calls != usage.calls
 
 
 def judge_usage(run: PairwiseRun) -> UsageTotals:
-    """Sum recorded tokens; report cost only when every comparison was priced."""
+    """Sum recorded tokens and cost; distinguish lower bounds from full totals."""
     usages = [e.comparison.token_usage for e in run.entries if e.comparison.token_usage is not None]
     costs = [u.total_cost for u in usages if u.total_cost is not None]
+    cost_recorded = sum(u.total_cost is not None for u in usages)
+    cost_partial = any(_pricing_is_incomplete(u) for u in usages) or cost_recorded < len(run.entries)
     return UsageTotals(
         input_tokens=sum(u.input_tokens for u in usages),
         output_tokens=sum(u.output_tokens for u in usages),
         total_tokens=sum(u.total_tokens or (u.input_tokens + u.output_tokens) for u in usages),
-        cost=math.fsum(costs) if costs and len(costs) == len(run.entries) else None,
+        cost=math.fsum(costs) if costs else None,
+        cost_recorded=cost_recorded,
+        cost_partial=cost_partial,
+        cost_complete=bool(run.entries) and cost_recorded == len(run.entries) and not cost_partial,
         with_usage=len(usages),
+    )
+
+
+@dataclass(frozen=True)
+class GenerationMetrics:
+    a_cost: float | None
+    b_cost: float | None
+    a_cost_recorded: int
+    b_cost_recorded: int
+    a_cost_partial: bool
+    b_cost_partial: bool
+    a_latency_ms: float | None
+    b_latency_ms: float | None
+    a_latency_recorded: int
+    b_latency_recorded: int
+    paired_cost_entries: int
+    paired_latency_entries: int
+
+
+def generation_metrics(run: PairwiseRun) -> GenerationMetrics:
+    """Aggregate each metric independently; paired counts require both sides."""
+    cost_sums: list[list[float]] = [[], []]
+    cost_seen = [0, 0]
+    cost_partial = [False, False]
+    latency_sums: list[list[float]] = [[], []]
+    paired_cost = paired_latency = 0
+    for entry in run.entries:
+        pair = (entry.metrics_a, entry.metrics_b)
+        for index, metrics in enumerate(pair):
+            if metrics is None:
+                continue
+            if metrics.usage is not None and metrics.usage.total_cost is not None:
+                cost_sums[index].append(metrics.usage.total_cost)
+                cost_seen[index] += 1
+                cost_partial[index] |= _pricing_is_incomplete(metrics.usage)
+            if metrics.latency_ms is not None:
+                latency_sums[index].append(metrics.latency_ms)
+        if all(
+            metrics is not None
+            and metrics.usage is not None
+            and metrics.usage.total_cost is not None
+            and not _pricing_is_incomplete(metrics.usage)
+            for metrics in pair
+        ):
+            paired_cost += 1
+        if all(metrics is not None and metrics.latency_ms is not None for metrics in pair):
+            paired_latency += 1
+    for index in range(2):
+        cost_partial[index] |= cost_seen[index] < len(run.entries)
+    return GenerationMetrics(
+        a_cost=math.fsum(cost_sums[0]) if cost_sums[0] else None,
+        b_cost=math.fsum(cost_sums[1]) if cost_sums[1] else None,
+        a_cost_recorded=cost_seen[0],
+        b_cost_recorded=cost_seen[1],
+        a_cost_partial=cost_partial[0],
+        b_cost_partial=cost_partial[1],
+        a_latency_ms=math.fsum(latency_sums[0]) if latency_sums[0] else None,
+        b_latency_ms=math.fsum(latency_sums[1]) if latency_sums[1] else None,
+        a_latency_recorded=len(latency_sums[0]),
+        b_latency_recorded=len(latency_sums[1]),
+        paired_cost_entries=paired_cost,
+        paired_latency_entries=paired_latency,
     )
 
 

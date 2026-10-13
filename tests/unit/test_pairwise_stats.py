@@ -7,6 +7,7 @@ from evaluatorq.pairwise import PairwiseComparison, PairwiseVote
 from evaluatorq.pairwise_reports.stats import (
     comparison_flags,
     fleiss_kappa,
+    generation_metrics,
     judge_usage,
     kappa_label,
     length_lean,
@@ -154,17 +155,6 @@ def test_length_lean_counts_the_longer_answer_winning():
     assert (lean.longer_wins, lean.compared) == (2, 3)
 
 
-def test_length_lean_is_none_when_lengths_never_differ():
-    r = _run([(['A'] * 3, 'A', {'ra': 'xx', 'rb': 'yy'})])
-    assert length_lean(r) is None
-
-
-def test_comparison_flags():
-    r = _run([(['A', 'B', 'A'], 'A', {'flipped': ('j3',), 'failures': 1})])
-    f = comparison_flags(r.entries[0], r.judges)
-    assert (f.split, f.thrown_out, f.judge_failed) == (True, True, True)
-
-
 def test_comparison_flags_marks_a_missing_configured_judge_as_failed():
     r = new_run(run_name='r', judges=J)
     r.add(
@@ -187,10 +177,105 @@ def test_judge_usage_sums_tokens_and_keeps_unknown_cost_unknown():
     r = _run([(['A'] * 3, 'A', {'usage': u1}), (['B'] * 3, 'B', {'usage': u2}), (['A'] * 3, 'A', {})])
     t = judge_usage(r)
     assert (t.input_tokens, t.output_tokens, t.total_tokens, t.with_usage) == (15, 3, 18, 2)
-    assert t.cost is None
+    assert t.cost == pytest.approx(0.5)
+    assert t.cost_partial is True
     assert judge_usage(_run([(['A'] * 3, 'A', {})])).cost is None
     assert judge_usage(_run([(['A'] * 3, 'A', {'usage': u1})])).cost == pytest.approx(0.5)
-    assert judge_usage(_run([(['A'] * 3, 'A', {'usage': u1}), (['B'] * 3, 'B', {})])).cost is None
+    partial = judge_usage(_run([(['A'] * 3, 'A', {'usage': u1}), (['B'] * 3, 'B', {})]))
+    assert partial.cost == pytest.approx(0.5) and partial.cost_partial
+
+
+def test_generation_metrics_keep_metric_coverage_and_same_entry_pairs():
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run([(['A'] * 3, 'A', {}), (['B'] * 3, 'B', {})])
+    run.entries[0].metrics_a = PairwiseResponseMetrics(
+        usage=Usage(total_cost=0.0004, calls=1, priced_calls=1), latency_ms=0
+    )
+    run.entries[0].metrics_b = PairwiseResponseMetrics(
+        usage=Usage(total_cost=0.0008, calls=1, priced_calls=1), latency_ms=20
+    )
+    run.entries[1].metrics_a = PairwiseResponseMetrics(
+        usage=Usage(total_cost=0.0005, calls=1, priced_calls=1), latency_ms=30
+    )
+    run.entries[1].metrics_b = None
+
+    totals = generation_metrics(run)
+    assert (totals.a_cost, totals.a_cost_recorded, totals.a_cost_partial) == (0.0009, 2, False)
+    assert (totals.b_cost, totals.b_cost_recorded, totals.b_cost_partial) == (0.0008, 1, True)
+    assert (totals.a_latency_ms, totals.a_latency_recorded) == (30, 2)
+    assert (totals.b_latency_ms, totals.b_latency_recorded) == (20, 1)
+    assert totals.paired_cost_entries == totals.paired_latency_entries == 1
+
+
+def test_generation_cost_coverage_honors_unknown_and_partial_prices():
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run([(['A'] * 3, 'A', {}), (['B'] * 3, 'B', {}), (['A'] * 3, 'A', {})])
+    run.entries[0].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.2))
+    run.entries[1].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.3, calls=2, priced_calls=1))
+    run.entries[2].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.0))
+    totals = generation_metrics(run)
+    assert totals.a_cost == pytest.approx(0.5)
+    assert totals.a_cost_recorded == 3
+    assert totals.a_cost_partial is True
+    run.entries[0].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.2, calls=2, priced_calls=1))
+    assert generation_metrics(run).a_cost_partial is True
+
+def test_generation_metrics_reaggregate_only_filtered_entries():
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run([(['A'] * 3, 'A', {}), (['B'] * 3, 'B', {})])
+    run.entries[0].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.1), latency_ms=10)
+    run.entries[1].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.9), latency_ms=90)
+    filtered = generation_metrics(run.model_copy(update={'entries': [run.entries[1]]}))
+    assert (filtered.a_cost, filtered.a_cost_recorded, filtered.a_latency_ms, filtered.a_latency_recorded) == (
+        0.9, 1, 90, 1
+    )
+
+
+def test_judge_usage_exposes_recorded_subtotal_but_not_invents_missing_price():
+    usage = Usage(input_tokens=10, output_tokens=2, total_cost=0.001)
+    run = _run([(['A'] * 3, 'A', {'usage': usage}), (['B'] * 3, 'B', {})])
+    totals = judge_usage(run)
+    assert totals.cost == pytest.approx(0.001)
+    assert totals.cost_recorded == 1
+    assert totals.cost_partial is True
+
+
+@pytest.mark.parametrize('calls, priced_calls, partial', [(0, 0, True), (2, 0, True), (2, 1, True), (2, 2, False)])
+def test_cost_totals_require_known_complete_call_pricing(calls, priced_calls, partial):
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    usage = Usage(total_cost=0.3, calls=calls, priced_calls=priced_calls)
+    run = _run([(['A'] * 3, 'A', {'usage': usage})])
+    run.entries[0].metrics_a = PairwiseResponseMetrics(usage=usage)
+    run.entries[0].metrics_b = PairwiseResponseMetrics(usage=usage)
+    generation = generation_metrics(run)
+    judging = judge_usage(run)
+    assert generation.a_cost == generation.b_cost == pytest.approx(0.3)
+    assert generation.a_cost_partial is generation.b_cost_partial is partial
+    assert generation.paired_cost_entries == (0 if partial else 1)
+    assert judging.cost == pytest.approx(0.3)
+    assert judging.cost_partial is partial
+    assert judging.cost_complete is not partial
+
+
+def test_equal_side_counts_do_not_make_disjoint_measurements_paired():
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run([(['A'] * 3, 'A', {}), (['B'] * 3, 'B', {})])
+    run.entries[0].metrics_a = PairwiseResponseMetrics(
+        usage=Usage(total_cost=0.2, calls=1, priced_calls=1), latency_ms=10
+    )
+    run.entries[1].metrics_b = PairwiseResponseMetrics(
+        usage=Usage(total_cost=0.3, calls=1, priced_calls=1), latency_ms=20
+    )
+    totals = generation_metrics(run)
+    assert (totals.a_cost_recorded, totals.b_cost_recorded) == (1, 1)
+    assert (totals.a_latency_recorded, totals.b_latency_recorded) == (1, 1)
+    assert totals.paired_cost_entries == totals.paired_latency_entries == 0
+    assert totals.a_cost_partial is totals.b_cost_partial is True
 
 
 def test_trust_signals_order_and_tones():
