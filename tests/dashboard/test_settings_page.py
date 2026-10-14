@@ -75,9 +75,9 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
             'classifier_model': 'classifier/custom',
             'smart_model': 'smart/custom',
             'window_days': '14',
-            'parallelism': '7',
             'trace_input_chars': '230000',
             'ask_ai_mode': 'review',
+            'filter_selection': 'llm',
         }),
     )
 
@@ -89,6 +89,7 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
     assert saved['parallelism'] == DashboardSettings.model_fields['parallelism'].default
     assert saved['trace_input_chars'] == 230000
     assert saved['ask_ai_mode'] == 'review'
+    assert saved['filter_selection'] == 'llm'
 
 
 def test_settings_post_preserves_future_fields_while_saving_known_edits(
@@ -230,6 +231,8 @@ def test_ai_limits_are_per_run_trace_search_controls(client: TestClient) -> None
     assert 'name="limit"' in search_html
     assert 'name="parallelism"' in search_html
     assert '<option value="immediate" selected>Just proceed</option>' in settings_html
+    assert 'name="filter_selection"' in settings_html
+    assert '<option value="llm+jev" selected>LLM + Jev</option>' in settings_html
 
 
 def test_settings_ignores_per_run_ai_limits(client: TestClient, settings_file: Path) -> None:
@@ -272,6 +275,11 @@ def test_invalid_hidden_numeric_field_is_ignored(client: TestClient, settings_fi
     assert response.status_code == 303
     assert json.loads(settings_file.read_text())['limit'] == DashboardSettings.model_fields['limit'].default
 
+
+def test_invalid_filter_selection_is_rejected(client: TestClient) -> None:
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'filter_selection': 'merged'}))
+    assert response.status_code == 422
+    assert 'filter_selection' in response.text
 
 def test_submitted_settings_keep_saved_explorer_columns() -> None:
     current = DashboardSettings.model_validate({'explorer_columns': ('model', 'cost')})

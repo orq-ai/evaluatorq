@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+import hashlib
+import time
+from collections import OrderedDict
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -12,9 +16,8 @@ from loguru import logger
 from .models import FACET_NAMES, FacetCatalogue, FacetName
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from orq_ai_sdk import Orq
+
 
 _FACET_FIELDS: Mapping[FacetName, str] = MappingProxyType({
     'project': 'project_id',
@@ -28,6 +31,153 @@ _FACET_FIELDS: Mapping[FacetName, str] = MappingProxyType({
 })
 if set(_FACET_FIELDS) != set(FACET_NAMES):
     raise RuntimeError('trace facet field mapping is out of sync with FACET_NAMES')
+
+_CACHE_TTL = 300.0
+_CACHE_MAX_ENTRIES = 32
+_catalogue_cache: OrderedDict[tuple[Any, ...], tuple[float, FacetCatalogue]] = OrderedDict()
+_catalogue_inflight: dict[tuple[Any, ...], asyncio.Task[FacetCatalogue]] = {}
+_cache_lock: asyncio.Lock | None = None
+_cache_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_cache_lock() -> asyncio.Lock:
+    """Use a lock scoped to the current event loop, never reusing loop-bound state."""
+    global _cache_lock, _cache_lock_loop
+    loop = asyncio.get_running_loop()
+    if _cache_lock is None or _cache_lock_loop is not loop:
+        _cache_lock = asyncio.Lock()
+        _cache_lock_loop = loop
+        _catalogue_inflight.clear()
+    return _cache_lock
+
+
+def _credential_fingerprint(client: Orq) -> str:
+    """Fingerprint configured authentication without retaining or exposing its secret."""
+    config = client.sdk_configuration
+    auth = config.security
+    if callable(auth):
+        auth = auth()
+    security = getattr(auth, 'api_key', None)
+    if security is None and isinstance(auth, Mapping):
+        security = auth.get('api_key')
+    secret = (
+        security
+        if isinstance(security, str)
+        else (
+            security.get('api_key') or security.get('token')
+            if isinstance(security, Mapping)
+            else getattr(security, 'api_key', None) or getattr(security, 'token', None)
+        )
+    )
+    return hashlib.sha256(str(secret or '').encode()).hexdigest()
+
+
+def _cache_key(client: Orq, start: datetime, end: datetime, limit: int) -> tuple[Any, ...]:
+    config = client.sdk_configuration
+    http_client = config.async_client
+    headers = getattr(http_client, 'headers', {})
+    scope = tuple(
+        sorted(
+            (str(key).casefold(), str(value))
+            for key, value in headers.items()
+            if str(key).casefold() in {'x-orq-workspace-id', 'x-orq-project-id'}
+        )
+    )
+    return (
+        config.get_server_details()[0],
+        _credential_fingerprint(client),
+        scope,
+        start.isoformat(),
+        end.isoformat(),
+        limit,
+    )
+
+
+def facet_catalogue_cache_hit(
+    client: Orq, start: datetime, end: datetime, limit: int = 50, *, default_window: bool = False
+) -> bool:
+    """Report whether an unexpired cache entry exists for this request."""
+    if default_window:
+        key = (
+            *_cache_key(client, start, end, limit)[:3],
+            'rolling-default',
+            round((end - start).total_seconds()),
+            limit,
+        )
+    else:
+        key = _cache_key(client, start, end, limit)
+    cached = _catalogue_cache.get(key)
+    return cached is not None and time.monotonic() - cached[0] < _CACHE_TTL
+
+
+async def load_facet_catalogue_cached(
+    client: Orq,
+    start: datetime,
+    end: datetime,
+    limit: int = 50,
+    *,
+    default_window: bool = False,
+    now: datetime | None = None,
+    loader: Callable[..., Awaitable[FacetCatalogue]] | None = None,
+) -> FacetCatalogue:
+    """Load all returned facet values from a bounded five-minute, single-flight cache."""
+    if loader is not None:
+        return await loader(client, start=start, end=end, limit=limit)
+    if default_window:
+        anchor = now or datetime.now(timezone.utc)
+        stable_start = anchor - timedelta(days=1)
+        key = (
+            *_cache_key(client, stable_start, anchor, limit)[:3],
+            'rolling-default',
+            round((end - start).total_seconds()),
+            limit,
+        )
+    else:
+        key = _cache_key(client, start, end, limit)
+    lock = _get_cache_lock()
+    async with lock:
+        cached = _catalogue_cache.get(key)
+        if cached is not None and time.monotonic() - cached[0] < _CACHE_TTL:
+            _catalogue_cache.move_to_end(key)
+            return cached[1].model_copy(deep=True)
+        task = _catalogue_inflight.get(key)
+        if task is None:
+            load = loader or load_facet_catalogue
+            task = asyncio.ensure_future(load(client, start=start, end=end, limit=limit))
+            _catalogue_inflight[key] = task
+    try:
+        catalogue = await asyncio.shield(task)
+    except BaseException:
+        if task.done():
+            async with lock:
+                if _catalogue_inflight.get(key) is task:
+                    del _catalogue_inflight[key]
+        raise
+    async with lock:
+        if _catalogue_inflight.get(key) is task:
+            _catalogue_inflight.pop(key)
+            _catalogue_cache[key] = (time.monotonic(), catalogue.model_copy(deep=True))
+            _catalogue_cache.move_to_end(key)
+            while len(_catalogue_cache) > _CACHE_MAX_ENTRIES:
+                _catalogue_cache.popitem(last=False)
+    return catalogue.model_copy(deep=True)
+
+
+async def invalidate_facet_catalogue_cache() -> None:
+    """Invalidate successful entries and cancel outstanding cache loads."""
+    lock = _get_cache_lock()
+    async with lock:
+        _catalogue_cache.clear()
+        tasks = tuple(_catalogue_inflight.values())
+        _catalogue_inflight.clear()
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def close_facet_catalogue_cache() -> None:
+    """Close the process-local cache; intended for runtime shutdown."""
+    await invalidate_facet_catalogue_cache()
 
 
 async def load_facet_catalogue(

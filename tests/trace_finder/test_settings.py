@@ -71,12 +71,18 @@ def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
         window_days=14,
         parallelism=7,
         trace_input_chars=320_000,
+        filter_selection='llm',
     )
 
     save_settings(settings, path)
 
     assert load_settings(path).model_dump() == settings.model_dump()
     assert json.loads(path.read_text()) == settings.model_dump()
+
+def test_filter_selection_defaults_and_rejects_unknown_mode() -> None:
+    assert DashboardSettings().filter_selection == 'llm+jev'
+    with pytest.raises(ValueError):
+        DashboardSettings.model_validate({'filter_selection': 'merged'})
 
 
 def test_older_settings_files_inherit_default_trace_input_cap(tmp_path: Path) -> None:

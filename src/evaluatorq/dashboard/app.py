@@ -788,6 +788,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_project_id'] = form_data.get('orq_project_id') if values['orq_auth_method'] == 'cli_oauth' else None
     values['orq_project_name'] = None
     values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
+    values['filter_selection'] = form_data.get('filter_selection', current.filter_selection)
     values['compression_inspector_enabled'] = form_data.get('compression_inspector_enabled') in ('on', 'true')
     raw_input_cap = form_data.get('trace_input_chars')
     if raw_input_cap is None:
@@ -818,7 +819,11 @@ def _settings_changed_fields(form_data: Any, current: DashboardSettings) -> set[
         'orq_api_key_entry',
         'orq_stored_key_host',
     }
-    allowed = set(MODEL_FIELDS) | {'ask_ai_mode', 'trace_input_chars', 'compression_inspector_enabled'} | auth_inputs
+    allowed = (
+        set(MODEL_FIELDS)
+        | {'ask_ai_mode', 'filter_selection', 'trace_input_chars', 'compression_inspector_enabled'}
+        | auth_inputs
+    )
     marker = form_data.get('settings_changed_fields')
     if marker is not None:
         names = {name for name in str(marker).split(',') if name}

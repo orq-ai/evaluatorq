@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping, Sequence
 
     from .explorer import ExplorerStore
+    from .planner import PlanningResult
 
 TReviewFilters = TypeVar('TReviewFilters', FacetSelection, NumericFilters)
 T = TypeVar('T')
@@ -53,6 +54,14 @@ class TableLoader(Protocol):
     """Load the records that the dashboard explorer should display."""
 
     def __call__(self, request: PopulationRequest) -> Awaitable[tuple[TraceRecord, ...]]: ...
+
+
+class SharedPlanner(Protocol):
+    """Plan semantic dimensions, filters, and effective time as one result."""
+
+    def __call__(
+        self, query: str, population: PopulationRequest, *, within_results: bool
+    ) -> Awaitable[PlanningResult]: ...
 
 
 class ClassifierRunner(Protocol):
@@ -90,10 +99,12 @@ class RunStore:
     def __init__(
         self,
         *,
-        compiler: Callable[[str], Awaitable[CompiledPlan]],
+        compiler: Callable[[str], Awaitable[CompiledPlan]] | None = None,
         population_loader: PopulationLoader,
         run_classifier: ClassifierRunner,
-        filter_selector: Callable[[str, PopulationRequest], Awaitable[FacetSelection | FilterSelectionResult]],
+        filter_selector: Callable[[str, PopulationRequest], Awaitable[FacetSelection | FilterSelectionResult]]
+        | None = None,
+        planner: SharedPlanner | None = None,
         project_trace: TraceProjector = default_project_trace,
         monotonic: Callable[[], float] = time.monotonic,
         now_utc: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
@@ -101,14 +112,17 @@ class RunStore:
         explorer: ExplorerStore | None = None,
         classifier_model: str | None = None,
     ) -> None:
+        if planner is None and (filter_selector is None or compiler is None):
+            raise ValueError('a shared planner or legacy compiler and filter selector are required')
         self._compiler = compiler
-        self._close = close
         self.explorer = explorer
         self._classifier_model = classifier_model
         self._closed = False
         self._population_loader = population_loader
         self._run_classifier = run_classifier
         self._filter_selector = filter_selector
+        self._planner = planner
+        self._close = close
         self._project_trace = project_trace
         self._monotonic = monotonic
         self._now_utc = now_utc
@@ -185,16 +199,20 @@ class RunStore:
             table=table,
             source_generation=source_generation,
         )
-        if wait:
-            return await work
         task = asyncio.create_task(work)
         async with self._lock:
-            if generation == self._generation and self._snapshot.state == 'compiling':
+            if generation != self._generation or self._snapshot.state != 'compiling':
+                stale = True
+            else:
                 self._task = task
-                return self._view()
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        return await self.snapshot()
+                stale = False
+                if not wait:
+                    return self._view()
+        if stale:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            return await self.snapshot()
+        return await task
 
     async def _begin(
         self, request: RunRequest, *, compile_query: bool, within_results: bool
@@ -239,6 +257,8 @@ class RunStore:
                 filter_response = None if compile_query else self._snapshot.filter_response
                 filter_selection_error = None if compile_query else self._snapshot.filter_selection_error
                 plan_warning = None if compile_query else self._snapshot.plan_warning
+                generated_time = None if compile_query else self._snapshot.generated_time
+                provenance = {} if compile_query else dict(self._snapshot.provenance)
                 self._snapshot = RunSnapshot(
                     generation=generation,
                     state='compiling',
@@ -252,6 +272,8 @@ class RunStore:
                     filter_response=filter_response.model_copy(deep=True) if filter_response is not None else None,
                     filter_selection_error=filter_selection_error,
                     plan_warning=plan_warning,
+                    generated_time=generated_time,
+                    provenance=provenance,
                     created_at=self._now_utc(),
                 )
                 self._started_monotonic = None
@@ -279,32 +301,53 @@ class RunStore:
         )
         try:
             unsupported_reason: str | None = None
+            empty_match = False
+            planning: PlanningResult | None = None
             if compile_query:
-                plan_task = asyncio.create_task(self._plan(request.query, request.population))
-                async with self._lock:
-                    if generation != self._generation or self._snapshot.state != 'compiling':
-                        plan_task.cancel()
-                        await asyncio.gather(plan_task, return_exceptions=True)
-                        return self._view()
-                    self._task = plan_task
-                plan, filter_result = await plan_task
-                unsupported_reason = plan.unsupported_reason
-                generated_filters = filter_result.selection
-                generated_numeric = plan.numeric.model_copy(deep=True)
-                dimensions = _revalidated(plan.dimensions)
-                plan_warning = _unsupported_warning(plan.unsupported_reason) or _uncovered_words_warning(
-                    request.query, dimensions, generated_filters
-                )
-                # Already-loaded rows are narrowed locally instead; a fresh population, from Orq or the
-                # table, is queried with the question's filters.
-                if traces is None:
-                    population = request.population.model_copy(
-                        update={
-                            'facets': merge_facets(request.population.facets, generated_filters),
-                            'numeric': _merge_numeric(request.population.numeric, plan.numeric),
-                        }
+                if self._planner is not None:
+                    planning = await self._planner(
+                        request.query,
+                        request.population,
+                        within_results=traces is not None or traces_limited is not None or table is not None,
                     )
-                    request = request.model_copy(update={'population': population})
+                    generated_filters = planning.generated_facets
+                    generated_numeric = planning.generated_numeric
+                    dimensions = _revalidated(planning.dimensions)
+                    filter_result = FilterSelectionResult(
+                        generated_filters, planning.selector_response, planning.selector_error
+                    )
+                    effective_population = planning.effective_population
+                    generated_time = planning.generated_time
+                    provenance = dict(planning.provenance)
+                    empty_match = planning.empty_match
+                    unsupported_reason = getattr(planning, 'unsupported_reason', None)
+                    plan_warning = _unsupported_warning(unsupported_reason) or _uncovered_words_warning(
+                        request.query, dimensions, generated_filters
+                    )
+                    request = request.model_copy(update={'population': planning.effective_population})
+                else:
+                    if self._filter_selector is None:  # pragma: no cover - constructor enforces this
+                        raise RuntimeError('a filter selector is required by the legacy planning seam')
+                    plan, filter_result = await self._plan(request.query, request.population)
+                    generated_filters = filter_result.selection
+                    generated_numeric = plan.numeric.model_copy(deep=True)
+                    dimensions = _revalidated(plan.dimensions)
+                    generated_time = None
+                    provenance = {}
+                    effective_population = request.population
+                    unsupported_reason = plan.unsupported_reason
+                    plan_warning = _unsupported_warning(plan.unsupported_reason) or _uncovered_words_warning(
+                        request.query, dimensions, generated_filters
+                    )
+                    # Legacy callback consumers still merge compiler outputs in this adapter.
+                    if traces is None and traces_limited is None:
+                        population = request.population.model_copy(
+                            update={
+                                'facets': merge_facets(request.population.facets, generated_filters),
+                                'numeric': merge_numeric(request.population.numeric, plan.numeric),
+                            }
+                        )
+                        request = request.model_copy(update={'population': population})
             else:
                 if dimensions is None:
                     raise ValueError('reviewed classifier dimensions are required to start a run')
@@ -315,9 +358,21 @@ class RunStore:
                     generated_filters, self._snapshot.filter_response, self._snapshot.filter_selection_error
                 )
                 plan_warning = self._snapshot.plan_warning
+                generated_time = self._snapshot.generated_time
+                provenance = dict(self._snapshot.provenance)
+                effective_population = request.population
+            if table is not None:
+                population = request.population.model_copy(
+                    update={
+                        'facets': merge_facets(request.population.facets, generated_filters),
+                        'numeric': merge_numeric(request.population.numeric, generated_numeric),
+                    }
+                )
+                request = request.model_copy(update={'population': population})
 
             if (
                 compile_query
+                and not empty_match
                 and unsupported_reason is not None
                 and not dimensions
                 and generated_filters == FacetSelection()
@@ -335,12 +390,43 @@ class RunStore:
                         else None,
                         filter_selection_error=filter_result.error,
                         plan_warning=plan_warning,
+                        generated_time=generated_time,
+                        provenance=provenance,
                     )
-                    # 'cancelled' is the existing terminal state that is neither success nor a system error.
                     self._finish('cancelled')
                     self._task = None
                     return self._view()
 
+            if empty_match:
+                async with self._lock:
+                    if generation != self._generation or self._snapshot.state != 'compiling':
+                        return self._view()
+                    self._snapshot = replace(
+                        self._snapshot,
+                        dimensions=dimensions,
+                        generated_filters=generated_filters.model_copy(deep=True),
+                        generated_numeric=generated_numeric.model_copy(deep=True),
+                        filter_response=filter_result.response.model_copy(deep=True)
+                        if filter_result.response
+                        else None,
+                        filter_selection_error=filter_result.error,
+                        generated_time=generated_time,
+                        provenance=provenance,
+                        request=request.model_copy(deep=True),
+                        trace_ids=(),
+                        traces=(),
+                        total=0,
+                        completed=0,
+                        results={},
+                        plan_warning=(
+                            f'Trace filter selection failed; no traces were selected: {filter_result.error}'
+                            if filter_result.error
+                            else 'The query time window does not overlap the loaded results; no traces were selected.'
+                        ),
+                    )
+                    self._finish('completed')
+                    self._task = None
+                    return self._view()
             async with self._lock:
                 if generation != self._generation or self._snapshot.state != 'compiling':
                     return self._view()
@@ -353,16 +439,20 @@ class RunStore:
                     filter_response=filter_result.response.model_copy(deep=True) if filter_result.response else None,
                     filter_selection_error=filter_result.error,
                     plan_warning=plan_warning,
+                    generated_time=generated_time,
+                    provenance=provenance,
                     request=request.model_copy(deep=True),
                 )
-
             if not staged_traces:
                 if traces is not None or traces_limited is not None or table is not None:
                     population = request.population
+                    # The limited loader takes the first usable rows of the whole view, so any
+                    # generated facet, numeric or time narrowing needs the full loader first.
                     use_limited_loader = (
                         traces_limited is not None
                         and generated_filters == FacetSelection()
                         and generated_numeric == NumericFilters()
+                        and generated_time is None
                     )
                     if use_limited_loader and traces_limited is not None:
                         loader = partial(traces_limited, population.limit)
@@ -383,10 +473,13 @@ class RunStore:
                         if generation == self._generation and self._snapshot.state == 'compiling':
                             self._snapshot = replace(self._snapshot, explorer_generation=exact_source_generation)
                     self._report_loaded(generation, len(loaded_traces or ()), len(loaded_traces or ()))
-                    # Loaded rows skip the Orq query, so apply the question's generated filters here
-                    # and to the table only for within-results runs.
                     staged_traces = (
-                        _narrowed(loaded_traces or (), generated_filters, generated_numeric)
+                        _narrowed(
+                            loaded_traces or (),
+                            generated_filters,
+                            generated_numeric,
+                            effective_population if generated_time is not None else None,
+                        )
                         if traces is not None and not use_limited_loader
                         else tuple(loaded_traces or ())
                     )
@@ -533,13 +626,18 @@ class RunStore:
             self._snapshot = replace(self._snapshot, loaded=done, to_load=total)
 
     async def _plan(self, query: str, population: PopulationRequest) -> tuple[CompiledPlan, FilterSelectionResult]:
-        """Run semantic and facet planning concurrently and clean up both."""
+        """Run legacy compiler and facet-selector callbacks concurrently, cleaning up both."""
+
+        if self._filter_selector is None or self._compiler is None:  # pragma: no cover - constructor enforces this
+            raise RuntimeError('legacy compiler and filter selector are required')
+        compile_callback = self._compiler
+        selector_callback = self._filter_selector
 
         async def compile_plan() -> object:
-            return await self._compiler(query)
+            return await compile_callback(query)
 
         async def select_filters() -> object:
-            return await self._filter_selector(query, population)
+            return await selector_callback(query, population)
 
         compiler = asyncio.create_task(compile_plan())
         filters = asyncio.create_task(select_filters())
@@ -881,11 +979,20 @@ def _uncovered_words_warning(query: str, dimensions: tuple[CompiledQuery, ...], 
 
 
 def _narrowed(
-    traces: tuple[TraceRecord, ...], facets: FacetSelection, bounds: NumericFilters
+    traces: tuple[TraceRecord, ...],
+    facets: FacetSelection,
+    bounds: NumericFilters,
+    population: PopulationRequest | None = None,
 ) -> tuple[TraceRecord, ...]:
-    """Keep loaded traces inside the generated filters."""
+    """Keep loaded traces inside the generated filters and optional effective time window."""
 
-    return tuple(trace for trace in traces if _within_facets(trace, facets) and _within_numeric(trace, bounds))
+    return tuple(
+        trace
+        for trace in traces
+        if _within_facets(trace, facets)
+        and _within_numeric(trace, bounds)
+        and (population is None or population.contains_time(trace.timestamp))
+    )
 
 
 def _nothing_kept_message(traces: tuple[TraceRecord, ...], facets: FacetSelection, bounds: NumericFilters) -> str:
@@ -981,4 +1088,6 @@ def _detach(snapshot: RunSnapshot) -> RunSnapshot:
         traces=tuple(trace.model_copy(deep=True) for trace in snapshot.traces),
         results={key: value.model_copy(deep=True) for key, value in snapshot.results.items()},
         projections={key: value.model_copy(deep=True) for key, value in snapshot.projections.items()},
+        generated_time=snapshot.generated_time,
+        provenance=dict(snapshot.provenance),
     )

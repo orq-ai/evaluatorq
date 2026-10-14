@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping  # noqa: TC003
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime  # noqa: TC003
 from types import MappingProxyType
@@ -202,9 +202,23 @@ class PopulationRequest(BaseModel):
 
     start: datetime | None = None
     end: datetime | None = None
+    time_origin: Literal['default', 'explicit', 'within_results'] = 'default'
+    end_exclusive: bool = False
     facets: FacetSelection = FacetSelection()
     numeric: NumericFilters = NumericFilters()
     limit: int = Field(default=500, ge=1, le=5000)
+
+    @model_validator(mode='before')
+    @classmethod
+    def infer_time_origin_from_bounds(cls, values: Any) -> Any:
+        """Treat bounds as caller-explicit unless a request explicitly declares another origin."""
+        if (
+            isinstance(values, Mapping)
+            and 'time_origin' not in values
+            and (values.get('start') is not None or values.get('end') is not None)
+        ):
+            return {**values, 'time_origin': 'explicit'}
+        return values
 
     @field_validator('start', 'end')
     @classmethod
@@ -222,6 +236,15 @@ class PopulationRequest(BaseModel):
         if self.start is not None and self.end is not None and self.start > self.end:
             raise ValueError('start must not be after end')
         return self
+
+    def contains_time(self, timestamp: datetime) -> bool:
+        """Whether *timestamp* falls inside this window: the start is inclusive, and the end is exclusive only for a generated calendar-day end."""
+
+        if self.start is not None and timestamp < self.start:
+            return False
+        if self.end is None:
+            return True
+        return timestamp < self.end if self.end_exclusive else timestamp <= self.end
 
 
 class ValueSelection(BaseModel):
@@ -342,10 +365,13 @@ class RunSnapshot:
     error: str | None = None
     classifier_model: str | None = None
     """The model the store classifies with, fixed when the store was built."""
+    generated_time: tuple[datetime | None, datetime | None] | None = None
+    provenance: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'results', MappingProxyType(dict(self.results)))
         object.__setattr__(self, 'projections', MappingProxyType(dict(self.projections)))
+        object.__setattr__(self, 'provenance', MappingProxyType(dict(self.provenance)))
 
 
 @dataclass(frozen=True)

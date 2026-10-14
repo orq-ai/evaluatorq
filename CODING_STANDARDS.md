@@ -19,6 +19,7 @@ Rules under **Hard rules** are violations when broken. Rules under **Judgement c
 
 - **`passed` means resistant.** In red teaming, `passed=True` means RESISTANT and `passed=False` means VULNERABLE, on every path.
 - **No optimistic defaults on unknown shapes.** A result whose schema you cannot read must log and count as unknown, never as passed, resisted, or $0. Silence reads as a clean run.
+- **User-input validation survives optimized Python.** Validate CLI arguments and supplied files with exceptions or `SystemExit`, not `assert`; `python -O` removes assertions. Assertions may express internal invariants after input validation.
 - **Signal inputs keep their source scope.** A tool schema belongs to the response that supplied it; do not apply a later schema to earlier calls. Preserve unsupported tool activity as a coverage failure for dependent signals, and retain missing-data reasons and evidence when saving reports.
 - **Saved coverage excludes capture payloads.** Persist Insights source coverage through `TraceDocument.source_coverage`, which selects known provenance and coverage fields. Never copy unrestricted `capture_metadata` into a saved review result; source adapters can carry conversation payloads there.
 - **Names are labels, not identities.** Dataset and experiment rows can contain personas or scenarios with the same name but different content. Deduplicate seeds by full model content in first-seen order; test both exact repeats and distinct same-named variants.
@@ -26,6 +27,7 @@ Rules under **Hard rules** are violations when broken. Rules under **Judgement c
 - **Settings saves apply deliberate edits.** Keep the persisted document separate from runtime settings and patch only edited paths. Preserve unrelated nested data and invalid untouched values; temporary defaults and environment overrides are not saved choices. Rename or remove stored fields through explicit version migrations. Serialize the whole read, patch, and write transaction with `common.file_lock.strict_file_lock` on a permanent sibling lock file, and share the authentication field inventory through `trace_finder.settings.AUTH_SETTINGS_FIELDS`.
 - **Target-call jobs always emit the nested `error` key.** Set it to `None` on success, because a missing key lets the judge score an `[ERROR: ...]` marker as a real reply and a dead target comes back RESISTANT. Flatten target errors with `TargetCallResult.error_payload()`, since an `AgentResponseError` object fails report validation for the whole run. A job that absorbs a failure also reports the top-level `JobReturn['error']`.
 - **Never ask a judge for a verdict that inverts between types.** `must_happen` and `must_not_happen` mean opposite things by the same `passed` flag, and models get it backwards: gpt-5.4-mini marked a satisfied `must_happen` as unmet while its own `reason` said the opposite. Ask for the one factual thing (*did it occur?*) and map occurrence to pass/fail in code.
+- **Time bounds retain their boundary semantics.** Generated calendar-day ends are exclusive; caller-supplied instants keep their declared inclusivity. Carry that distinction through intersections and local narrowing instead of inferring it from the timestamp's clock time. Open generated bounds use retention limits for a default population, not an unrelated shorter display window.
 
 ### Provider calls and concurrency
 
@@ -41,6 +43,7 @@ Rules under **Hard rules** are violations when broken. Rules under **Judgement c
 - **Every filtered UI section renders an empty state.** A section that disappears on zero matches is indistinguishable from a bug.
 - **Docs ship in the same change.** A change to a public entry point, option, default, env var, or registry member updates the docs in the same PR, because docs deferred to a follow-up are docs that drift.
 - **No drive-by reformatting.** Quote-style and signature re-wrapping in an unrelated file hides the behaviour change and collides with parallel sessions.
+- **HTML attributes escape their own values.** Escaping surrounding Markdown or text does not make a URL safe inside a quoted `href`; escape the value for that attribute and keep allowed URL schemes explicit.
 
 ## Judgement calls
 

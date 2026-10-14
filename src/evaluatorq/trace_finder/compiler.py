@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, time, timedelta, timezone
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from evaluatorq.common.structured_output import generate_structured
 
@@ -20,6 +30,7 @@ from .models import (
     CompiledQuery,
     LegendItem,
     NumericFilters,
+    PopulationRequest,
     ThresholdSelection,
     ValueSelection,
 )
@@ -100,11 +111,120 @@ Extract numeric constraints on total tokens and duration into numeric. Bounds ar
 counts, so strict phrases must move by one unit: "over 20k tokens" → tokens_min: 20001 and
 "slower than 30 seconds" → duration_ms_min: 30001. Likewise "under 20k tokens" → tokens_max:
 19999. A bare count with no unit ("above 50k") means total tokens. Keep all four numeric fields
-null when the query does not mention a token or duration constraint."""
+null when the query does not mention a token or duration constraint. Extract explicit and relative
+periods; leave both bounds null when no calendar-time constraint is requested. For whole-calendar-day
+requests, set calendar_day true and use an exclusive next-day UTC midnight end, even when the
+underlying date was expressed as a relative day. Set it false for any request with explicit clock-time
+semantics; preserve those exact instants. A date-only bound is a whole calendar day, not a time-of-day.
+Use the supplied current UTC time to resolve relative periods; leave both bounds null when no
+calendar-time constraint is requested and set calendar_day false when no calendar-time constraint
+is requested. Time bounds do not create semantic dimensions; descriptive language still does."""
+
+
+class TimeFilters(BaseModel):
+    """UTC bounds and the model's explicit whole-calendar-day intent marker."""
+
+    model_config = ConfigDict(frozen=True, extra='forbid')
+
+    start: datetime | None = None
+    end: datetime | None = None
+    calendar_day: bool = False
+
+    @model_validator(mode='before')
+    @classmethod
+    def retain_date_only_end_intent(cls, values: object) -> object:
+        """Retain the exclusive calendar boundary when normalizing a date-only end."""
+        if isinstance(values, dict) and isinstance(values.get('end'), str):
+            if re.fullmatch(r'\d{4}-\d{2}-\d{2}', values['end']):
+                return {**values, 'calendar_day': True}
+        return values
+
+    @field_validator('start', mode='before')
+    @classmethod
+    def normalize_calendar_start(cls, value: object) -> object:
+        """Interpret ISO date-only starts as UTC midnight."""
+
+        if isinstance(value, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+            return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+        return value
+
+    @field_validator('end', mode='before')
+    @classmethod
+    def normalize_calendar_end(cls, value: object) -> object:
+        """Treat ISO date-only ends as exclusive midnight after that calendar day."""
+
+        if isinstance(value, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+            return datetime.fromisoformat(value).replace(tzinfo=timezone.utc) + timedelta(days=1)
+        return value
+
+    @field_validator('start', 'end')
+    @classmethod
+    def require_aware_utc(cls, value: datetime | None) -> datetime | None:
+        """Normalize aware instants to UTC and reject naive values."""
+
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError('time bounds must be timezone-aware')
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode='after')
+    def validate_order(self) -> TimeFilters:
+        """Reject reversed closed ranges."""
+
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError('start must be less than or equal to end')
+        return self
 
 
 class CompileError(RuntimeError):
     """The compiler did not return an OpenAI structured-output document."""
+
+
+def canonical_generated_end(generated: TimeFilters, *, selector_output: bool = False) -> datetime | None:
+    """Return the declared upper bound before retention or population clipping."""
+    end = generated.end
+    if selector_output and generated.calendar_day and generated.start is not None and end is not None:
+        midnight_after_end_date = datetime.combine(end.date() + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        if (
+            generated.start.time() == time.min
+            and generated.start < midnight_after_end_date
+            and end.time() in (time(23, 59, 59), time(23, 59, 59, 999999))
+        ):
+            return midnight_after_end_date
+    return end
+
+
+def normalize_generated_time(
+    generated: TimeFilters | None,
+    *,
+    population: PopulationRequest,
+    within_results: bool,
+    reference: datetime,
+    default_window_days: int = 30,
+    selector_output: bool = False,
+) -> tuple[datetime, datetime] | None:
+    """Resolve bounds and canonicalize selector-only inclusive whole-day end spellings."""
+
+    if reference.tzinfo is None or reference.utcoffset() is None:
+        raise ValueError('reference must be timezone-aware')
+    reference = reference.astimezone(timezone.utc)
+    if generated is None:
+        return None
+
+    retention_start = reference - timedelta(days=default_window_days)
+    generated_start = generated.start or retention_start
+    generated_end = canonical_generated_end(generated, selector_output=selector_output) or population.end or reference
+    generated_start = max(generated_start, retention_start)
+    generated_end = min(generated_end, reference)
+    if within_results or population.time_origin == 'within_results':
+        start = max(value for value in (population.start, generated_start) if value is not None)
+        end = min(value for value in (population.end, generated_end) if value is not None)
+    elif population.time_origin == 'explicit':
+        return None
+    else:
+        start, end = generated_start, generated_end
+    return start, end
 
 
 _BOOLEAN_LABELS = MappingProxyType({'yes': True, 'true': True, 'no': False, 'false': False})
@@ -247,6 +367,9 @@ class CompilerWireQuery(BaseModel):
 
     dimensions: list[WireDimension]
     numeric: WireNumeric
+    calendar_day: StrictBool
+    start: datetime | None = Field(...)
+    end: datetime | None = Field(...)
     unsupported_reason: str | None = Field(max_length=200)
 
     def to_domain(self) -> tuple[tuple[CompiledQuery, ...], NumericFilters]:
@@ -269,6 +392,7 @@ class CompiledPlan(BaseModel):
 
     dimensions: tuple[CompiledQuery, ...] = Field(max_length=MAX_DIMENSIONS)
     numeric: NumericFilters
+    time: TimeFilters | None = None
     # Set when the question asks for an aggregate (total, average, ranking) that finding traces cannot answer.
     unsupported_reason: str | None = None
 
@@ -279,6 +403,7 @@ async def compile_query(
     query: str,
     *,
     cfg: LLMCallConfig | None = None,
+    now: datetime | None = None,
 ) -> CompiledPlan:
     """Use shared structured output to compile a question into numeric bounds and zero to three classifier dimensions."""
 
@@ -286,9 +411,13 @@ async def compile_query(
     if not normalized:
         raise ValueError('Enter a semantic trace query before compiling.')
 
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None or current.utcoffset() is None:
+        raise ValueError('now must be timezone-aware')
+    current = current.astimezone(timezone.utc)
     messages = [
         {'role': 'system', 'content': COMPILER_INSTRUCTIONS},
-        {'role': 'user', 'content': normalized},
+        {'role': 'user', 'content': f'{normalized}\n\nCurrent UTC time: {current.isoformat()}'},
     ]
     if debug_enabled():
         logger.debug(
@@ -322,6 +451,11 @@ async def compile_query(
         error_kind = 'an invalid plan'
         try:
             dimensions, numeric = wire.to_domain()
+            time = (
+                TimeFilters(start=wire.start, end=wire.end, calendar_day=wire.calendar_day)
+                if wire.start is not None or wire.end is not None
+                else None
+            )
         except (ValidationError, ValueError) as exc:
             error = exc
         else:
@@ -332,7 +466,7 @@ async def compile_query(
                 error_kind = 'contradictory numeric bounds'
             else:
                 reason = (wire.unsupported_reason or '').strip() or None
-                return CompiledPlan(dimensions=dimensions, numeric=numeric, unsupported_reason=reason)
+                return CompiledPlan(dimensions=dimensions, numeric=numeric, time=time, unsupported_reason=reason)
         if attempt:
             raise CompileError(f'Compiler produced {error_kind}: {error}') from error
         logger.warning('Trace query compiler returned an invalid plan; retrying: {}', error)

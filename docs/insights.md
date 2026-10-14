@@ -96,7 +96,11 @@ The `eq insights` command accepts population filters, label presets or JSON file
 eq insights --query "customers asking about refunds" --agent support-bot --label sentiment --label customer_satisfaction --dimension intent --dimension failure --limit 500 --json refunds-insights.json
 ```
 
-The command prints cluster and label summaries, failed-trace counts, projection coverage, and the saved run path.
+For query-based population selection, `--filter-selection llm|llm+jev` overrides the saved dashboard mode (default `llm+jev`) and requires `--query`. `llm` uses the configured fast `finder.filters` task for facets, numeric bounds and time bounds; `llm+jev` uses the configured `finder.classifier` for facets while the shared compiler supplies numeric and time bounds in both modes. The compiler runs before facet selection. Each catalogue request supplies up to 50 values per facet for its actual time window. Candidate extraction is limited to eight values from `model`, `provider`, `agent`, `tool`, or `project` mentions, slash-qualified model names, and quoted strings up to 100 characters; a candidate outside the catalogue is used only after exact trace confirmation. Generated calendar dates may narrow or replace the configured default window; explicitly supplied windows keep their bounds. The mode and generated-window behavior are the same whether or not you pass `--filter-selection`.
+
+The five-minute facet-catalogue cache is scoped to the Orq host, credentials, workspace/project scope and limit. Exact time bounds distinguish explicit-window entries; default-window entries are grouped by window duration.
+
+The command prints cluster and label summaries, failed-trace counts, projection coverage, and the saved run path. `--from-finder` and `--from-snapshot` cannot be combined with `--filter-selection`; file sources fix the population. Other options and preview behavior are listed below.
 
 | Option | Purpose and constraints |
 |---|---|

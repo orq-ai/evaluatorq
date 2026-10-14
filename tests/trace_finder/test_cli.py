@@ -176,6 +176,29 @@ def test_find_shows_plan_and_classifies_without_prompt_when_not_a_tty(monkeypatc
     assert 'Matched traces' in result.output
 
 
+
+@pytest.mark.parametrize(('args', 'expected_origin', 'expected_mode'), [
+    ([], 'default', 'llm+jev'),
+    (['--window-days', '3', '--filter-selection', 'llm'], 'explicit', 'llm'),
+])
+def test_find_preserves_window_and_filter_selection_overrides(
+    monkeypatch: Any, args: list[str], expected_origin: str, expected_mode: str
+) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    store = ReviewStore()
+    captured: dict[str, Any] = {}
+    _use_review_store(monkeypatch, store, tty=False)
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda settings, **kwargs: (captured.update(settings=settings) or store))
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests', *args])
+
+    assert result.exit_code == 0, result.output
+    assert store.request is not None
+    assert store.request.population.time_origin == expected_origin
+    assert captured['settings'].filter_selection == expected_mode
+
+
 def test_find_starts_the_reviewed_plan_without_recompiling(monkeypatch: Any) -> None:
     store = ReviewStore()
     _use_review_store(monkeypatch, store, tty=False)

@@ -138,7 +138,9 @@ class InsightsPopulation(BaseModel):
     filters: dict[str, Any] | None = Field(default=None, exclude=True)
     start: datetime | None = None
     end: datetime | None = None
+    time_origin: Literal['default', 'explicit'] = 'default'
     window_days: int = Field(default=7, ge=1, le=90)
+    filter_selection: Literal['llm', 'llm+jev'] | None = None
     limit: int = Field(default=500, ge=1, le=5000)
     finder_export: Path | None = None
     snapshot_path: Path | None = None
@@ -179,6 +181,8 @@ class InsightsPopulation(BaseModel):
                 raise ValueError(f'{name} must be timezone-aware')
         if self.start is not None and self.end is not None and self.start > self.end:
             raise ValueError('start must not be later than end')
+        if self.filter_selection is not None and self.query is None:
+            raise ValueError('filter_selection requires query')
 
         if self.finder_export is None and self.snapshot_path is None:
             return self
@@ -190,7 +194,9 @@ class InsightsPopulation(BaseModel):
             'numeric': self.numeric != NumericFilters(),
             'start': self.start is not None,
             'end': self.end is not None,
+            'time_origin': self.time_origin != 'default',
             'window_days': self.window_days != 7,
+            'filter_selection': self.filter_selection is not None,
             'limit': self.limit != 500,
         }
         conflicting = [name for name, used in live_fields.items() if used]

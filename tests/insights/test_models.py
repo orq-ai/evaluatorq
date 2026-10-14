@@ -51,6 +51,27 @@ def test_population_allows_equal_window_bounds() -> None:
     assert InsightsPopulation(start=bound, end=bound).start == bound
 
 
+@pytest.mark.parametrize(
+    ('field', 'value'),
+    [
+        ('facets', FacetSelection(model=frozenset({'gpt-5'}))),
+        ('numeric', NumericFilters(tokens_min=10)),
+        ('start', datetime(2026, 9, 1, tzinfo=timezone.utc)),
+        ('end', datetime(2026, 9, 2, tzinfo=timezone.utc)),
+        ('window_days', 14),
+        ('filter_selection', 'llm'),
+        ('limit', 100),
+    ],
+)
+def test_finder_export_rejects_live_population_settings(field: str, value: Any) -> None:
+    with pytest.raises(ValueError, match=field):
+        InsightsPopulation(finder_export=Path('a.json'), **{field: value})
+
+def test_filter_selection_requires_query() -> None:
+    with pytest.raises(ValueError):
+        InsightsPopulation(filter_selection='llm')
+
+
 def test_population_unified_filters_split_into_facets_and_numeric() -> None:
     population = InsightsPopulation(filters={'agent_name': ['support-bot'], 'tokens_min': 100})
 

@@ -1076,6 +1076,16 @@ def settings_body(
         '<div class="config-row settings-field"><label class="config-key" for="ask_ai_mode">Ask AI on traces</label>'
         f'<span class="config-val"><span class="settings-select"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></span></div>'
     )
+    filter_mode = setting_value('filter_selection') or 'llm+jev'
+    filter_options = ''.join(
+        f'<option value="{value}"{" selected" if value == filter_mode else ""}>{label}</option>'
+        for value, label in (('llm+jev', 'LLM + Jev'), ('llm', 'LLM only'))
+    )
+    field_rows.append(
+        '<div class="config-row settings-field"><label class="config-key" for="filter_selection">Trace filters</label>'
+        f'<span class="config-val"><span class="settings-select"><select id="filter_selection" name="filter_selection">{filter_options}</select></span>'
+        '<span class="settings-auth-hint">Choose how natural-language trace metadata filters are selected.</span></span></div>'
+    )
     toast_text = 'Profile preview. Change a setting to save it.' if preview else 'Settings saved' if saved else ''
     toast_html = (
         f'<div id="settings-toast" class="settings-toast{" show" if toast_text else ""}" role="status" aria-live="polite">'

@@ -45,7 +45,7 @@ AUTH_SETTINGS_FIELDS = frozenset({
 
 
 class DashboardSettings(BaseModel):
-    """Configurable models and finder limits used by the dashboard and CLI."""
+    """Configurable models, filter selection and finder limits used by the dashboard and CLI."""
 
     model_config = ConfigDict(extra='forbid')
     _future_fields: dict[str, Any] = PrivateAttr(default_factory=dict)
@@ -63,6 +63,7 @@ class DashboardSettings(BaseModel):
     limit: int = Field(DEFAULT_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
     trace_input_chars: int = Field(DEFAULT_TRACE_INPUT_CHARS, ge=MIN_TRACE_INPUT_CHARS, le=MAX_TRACE_INPUT_CHARS)
+    filter_selection: Literal['llm', 'llm+jev'] = 'llm+jev'
     ask_ai_mode: Literal['immediate', 'review'] = 'immediate'
     orq_auth_method: Literal['environment', 'cli_profile', 'cli_oauth', 'stored_api_key'] = 'environment'
     orq_api_key_ciphertext: str | None = None

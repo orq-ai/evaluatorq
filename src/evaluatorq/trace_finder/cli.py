@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path  # noqa: TC003 — Typer resolves this annotation at runtime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import typer
 from loguru import logger
@@ -117,6 +117,7 @@ def _request(
     *,
     query: str,
     settings: Any,
+    window_days_explicit: bool = False,
     project: list[str] | None,
     model: list[str] | None,
     provider: list[str] | None,
@@ -137,6 +138,7 @@ def _request(
         population=PopulationRequest(
             start=end - timedelta(days=settings.window_days),
             end=end,
+            time_origin='explicit' if window_days_explicit else 'default',
             facets=_facets(
                 project=project,
                 model=model,
@@ -351,6 +353,10 @@ def find(
         int | None,
         typer.Option('--window-days', min=1, max=90, help='How many recent days to search.'),
     ] = None,
+    filter_selection: Annotated[
+        Literal['llm', 'llm+jev'] | None,
+        typer.Option('--filter-selection', help='Natural-language metadata filter mode: llm or llm+jev.'),
+    ] = None,
     limit: Annotated[int | None, typer.Option('--limit', min=1, max=5000, help='Maximum traces to classify.')] = None,
     parallelism: Annotated[
         int | None,
@@ -399,6 +405,7 @@ def find(
     """Find recent Orq traces that satisfy a natural-language classifier task."""
     settings = effective_settings({
         'window_days': window_days,
+        'filter_selection': filter_selection,
         'limit': limit,
         'parallelism': parallelism,
     })
@@ -440,6 +447,7 @@ def find(
         request = _request(
             query=query,
             settings=settings,
+            window_days_explicit=window_days is not None,
             project=project,
             model=model,
             provider=provider,

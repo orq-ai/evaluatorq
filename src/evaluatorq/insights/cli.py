@@ -7,7 +7,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 import typer
@@ -135,6 +135,10 @@ def _validate_population_source(
     preview_input: bool,
 ) -> None:
     """Reject combinations that cannot describe one trace population."""
+    filter_selection = any(name == '--filter-selection' and used for name, used in population_options)
+    if filter_selection and query is None:
+        emit_error('--filter-selection requires --query')
+        raise typer.Exit(code=2)
     if from_finder is not None and from_snapshot is not None:
         emit_error('--from-finder and --from-snapshot cannot be combined')
         raise typer.Exit(code=2)
@@ -450,6 +454,10 @@ def insights_cmd(
     window_days: Annotated[
         int | None, typer.Option('--window-days', min=1, max=90, help='Recent days to scan.')
     ] = None,
+    filter_selection: Annotated[
+        Literal['llm', 'llm+jev'] | None,
+        typer.Option('--filter-selection', help='Natural-language metadata filter mode: llm or llm+jev.'),
+    ] = None,
     limit: Annotated[
         int | None,
         typer.Option(
@@ -502,6 +510,7 @@ def insights_cmd(
                 ('--tokens-max', tokens_max is not None),
                 ('--duration-ms-min', duration_ms_min is not None),
                 ('--duration-ms-max', duration_ms_max is not None),
+                ('--filter-selection', filter_selection is not None),
             ),
         )
         _run_local_sessions(
@@ -544,6 +553,7 @@ def insights_cmd(
             ('--tokens-max', tokens_max is not None),
             ('--duration-ms-min', duration_ms_min is not None),
             ('--duration-ms-max', duration_ms_max is not None),
+            ('--filter-selection', filter_selection is not None),
         ),
         preview_input=preview_input,
     )
@@ -607,6 +617,8 @@ def insights_cmd(
                 ),
                 numeric=numeric,
                 window_days=settings.window_days,
+                time_origin='explicit' if window_days is not None else 'default',
+                filter_selection=filter_selection,
                 limit=settings.limit,
             )
         )
