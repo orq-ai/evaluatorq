@@ -6,7 +6,7 @@ import json
 import math
 import sys
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime  # noqa: TC003 — runtime-required by pydantic manifest models
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias
 
@@ -1163,75 +1163,189 @@ class ResponseTrace(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _add_tool_record(items: list[Any], pairing: dict[str, int], no_args: set[int], item: Any, item_type: str) -> None:
-    """Append one wire tool record to ``items``, joining it to its other half by ``call_id``.
+@dataclass(frozen=True)
+class _ToolRecord:
+    """One wire tool record, normalised for pairing."""
 
-    The Orq router can return an invocation as two records sharing a ``call_id``:
-    a ``function_call`` carrying the arguments and an ``orq:<tool>`` carrying the
-    result. They are folded into one `ToolCallOutputItem`, whichever arrives first.
-    ``pairing`` maps a correlation key to the index of its item in ``items`` and is
-    scoped to one response, so the same ``call_id`` in another turn never pairs.
-    ``no_args`` holds the indices whose arguments no record has supplied yet.
+    key: str | None
+    wire_id: str | None
+    is_function_call: bool
+    explicit_name: str | None
+    derived_name: str
+    arguments: str | None
+    result: str | None
+    error: str | None
+    failed: bool
 
-    The wire ``id`` names the item, not the invocation. It only stands in for a
-    missing ``call_id`` on a ``function_call`` record, where the spec makes it the
-    invocation id; an ``orq:`` record without its own ``call_id`` never pairs. A
-    missing key never pairs. Two records that disagree on name, arguments or result
-    are kept apart and logged rather than guessed at.
-    """
+
+def _is_tool_record(item_type: Any) -> bool:
+    """Whether a wire item type is a tool record: a ``function_call`` or an ``orq:<tool>``."""
+    return isinstance(item_type, str) and (item_type == 'function_call' or item_type.startswith('orq:'))
+
+
+def _is_placeholder_arguments(text: str) -> bool:
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return False
+    return parsed is None or parsed in ({}, [], '')
+
+
+def _read_tool_record(item: Any, item_type: str) -> _ToolRecord:
     explicit_call_id = _gf(item, 'call_id')
     wire_id = _gf(item, 'id')
-    key = explicit_call_id or (wire_id if item_type == 'function_call' else None)
+    is_function_call = item_type == 'function_call'
+    key = explicit_call_id or (wire_id if is_function_call else None)
     raw_args = _gf(item, 'arguments')
-    has_args = raw_args is not None
-    args = (raw_args if isinstance(raw_args, str) else json.dumps(raw_args)) if has_args else '{}'
+    arguments = (
+        None if raw_args is None or raw_args == '' else raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
+    )
+    # An orq: record's empty arguments are a placeholder, so the function_call's win.
+    if arguments is not None and not is_function_call and _is_placeholder_arguments(arguments):
+        arguments = None
     result = _gf(item, 'result')
     if result is None:
         result = _gf(item, 'output')
-    result_text = tool_result_to_text(result) if result is not None else None
-    name = _gf(item, 'name') or (item_type.split(':', 1)[1] if item_type.startswith('orq:') else '')
-    fields: dict[str, Any] = {
-        'type': 'function_call',
-        'name': str(name),
-        'call_id': str(explicit_call_id or wire_id or ''),
-        'arguments': args,
-        'result': result_text,
-    }
-    if isinstance(wire_id, str) and wire_id:
-        fields['id'] = wire_id
-    new = ToolCallOutputItem(**fields)
-    index = pairing.get(str(key)) if key else None
-    if index is None:
-        if key:
-            pairing[str(key)] = len(items)
+    raw_error = _gf(item, 'error')
+    error = tool_result_to_text(raw_error) if raw_error not in (None, '') else None
+    return _ToolRecord(
+        key=str(key) if key else None,
+        wire_id=wire_id if isinstance(wire_id, str) and wire_id else None,
+        is_function_call=is_function_call,
+        explicit_name=str(_gf(item, 'name')) if _gf(item, 'name') else None,
+        derived_name='' if is_function_call else item_type.split(':', 1)[1],
+        arguments=arguments,
+        result=tool_result_to_text(result) if result is not None else None,
+        error=error,
+        failed=str(_gf(item, 'status')).lower() in ('failed', 'error'),
+    )
+
+
+def _json_key(text: str) -> tuple[str, str]:
+    try:
+        return ('json', json.dumps(json.loads(text), sort_keys=True))
+    except ValueError:
+        return ('raw', text)
+
+
+def _conflicting_fields(records: list[_ToolRecord]) -> list[str]:
+    """Fields on which the records of one call_id disagree, comparing JSON by value."""
+    arguments = {_json_key(r.arguments) for r in records if r.arguments is not None}
+    names = {r.explicit_name for r in records if r.explicit_name}
+    results = {_json_key(r.result) for r in records if r.result is not None}
+    errors = {_json_key(r.error) for r in records if r.error is not None}
+    candidates = (('arguments', arguments), ('name', names), ('result', results), ('error', errors))
+    return [name for name, values in candidates if len(values) > 1]
+
+
+def _outcome_buckets(records: list[_ToolRecord], conflicts: list[str]) -> list[list[_ToolRecord]]:
+    """Group the records into one bucket per distinct result or error; the rest join the first."""
+    if 'result' not in conflicts and 'error' not in conflicts:
+        return [records]
+
+    def signature(record: _ToolRecord) -> Any:
+        result = _json_key(record.result) if record.result is not None else None
+        error = _json_key(record.error) if record.error is not None else None
+        if 'result' in conflicts and 'error' in conflicts:
+            return None if result is None and error is None else (result, error)
+        return result if 'result' in conflicts else error
+
+    buckets: dict[Any, list[_ToolRecord]] = {}
+    rest: list[_ToolRecord] = []
+    for record in records:
+        sig = signature(record)
+        if sig is None:
+            rest.append(record)
         else:
-            logger.warning('Tool record {!r} has no call_id, so it cannot be paired; keeping it as is', item_type)
-        if not has_args:
-            no_args.add(len(items))
-        items.append(new)
-        return
-    old = items[index]
-    old_has_args = index not in no_args
-    conflict = (
-        (has_args and old_has_args and args != old.arguments)
-        or (result_text is not None and old.result is not None and result_text != old.result)
-        or (old.name and new.name and old.name != new.name)
-    )
-    if conflict:
-        logger.warning('Conflicting records for call_id {!r} ({!r} vs {!r}); not pairing them', key, old.name, new.name)
-        if not has_args:
-            no_args.add(len(items))
-        items.append(new)
-        return
-    if has_args:
-        no_args.discard(index)
-    items[index] = old.model_copy(
-        update={
-            'name': old.name or new.name,
-            'arguments': args if has_args and not old_has_args else old.arguments,
-            'result': old.result if old.result is not None else result_text,
-        }
-    )
+            buckets.setdefault(sig, []).append(record)
+    ordered = list(buckets.values())
+    ordered[0].extend(rest)
+    return ordered
+
+
+def _tool_call_item(group: list[_ToolRecord], *, call_id: str | None) -> ToolCallOutputItem:
+    """Merge the records of ``group`` into one item; a function_call record's fields win."""
+    ordered = sorted(group, key=lambda r: not r.is_function_call)
+    function_call = ordered[0]
+    result = next((r.result for r in ordered if r.result is not None), None)
+    error = next((r.error for r in ordered if r.error is not None), None)
+    if any(r.failed for r in ordered):
+        payload: dict[str, Any] = {'status': 'failed', 'error': error}
+        if result is not None:
+            payload['result'] = result
+        result = json.dumps(payload)
+    elif result is None:
+        result = error
+    fields: dict[str, Any] = {
+        'name': next((r.explicit_name for r in ordered if r.explicit_name), None)
+        or next((r.derived_name for r in ordered if r.derived_name), ''),
+        'arguments': next((r.arguments for r in ordered if r.arguments is not None), '{}'),
+        'result': result,
+    }
+    if call_id:
+        fields['call_id'] = call_id
+    if function_call.wire_id:
+        fields['id'] = function_call.wire_id
+    return ToolCallOutputItem(**fields)
+
+
+def _pair_tool_records(output_items: list[Any]) -> dict[int, list[ToolCallOutputItem]]:
+    """Convert the tool records in ``output_items`` into items, keyed by input position.
+
+    Pairing is scoped to one response, so the same ``call_id`` in another turn never
+    pairs. The wire ``id`` is a correlation key only for ``function_call`` records.
+    Records that agree on a field are merged. Records whose results or errors
+    conflict become separate items with derived ids (``<call_id>#2``, ``#3``), each
+    keeping the call's arguments and wire id. Conflicting arguments or names keep
+    the call's value.
+    """
+    positions: list[tuple[int, _ToolRecord]] = []
+    for index, item in enumerate(output_items):
+        item_type = _gf(item, 'type')
+        if _is_tool_record(item_type):
+            positions.append((index, _read_tool_record(item, str(item_type))))
+    response_has_call = any(record.is_function_call for _, record in positions)
+    response_has_orq = any(not record.is_function_call for _, record in positions)
+    groups: dict[str, list[tuple[int, _ToolRecord]]] = {}
+    converted: dict[int, list[ToolCallOutputItem]] = {}
+    for index, record in positions:
+        if record.key is None:
+            item = _tool_call_item([record], call_id=None)
+            converted[index] = [item]
+            _warn_unmatched(
+                [record], label=item.call_id, response_has_call=response_has_call, response_has_orq=response_has_orq
+            )
+        else:
+            groups.setdefault(record.key, []).append((index, record))
+    for key, members in groups.items():
+        records = [record for _, record in members]
+        call = next((r for r in records if r.is_function_call), records[0])
+        index = next(i for i, r in members if r is call)
+        conflicts = _conflicting_fields(records)
+        for conflict in conflicts:
+            logger.warning('Conflicting {} for call_id {!r}', conflict, key)
+        call_only = replace(call, result=None, error=None, failed=False)
+        items: list[ToolCallOutputItem] = []
+        for n, bucket in enumerate(_outcome_buckets(records, conflicts), start=1):
+            group = bucket if any(r is call for r in bucket) else [call_only, *bucket]
+            items.append(_tool_call_item(group, call_id=key if n == 1 else f'{key}#{n}'))
+        converted[index] = items
+        _warn_unmatched(records, label=key, response_has_call=response_has_call, response_has_orq=response_has_orq)
+    return converted
+
+
+def _warn_unmatched(records: list[_ToolRecord], *, label: str, response_has_call: bool, response_has_orq: bool) -> None:
+    has_args = any(r.arguments is not None for r in records)
+    has_result = any(r.result is not None or r.error is not None or r.failed for r in records)
+    # A lone function_call is the normal Responses shape when the caller runs the tool
+    # itself; only the router's split shape (an orq: record in the response) makes a
+    # missing result worth a warning.
+    if has_args and not has_result:
+        if not response_has_orq:
+            return
+        logger.warning('Tool call {!r} has no result record', label)
+    elif has_result and not has_args and response_has_call:
+        logger.warning('Tool result {!r} has no matching call record; its arguments are unknown', label)
 
 
 class AgentResponse(BaseModel):
@@ -1313,10 +1427,10 @@ class AgentResponse(BaseModel):
     def from_output_items(cls, output_items: Any) -> AgentResponse:
         """Build an AgentResponse from bare Responses ``output`` items, with no usage or metadata."""
         items: list[OutputMessage] = []
-        pairing: dict[str, int] = {}
-        no_args: set[int] = set()
+        output_items = list(output_items)
+        tool_items = _pair_tool_records(output_items)
         refusal: str | None = None
-        for item in output_items:
+        for index, item in enumerate(output_items):
             item_type = _gf(item, 'type')
             if item_type == 'message':
                 for part in _gf(item, 'content') or []:
@@ -1340,20 +1454,12 @@ class AgentResponse(BaseModel):
             # instead types agent tool calls as 'orq:<tool_name>' (e.g.
             # 'orq:query_knowledge_base'). Treat both as tool calls so the
             # agent's tool activity is captured rather than silently dropped.
-            elif item_type == 'function_call' or (isinstance(item_type, str) and item_type.startswith('orq:')):
-                _add_tool_record(items, pairing, no_args, item, str(item_type))
+            elif _is_tool_record(item_type):
+                items.extend(tool_items.get(index, []))
             elif item_type == 'reasoning':
                 pass  # o1/o3/o4-mini reasoning steps intentionally excluded
             else:
                 logger.warning('AgentResponse.from_openresponses: skipping unknown item type={!r}', item_type)
-        for index in sorted(no_args):
-            orphan = items[index]
-            if isinstance(orphan, ToolCallOutputItem) and orphan.result is not None:
-                logger.warning(
-                    'Tool result {!r} ({!r}) has no matching call record; its arguments are unknown',
-                    orphan.call_id,
-                    orphan.name,
-                )
         return cls(output=items, refusal=refusal)
 
     @classmethod
