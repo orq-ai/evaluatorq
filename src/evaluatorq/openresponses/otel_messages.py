@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from evaluatorq.openresponses.tool_records import is_tool_record, pair_tool_records
+
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text', 'summary_text'})
 _REASONING_PART_TYPES = frozenset({'reasoning_text', 'reasoning'})
 
@@ -91,6 +93,31 @@ def _is_orq_tool_call(item_type: str) -> bool:
     return item_type.startswith('orq:')
 
 
+def _pair_split_tool_records(items: list[Any]) -> list[Any]:
+    """Replace each split ``function_call`` + ``orq:<tool>`` pair with one ``orq:`` item holding both halves.
+
+    A list with no ``orq:`` record is returned unchanged: a lone ``function_call``
+    is the ordinary Responses shape and its result arrives as a separate output item.
+    """
+    if not any(isinstance(raw, dict) and str(raw.get('type', '')).startswith('orq:') for raw in items):
+        return items
+    merged: dict[int, list[dict[str, Any]]] = {}
+    for call in pair_tool_records(items):
+        item: dict[str, Any] = {'type': f'orq:{call.name}', 'call_id': call.call_id, 'name': call.name}
+        if call.has_arguments:
+            item['arguments'] = call.arguments
+        if call.result is not None:
+            item['result'] = call.result
+        merged.setdefault(call.source_index, []).append(item)
+    paired: list[Any] = []
+    for index, raw in enumerate(items):
+        if index in merged:
+            paired.extend(merged[index])
+        elif not (isinstance(raw, dict) and is_tool_record(raw.get('type'))):
+            paired.append(raw)
+    return paired
+
+
 RESPONSES_ITEM_TYPES = frozenset({
     'message',
     'function_call',
@@ -132,7 +159,7 @@ def items_to_input_messages(items: Any) -> list[dict[str, Any]]:
         return []
 
     messages: list[dict[str, Any]] = []
-    for raw in items:
+    for raw in _pair_split_tool_records(items):
         if not isinstance(raw, dict):
             messages.append({'role': 'assistant', 'parts': [_generic_part(raw)]})
             continue
@@ -173,7 +200,7 @@ def items_to_output_messages(items: Any, finish_reason: str = '') -> list[dict[s
         return []
 
     messages: list[dict[str, Any]] = []
-    for raw in items:
+    for raw in _pair_split_tool_records(items):
         if not isinstance(raw, dict):
             messages.append({'role': 'assistant', 'parts': [_generic_part(raw)], 'finish_reason': finish_reason})
             continue

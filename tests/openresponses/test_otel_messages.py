@@ -145,3 +145,33 @@ def test_request_span_records_parts_in_gen_ai_and_raw_items_in_openresponses() -
     # The raw items stay verbatim under the key Orq's gateway uses for them.
     assert json.loads(str(attrs['openresponses.input'])) == _TOOL_TRANSCRIPT
     assert attrs['gen_ai.system_instructions'] == 'be brief'
+
+
+_SPLIT_CALL = {'type': 'function_call', 'id': 'fc_1', 'call_id': 'c1', 'name': 'refund', 'arguments': '{"order": "a2"}'}
+_SPLIT_RESULT = {'type': 'orq:refund', 'id': 'orq_9', 'call_id': 'c1', 'result': {'ok': False}}
+
+
+def test_split_orq_pair_is_one_tool_call_with_its_result() -> None:
+    messages = items_to_input_messages([_SPLIT_CALL, _SPLIT_RESULT])
+
+    assert [m['role'] for m in messages] == ['assistant', 'tool']
+    assert messages[0]['parts'] == [{'type': 'tool_call', 'id': 'c1', 'name': 'refund', 'arguments': {'order': 'a2'}}]
+    assert messages[1]['parts'] == [{'type': 'tool_call_response', 'id': 'c1', 'response': {'ok': False}}]
+
+
+def test_reordered_split_pair_gives_the_same_messages() -> None:
+    assert items_to_input_messages([_SPLIT_RESULT, _SPLIT_CALL]) == items_to_input_messages([_SPLIT_CALL, _SPLIT_RESULT])
+
+
+def test_split_pair_in_output_is_one_call_part_and_no_result() -> None:
+    messages = items_to_output_messages([_SPLIT_CALL, _SPLIT_RESULT], 'stop')
+
+    assert len(messages) == 1
+    assert messages[0]['parts'] == [{'type': 'tool_call', 'id': 'c1', 'name': 'refund', 'arguments': {'order': 'a2'}}]
+
+
+def test_unmatched_orq_record_keeps_its_result_and_has_no_invented_arguments() -> None:
+    messages = items_to_input_messages([{'type': 'orq:refund', 'call_id': 'c9', 'result': 'ok'}])
+
+    assert messages[0]['parts'] == [{'type': 'tool_call', 'id': 'c9', 'name': 'refund', 'arguments': None}]
+    assert messages[1]['parts'] == [{'type': 'tool_call_response', 'id': 'c9', 'response': 'ok'}]
