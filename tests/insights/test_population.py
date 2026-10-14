@@ -11,8 +11,10 @@ import pytest
 
 from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document
 from evaluatorq.insights import population as population_module
+from evaluatorq.contracts import Usage
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.population import PopulationError, resolve_population
+from evaluatorq.insights.usage import UsageLedger
 from evaluatorq.trace_finder.export import (
     ExportCounts,
     ExportDimension,
@@ -875,3 +877,87 @@ async def test_query_population_honours_the_effective_end_boundary(monkeypatch, 
     )
     assert [trace.metadata.trace_id for trace in resolved.traces] == expected
     assert resolved.n_scanned == len(expected)
+
+
+def _plan_with_calls(*calls: Usage | None):
+    async def fake_plan(query: str, population: PopulationRequest, **kwargs: Any) -> PlanningResult:
+        return PlanningResult(
+            dimensions=(),
+            generated_facets=FacetSelection(),
+            generated_numeric=NumericFilters(),
+            generated_time=None,
+            effective_population=population,
+            selector_response=None,
+            selector_error=None,
+            provenance={'filter_mode': 'llm'},
+            usage={},
+            model_calls=calls,
+        )
+
+    return fake_plan
+
+
+@pytest.mark.asyncio
+async def test_query_population_records_planner_calls_under_population(monkeypatch: pytest.MonkeyPatch) -> None:
+    call = Usage(input_tokens=10, output_tokens=5, total_tokens=15, total_cost=0.25).with_calls(1)
+    monkeypatch.setattr(population_module, 'plan_query', _plan_with_calls(call, call))
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=())
+    ledger = UsageLedger()
+
+    await resolve_population(
+        InsightsPopulation(query='refund requests', filter_selection='llm'),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+        usage=ledger,
+    )
+
+    total = ledger.totals()['population']
+    assert total is not None
+    assert total.calls == 2
+    assert total.total_tokens == 30
+    assert total.total_cost == pytest.approx(0.5)
+    assert not total.cost_is_partial
+
+
+@pytest.mark.asyncio
+async def test_query_population_with_unreported_usage_is_partial(monkeypatch: pytest.MonkeyPatch) -> None:
+    call = Usage(input_tokens=10, output_tokens=5, total_tokens=15, total_cost=0.25).with_calls(1)
+    monkeypatch.setattr(population_module, 'plan_query', _plan_with_calls(call, None))
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=())
+    ledger = UsageLedger()
+
+    await resolve_population(
+        InsightsPopulation(query='refund requests', filter_selection='llm'),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+        usage=ledger,
+    )
+
+    total = ledger.totals()['population']
+    assert total is not None
+    assert total.calls == 2
+    assert total.cost_is_partial
+
+
+@pytest.mark.asyncio
+async def test_filter_population_records_no_population_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=())
+    ledger = UsageLedger()
+
+    await resolve_population(
+        InsightsPopulation(),
+        orq=_orq(),
+        client=None,
+        compiler_model='compiler',
+        classifier_model='classifier',
+        usage=ledger,
+    )
+
+    assert 'population' not in ledger.totals()

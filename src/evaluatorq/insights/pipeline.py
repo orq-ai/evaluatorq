@@ -597,6 +597,7 @@ async def insights(  # noqa: C901
                 trace_input_chars=trace_input_chars,
                 label_classifier_model=classifier_model,
                 classifier_questions=classifier_questions,
+                usage=ledger,
             )
             measured = []
             for source_trace in resolved.traces:

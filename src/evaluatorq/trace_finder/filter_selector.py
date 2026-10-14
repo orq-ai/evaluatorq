@@ -136,6 +136,7 @@ async def select_filters_with_response(
     return FilterSelectionResult(
         _selection_from_answers(outcome.response, choices, binary_values, questions),
         outcome.response.model_copy(deep=True),
+        usage=outcome.token_usage,
     )
 
 

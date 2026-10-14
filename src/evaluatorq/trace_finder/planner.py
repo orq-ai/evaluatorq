@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from orq_ai_sdk import Orq
 
     from evaluatorq.common.judge import ClassifyResponse
+    from evaluatorq.contracts import Usage
     from evaluatorq.trace_finder.compiler import CompiledQuery
 
 
@@ -41,6 +42,8 @@ class PlanningResult:
     usage: Mapping[str, Any]
     unsupported_reason: str | None = None
     empty_match: bool = False
+    # One entry per model call the plan made; ``None`` is a call whose response carried no usage.
+    model_calls: tuple[Usage | None, ...] = ()
 
 
 async def plan_query(
@@ -74,6 +77,7 @@ async def plan_query(
     default_bounds = (initial_start, initial_end)
     cache_events: list[dict[str, Any]] = []
     selector_usage_events: list[dict[str, Any]] = []
+    model_calls: list[Usage | None] = [*compiled.usages]
     catalogue = FacetCatalogue()
 
     async def load_catalogue(start: datetime, end: datetime) -> FacetCatalogue:
@@ -123,7 +127,8 @@ async def plan_query(
     try:
         if initial_catalogue_error is not None:
             raise RuntimeError(initial_catalogue_error)
-        selected = await _select_from_catalogue(
+        selected = await _select_recorded(
+            model_calls,
             query,
             catalogue,
             client=client,
@@ -163,6 +168,7 @@ async def plan_query(
         classifier_model=classifier_model,
         fast_filter_model=fast_filter_model,
         selector_usage_events=selector_usage_events,
+        model_calls=model_calls,
         loader=load_catalogue,
     )
     generated_exclusive_end = (
@@ -257,6 +263,7 @@ async def plan_query(
         usage,
         compiled.unsupported_reason,
         empty_match,
+        tuple(model_calls),
     )
 
 
@@ -469,6 +476,19 @@ async def _select_from_catalogue(
     )
 
 
+async def _select_recorded(model_calls: list[Usage | None], *args: Any, **kwargs: Any) -> FilterSelectionResult:
+    """Run the filter selector and record its call; a failed call is recorded with unknown usage."""
+    try:
+        selected = await _select_from_catalogue(*args, **kwargs)
+    except Exception:
+        model_calls.append(None)
+        raise
+    # The jev path makes no call when the catalogue offers nothing to classify, and then has no response.
+    if kwargs['filter_selection'] == 'llm' or selected.response is not None:
+        model_calls.append(selected.usage)
+    return selected
+
+
 async def _resolve_final_selection(
     query: str,
     population: PopulationRequest,
@@ -486,6 +506,7 @@ async def _resolve_final_selection(
     classifier_model: str,
     fast_filter_model: str,
     selector_usage_events: list[dict[str, Any]],
+    model_calls: list[Usage | None],
     loader: Callable[[datetime, datetime], Awaitable[FacetCatalogue]],
 ) -> tuple[FacetCatalogue, FilterSelectionResult, Any, tuple[datetime, datetime] | None, bool]:
     """Normalize time and reselect only against the final generated-time catalogue window."""
@@ -523,7 +544,8 @@ async def _resolve_final_selection(
                 False,
             )
         catalogue = await loader(*generated_time)
-        selected = await _select_from_catalogue(
+        selected = await _select_recorded(
+            model_calls,
             query,
             catalogue,
             client=client,
