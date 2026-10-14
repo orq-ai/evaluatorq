@@ -230,6 +230,7 @@ async def _build_dimension(  # noqa: C901
     else:
         group_indices[None] = list(range(len(usable)))
 
+    usage = usage.scoped(f'dimension:{dimension}') if usage is not None else None
     next_base = next_top = 0
     for group, indices in group_indices.items():
         if len(indices) == 1:
