@@ -45,12 +45,13 @@ TASKS: dict[str, Role] = {
     'sim.judge': 'smart',
     'sim.generator': 'fast',
     'finder.compiler': 'fast',
+    'finder.filters': 'fast',
     'finder.classifier': 'classifier',
-    'apply': 'smart',
     'insights.summary': 'smart',
     'insights.labels': 'classifier',
     'insights.embedding': 'embedding',
     'signals': 'classifier',
+    'apply': 'smart',
 }
 # Env vars from before roles existed, still honoured as task overrides.
 LEGACY_TASK_ENV: dict[str, str] = {

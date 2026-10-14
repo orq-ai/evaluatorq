@@ -17,7 +17,7 @@ from evaluatorq.common.trace_document import (  # noqa: TC001 — Pydantic needs
     DatasetRef,
     Outcome,
 )
-from evaluatorq.contracts import Usage  # noqa: TC001 — Pydantic needs the runtime model type.
+from evaluatorq.contracts import StageRecord, Usage  # noqa: TC001 — Pydantic needs the runtime model types.
 from evaluatorq.insights.transcript import ToolStats  # noqa: TC001 — Pydantic needs the runtime model type.
 from evaluatorq.signals.config import SignalsConfig  # noqa: TC001 — Pydantic field type.
 from evaluatorq.signals.models import SignalReport  # noqa: TC001 — Pydantic field type.
@@ -138,7 +138,9 @@ class InsightsPopulation(BaseModel):
     filters: dict[str, Any] | None = Field(default=None, exclude=True)
     start: datetime | None = None
     end: datetime | None = None
+    time_origin: Literal['default', 'explicit'] = 'default'
     window_days: int = Field(default=7, ge=1, le=90)
+    filter_selection: Literal['llm', 'llm+jev'] | None = None
     limit: int = Field(default=500, ge=1, le=5000)
     finder_export: Path | None = None
     snapshot_path: Path | None = None
@@ -179,6 +181,8 @@ class InsightsPopulation(BaseModel):
                 raise ValueError(f'{name} must be timezone-aware')
         if self.start is not None and self.end is not None and self.start > self.end:
             raise ValueError('start must not be later than end')
+        if self.filter_selection is not None and self.query is None:
+            raise ValueError('filter_selection requires query')
 
         if self.finder_export is None and self.snapshot_path is None:
             return self
@@ -190,7 +194,9 @@ class InsightsPopulation(BaseModel):
             'numeric': self.numeric != NumericFilters(),
             'start': self.start is not None,
             'end': self.end is not None,
+            'time_origin': self.time_origin != 'default',
             'window_days': self.window_days != 7,
+            'filter_selection': self.filter_selection is not None,
             'limit': self.limit != 500,
         }
         conflicting = [name for name, used in live_fields.items() if used]
@@ -398,6 +404,14 @@ class InsightsConfig(BaseModel):
         return self
 
 
+class InsightsStageHistory(BaseModel):
+    """Pipeline stage plan and records stored with the run so the file stays self-sufficient."""
+
+    planned_stages: list[str] = Field(default_factory=list)
+    stage_labels: dict[str, str] = Field(default_factory=dict)
+    stages: list[StageRecord] = Field(default_factory=list)
+
+
 class InsightsRun(BaseModel):
     """The full, persisted result of one insights run — written as `insights_<timestamp>_<slug>.json`."""
 
@@ -419,6 +433,8 @@ class InsightsRun(BaseModel):
     counts: dict[str, int]
     warnings: list[str]
     cost_by_stage: dict[str, Usage | None] = {}
+    # None on runs saved before stage history was stored.
+    stage_history: InsightsStageHistory | None = None
 
     @model_validator(mode='after')
     def _trace_identities_are_unique(self) -> Self:

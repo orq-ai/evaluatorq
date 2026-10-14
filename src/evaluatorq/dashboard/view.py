@@ -34,6 +34,7 @@ from evaluatorq.common.model_roles import BUILTIN, ROLE_ENV, TASKS, role_model, 
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.simulation.metrics import TURN_METRICS
 from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
@@ -255,12 +256,10 @@ def _stat_tile(label: str, value: str, unit: str = '', sub: str = '') -> str:
     )
 
 
-def _panel(title: str, sub: str, inner: str, *, cls: str = '') -> str:
+def _panel(title: str, sub: str, inner: str, *, cls: str = '', title_tag: str = 'div') -> str:
     cls_attr = f' {cls}' if cls else ''
-    return (
-        f'<div class="panel{cls_attr}"><div class="panel-title">{esc(title)}</div>'
-        f'<div class="panel-sub">{esc(sub)}</div>{inner}</div>'
-    )
+    sub_html = f'<div class="panel-sub">{esc(sub)}</div>' if sub else ''
+    return f'<div class="panel{cls_attr}"><{title_tag} class="panel-title">{esc(title)}</{title_tag}>{sub_html}{inner}</div>'
 
 
 def _bars(
@@ -455,7 +454,7 @@ _CHEVRON = (
 )
 
 
-def _target_pill(label: str, kind: str) -> str:
+def _target_pill(label: str, kind: str, *, ellipsis: bool = False) -> str:
     """Target cell rendered exclusively from the saved run's target kind.
 
     Older JSON and extensions may carry raw storage kinds rather than the
@@ -470,7 +469,8 @@ def _target_pill(label: str, kind: str) -> str:
         'callback': 'external',
         'other': 'external',
     }.get(kind, kind if kind in _TARGET_ICONS else 'external')
-    return f'<span class="target-pill" data-kind="{esc(display_kind)}">{_TARGET_ICONS[display_kind]}{esc(label)}</span>'
+    text = f'<span class="target-label">{esc(label)}</span>' if ellipsis else esc(label)
+    return f'<span class="target-pill" data-kind="{esc(display_kind)}">{_TARGET_ICONS[display_kind]}{text}</span>'
 
 
 # Run lifecycle → label for the solid status pill (mirrors the platform's
@@ -484,36 +484,140 @@ def _run_status_pill(status: str) -> str:
     return f'<span class="run-status {esc(status)}">{esc(_STATUS_LABEL.get(status, status))}</span>'
 
 
-def _run_grid(rows: list[Any]) -> str:
+_RECENT_DAYS = 7
+
+
+def _when_label(when: datetime) -> tuple[str, str]:
+    """Red team row date: relative inside a week, else an absolute 'Apr 1' (with the year when it is not this one).
+
+    Returns ``(text, title)``; the title carries the relative text for old runs.
+    """
+    relative = _ago(when)
+    now = datetime.now(tz=when.tzinfo) if when.tzinfo else datetime.now()  # noqa: DTZ005
+    if (now - when).days < _RECENT_DAYS:
+        return relative, ''
+    text = f'{when:%b} {when.day}' + ('' if when.year == now.year else f', {when.year}')
+    return text, relative
+
+
+# ASR bands, single-sourced: at or below ``_ASR_FLAG`` is fine, above it is flagged, above ``_ASR_HIGH`` is high.
+_ASR_FLAG = 0.10
+_ASR_HIGH = 0.25
+_ASR_NOTE = (
+    'Attack success rate: share of evaluated attacks that broke the agent; '
+    f'above {_ASR_FLAG:.0%} is flagged, above {_ASR_HIGH:.0%} is high'
+)
+_ASR_HINT = {'mid': f'above {_ASR_FLAG:.0%}, flagged', 'high': f'above {_ASR_HIGH:.0%}, high'}
+_ASR_SUB = {
+    'good': f'At or below {_ASR_FLAG:.0%}',
+    'mid': f'Flagged above {_ASR_FLAG:.0%}',
+    'high': f'High: above {_ASR_HIGH:.0%}',
+}
+_ASR_KPI_STATUS = {'good': 'pass', 'mid': 'warn', 'high': 'fail'}
+
+
+def _asr(row: Any) -> float | None:
+    """Attack success rate of a red team row, ``None`` when nothing was evaluated."""
+    return row.vulnerable / row.evaluated if row.evaluated else None
+
+
+def _asr_cls(asr: float | None) -> str:
+    """Band of an ASR: ``good`` (at or below the flag), ``mid`` (up to the high mark), ``high`` (above), ``none`` when unmeasured."""
+    if asr is None:
+        return 'none'
+    if asr <= _ASR_FLAG:
+        return 'good'
+    return 'mid' if asr <= _ASR_HIGH else 'high'
+
+
+def _sim_row(r: Any) -> str:
+    """One Agent Sim run row of the run grid."""
+    err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
+    status_label = _STATUS_LABEL.get(r.status, r.status)
+    label = f'{r.name}, {_ago(r.when)}, {status_label}, score {_fmt_score(r.score)}, {r.cases} cases'
+    targets = ''.join(starmap(_target_pill, r.targets))
+    return (
+        f'<a class="runs-grid-row" href="/r/{esc(r.rid)}" aria-label="{esc(label)}">'
+        f'<span class="rg-job"><span class="rg-name">{esc(r.name)}{err}</span>'
+        f'<span class="rg-sub">{esc(_ago(r.when))}</span></span>'
+        f'<span class="rg-targets">{targets}</span>'
+        f'<span class="rg-status">{_run_status_pill(r.status)}</span>'
+        f'<span class="run-score rg-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
+        f'<span class="rg-num rg-cases">{r.cases:,}</span>'
+        f'<span class="rg-num rg-cost">{esc(_fmt_cost(r.cost))}</span>'
+        f'{_CHEVRON}'
+        f'</a>'
+    )
+
+
+def _redteam_row(r: Any) -> str:
+    """One red team run row: Broke as x/y, the ASR chip, and a one-chip target summary."""
+    err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
+    when_text, when_title = _when_label(r.when)
+    when_attrs = f' title="{esc(when_title)}"' if when_title else ''
+    cost_text = _fmt_spend(r.cost)
+    asr = _asr(r)
+    asr_text = '—' if asr is None else pct(asr)
+    broke_text = '—' if asr is None else f'{r.vulnerable:,}/{r.evaluated:,}'
+    # An errored run already says so in its pill; a dash beside it adds nothing.
+    broke = f'<span class="rg-broke-n{"" if asr is not None else " is-none"}">{broke_text}</span>'
+    if asr is None and r.status != 'finished':
+        broke = ''
+    status_label = 'completed' if r.status == 'finished' else _STATUS_LABEL.get(r.status, r.status)
+    status_cell = broke if r.status == 'finished' else _run_status_pill(r.status) + broke
+    all_targets = ', '.join(t[0] for t in r.targets) or 'no target'
+    asr_cls = _asr_cls(asr)
+    asr_flag = f' ({_ASR_HINT[asr_cls]})' if asr_cls in _ASR_HINT else ''
+    broke_label = 'none evaluated' if asr is None else f'{broke_text} broke'
+    label = (
+        f'{r.name}, {when_text}, {status_label}, target {all_targets}, '
+        f'ASR {asr_text}{asr_flag}, {broke_label}, {r.cases} cases, cost {cost_text}'
+    )
+    targets_attrs = ''
+    if len(r.targets) > 1:
+        targets = _target_pill(*r.targets[0], ellipsis=True) + f'<span class="target-more">+{len(r.targets) - 1}</span>'
+        targets_attrs = f' title="{esc(all_targets)}"'
+    else:
+        targets = ''.join(_target_pill(*t, ellipsis=True) for t in r.targets)
+        if r.targets:
+            targets_attrs = f' title="{esc(r.targets[0][0])}"'
+    score_hint = f'<span class="sr-only">{esc(asr_flag)}</span>' if asr_flag else ''
+    return (
+        f'<a class="runs-grid-row" href="/r/{esc(r.rid)}" aria-label="{esc(label)}">'
+        f'<span class="rg-job"><span class="rg-name" title="{esc(r.name)}">{esc(r.name)}{err}</span>'
+        f'<span class="rg-sub"{when_attrs}>{esc(when_text)}</span></span>'
+        f'<span class="rg-targets"{targets_attrs}>{targets}</span>'
+        f'<span class="rg-status">{status_cell}</span>'
+        f'<span class="run-score rg-score {asr_cls}" title="{esc(_ASR_NOTE)}">{asr_text}{score_hint}</span>'
+        f'<span class="rg-num rg-cases">{r.cases:,}</span>'
+        f'<span class="rg-num rg-cost">{esc(cost_text)}</span>'
+        f'{_CHEVRON}'
+        f'</a>'
+    )
+
+
+def _run_grid(rows: list[Any], *, redteam: bool = False) -> str:
     """Run-level table as a clickable anchor-grid — the WHOLE row links to the
     run's report. Borderless (no boxed table chrome), aligned columns.
-    Shared by the Red Team + Agent Sim surfaces (identical row shape)."""
+    Shared by the Red Team + Agent Sim surfaces (identical row shape).
+
+    ``redteam`` swaps Status/Score for Broke/ASR (attack success rate, lower is
+    better) and adds the one-chip target summary; the Agent Sim grid keeps its original cells.
+    """
+    status_head, score_head = ('Broke', 'ASR') if redteam else ('Status', 'Score')
     head = (
-        '<div class="runs-grid-head"><span>Job</span><span>Target</span><span>Status</span>'
-        '<span>Score</span><span>Cases</span><span>Cost</span><span></span></div>'
+        '<div class="runs-grid-head" aria-hidden="true"><span>Job</span><span>Target</span>'
+        f'<span>{status_head}</span><span>{score_head}</span><span>Cases</span><span>Cost</span><span></span></div>'
     )
-    parts: list[str] = [head]
-    for r in rows:
-        err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
-        parts.append(
-            f'<a class="runs-grid-row" href="/r/{esc(r.rid)}">'
-            f'<span class="rg-job"><span class="rg-name">{esc(r.name)}{err}</span>'
-            f'<span class="rg-sub">{esc(_ago(r.when))}</span></span>'
-            f'<span class="rg-targets">{"".join(starmap(_target_pill, r.targets))}</span>'
-            f'<span>{_run_status_pill(r.status)}</span>'
-            f'<span class="run-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
-            f'<span class="rg-num">{esc(str(r.cases))}</span>'
-            f'<span class="rg-num">{esc(_fmt_cost(r.cost))}</span>'
-            f'{_CHEVRON}'
-            f'</a>'
-        )
-    return f'<div class="runs-grid">{"".join(parts)}</div>'
+    row = _redteam_row if redteam else _sim_row
+    return f'<div class="runs-grid">{head}{"".join(map(row, rows))}</div>'
 
 
 def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
     """Prev/Next page nav + page-size picker for the run overview. Full-page GET
     links (no JS), shared by both surfaces. Renders just the size picker when
-    everything fits on one page."""
+    everything fits on one page, and nothing at all on the red team overview when
+    even the smallest page holds every run."""
     last = max(1, -(-total // per_page))  # ceil division
     page = min(page, last)
 
@@ -522,15 +626,24 @@ def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
         if active:
             cls += ' is-active'
         if disabled:
-            return f'<span class="{cls} is-disabled">{label}</span>'
-        return f'<a class="{cls}" href="/?surface={esc(surface)}&page={pg}&per_page={pp}">{label}</a>'
+            return f'<span class="{cls} is-disabled" aria-disabled="true">{label}</span>'
+        current = ' aria-current="true"' if active else ''
+        return f'<a class="{cls}" href="/?surface={esc(surface)}&page={pg}&per_page={pp}"{current}>{label}</a>'
 
     sizes = ''.join(link(str(sz), pg=1, pp=sz, active=(sz == per_page)) for sz in RUN_PAGE_SIZES)
-    left = f'<span class="runs-pager-sizes">Per page: {sizes}</span>'
+    # A picker that cannot change anything is noise on the red team overview.
+    fits_smallest = surface == 'redteam' and total <= min(RUN_PAGE_SIZES)
+    left = '' if fits_smallest else f'<span class="runs-pager-sizes">Per page: {sizes}</span>'
 
     if total <= per_page:
-        count = f'<span class="runs-pager-count">Total {total} runs</span>'
-        return f'<div class="runs-pager">{left}<span class="runs-pager-right">{count}</span></div>'
+        if surface == 'redteam' and fits_smallest:
+            # The caption above the strip already says "All N runs"; nothing is left to show.
+            return ''
+        noun = 'run' if total == 1 else 'runs'
+        count = '' if surface == 'redteam' else f'<span class="runs-pager-count">Total {total} {noun}</span>'
+        return (
+            f'<nav class="runs-pager" aria-label="Pagination">{left}<span class="runs-pager-right">{count}</span></nav>'
+        )
 
     lo = (page - 1) * per_page + 1
     hi = min(page * per_page, total)
@@ -539,8 +652,8 @@ def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
         'Next &rsaquo;', pg=page + 1, pp=per_page, disabled=page >= last
     )
     return (
-        f'<div class="runs-pager">{left}'
-        f'<span class="runs-pager-right">{count}<span class="runs-pager-nav">{nav}</span></span></div>'
+        f'<nav class="runs-pager" aria-label="Pagination">{left}'
+        f'<span class="runs-pager-right">{count}<span class="runs-pager-nav">{nav}</span></span></nav>'
     )
 
 
@@ -617,7 +730,7 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
     ``compare_choices`` is the (rid, name) list of all sim runs used to populate
     the side-by-side compare picker; ``None`` hides the picker.
     """
-    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+    from evaluatorq.common.reports.html_helpers import kpi_cards
 
     if data.simulations_run == 0:
         return runs_screen_body([], 'sim')
@@ -678,39 +791,58 @@ def search_results(cards: list[ReportCard], query: str) -> str:
 def redteam_overview_body(data: RedTeamOverview) -> str:
     """Render the Red Team surface as the design's rich overview: 4 KPI cards
     plus an item-level 'Recent attacks' table (RES-1021)."""
-    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+    from evaluatorq.common.reports.html_helpers import kpi_cards
 
-    if data.attacks_run == 0:
+    if data.total_runs == 0:
         return runs_screen_body([], 'redteam')
 
     asr = '—' if data.break_rate is None else pct(data.break_rate)
-    asr_status = (
-        'neutral'
-        if data.break_rate is None
-        else ('fail' if data.break_rate >= 0.25 else 'warn' if data.break_rate > 0 else 'pass')
+    spend_card = {'label': 'Total spend', 'value': _fmt_spend(data.total_cost)}
+    if data.total_cost is not None and (sub := _spend_coverage(data)):
+        spend_card['sub'] = sub
+    band = kpi_cards(
+        [
+            {
+                'label': 'ASR',
+                'value': asr,
+                'status': _ASR_KPI_STATUS.get(_asr_cls(data.break_rate), 'neutral'),
+                **({'sub': _ASR_SUB[_asr_cls(data.break_rate)]} if data.break_rate is not None else {}),
+            },
+            {
+                'label': 'Critical findings',
+                'value': f'{data.critical_findings:,}',
+                'status': 'fail' if data.critical_findings else 'pass',
+            },
+            {'label': 'Attacks run', 'value': f'{data.attacks_run:,}'},
+            spend_card,
+        ],
+        modifier='strip',
     )
-    spend_value = _fmt_cost(data.total_cost)
-    if data.total_input_cost is not None or data.total_output_cost is not None:
-        spend_value += f' (in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)})'
-    if data.total_cost is not None:
-        spend_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls)
-    band = kpi_cards([
-        {'label': 'Attacks run', 'value': str(data.attacks_run)},
-        {'label': 'ASR', 'value': asr, 'status': asr_status},
-        {
-            'label': 'Critical findings',
-            'value': str(data.critical_findings),
-            'status': 'fail' if data.critical_findings else 'pass',
-        },
-        {'label': 'Total spend', 'value': spend_value},
-    ])
 
+    pager = _run_pager('redteam', data.page, data.total_runs, data.per_page)
     panel = _panel(
         'Recent runs',
-        'Latest red team runs',
-        _run_grid(data.recent) + _run_pager('redteam', data.page, data.total_runs, data.per_page),
+        '',
+        _run_grid(data.recent, redteam=True) + pager,
+        cls='' if pager else 'panel--flush',
+        title_tag='h2',
     )
-    return f'<section class="dash-wrap">{band}{panel}</section>'
+    scope = f'All {data.total_runs} runs' if data.total_runs != 1 else '1 run'
+    return f'<section class="dash-wrap rt-overview"><p class="rt-scope">{scope}</p>{band}{panel}</section>'
+
+
+def _fmt_spend(cost: float | None) -> str:
+    """KPI spend: cents once it is dollars, the shared 4dp precision below that."""
+    return f'${cost:,.2f}' if cost is not None and cost >= 1 else _fmt_cost(cost)
+
+
+def _spend_coverage(data: RedTeamOverview) -> str:
+    """Sub-line for a spend total that only some calls priced, e.g. '3 of 10 calls priced'."""
+    text = _coverage(data.priced_calls, data.cost_calls, data.unknown_calls).strip().removeprefix('(').removesuffix(')')
+    head, sep, tail = text.partition(', ')
+    if head.endswith(' calls'):
+        head += ' priced'
+    return head + sep + tail
 
 
 def runs_screen_body(rows: list[RunRow], surface: str) -> str:
@@ -1076,6 +1208,16 @@ def settings_body(
     field_rows.append(
         '<div class="config-row settings-field"><label class="config-key" for="ask_ai_mode">Ask AI on traces</label>'
         f'<span class="config-val"><span class="settings-select"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></span></div>'
+    )
+    filter_mode = setting_value('filter_selection') or 'llm+jev'
+    filter_options = ''.join(
+        f'<option value="{value}"{" selected" if value == filter_mode else ""}>{label}</option>'
+        for value, label in (('llm+jev', 'LLM + Jev'), ('llm', 'LLM only'))
+    )
+    field_rows.append(
+        '<div class="config-row settings-field"><label class="config-key" for="filter_selection">Trace filters</label>'
+        f'<span class="config-val"><span class="settings-select"><select id="filter_selection" name="filter_selection">{filter_options}</select></span>'
+        '<span class="settings-auth-hint">Choose how natural-language trace metadata filters are selected.</span></span></div>'
     )
     toast_text = 'Profile preview. Change a setting to save it.' if preview else 'Settings saved' if saved else ''
     toast_html = (

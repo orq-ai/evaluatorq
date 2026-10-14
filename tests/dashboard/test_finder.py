@@ -61,6 +61,12 @@ def csrf_data(values: dict[str, str] | None = None) -> dict[str, str]:
     return {CSRF_FIELD: _CSRF_TOKEN, **(values or {})}
 
 
+def _private_directory(path: Path) -> None:
+    """Create a private run-store directory for Finder lease tests."""
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.chmod(0o700)
+
+
 def _trace() -> TraceRecord:
     return TraceRecord(
         schema_version=1,
@@ -1027,6 +1033,7 @@ def test_find_export_survives_non_object_manifest_during_retention(
 
     runs_dir = tmp_path / 'insights-runs'
     manifest_dir = runs_dir / '.manifests'
+    _private_directory(runs_dir)
     manifest_dir.mkdir(parents=True)
     (manifest_dir / 'malformed-run.json').write_text('[]', encoding='utf-8')
     marker = finder_export_reference_path(runs_dir, 'malformed-run')
@@ -1101,6 +1108,7 @@ def test_finder_pruning_skips_when_a_lease_is_malformed(monkeypatch: pytest.Monk
         # nanosecond increments; whole-second values keep the ordering stable.
         os.utime(path, (index + 1, index + 1))
     runs_dir = tmp_path / 'insights-runs'
+    _private_directory(runs_dir)
     marker = finder_export_reference_path(runs_dir, 'malformed-lease')
     ensure_private_finder_reference_dir(marker.parent)
     marker.write_text('{invalid JSON', encoding='utf-8')
@@ -1123,6 +1131,7 @@ def test_finder_pruning_recovers_after_malformed_lease_expires(monkeypatch: pyte
         path.write_text('{}', encoding='utf-8')
         os.utime(path, (index + 1, index + 1))
     marker = finder_export_reference_path(tmp_path / 'insights-runs', 'malformed-lease')
+    _private_directory(marker.parent.parent)
     ensure_private_finder_reference_dir(marker.parent)
     marker.write_text('{invalid JSON', encoding='utf-8')
     marker.chmod(0o600)
@@ -1147,6 +1156,7 @@ def test_finder_pruning_skips_when_lease_directory_is_unsafe(monkeypatch: pytest
         path.write_text('{}', encoding='utf-8')
         os.utime(path, (index + 1, index + 1))
     leases = tmp_path / 'insights-runs' / '.finder-export-leases'
+    _private_directory(leases.parent)
     ensure_private_finder_reference_dir(leases)
     leases.chmod(0o755)
 
@@ -1204,7 +1214,7 @@ def test_finder_export_retention_keeps_recent_and_saved_insights_references(
         os.utime(path, (index + 1, index + 1))
     old_referenced = exports[0]
     runs_dir = tmp_path / 'insights-runs'
-    runs_dir.mkdir()
+    runs_dir.mkdir(mode=0o700)
     (runs_dir / 'insights_saved.json').write_text(
         json.dumps({'population': {'finder_export': str(old_referenced)}}), encoding='utf-8'
     )
@@ -1294,6 +1304,7 @@ def test_finder_export_retention_pins_in_flight_insights_source(
         path.write_text('{}', encoding='utf-8')
         os.utime(path, (index + 1, index + 1))
     runs_dir = tmp_path / 'insights-runs'
+    _private_directory(runs_dir)
     writer = start_manifest(run_id='active-run', surface='insights', run_name='active', runs_dir=runs_dir)
     marker = finder_export_reference_path(runs_dir, 'active-run')
     ensure_private_finder_reference_dir(marker.parent)
@@ -1329,6 +1340,7 @@ def test_finder_export_retention_expires_abandoned_in_flight_reference(
         path.write_text('{}', encoding='utf-8')
         os.utime(path, (index + 1, index + 1))
     runs_dir = tmp_path / 'insights-runs'
+    _private_directory(runs_dir)
     writer = start_manifest(run_id='abandoned-run', surface='insights', run_name='abandoned', runs_dir=runs_dir)
     marker = finder_export_reference_path(runs_dir, 'abandoned-run')
     ensure_private_finder_reference_dir(marker.parent)

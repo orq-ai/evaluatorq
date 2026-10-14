@@ -32,10 +32,9 @@ import csv
 import io
 import json
 import os
-from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 from fasthtml.core import FastHTML, NotStr
@@ -45,11 +44,6 @@ from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
-# Starlette 1.3.x / FastHTML 0.12.x compat shim. Must be imported, not deferred to
-# serve(): the patch has to be live when build_app() constructs the FastHTML app, and
-# dashboard tests use build_app()+TestClient without ever calling serve(). See
-# evaluatorq/dashboard/_compat.py.
-import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
 from evaluatorq.common.cli_oauth import OrqCLIError, list_oauth_sessions
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
@@ -105,6 +99,9 @@ from evaluatorq.trace_finder.settings import (
     save_settings,
     store_api_key,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 _STATIC_DIR = Path(__file__).parent / 'static'
 
@@ -310,7 +307,11 @@ async def _auth_status(req: Request) -> JSONResponse:
                 'method': auth.method,
                 'message': 'The authentication check failed unexpectedly. Check the dashboard logs.',
             })
-        logger.opt(exception=True).warning('Dashboard auth status probe failed for {}: {}', auth.label, exc)
+        if isinstance(exc, httpx.TransportError):
+            # Network down, VPN or proxy reset: a one-line warning, not a traceback the page repeats on every poll.
+            logger.warning('Dashboard auth status probe could not reach Orq for {}: {!r}', auth.label, exc)
+        else:
+            logger.opt(exception=True).warning('Dashboard auth status probe failed for {}: {}', auth.label, exc)
         return JSONResponse({
             'status': 'unavailable',
             'method': auth.method,
@@ -786,6 +787,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_project_id'] = form_data.get('orq_project_id') if values['orq_auth_method'] == 'cli_oauth' else None
     values['orq_project_name'] = None
     values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
+    values['filter_selection'] = form_data.get('filter_selection', current.filter_selection)
     values['compression_inspector_enabled'] = form_data.get('compression_inspector_enabled') in ('on', 'true')
     raw_input_cap = form_data.get('trace_input_chars')
     if raw_input_cap is None:
@@ -816,7 +818,11 @@ def _settings_changed_fields(form_data: Any, current: DashboardSettings) -> set[
         'orq_api_key_entry',
         'orq_stored_key_host',
     }
-    allowed = set(MODEL_FIELDS) | {'ask_ai_mode', 'trace_input_chars', 'compression_inspector_enabled'} | auth_inputs
+    allowed = (
+        set(MODEL_FIELDS)
+        | {'ask_ai_mode', 'filter_selection', 'trace_input_chars', 'compression_inspector_enabled'}
+        | auth_inputs
+    )
     marker = form_data.get('settings_changed_fields')
     if marker is not None:
         names = {name for name in str(marker).split(',') if name}
@@ -1260,8 +1266,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         ``starlette.testclient.TestClient``.
     """
 
-    @asynccontextmanager
-    async def lifespan(runtime: FastHTML) -> Any:
+    async def lifespan(runtime: FastHTML) -> AsyncIterator[None]:
         try:
             yield
         finally:

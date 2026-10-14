@@ -160,3 +160,35 @@ jobs:
 
       - name: Test SDK compatibility
         run: uv run --no-sync pytest tests/redteam/test_orq_backend_context.py tests/redteam/test_contracts.py
+
+  fasthtml-floor:
+    name: Dashboard on fasthtml floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js for dashboard behavior tests
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
+
+      - name: Install the lowest allowed fasthtml
+        run: |
+          floor="$(python3 -c "import re,tomllib; d=tomllib.load(open('pyproject.toml','rb'))['project']['optional-dependencies']['dashboard']; print(re.search(r'python-fasthtml>=([\d.]+)', ' '.join(d)).group(1))")"
+          echo "floor=${floor}"
+          uv pip install "python-fasthtml==${floor}"
+
+      - name: Test dashboard
+        run: uv run --no-sync pytest tests/dashboard

@@ -174,7 +174,7 @@ Scoring both, as two separate evaluators, is usually what you want — criteria 
 
 ## What the job returns
 
-The job's output is an OpenResponses response dict. The transcript is in `input` and `output` — user turns as `input_text`, agent turns as `output_text` — and everything the judge concluded is under `metadata`:
+The job's output is an OpenResponses response dict. The transcript is in `input` and `output` — user turns as `input_text`, agent turns as `output_text` — and everything the judge concluded is under `metadata`. An agent turn with neither text nor tool calls is kept as an empty `output_text` message, so a silent reply stays in place in the conversation:
 
 | `metadata` key | Type | What it holds |
 |---|---|---|
@@ -192,6 +192,8 @@ The job's output is an OpenResponses response dict. The transcript is in `input`
 | `scorer_errors` | `dict \| None` | Scorer failures recorded after conversion. Always present; it is `None` on this job path because conversion happens before scoring. |
 | `datapoint_id` | `str \| None` | The simulation datapoint identifier. Always present; `None` when the result carries no datapoint id. |
 | `turn_metrics` | `list[dict]` | Per-turn latency and token detail. Present only when metrics were collected. |
+| `item_order` | `list[str]` | One entry per `input` and `output` item, each `"input"` or `"output"`, in transcript order. Walk it with one cursor per list to rebuild the conversation; `orq_evaluator` uses it to send the full conversation. |
+| `assistant_turn_order` | `list[int \| None]` | One entry per `output` item: the source message index for assistant text and tool calls, or `None` for a tool result. Equal indexes keep one assistant message together; different indexes preserve separate assistant turns. Older exports without this key retain adjacent-assistant grouping. |
 
 `criteria_results` and `turn_metrics` are optional, so read them with a default rather than by subscript. The audit and error keys listed as always present are different: their `None` value carries meaning, so preserve it instead of treating it as an empty collection.
 

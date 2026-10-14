@@ -40,6 +40,9 @@ def choice_document() -> dict[str, Any]:
                 'selection': {'kind': 'values', 'values': ['billing']},
             }
         ],
+        'calendar_day': False,
+        'start': None,
+        'end': None,
         'numeric': {
             'tokens_min': 20_000,
             'tokens_max': None,
@@ -125,10 +128,9 @@ async def test_compile_query_uses_shared_structured_output_and_returns_numeric_f
     assert plan.numeric.duration_ms_min is None
     assert calls[0]['client'] is client
     assert calls[0]['model'] == 'compiler-model'
-    assert calls[0]['messages'] == [
-        {'role': 'system', 'content': COMPILER_INSTRUCTIONS},
-        {'role': 'user', 'content': 'find long billing requests'},
-    ]
+    assert calls[0]['messages'][0] == {'role': 'system', 'content': COMPILER_INSTRUCTIONS}
+    assert calls[0]['messages'][1]['content'].startswith('find long billing requests')
+    assert 'Current UTC time:' in calls[0]['messages'][1]['content']
     assert calls[0]['label'] == 'trace_finder.compile'
     assert calls[0]['max_tokens'] == 2000
     assert calls[0]['api'] == 'responses'
@@ -451,6 +453,7 @@ def test_compiler_prompt_carries_the_shared_filter_or_judgment_rule() -> None:
     assert 'Aggregate questions' in FILTER_OR_JUDGMENT_RULE
 
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(('reason', 'expected'), [(None, None), ('  ', None), ('Costs per model.', 'Costs per model.')])
 async def test_compile_query_threads_the_unsupported_reason(monkeypatch, reason: str | None, expected: str | None) -> None:
@@ -495,3 +498,187 @@ def test_classification_legend_uses_dashboard_chart_tokens() -> None:
         {'label': 'billing', 'color': 'var(--chart-5)', 'kind': 'value', 'threshold': None},
         {'label': 'technical', 'color': 'var(--chart-2)', 'kind': 'value', 'threshold': None},
     ]
+
+
+def test_time_filters_require_aware_ordered_bounds() -> None:
+    from datetime import datetime, timezone
+
+    from evaluatorq.trace_finder.compiler import TimeFilters
+
+    end = TimeFilters(start=None, end=datetime(2025, 1, 1, tzinfo=timezone.utc)).end
+    assert end is not None and end.tzinfo is not None
+    with pytest.raises(ValidationError):
+        TimeFilters(start=datetime(2025, 1, 1), end=None)
+    with pytest.raises(ValidationError):
+        TimeFilters(
+            start=datetime(2025, 1, 2, tzinfo=timezone.utc),
+            end=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        )
+
+
+@pytest.mark.asyncio
+async def test_compile_query_returns_datetime_filters_and_passes_utc_now(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    document = choice_document()
+    document['dimensions'] = []
+    document['calendar_day'] = True
+    document['start'] = '2025-01-01T00:00:00Z'
+    document['end'] = '2025-01-02T00:00:00Z'
+    captured: list[dict[str, Any]] = []
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        captured.append(kwargs)
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+    now = datetime(2025, 1, 3, tzinfo=timezone.utc)
+    plan = await compile_query(cast(Any, object()), 'compiler-model', 'on January 1', now=now)
+
+    assert plan.time is not None
+    assert plan.time.start is not None
+    assert plan.time.start == datetime(2025, 1, 1, tzinfo=timezone.utc)
+    assert plan.time.calendar_day is True
+    assert captured[0]['messages'][-1]['content'].endswith(f'Current UTC time: {now.isoformat()}')
+    assert plan.dimensions == ()
+
+
+
+def test_generated_time_is_retained_intersected_and_resolves_open_bounds() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from evaluatorq.trace_finder.compiler import TimeFilters, normalize_generated_time
+    from evaluatorq.trace_finder.models import PopulationRequest
+
+    now = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
+    retention_start = now - timedelta(days=30)
+    default_population = PopulationRequest(time_origin='default')
+    assert normalize_generated_time(
+        TimeFilters(start=datetime(2026, 8, 1, tzinfo=timezone.utc), end=datetime(2026, 10, 1, tzinfo=timezone.utc)),
+        population=default_population,
+        within_results=False,
+        reference=now,
+    ) == (retention_start, datetime(2026, 10, 1, tzinfo=timezone.utc))
+    assert normalize_generated_time(
+        TimeFilters(start=None, end=datetime(2026, 10, 5, tzinfo=timezone.utc)),
+        population=default_population,
+        within_results=False,
+        reference=now,
+    ) == (retention_start, datetime(2026, 10, 5, tzinfo=timezone.utc))
+    assert normalize_generated_time(
+        TimeFilters(start=datetime(2026, 10, 1, tzinfo=timezone.utc), end=None),
+        population=default_population,
+        within_results=False,
+        reference=now,
+    ) == (datetime(2026, 10, 1, tzinfo=timezone.utc), now)
+    assert normalize_generated_time(
+        TimeFilters(end=now - timedelta(days=20)),
+        population=PopulationRequest(start=now - timedelta(days=1), time_origin='default'),
+        within_results=False,
+        reference=now,
+    ) == (retention_start, now - timedelta(days=20))
+    assert normalize_generated_time(
+        TimeFilters(end=now - timedelta(days=20)),
+        population=PopulationRequest(start=now - timedelta(days=1), time_origin='within_results'),
+        within_results=True,
+        reference=now,
+    ) == (now - timedelta(days=1), now - timedelta(days=20))
+
+
+def test_time_filters_normalize_date_only_end_to_exclusive_next_midnight() -> None:
+    from datetime import datetime, timezone
+
+    from evaluatorq.trace_finder.compiler import TimeFilters
+
+    time = TimeFilters(start='2026-10-01', end='2026-10-12')
+    assert time.start == datetime(2026, 10, 1, tzinfo=timezone.utc)
+    assert time.end == datetime(2026, 10, 13, tzinfo=timezone.utc)
+
+
+def test_generated_whole_calendar_day_endings_normalize_without_touching_clock_bounds() -> None:
+    from datetime import datetime, timezone
+
+    from evaluatorq.trace_finder.compiler import TimeFilters, normalize_generated_time
+    from evaluatorq.trace_finder.models import PopulationRequest
+
+    population = PopulationRequest(time_origin='default')
+    reference = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
+    expected = (datetime(2026, 10, 11, tzinfo=timezone.utc), datetime(2026, 10, 12, tzinfo=timezone.utc))
+    for end in (
+        datetime(2026, 10, 11, 23, 59, 59, tzinfo=timezone.utc),
+        datetime(2026, 10, 11, 23, 59, 59, 999999, tzinfo=timezone.utc),
+    ):
+        assert normalize_generated_time(
+            TimeFilters(start=expected[0], end=end, calendar_day=True),
+            population=population,
+            within_results=False,
+            reference=reference,
+            selector_output=True,
+        ) == expected
+    generated_end_of_day = TimeFilters(
+        start=expected[0],
+        end=datetime(2026, 10, 11, 23, 59, 59, tzinfo=timezone.utc),
+        calendar_day=True,
+    )
+    assert normalize_generated_time(
+        generated_end_of_day,
+        population=population,
+        within_results=False,
+        reference=reference,
+    ) == (expected[0], generated_end_of_day.end)
+
+    for end in (
+        datetime(2026, 10, 11, 23, 59, 58, tzinfo=timezone.utc),
+        datetime(2026, 10, 11, 23, 59, 59, 1, tzinfo=timezone.utc),
+        datetime(2026, 10, 11, 23, 59, 59, 500000, tzinfo=timezone.utc),
+    ):
+        generated = TimeFilters(start=expected[0], end=end, calendar_day=True)
+        assert normalize_generated_time(
+            generated,
+            population=population,
+            within_results=False,
+            reference=reference,
+            selector_output=True,
+        ) == (expected[0], end)
+    clock_bounds = TimeFilters(
+        start=datetime(2026, 10, 11, 15, tzinfo=timezone.utc),
+        end=datetime(2026, 10, 11, 23, 59, 59, 999999, tzinfo=timezone.utc),
+    )
+    assert normalize_generated_time(
+        clock_bounds,
+        population=population,
+        within_results=False,
+        reference=reference,
+    ) == (clock_bounds.start, clock_bounds.end)
+
+
+def test_generated_whole_calendar_day_normalization_does_not_hide_changed_dates() -> None:
+    from datetime import datetime, timezone
+
+    from evaluatorq.trace_finder.compiler import TimeFilters, normalize_generated_time
+    from evaluatorq.trace_finder.models import PopulationRequest
+
+    population = PopulationRequest(time_origin='default')
+    reference = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
+    canonical = normalize_generated_time(
+        TimeFilters(
+            start=datetime(2026, 10, 11, tzinfo=timezone.utc),
+            end=datetime(2026, 10, 12, tzinfo=timezone.utc),
+            calendar_day=True,
+        ),
+        population=population,
+        within_results=False,
+        reference=reference,
+    )
+    changed = normalize_generated_time(
+        TimeFilters(
+            start=datetime(2026, 10, 10, tzinfo=timezone.utc),
+            end=datetime(2026, 10, 11, 23, 59, 59, 999999, tzinfo=timezone.utc),
+            calendar_day=True,
+        ),
+        population=population,
+        within_results=False,
+        selector_output=True,
+        reference=reference,
+    )
+    assert canonical != changed

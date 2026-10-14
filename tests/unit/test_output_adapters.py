@@ -265,3 +265,74 @@ def test_output_to_text_reads_legacy_fields_from_message_objects():
         function_call = {'name': 'get_balance', 'arguments': '{}'}
 
     assert messages_to_text([_SdkMessage()]) == '[tool_call: get_balance({})]'
+
+
+def test_responses_transcript_none_for_plain_string() -> None:
+    from evaluatorq.common.output_adapters import responses_transcript
+
+    assert responses_transcript('hello') is None
+
+
+def test_responses_transcript_none_without_item_order() -> None:
+    from evaluatorq.common.output_adapters import responses_transcript
+
+    output = {'object': 'response', 'input': [], 'output': [], 'metadata': {}}
+    assert responses_transcript(output) is None
+
+
+def test_responses_transcript_none_on_count_mismatch() -> None:
+    from evaluatorq.common.output_adapters import responses_transcript
+
+    user = {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'hi'}]}
+    output = {
+        'object': 'response',
+        'input': [user],
+        'output': [],
+        'metadata': {'item_order': ['input', 'output']},
+    }
+    assert responses_transcript(output) is None
+
+
+def test_responses_transcript_preserves_refusal_media_and_structured_tool_result() -> None:
+    from evaluatorq.common.output_adapters import responses_transcript
+
+    output = {
+        'object': 'response',
+        'input': [
+            {
+                'type': 'message',
+                'role': 'user',
+                'content': [
+                    {'type': 'input_text', 'text': 'Please inspect'},
+                    {'type': 'input_image', 'image_url': 'https://example.com/photo.png'},
+                    {'type': 'input_file', 'file_id': 'file-example'},
+                ],
+            },
+        ],
+        'output': [
+            {
+                'type': 'message',
+                'role': 'assistant',
+                'content': [{'type': 'refusal', 'refusal': 'I cannot help with that request.'}],
+            },
+            {'type': 'function_call', 'call_id': 'call-example', 'name': 'lookup', 'arguments': '{}'},
+            {
+                'type': 'function_call_output',
+                'call_id': 'call-example',
+                'output': [{'type': 'input_text', 'text': 'The package shipped.'}],
+            },
+        ],
+        'metadata': {'item_order': ['input', 'output', 'output', 'output']},
+    }
+
+    transcript = responses_transcript(output)
+    assert transcript is not None
+    rendered = messages_to_text(transcript)
+    assert 'Please inspect' in rendered
+    assert '[image]' in rendered
+    assert '[file]' in rendered
+    assert 'I cannot help with that request.' in rendered
+    assert 'The package shipped.' in rendered
+    assert transcript[-1].role == 'tool'
+    assert transcript[-1].content == 'The package shipped.'
+    assert transcript[-1].tool_call_id == 'call-example'

@@ -49,7 +49,7 @@ from evaluatorq.insights.presets import (
     SENTIMENT,
 )
 from evaluatorq.insights.priority import priority_points
-from evaluatorq.insights.progress import stage_plan
+from evaluatorq.insights.progress import stage_history_for_save, stage_plan
 from evaluatorq.insights.store import get_insights_runs_dir, save_run
 from evaluatorq.insights.summarize import summarize_traces
 from evaluatorq.insights.transcript import tool_stats
@@ -591,8 +591,19 @@ async def insights(  # noqa: C901
                 'n_failed_match': 0,
             }
             if population.query is not None:
-                # finder.classifier picked this query's generated filters; config holds only the labels model.
-                run.population['finder_classifier_model'] = finder_classifier_model
+                filter_selection = resolved.echo.get('filter_selection')
+                if filter_selection is None:
+                    # Query resolution normally records the chosen mode. Keep metadata
+                    # complete for legacy/mock resolvers that omit the echo field.
+                    from evaluatorq.trace_finder.settings import effective_settings
+
+                    filter_selection = population.filter_selection or effective_settings().filter_selection
+                if filter_selection == 'llm+jev':
+                    run.population['finder_classifier_model'] = finder_classifier_model
+                elif filter_selection == 'llm':
+                    run.population['finder_filter_model'] = resolved.echo.get(
+                        'filter_model', role_model('fast', task='finder.filters')
+                    )
             if _finder_export_source is not None and population.finder_export is not None:
                 run.population['finder_export'] = str(_finder_export_source)
                 if _finder_export_sha256 is not None:
@@ -810,6 +821,9 @@ async def insights(  # noqa: C901
         _stage_end(writer, 'priority')
         _stage(writer, 'write')
         run.cost_by_stage = ledger.totals()
+        run.stage_history = stage_history_for_save(
+            writer.manifest, failed_stage=run.stage_failures[-1].stage if run.status == 'error' else None
+        )
         run_path = save_run(run, directory)
         notify_saved(run_path)
         _stage_end(writer, 'write')
@@ -845,6 +859,9 @@ async def insights(  # noqa: C901
             try:
                 run.counts = run.counts or {'n_traces': len(run.traces), 'n_failed_traces': 0, 'per_stage_failed': 0}
                 run.cost_by_stage = ledger.totals()
+                run.stage_history = stage_history_for_save(
+                    writer.manifest, failed_stage=run.stage_failures[-1].stage if run.status == 'error' else None
+                )
                 report = save_run(run, directory)
                 notify_saved(report)
                 if run.status == 'error':

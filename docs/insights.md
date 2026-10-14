@@ -4,18 +4,7 @@
 
 A run moves from population selection through labels and summaries to discovered dimensions, then saves a result for the dashboard. Signals are computed locally from each normalized trace before labeling and summarizing. A semantic query may make model calls while the population is selected.
 
-```mermaid
-flowchart TD
-    A["Population source<br/>Orq filters or query<br/>Finder export or local snapshot"] --> B["Compile query and select filters when needed"]
-    B --> C["Load and normalize as TraceDocument"]
-    C --> D["Compute deterministic signals locally"]
-    D --> E["Classifier answers labels and query match"]
-    E --> F["Keep query matches; without a query, keep all selected traces"]
-    F --> G["Summarize retained traces"]
-    G --> H["For each dimension: embed, cluster, name, merge, project"]
-    H --> I["Optional priority matrix"]
-    I --> J["Save run result for the dashboard"]
-```
+![Trace Insights run flow: select the population, read each trace (signals, classifier, query-match gate, summary), then embed, cluster, name, merge and project each dimension before saving the run](assets/insights-flow.svg)
 
 The classifier and summary model read different inputs. The classifier reads its model-specific trace state plus the selected questions. The summary model reads the detailed conversation view. A query match controls which traces continue to summaries and dimensions; label answers do not change membership.
 
@@ -107,7 +96,11 @@ The `eq insights` command accepts population filters, label presets or JSON file
 eq insights --query "customers asking about refunds" --agent support-bot --label sentiment --label customer_satisfaction --dimension intent --dimension failure --limit 500 --json refunds-insights.json
 ```
 
-The command prints cluster and label summaries, failed-trace counts, projection coverage, and the saved run path.
+For query-based population selection, `--filter-selection llm|llm+jev` overrides the saved dashboard mode (default `llm+jev`) and requires `--query`. `llm` uses the configured fast `finder.filters` task for facets, numeric bounds and time bounds; `llm+jev` uses the configured `finder.classifier` for facets while the shared compiler supplies numeric and time bounds in both modes. The compiler runs before facet selection. Each catalogue request supplies up to 50 values per facet for its actual time window. Candidate extraction is limited to eight values from `model`, `provider`, `agent`, `tool`, or `project` mentions, slash-qualified model names, and quoted strings up to 100 characters; a candidate outside the catalogue is used only after exact trace confirmation. Generated calendar dates may narrow or replace the configured default window; explicitly supplied windows keep their bounds. The mode and generated-window behavior are the same whether or not you pass `--filter-selection`.
+
+The five-minute facet-catalogue cache is scoped to the Orq host, credentials, workspace/project scope and limit. Exact time bounds distinguish explicit-window entries; default-window entries are grouped by window duration.
+
+The command prints cluster and label summaries, failed-trace counts, projection coverage, and the saved run path. `--from-finder` and `--from-snapshot` cannot be combined with `--filter-selection`; file sources fix the population. Other options and preview behavior are listed below.
 
 | Option | Purpose and constraints |
 |---|---|

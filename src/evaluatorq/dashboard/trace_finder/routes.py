@@ -557,10 +557,10 @@ async def warm_initial_finder(app: Any, session_id: str, request_state: Any) -> 
     if explorer is not None:
         async with app.state.finder_store_lock:
             if (await explorer.view()).state == 'idle':
-                end = datetime.now(timezone.utc)
+                now = datetime.now(timezone.utc)
                 await explorer.load(
-                    end - timedelta(days=7),
-                    end,
+                    now - timedelta(days=_settings(app).window_days),
+                    now,
                     explorer_views.DEFAULT_EXPLORER_ROWS,
                     facets=FacetSelection(project_id=_settings(app).orq_project_id),
                     numeric=NumericFilters(),
@@ -671,9 +671,14 @@ def _run_request(
         duration_ms_min=parsed.duration_ms_min,
         duration_ms_max=parsed.duration_ms_max,
     )
+    time_origin = str(form.get('time_origin') or '')
     if anchor is not None and anchor.end is not None:
         end = anchor.end
         start = anchor.start if anchor.start is not None else end - timedelta(days=parsed.window_days)
+        time_origin = anchor.time_origin
+    elif time_origin == 'within_results':
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=parsed.window_days)
     elif (form.get('new_from') and form.get('new_to')) or (form.get('from') and form.get('to')):
         if form.get('new_from') and form.get('new_to'):
             start, end = parse_range(
@@ -690,15 +695,19 @@ def _run_request(
                 str(form.get('from_tz_offset') or '') or None,
                 str(form.get('to_tz_offset') or '') or None,
             )
+        if time_origin != 'default':
+            time_origin = 'explicit'
     else:
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=parsed.window_days)
+        time_origin = 'default'
     return RunRequest(
         query=parsed.query,
         mode=parsed.mode,
         population=PopulationRequest(
             start=start,
             end=end,
+            time_origin=time_origin if time_origin in {'default', 'explicit', 'within_results'} else 'explicit',
             facets=FacetSelection(project_id=settings.orq_project_id, **facet_values),
             numeric=numeric,
             limit=parsed.limit,
@@ -1071,6 +1080,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                         'population': PopulationRequest(
                             start=explorer_view.start,
                             end=explorer_view.end,
+                            time_origin='within_results',
                             facets=explorer_view.facets,
                             numeric=explorer_view.numeric,
                             limit=limit,

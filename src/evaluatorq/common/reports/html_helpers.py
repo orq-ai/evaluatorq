@@ -425,17 +425,23 @@ def status_badge(text: str, status: str) -> str:
     return f'<span class="status-badge status-badge--{safe_status}">{esc(text)}</span>'
 
 
-def kpi_cards(cards: list[dict[str, str]]) -> str:
-    """Render a KPI scorecard band. Each card: {label, value, status?}."""
+def kpi_cards(cards: list[dict[str, str]], modifier: str = '') -> str:
+    """Render a KPI scorecard band. Each card: {label, value, status?, sub?}.
+
+    ``modifier`` adds a ``kpi-band--<modifier>`` class so one surface can restyle
+    the band without touching the others.
+    """
     if not cards:
         return ''
     items = []
     for c in cards:
         status = c.get('status', 'neutral')
         safe_status = status if status in {'pass', 'fail', 'warn', 'neutral'} else 'neutral'
+        sub = f'<div class="kpi-sub">{esc(c["sub"])}</div>' if c.get('sub') else ''
         items.append(
             f'<div class="kpi-card kpi-card--{safe_status}">'
             f'<div class="kpi-value">{esc(c["value"])}</div>'
-            f'<div class="kpi-label">{esc(c["label"])}</div></div>'
+            f'<div class="kpi-label">{esc(c["label"])}</div>{sub}</div>'
         )
-    return f'<div class="kpi-band">{"".join(items)}</div>'
+    band_cls = f'kpi-band kpi-band--{esc(modifier)}' if modifier else 'kpi-band'
+    return f'<div class="{band_cls}">{"".join(items)}</div>'
