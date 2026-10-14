@@ -32,10 +32,9 @@ import csv
 import io
 import json
 import os
-from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 from fasthtml.core import FastHTML, NotStr
@@ -45,11 +44,6 @@ from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
-# Starlette 1.3.x / FastHTML 0.12.x compat shim. Must be imported, not deferred to
-# serve(): the patch has to be live when build_app() constructs the FastHTML app, and
-# dashboard tests use build_app()+TestClient without ever calling serve(). See
-# evaluatorq/dashboard/_compat.py.
-import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
 from evaluatorq.common.cli_oauth import OrqCLIError, list_oauth_sessions
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
@@ -103,6 +97,9 @@ from evaluatorq.trace_finder.settings import (
     save_settings,
     store_api_key,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 _STATIC_DIR = Path(__file__).parent / 'static'
 
@@ -1234,8 +1231,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         ``starlette.testclient.TestClient``.
     """
 
-    @asynccontextmanager
-    async def lifespan(runtime: FastHTML) -> Any:
+    async def lifespan(runtime: FastHTML) -> AsyncIterator[None]:
         try:
             yield
         finally:
