@@ -13,12 +13,13 @@ from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from typing_extensions import TypedDict
 
+from evaluatorq.common.messages import tool_result_to_text
 from evaluatorq.openresponses.convert_models import (
     InputFileContent,
     InputImageContent,
     InputTextContent,
 )
-from evaluatorq.openresponses.tool_records import is_tool_record, pair_tool_records, tool_result_to_text
+from evaluatorq.openresponses.tool_records import normalize_tool_records
 
 # A single part of multi-modal message content (Responses-API input shapes).
 # Tagged on ``type`` (mirroring ``OutputMessage``) so Pydantic dispatches on the
@@ -1207,20 +1208,8 @@ class AgentResponse(BaseModel):
     def from_output_items(cls, output_items: Any) -> AgentResponse:
         """Build an AgentResponse from bare Responses ``output`` items, with no usage or metadata."""
         items: list[OutputMessage] = []
-        output_items = list(output_items)
-        tool_items: dict[int, list[ToolCallOutputItem]] = {}
-        for call in pair_tool_records(output_items):
-            fields: dict[str, Any] = {
-                'call_id': call.call_id,
-                'name': call.name,
-                'arguments': call.arguments,
-                'result': call.result,
-            }
-            if call.item_id:
-                fields['id'] = call.item_id
-            tool_items.setdefault(call.source_index, []).append(ToolCallOutputItem(**fields))
         refusal: str | None = None
-        for index, item in enumerate(output_items):
+        for item in normalize_tool_records(output_items):
             item_type = _gf(item, 'type')
             if item_type == 'message':
                 for part in _gf(item, 'content') or []:
@@ -1240,12 +1229,26 @@ class AgentResponse(BaseModel):
                         logger.warning(
                             'AgentResponse.from_openresponses: skipping unknown message part type={!r}', part_type
                         )
-            # 'function_call' is the standard Responses shape; the Orq router
-            # instead types agent tool calls as 'orq:<tool_name>' (e.g.
-            # 'orq:query_knowledge_base'). Treat both as tool calls so the
-            # agent's tool activity is captured rather than silently dropped.
-            elif is_tool_record(item_type):
-                items.extend(tool_items.get(index, []))
+            # normalize_tool_records has already turned the Orq router's split
+            # ``function_call`` / ``orq:<tool>`` records into one function_call
+            # item followed by its function_call_output.
+            elif item_type == 'function_call':
+                fields: dict[str, Any] = {
+                    'call_id': _gf(item, 'call_id'),
+                    'name': _gf(item, 'name'),
+                    'arguments': _gf(item, 'arguments'),
+                    'result': None,
+                }
+                if _gf(item, 'id'):
+                    fields['id'] = _gf(item, 'id')
+                items.append(ToolCallOutputItem(**fields))
+            elif (
+                item_type == 'function_call_output'
+                and items
+                and isinstance(items[-1], ToolCallOutputItem)
+                and items[-1].call_id == _gf(item, 'call_id')
+            ):
+                items[-1] = items[-1].model_copy(update={'result': tool_result_to_text(_gf(item, 'output'))})
             elif item_type == 'reasoning':
                 pass  # o1/o3/o4-mini reasoning steps intentionally excluded
             else:

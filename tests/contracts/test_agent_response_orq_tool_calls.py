@@ -240,12 +240,11 @@ def test_conflicting_arguments_keep_the_calls_arguments_and_warn(caplog):
     assert "'c1'" in _messages(caplog)
 
 
-def test_conflicting_results_become_separate_items_with_unique_ids(caplog):
+def test_conflicting_results_keep_one_call_and_warn_once(caplog):
     r = AgentResponse.from_output_items([CALL, RESULT, {**RESULT, 'result': 'other'}, {**RESULT, 'result': 'third'}])
-    assert [t.call_id for t in r.tool_calls] == ['c1', 'c1#2', 'c1#3']
-    assert [t.result for t in r.tool_calls] == ['{"ok": false}', 'other', 'third']
-    assert {t.arguments for t in r.tool_calls} == {'{"order_id":"a2"}'}
-    assert {t.id for t in r.tool_calls} == {'fc_1'}
+    assert [t.call_id for t in r.tool_calls] == ['c1']
+    assert r.tool_calls[0].result == '{"ok": false}'
+    assert r.tool_calls[0].arguments == '{"order_id":"a2"}'
     assert _messages(caplog).count('Conflicting result for call_id') == 1
 
 
@@ -254,11 +253,11 @@ def test_results_are_compared_as_json():
     assert len(r.tool_calls) == 1
 
 
-def test_conflicting_errors_become_separate_items(caplog):
+def test_conflicting_errors_keep_one_call(caplog):
     one = {'type': 'orq:refund', 'call_id': 'c1', 'error': 'boom'}
     two = {'type': 'orq:refund', 'call_id': 'c1', 'error': 'bang'}
     r = AgentResponse.from_output_items([CALL, one, two])
-    assert [t.call_id for t in r.tool_calls] == ['c1', 'c1#2']
+    assert [t.call_id for t in r.tool_calls] == ['c1']
     assert 'Conflicting error for call_id' in _messages(caplog)
 
 
@@ -322,7 +321,7 @@ def test_failed_orq_record_without_error_or_result_carries_a_failed_status_resul
 def test_failed_record_with_a_real_result_keeps_it_under_result():
     failed = {**RESULT, 'status': 'failed', 'error': 'boom'}
     r = AgentResponse.from_output_items([CALL, failed])
-    assert json.loads(r.tool_calls[0].result or '') == {'status': 'failed', 'error': 'boom', 'result': '{"ok": false}'}
+    assert json.loads(r.tool_calls[0].result or '') == {'status': 'failed', 'error': 'boom', 'result': {'ok': False}}
 
 
 def test_unmatched_result_without_call_id_warns_with_the_minted_id(caplog):
@@ -377,3 +376,35 @@ def test_same_call_id_in_separate_responses_is_not_cross_paired():
     b = AgentResponse.from_output_items([RESULT])
     assert a.tool_calls[0].result is None
     assert b.tool_calls[0].result == '{"ok": false}'
+
+
+def test_lone_orq_record_with_real_empty_arguments_agrees_across_readers():
+    from evaluatorq.openresponses.otel_messages import items_to_input_messages
+
+    record = {'type': 'orq:kb', 'call_id': 'k', 'arguments': {}, 'result': 'x'}
+    assert AgentResponse.from_output_items([record]).tool_calls[0].arguments == '{}'
+    assert items_to_input_messages([record])[0]['parts'][0]['arguments'] == {}
+
+
+def test_plain_function_call_with_its_function_call_output_item_gets_the_result():
+    items = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'done'},
+    ]
+    assert AgentResponse.from_output_items(items).tool_calls[0].result == 'done'
+
+
+def test_call_with_a_function_call_output_is_not_reported_unmatched_beside_an_orq_record(caplog):
+    items = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'done'},
+        {'type': 'orq:kb', 'call_id': 'b', 'arguments': '{"q":1}', 'result': 'hit'},
+    ]
+    AgentResponse.from_output_items(items)
+    assert "'a'" not in _messages(caplog)
+
+
+def test_rendering_the_same_unpaired_input_twice_gives_equal_ids():
+    items = [{'type': 'orq:t', 'arguments': '{"a":1}', 'result': 'x'}]
+    first = AgentResponse.from_output_items(items).tool_calls[0].call_id
+    assert first == AgentResponse.from_output_items(items).tool_calls[0].call_id == 'call_unpaired_0'

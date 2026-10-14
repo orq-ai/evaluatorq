@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from evaluatorq.openresponses.tool_records import is_tool_record, pair_tool_records
+from evaluatorq.openresponses.tool_records import is_tool_record, normalize_tool_records
 
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text', 'summary_text'})
 _REASONING_PART_TYPES = frozenset({'reasoning_text', 'reasoning'})
@@ -88,36 +88,6 @@ def _reasoning_parts(item: dict[str, Any]) -> list[dict[str, Any]]:
     return parts
 
 
-def _is_orq_tool_call(item_type: str) -> bool:
-    """Orq's built-in tools are items typed ``orq:<tool name>`` — there is no single literal."""
-    return item_type.startswith('orq:')
-
-
-def _pair_split_tool_records(items: list[Any]) -> list[Any]:
-    """Replace each split ``function_call`` + ``orq:<tool>`` pair with one ``orq:`` item holding both halves.
-
-    A list with no ``orq:`` record is returned unchanged: a lone ``function_call``
-    is the ordinary Responses shape and its result arrives as a separate output item.
-    """
-    if not any(isinstance(raw, dict) and str(raw.get('type', '')).startswith('orq:') for raw in items):
-        return items
-    merged: dict[int, list[dict[str, Any]]] = {}
-    for call in pair_tool_records(items):
-        item: dict[str, Any] = {'type': f'orq:{call.name}', 'call_id': call.call_id, 'name': call.name}
-        if call.has_arguments:
-            item['arguments'] = call.arguments
-        if call.result is not None:
-            item['result'] = call.result
-        merged.setdefault(call.source_index, []).append(item)
-    paired: list[Any] = []
-    for index, raw in enumerate(items):
-        if index in merged:
-            paired.extend(merged[index])
-        elif not (isinstance(raw, dict) and is_tool_record(raw.get('type'))):
-            paired.append(raw)
-    return paired
-
-
 RESPONSES_ITEM_TYPES = frozenset({
     'message',
     'function_call',
@@ -132,7 +102,7 @@ RESPONSES_ITEM_TYPES = frozenset({
 def is_responses_item(value: Any) -> bool:
     """Whether *value* is a typed Responses API item rather than a chat message or content part."""
     item_type = value.get('type') if isinstance(value, dict) else None
-    return isinstance(item_type, str) and (item_type in RESPONSES_ITEM_TYPES or _is_orq_tool_call(item_type))
+    return isinstance(item_type, str) and (item_type in RESPONSES_ITEM_TYPES or is_tool_record(item_type))
 
 
 def _tool_response_message(call_id: Any, response: Any) -> dict[str, Any]:
@@ -159,7 +129,7 @@ def items_to_input_messages(items: Any) -> list[dict[str, Any]]:
         return []
 
     messages: list[dict[str, Any]] = []
-    for raw in _pair_split_tool_records(items):
+    for raw in normalize_tool_records(items):
         if not isinstance(raw, dict):
             messages.append({'role': 'assistant', 'parts': [_generic_part(raw)]})
             continue
@@ -179,10 +149,6 @@ def items_to_input_messages(items: Any) -> list[dict[str, Any]]:
                 messages.append(_tool_response_message(raw.get('call_id'), {'error': error}))
             elif raw.get('output'):
                 messages.append(_tool_response_message(raw.get('call_id'), raw.get('output')))
-        elif _is_orq_tool_call(item_type):
-            messages.append({'role': 'assistant', 'parts': [_tool_call_part(raw)]})
-            if raw.get('result') is not None:
-                messages.append(_tool_response_message(raw.get('call_id'), raw.get('result')))
         elif item_type == 'reasoning':
             messages.append({'role': 'assistant', 'parts': _reasoning_parts(raw)})
         else:
@@ -200,7 +166,7 @@ def items_to_output_messages(items: Any, finish_reason: str = '') -> list[dict[s
         return []
 
     messages: list[dict[str, Any]] = []
-    for raw in _pair_split_tool_records(items):
+    for raw in normalize_tool_records(items):
         if not isinstance(raw, dict):
             messages.append({'role': 'assistant', 'parts': [_generic_part(raw)], 'finish_reason': finish_reason})
             continue
@@ -210,7 +176,7 @@ def items_to_output_messages(items: Any, finish_reason: str = '') -> list[dict[s
         if item_type == 'message':
             parts = _content_to_parts(raw.get('content'))
             role = raw.get('role') or 'assistant'
-        elif item_type == 'function_call' or _is_orq_tool_call(item_type):
+        elif item_type == 'function_call':
             parts = [_tool_call_part(raw)]
             role = 'assistant'
         elif item_type == 'custom_tool_call':

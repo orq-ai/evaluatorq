@@ -9,7 +9,7 @@ import logging
 
 import pytest
 
-from evaluatorq.openresponses.tool_records import is_tool_record, pair_tool_records
+from evaluatorq.openresponses.tool_records import is_tool_record, normalize_tool_records, pair_tool_records
 
 CALL = {'type': 'function_call', 'id': 'fc_1', 'call_id': 'c1', 'name': 'refund', 'arguments': '{"order_id":"a2"}'}
 RESULT = {'type': 'orq:refund', 'id': 'orq_9', 'call_id': 'c1', 'name': 'refund', 'result': {'ok': False}}
@@ -34,7 +34,6 @@ def test_split_pair_becomes_one_call() -> None:
     assert call.arguments == '{"order_id":"a2"}'
     assert call.has_arguments
     assert call.result == '{"ok": false}'
-    assert not call.failed
     assert call.source_index == 0
 
 
@@ -115,14 +114,39 @@ def test_conflicting_arguments_keep_the_calls_and_warn(caplog) -> None:
     assert 'Conflicting arguments for call_id' in _warnings(caplog)
 
 
-def test_conflicting_results_split_into_derived_ids(caplog) -> None:
-    calls = pair_tool_records([CALL, RESULT, {**RESULT, 'result': 'other'}, {**RESULT, 'result': 'third'}])
-    assert [c.call_id for c in calls] == ['c1', 'c1#2', 'c1#3']
-    assert [c.result for c in calls] == ['{"ok": false}', 'other', 'third']
-    assert {c.arguments for c in calls} == {'{"order_id":"a2"}'}
-    assert {c.item_id for c in calls} == {'fc_1'}
-    assert {c.source_index for c in calls} == {0}
-    assert _warnings(caplog).count('Conflicting result for call_id') == 1
+def test_conflicting_results_keep_the_call_records_result_and_warn_once(caplog) -> None:
+    (call,) = pair_tool_records([CALL, RESULT, {**RESULT, 'result': 'other'}, {**RESULT, 'result': 'third'}])
+    assert call.call_id == 'c1'
+    assert call.result == '{"ok": false}'
+    warnings = _warnings(caplog)
+    assert warnings.count('Conflicting result for call_id') == 1
+    assert "'other'" in warnings
+    assert "'third'" in warnings
+    assert '#' not in call.call_id
+
+
+def test_result_on_the_function_call_record_beats_an_orq_result(caplog) -> None:
+    (call,) = pair_tool_records([{**RESULT, 'result': 'orq'}, {**CALL, 'result': 'fc'}])
+    assert call.result == 'fc'
+    assert 'Conflicting result' in _warnings(caplog)
+
+
+def test_conflicting_second_function_call_keeps_the_first_and_warns_once(caplog) -> None:
+    (call,) = pair_tool_records([CALL, {**CALL, 'id': 'fc_2', 'arguments': '{"order_id":"zz"}', 'name': 'other'}])
+    assert call.arguments == '{"order_id":"a2"}'
+    assert call.name == 'refund'
+    assert call.item_id == 'fc_1'
+    warnings = _warnings(caplog)
+    assert warnings.count('Conflicting arguments') == 1
+    assert warnings.count('Conflicting name') == 1
+
+
+def test_conflicting_errors_keep_the_first_and_warn_once(caplog) -> None:
+    one = {'type': 'orq:refund', 'call_id': 'c1', 'error': 'boom'}
+    two = {'type': 'orq:refund', 'call_id': 'c1', 'error': 'bang'}
+    (call,) = pair_tool_records([CALL, one, two])
+    assert json.loads(call.result or '') == {'status': 'failed', 'error': 'boom'}
+    assert _warnings(caplog).count('Conflicting error for call_id') == 1
 
 
 def test_results_are_compared_as_json() -> None:
@@ -136,12 +160,85 @@ def test_explicit_name_conflict_keeps_the_calls_name(caplog) -> None:
     assert 'Conflicting name for call_id' in _warnings(caplog)
 
 
-def test_failed_record_carries_its_error_and_keeps_a_real_result_under_result() -> None:
+def test_failed_record_carries_its_error_and_the_parsed_result() -> None:
     (plain,) = pair_tool_records([CALL, {'type': 'orq:refund', 'call_id': 'c1', 'status': 'failed', 'error': 'boom'}])
-    assert plain.failed
     assert json.loads(plain.result or '') == {'status': 'failed', 'error': 'boom'}
     (with_result,) = pair_tool_records([CALL, {**RESULT, 'status': 'failed', 'error': 'boom'}])
-    assert json.loads(with_result.result or '') == {'status': 'failed', 'error': 'boom', 'result': '{"ok": false}'}
+    assert json.loads(with_result.result or '') == {'status': 'failed', 'error': 'boom', 'result': {'ok': False}}
+
+
+def test_failed_record_with_a_non_json_result_keeps_the_string() -> None:
+    (call,) = pair_tool_records([CALL, {**RESULT, 'result': 'plain text', 'status': 'failed'}])
+    assert json.loads(call.result or '') == {'status': 'failed', 'error': None, 'result': 'plain text'}
+
+
+def test_record_with_an_error_but_no_failed_status_is_wrapped_as_failed() -> None:
+    (call,) = pair_tool_records([CALL, {'type': 'orq:refund', 'call_id': 'c1', 'error': 'boom'}])
+    assert json.loads(call.result or '') == {'status': 'failed', 'error': 'boom'}
+
+
+def test_lone_orq_record_with_real_empty_arguments_keeps_them() -> None:
+    (call,) = pair_tool_records([{'type': 'orq:kb', 'call_id': 'k', 'arguments': {}, 'result': 'x'}])
+    assert call.has_arguments
+    assert call.arguments == '{}'
+
+
+def test_non_json_arguments_are_encoded_with_a_str_fallback() -> None:
+    (call,) = pair_tool_records([{**CALL, 'arguments': {'when': object}}])
+    assert call.arguments.startswith('{"when": "<class')
+
+
+def test_same_call_id_in_two_turns_is_two_calls_without_a_conflict(caplog) -> None:
+    user = {'type': 'message', 'role': 'user', 'content': 'again'}
+    items = [
+        CALL,
+        RESULT,
+        user,
+        {**CALL, 'arguments': '{"order_id":"b3"}'},
+        {**RESULT, 'result': 'second'},
+    ]
+    first, second = pair_tool_records(items)
+    assert (first.arguments, first.result) == ('{"order_id":"a2"}', '{"ok": false}')
+    assert (second.arguments, second.result) == ('{"order_id":"b3"}', 'second')
+    assert not _warnings(caplog)
+    assert [i.get('call_id') for i in normalize_tool_records(items) if i['type'] == 'function_call'] == ['c1', 'c1']
+
+
+def test_function_call_output_item_counts_as_the_result(caplog) -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'done'},
+        {'type': 'orq:kb', 'call_id': 'b', 'arguments': '{"q":1}', 'result': 'hit'},
+    ]
+    pair_tool_records(items)
+    assert not _warnings(caplog)
+
+
+def test_minted_ids_are_deterministic_and_positional() -> None:
+    items = [TEXT, {'type': 'orq:t', 'arguments': '{"a":1}', 'result': 'x'}, {'type': 'orq:t', 'result': 'y'}]
+    ids = [c.call_id for c in pair_tool_records(items)]
+    assert ids == ['call_unpaired_1', 'call_unpaired_2']
+    assert ids == [c.call_id for c in pair_tool_records(items)]
+    assert normalize_tool_records(items) == normalize_tool_records(items)
+
+
+def test_normalize_rewrites_records_in_place_and_passes_other_items_through() -> None:
+    items = [RESULT, TEXT, CALL, {'type': 'reasoning', 'id': 'r'}]
+    assert normalize_tool_records(items) == [
+        TEXT,
+        {'type': 'function_call', 'id': 'fc_1', 'call_id': 'c1', 'name': 'refund', 'arguments': '{"order_id":"a2"}'},
+        {'type': 'function_call_output', 'call_id': 'c1', 'output': '{"ok": false}'},
+        {'type': 'reasoning', 'id': 'r'},
+    ]
+
+
+def test_normalize_leaves_a_plain_responses_transcript_unchanged() -> None:
+    plain = [
+        {'type': 'function_call', 'id': 'fc_1', 'call_id': 'c1', 'name': 't', 'arguments': '{}'},
+        {'type': 'function_call_output', 'call_id': 'c1', 'output': 'ok'},
+        TEXT,
+    ]
+    assert normalize_tool_records(plain) == plain
 
 
 def test_same_call_id_in_separate_lists_is_not_cross_paired() -> None:

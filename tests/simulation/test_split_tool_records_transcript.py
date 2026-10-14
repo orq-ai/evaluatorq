@@ -28,10 +28,10 @@ def test_placeholder_arguments_on_the_result_record_do_not_replace_the_calls():
     assert len(tool_messages) == 1
 
 
-def test_conflicting_results_render_unique_call_ids_that_keep_the_calls_arguments():
+def test_conflicting_results_render_one_call_with_the_calls_arguments_and_result():
     items = [CALL, RESULT, {**RESULT, 'result': 'other'}]
     assistant, *tool_messages = build_assistant_message(AgentResponse.from_output_items(items))
     assert assistant.tool_calls is not None
-    assert [c.id for c in assistant.tool_calls] == ['c1', 'c1#2']
-    assert {c.function.arguments for c in assistant.tool_calls} == {'{"order_id":"a2"}'}
-    assert [m.tool_call_id for m in tool_messages] == ['c1', 'c1#2']
+    assert [c.id for c in assistant.tool_calls] == ['c1']
+    assert [c.function.arguments for c in assistant.tool_calls] == ['{"order_id":"a2"}']
+    assert [m.tool_call_id for m in tool_messages] == ['c1']

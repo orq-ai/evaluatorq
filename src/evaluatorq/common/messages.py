@@ -12,6 +12,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -223,3 +225,38 @@ def messages_to_text(messages: Iterable[Any]) -> str:
         body = '\n'.join(parts)
         lines.append(body if role in (None, 'assistant') else f'[{role}] {body}')
     return '\n'.join(lines)
+
+
+def tool_result_to_text(result: object) -> str:
+    """Render a tool's return value as text.
+
+    Tools routinely return structured data (``{"temp": 12}``), and a result has to
+    be text because it ends up as a tool ``Message.content``. ``str()`` would give
+    the Python repr — single-quoted, ``None``/``True`` instead of ``null``/``true``
+    — which no downstream reader can parse back. JSON keeps it readable by both a
+    model and a parser.
+    """
+    if isinstance(result, str):
+        return result
+    model_dump_json = getattr(result, 'model_dump_json', None)
+    if callable(model_dump_json):
+        try:
+            rendered = model_dump_json()
+        except Exception as exc:  # noqa: BLE001 - any renderer failure must reach the text fallback
+            logger.warning(
+                'tool_result_to_text: {}.model_dump_json() failed with {}: {}; falling back to JSON encoding',
+                type(result).__name__,
+                type(exc).__name__,
+                exc,
+            )
+        else:
+            if isinstance(rendered, str):
+                return rendered
+            logger.warning(
+                'tool_result_to_text: {}.model_dump_json() returned {}; falling back to JSON encoding',
+                type(result).__name__,
+                type(rendered).__name__,
+            )
+    # default=str: a value JSON cannot encode degrades to its repr rather than
+    # failing the whole response over one odd tool return.
+    return json.dumps(result, default=str)
