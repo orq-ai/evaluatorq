@@ -37,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+import fasthtml.core
 import httpx
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
@@ -1234,8 +1235,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         ``starlette.testclient.TestClient``.
     """
 
-    @asynccontextmanager
-    async def lifespan(runtime: FastHTML) -> Any:
+    async def lifespan_gen(runtime: FastHTML) -> Any:
         try:
             yield
         finally:
@@ -1250,6 +1250,10 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             if search_store is not None:
                 await search_store.close()
                 del runtime.state.finder_search_store
+
+    # fasthtml >= 0.14 wraps ``lifespan`` itself and wants a bare async generator;
+    # older releases hand it straight to Starlette, which wants a context manager.
+    lifespan = lifespan_gen if hasattr(fasthtml.core, 'Lifespan') else asynccontextmanager(lifespan_gen)
 
     app = FastHTML(
         surreal=False,
