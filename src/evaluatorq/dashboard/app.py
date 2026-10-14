@@ -308,7 +308,11 @@ async def _auth_status(req: Request) -> JSONResponse:
                 'method': auth.method,
                 'message': 'The authentication check failed unexpectedly. Check the dashboard logs.',
             })
-        logger.opt(exception=True).warning('Dashboard auth status probe failed for {}: {}', auth.label, exc)
+        if isinstance(exc, httpx.TransportError):
+            # Network down, VPN or proxy reset: a one-line warning, not a traceback the page repeats on every poll.
+            logger.warning('Dashboard auth status probe could not reach Orq for {}: {!r}', auth.label, exc)
+        else:
+            logger.opt(exception=True).warning('Dashboard auth status probe failed for {}: {}', auth.label, exc)
         return JSONResponse({
             'status': 'unavailable',
             'method': auth.method,
