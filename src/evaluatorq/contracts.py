@@ -1163,6 +1163,77 @@ class ResponseTrace(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _add_tool_record(items: list[Any], pairing: dict[str, int], no_args: set[int], item: Any, item_type: str) -> None:
+    """Append one wire tool record to ``items``, joining it to its other half by ``call_id``.
+
+    The Orq router can return an invocation as two records sharing a ``call_id``:
+    a ``function_call`` carrying the arguments and an ``orq:<tool>`` carrying the
+    result. They are folded into one `ToolCallOutputItem`, whichever arrives first.
+    ``pairing`` maps a correlation key to the index of its item in ``items`` and is
+    scoped to one response, so the same ``call_id`` in another turn never pairs.
+    ``no_args`` holds the indices whose arguments no record has supplied yet.
+
+    The wire ``id`` names the item, not the invocation. It only stands in for a
+    missing ``call_id`` on a ``function_call`` record, where the spec makes it the
+    invocation id; an ``orq:`` record without its own ``call_id`` never pairs. A
+    missing key never pairs. Two records that disagree on name, arguments or result
+    are kept apart and logged rather than guessed at.
+    """
+    explicit_call_id = _gf(item, 'call_id')
+    wire_id = _gf(item, 'id')
+    key = explicit_call_id or (wire_id if item_type == 'function_call' else None)
+    raw_args = _gf(item, 'arguments')
+    has_args = raw_args is not None
+    args = (raw_args if isinstance(raw_args, str) else json.dumps(raw_args)) if has_args else '{}'
+    result = _gf(item, 'result')
+    if result is None:
+        result = _gf(item, 'output')
+    result_text = tool_result_to_text(result) if result is not None else None
+    name = _gf(item, 'name') or (item_type.split(':', 1)[1] if item_type.startswith('orq:') else '')
+    fields: dict[str, Any] = {
+        'type': 'function_call',
+        'name': str(name),
+        'call_id': str(explicit_call_id or wire_id or ''),
+        'arguments': args,
+        'result': result_text,
+    }
+    if isinstance(wire_id, str) and wire_id:
+        fields['id'] = wire_id
+    new = ToolCallOutputItem(**fields)
+    index = pairing.get(str(key)) if key else None
+    if index is None:
+        if key:
+            pairing[str(key)] = len(items)
+        else:
+            logger.warning('Tool record {!r} has no call_id, so it cannot be paired; keeping it as is', item_type)
+        if not has_args:
+            no_args.add(len(items))
+        items.append(new)
+        return
+    old = items[index]
+    old_has_args = index not in no_args
+    conflict = (
+        (has_args and old_has_args and args != old.arguments)
+        or (result_text is not None and old.result is not None and result_text != old.result)
+        or (old.name and new.name and old.name != new.name)
+    )
+    if conflict:
+        logger.warning('Conflicting records for call_id {!r} ({!r} vs {!r}); not pairing them', key, old.name, new.name)
+        if not has_args:
+            no_args.add(len(items))
+        items.append(new)
+        return
+    if has_args:
+        no_args.discard(index)
+    items[index] = old.model_copy(
+        update={
+            'name': old.name or new.name,
+            'arguments': args if has_args and not old_has_args else old.arguments,
+            'result': old.result if old.result is not None else result_text,
+        }
+    )
+
+
 class AgentResponse(BaseModel):
     """Structured response from a target agent as an ordered list of output messages.
 
@@ -1242,6 +1313,8 @@ class AgentResponse(BaseModel):
     def from_output_items(cls, output_items: Any) -> AgentResponse:
         """Build an AgentResponse from bare Responses ``output`` items, with no usage or metadata."""
         items: list[OutputMessage] = []
+        pairing: dict[str, int] = {}
+        no_args: set[int] = set()
         refusal: str | None = None
         for item in output_items:
             item_type = _gf(item, 'type')
@@ -1268,25 +1341,19 @@ class AgentResponse(BaseModel):
             # 'orq:query_knowledge_base'). Treat both as tool calls so the
             # agent's tool activity is captured rather than silently dropped.
             elif item_type == 'function_call' or (isinstance(item_type, str) and item_type.startswith('orq:')):
-                raw_args = _gf(item, 'arguments') or '{}'
-                call_id = _gf(item, 'call_id') or _gf(item, 'id') or ''
-                result = _gf(item, 'result')
-                if result is None:
-                    result = _gf(item, 'output')
-                name = _gf(item, 'name') or (item_type.split(':', 1)[1] if item_type.startswith('orq:') else '')
-                items.append(
-                    ToolCallOutputItem(
-                        type='function_call',
-                        name=str(name),
-                        call_id=str(call_id),
-                        arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args),
-                        result=tool_result_to_text(result) if result is not None else None,
-                    )
-                )
+                _add_tool_record(items, pairing, no_args, item, str(item_type))
             elif item_type == 'reasoning':
                 pass  # o1/o3/o4-mini reasoning steps intentionally excluded
             else:
                 logger.warning('AgentResponse.from_openresponses: skipping unknown item type={!r}', item_type)
+        for index in sorted(no_args):
+            orphan = items[index]
+            if isinstance(orphan, ToolCallOutputItem) and orphan.result is not None:
+                logger.warning(
+                    'Tool result {!r} ({!r}) has no matching call record; its arguments are unknown',
+                    orphan.call_id,
+                    orphan.name,
+                )
         return cls(output=items, refusal=refusal)
 
     @classmethod
