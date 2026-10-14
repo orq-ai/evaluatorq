@@ -268,11 +268,13 @@ An empty landing page — zeros across the stat band, no runs in either rail —
 
 ### 2. Red Team — pick a run { #rt-run-list }
 
-**Red Team** lists every red-team job, newest first, with the target or targets it attacked and how many attack cases it ran. The `SCORE` column is the resistance rate (higher is better), not the attack success rate — the stat band above totals attacks, ASR and critical findings across those runs, so the two directions sit on the same screen.
+**Red Team** opens on a card of four numbers across every stored run (ASR, critical findings, attacks run and total spend), then lists every red-team job, newest first, with the target or targets it attacked. Each row shows how many attacks broke the agent out of how many were evaluated (`BROKE`, as `x/y`), the attack success rate for that run (`ASR`), the case count and the cost. ASR is lower-is-better: a chip is teal at 10% or below, amber above 10% and red above 25%, and the same bands colour the ASR number in the card.
 
-`STATUS` is the run's lifecycle, not a verdict: **success** for a finished run, **running** for one still in flight (the dashboard reads the run manifest, so a long run appears here before it has a report), and **error** for one that died part-way. Open an **error** run anyway — the attacks that completed before the failure are still in it, and the numbers are computed over those alone, so treat its resistance rate as a partial sample.
+The total spend is the sum of the costs the runs recorded. When only some calls were priced, the line under it says how many (for example "1,140 of 1,236 calls priced"), so the figure counts only what could be priced.
 
-![The Red Team run list: target, status, score and case count per job.](assets/dashboard/redteam-02-run-list.png){ .dashboard-shot }
+A row for a run that died part-way carries an **error** pill, and one still in flight carries **running** (the dashboard reads the run manifest, so a long run appears here before it has a report). Open an **error** run anyway — the attacks that completed before the failure are still in it, and the numbers are computed over those alone, so treat its rates as a partial sample.
+
+![The Red Team overview: a card of ASR, critical findings, attacks run and total spend, then a run list with broke, ASR, cases and cost per job.](assets/dashboard/redteam-02-run-list.png){ .dashboard-shot }
 
 ### 3. Overview — the headline { #rt-overview }
 
