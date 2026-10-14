@@ -394,4 +394,14 @@ def test_length_row_reads_as_one_sentence():
     r = _run([(['B'] * 3, 'B', {'ra': 'a', 'rb': 'bbbb'}), (['A'] * 3, 'A', {'ra': 'aaaa', 'rb': 'b'})])
     row = next(s for s in trust_signals(r) if s.label == 'Length')
     assert row.value == 'longer won 100%'
-    assert row.detail == '2 of 2 decided comparisons with answers of different length'
+    assert row.tone == ''
+    assert row.detail.startswith('2 of 2 decided comparisons with answers of different length')
+    assert 'includes 50%' in row.detail
+
+
+def test_length_row_warns_when_the_lean_is_beyond_chance():
+    r = _run([(['B'] * 3, 'B', {'ra': 'a', 'rb': 'bbbb'})] * 12)
+    row = next(s for s in trust_signals(r) if s.label == 'Length')
+    assert row.value == 'longer won 100%'
+    assert row.tone == 'warn'
+    assert 'judges may favour longer answers' in row.detail

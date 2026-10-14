@@ -69,27 +69,45 @@ def _hx(rid: str, sort: str, direction: str, page: int) -> str:
     )
 
 
+_SORT_NAMES = {'index': 'number', 'winner': 'winner'}
+
+
 def _sort_button(rid: str, label: str, key: str, sort: str, direction: str) -> str:
     active = sort == key
     next_dir = 'desc' if active and direction == 'asc' else 'asc'
-    arrow = (' ▴' if direction == 'asc' else ' ▾') if active else ''
-    aria = ('ascending' if direction == 'asc' else 'descending') if active else 'none'
+    arrow = (
+        (' ▴' if direction == 'asc' else ' ▾') if active else '<span class="pw-sort-hint" aria-hidden="true">↕</span>'
+    )
+    name = _SORT_NAMES.get(key, label.lower())
+    if active:
+        current = 'ascending' if direction == 'asc' else 'descending'
+        nxt = 'ascending' if next_dir == 'asc' else 'descending'
+        aria = f'{name.capitalize()}, sorted {current}. Activate to sort {nxt}.'
+    else:
+        aria = f'Sort by {name}'
     return (
-        f'<button type="button" class="pw-th-sort" aria-sort="{aria}" {_hx(rid, key, next_dir, 1)}>'
-        f'{label}{arrow}</button>'
+        f'<button type="button" id="pw-sort-{esc(key)}-{esc(rid)}" class="pw-th-sort" aria-label="{esc(aria)}" '
+        f'{_hx(rid, key, next_dir, 1)}>{esc(label)}{arrow}</button>'
+    )
+
+
+def _pager_hx(rid: str, sort: str, direction: str, page: int) -> str:
+    # Own swap: scroll the new page to the top of the list, not the viewport it was clicked in.
+    return _hx(rid, sort, direction, page).replace(
+        'hx-swap="outerHTML"', f'hx-swap="outerHTML show:#pw-row-list-{esc(rid)}:top"'
     )
 
 
 def _pager(rid: str, sort: str, direction: str, page: int, pages: int, total: int) -> str:
     if pages <= 1:
         return f'<nav class="pw-pager"><span>{total} comparisons</span></nav>'
-    prev_attrs = 'disabled' if page <= 1 else _hx(rid, sort, direction, page - 1)
-    next_attrs = 'disabled' if page >= pages else _hx(rid, sort, direction, page + 1)
+    prev_attrs = 'aria-disabled="true"' if page <= 1 else _pager_hx(rid, sort, direction, page - 1)
+    next_attrs = 'aria-disabled="true"' if page >= pages else _pager_hx(rid, sort, direction, page + 1)
     return (
-        '<nav class="pw-pager">'
-        f'<button type="button" class="pw-pager-btn" {prev_attrs}>‹ Prev</button>'  # noqa: RUF001
+        '<nav class="pw-pager" aria-label="Comparison pages">'
+        f'<button type="button" id="pw-prev-{esc(rid)}" class="pw-pager-btn" {prev_attrs}>‹ Prev</button>'  # noqa: RUF001
         f'<span>Page {page} of {pages} · {total} comparisons</span>'
-        f'<button type="button" class="pw-pager-btn" {next_attrs}>Next ›</button>'  # noqa: RUF001
+        f'<button type="button" id="pw-next-{esc(rid)}" class="pw-pager-btn" {next_attrs}>Next ›</button>'  # noqa: RUF001
         '</nav>'
     )
 
@@ -273,7 +291,7 @@ def _vote_item(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> str:
         body = f'<div class="pw-passes">{"".join(lines)}</div>' if lines else ''
         classify = _classify_details({'classify_observations': _classify_observations(vote, run)})
         body += classify
-    return f'<li class="pw-vote"><div class="pw-vote-head" style="color:{pw_side_colour(value)}">{head}{tags}</div>{body}</li>'
+    return f'<li class="pw-vote"><div class="pw-vote-head" style="--c:{pw_side_colour(value)}">{head}{tags}</div>{body}</li>'
 
 
 def render_pairwise_comparison_detail(run: PairwiseRun, idx: int) -> str:

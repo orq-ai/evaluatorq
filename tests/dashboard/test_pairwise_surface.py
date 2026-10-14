@@ -169,7 +169,11 @@ def _headline(tmp_path: Path, winners: list[str]) -> str:
 
 
 def test_headline_names_the_leading_side(tmp_path: Path) -> None:
-    assert _headline(tmp_path, ['A', 'B', 'B', 'B']) == '4 comparisons · prompt-v3 leads 75%'
+    assert _headline(tmp_path, ['A', 'B', 'B', 'B']) == '4 comparisons · prompt-v3 leads 75% · too close'
+
+
+def test_headline_drops_too_close_for_a_clear_lead(tmp_path: Path) -> None:
+    assert _headline(tmp_path, ['B'] * 12) == '12 comparisons · prompt-v3 leads 100%'
 
 
 def test_headline_even_and_undecided(tmp_path: Path) -> None:
@@ -769,10 +773,10 @@ def test_score_column_names_its_metric_per_surface(client: tuple[TestClient, str
             status='finished', error=False,
         )
 
-    assert 'Decided rate' in _score_title(_row('pairwise'))
+    assert 'Called rate' in _score_title(_row('pairwise'))
     assert 'Resistance rate' in _score_title(_row('redteam'))
     assert _score_title(_row('unknown')) == ''
-    assert 'Decided rate' in c.get('/?surface=pairwise').text
+    assert 'Called rate' in c.get('/?surface=pairwise').text
 
 
 def test_kind_colours_are_stable_when_kinds_are_absent() -> None:

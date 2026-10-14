@@ -176,6 +176,8 @@ def _card(path: Path) -> ReportCard | None:
     if error:
         headline = ''
     elif surface == 'pairwise':
+        from evaluatorq.pairwise_reports.stats import wilson_interval
+
         entries = data.get('entries')
         entries = entries if isinstance(entries, list) else []
         count = len(entries)
@@ -192,7 +194,10 @@ def _card(path: Path) -> ReportCard | None:
             else:
                 b_leads = b_wins > a_wins
                 label = data.get('label_b' if b_leads else 'label_a') or ('B' if b_leads else 'A')
-                headline += f' · {label} leads {max(a_wins, b_wins) / (a_wins + b_wins):.0%}'
+                decided = a_wins + b_wins
+                low, _ = wilson_interval(max(a_wins, b_wins), decided)
+                too_close = '' if low > 0.5 else ' · too close'
+                headline += f' · {label} leads {max(a_wins, b_wins) / decided:.0%}{too_close}'
     else:
         headline = f'{data.get("total_results", 0)} {"attacks" if surface == "redteam" else "conversations"}'
     return ReportCard(report_id(path), surface, str(name), created_at, headline, path, error)

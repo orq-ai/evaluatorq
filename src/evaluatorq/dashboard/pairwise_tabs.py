@@ -11,6 +11,7 @@ run and is deliberately left alone; this module reads metrics from
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from itertools import starmap
 from typing import TYPE_CHECKING, Any
@@ -28,13 +29,33 @@ from evaluatorq.pairwise_reports.sections import (
     judge_order,
     observed_swap,
 )
-from evaluatorq.pairwise_reports.stats import generation_metrics, judge_usage, trust_signals, verdict
+from evaluatorq.pairwise_reports.stats import generation_metrics, judge_usage, trust_signals, verdict, wilson_interval
 
 if TYPE_CHECKING:
     from evaluatorq.pairwise_reports.stats import TrustSignal, Verdict
     from evaluatorq.pairwise_run import PairwiseEntry, PairwiseRun
 
-_EMPTY_FILTERED = '<p class="pw-note">No comparisons match the current filter.</p>'
+
+def _empty_filtered(rid: str) -> str:
+    return f'<div class="pw-note">No comparisons match the current filter. {_show_all_button(rid)}</div>'
+
+
+def _show_all_button(rid: str, label: str = 'Show all') -> str:
+    return (
+        '<button type="button" class="pw-filtered-clear" '
+        f'hx-post="/r/{esc(rid)}/filter" hx-target="#filter-swap" hx-swap="outerHTML">{esc(label)}</button>'
+    )
+
+
+def _filtered_banner(rid: str, shown: int, total: int) -> str:
+    return (
+        '<div class="pw-filtered" role="status"><span class="pw-filtered-text">'
+        f'Filtered view · {shown} of {total} comparisons. The verdict uses all {total}; '
+        'counts, trust signals, judges and performance below cover only these.</span>'
+        f'{_show_all_button(rid, f"Show all {total}")}</div>'
+    )
+
+
 _EMPTY_RUN = '<p class="pw-note">No comparisons in this run.</p>'
 
 _BIAS_HEADER_TIP = (
@@ -84,7 +105,7 @@ def _hero(run: PairwiseRun, hero_actions_html: str) -> str:
         '<p class="report-hero-kicker">Pairwise</p>'
         f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
         f'<p class="report-hero-sub">{_swatch("A", run.label_a)} vs {_swatch("B", run.label_b)}'
-        f' · {judges} judges · swap {esc(_swap_text(run))}{criteria}</p>'
+        f' · {judges} {"judge" if judges == 1 else "judges"} · swap {esc(_swap_text(run))}{criteria}</p>'
         f'{actions}</header>'
     )
 
@@ -123,26 +144,35 @@ def _verdict_text(v: Verdict) -> tuple[str, str, str]:
     return (verdict_eyebrow(v.state), headline, crossing + left_out)
 
 
-def _interval_bar(v: Verdict) -> str:
-    if v.state == 'no_decided' or v.low is None or v.high is None or v.win_rate is None:
+def _interval_bar(v: Verdict, *, side: str | None = None, label: str | None = None) -> str:
+    if v.state == 'no_decided' or v.low is None or v.high is None or v.win_rate is None or not v.decided:
         return ''
-    colour = pw_side_colour(v.leader or 'tie')
-    who = v.leader_label or 'Either side'
+    if side is None:
+        colour = pw_side_colour(v.leader or 'tie')
+        who = v.leader_label or 'Either side'
+        rate, low, high = v.win_rate, v.low, v.high
+    else:
+        wins = v.wins_a if side == 'A' else v.wins_b
+        colour = pw_side_colour(side)
+        who = label or side
+        rate = wins / v.decided
+        low, high = wilson_interval(wins, v.decided)
     description = (
-        f'{who} won {v.win_rate:.0%} of {v.decided} decided comparisons. '
-        f'95% uncertainty range: {v.low:.0%} to {v.high:.0%}. 50% means equal wins.'
+        f'{who} won {rate:.0%} of {v.decided} decided comparisons. '
+        f'95% uncertainty range: {low:.0%} to {high:.0%}. 50% means equal wins.'
     )
     return (
         f'<figure class="pw-ci-figure" style="--c:{colour}">'
+        '<div class="pw-ci-head">'
         f'<figcaption class="pw-ci-title">{esc(who)} win rate</figcaption>'
         '<div class="pw-ci-readout">'
-        f'<span><i class="pw-ci-key-dot" aria-hidden="true"></i>Observed <strong>{v.win_rate:.0%}</strong></span>'
+        f'<span><i class="pw-ci-key-dot" aria-hidden="true"></i>Observed <strong>{rate:.0%}</strong></span>'
         f'<span><i class="pw-ci-key-range" aria-hidden="true"></i>95% range '
-        f'<strong>{v.low:.0%}\u2013{v.high:.0%}</strong></span></div>'
+        f'<strong>{low:.0%}\u2013{high:.0%}</strong></span></div></div>'
         f'<div class="pw-ci" role="img" aria-label="{esc(description)}">'
-        f'<div class="pw-ci-range" style="left:{v.low * 100:.1f}%;width:{(v.high - v.low) * 100:.1f}%"></div>'
+        f'<div class="pw-ci-range" style="left:{low * 100:.1f}%;width:{(high - low) * 100:.1f}%"></div>'
         '<div class="pw-ci-mid"></div>'
-        f'<div class="pw-ci-dot" style="left:{v.win_rate * 100:.1f}%"></div></div>'
+        f'<div class="pw-ci-dot" style="left:{rate * 100:.1f}%"></div></div>'
         '<div class="pw-ci-cap"><span>0%</span><span>50% · equal wins</span><span>100%</span></div>'
         '</figure>'
     )
@@ -152,35 +182,63 @@ def _side_card(label: str, side: str, wins: int, decided: int) -> str:
     rate = f'{wins / decided:.0%}' if decided else '—'
     return (
         f'<div class="pw-side-card" style="--c:{pw_side_colour(side)}"><div class="nm">{esc(label)}</div>'
-        '<div class="mets">'
-        f'<div class="met"><span>wins</span><b>{wins}</b></div>'
-        f'<div class="met"><span>win rate</span><b>{rate}</b></div></div></div>'
+        f'<div class="pw-side-rate">{rate}</div>'
+        f'<div class="pw-side-sub">{wins} wins of {decided} decided</div></div>'
     )
 
 
-def _verdict_card(run: PairwiseRun, v: Verdict) -> str:
+def _verdict_card(run: PairwiseRun, v: Verdict, *, narrowed: bool = False) -> str:
     eyebrow, headline, explanation = _verdict_text(v)
     is_open = '' if v.state == 'clear' else ' is-open'
+    scope = (
+        f'<p class="pw-verdict-scope">All {len(run.entries)} comparisons · filter not applied</p>' if narrowed else ''
+    )
     return (
         f'<div class="pw-verdict{is_open}">'
         f'<p class="pw-verdict-eyebrow">{esc(eyebrow)}</p>'
         f'<p class="pw-verdict-head">{esc(headline)}</p>'
         f'<p class="pw-verdict-expl">{esc(explanation)}</p>'
-        f'{_interval_bar(v)}'
+        f'{scope}'
+        f'{_interval_bar(v, side=None)}'
         '<div class="pw-verdict-sides">'
         f'{_side_card(run.label_a, "A", v.wins_a, v.decided)}{_side_card(run.label_b, "B", v.wins_b, v.decided)}'
         '</div></div>'
     )
 
 
-def _kpis(run: PairwiseRun, v: Verdict) -> str:
-    inconclusive_status = 'warn' if v.total and v.inconclusive / v.total > INCONCLUSIVE_WARN else 'neutral'
+def _kpis(run: PairwiseRun, v: Verdict, *, narrowed: bool = False) -> str:
+    warned = v.total and v.inconclusive / v.total > INCONCLUSIVE_WARN
+    inconclusive_status = 'warn' if warned and not narrowed else 'neutral'
     return kpi_cards([
         {'label': 'Comparisons', 'value': str(v.total), 'status': 'neutral'},
         {'label': 'Decided', 'value': str(v.decided), 'status': 'neutral'},
         {'label': 'Ties', 'value': str(v.ties), 'status': 'neutral'},
         {'label': 'Inconclusive', 'value': str(v.inconclusive), 'status': inconclusive_status},
     ])
+
+
+def _fmt_ms(ms: float) -> str:
+    return f'{ms:,.0f} ms' if ms < 10_000 else f'{ms / 1000:,.1f} s'
+
+
+def _latency_text(mean_ms: float, measured: int, total: int) -> str:
+    text = _fmt_ms(mean_ms)
+    return f'{text} ({measured} measured)' if measured < total else text
+
+
+def _mean_latency_text(sum_ms: float | None, measured: int, total: int) -> str:
+    if sum_ms is None or not measured:
+        return 'Not recorded'
+    return _latency_text(sum_ms / measured, measured, total)
+
+
+def _perf_row(metric: str, label_a: str, a: str, label_b: str, b: str, delta_head: str, delta: str) -> str:
+    return (
+        f'<tr><th scope="row">{esc(metric)}</th>'
+        f'<td data-label="{esc(label_a)}">{esc(a)}</td>'
+        f'<td data-label="{esc(label_b)}">{esc(b)}</td>'
+        f'<td class="pw-perf-delta" data-label="{esc(delta_head)}">{esc(delta)}</td></tr>'
+    )
 
 
 def _outcomes_panel(run: PairwiseRun, v: Verdict) -> str:
@@ -193,12 +251,20 @@ def _outcomes_panel(run: PairwiseRun, v: Verdict) -> str:
     return panel('Outcomes', donut(segments, str(v.total), 'comparisons'))
 
 
-def _trust_panel(run: PairwiseRun) -> str:
-    rows = ''.join(_trust_row(s) for s in trust_signals(run))
+def _trust_panel(run: PairwiseRun, *, narrowed: bool = False) -> str:
+    signals = trust_signals(run)
+    if narrowed:
+        signals = [replace(s, tone='') for s in signals]
+    rows = ''.join(_trust_row(s) for s in signals)
     return panel(
-        'How much to trust this',
-        f'<table class="pw-trust"><tbody>{rows}</tbody></table>',
-        info='Signals about the run, not about either side. Amber means read the verdict with care.',
+        'Signals in these comparisons' if narrowed else 'How much to trust this',
+        f'<table class="pw-trust no-stack"><tbody>{rows}</tbody></table>',
+        info=(
+            'Covers only the filtered comparisons, which were picked by outcome, so these signals are skewed '
+            'by the filter. Warning colours are off.'
+            if narrowed
+            else 'Signals about the run, not about either side. Orange means read the verdict with care.'
+        ),
     )
 
 
@@ -224,25 +290,50 @@ def _generation_panel(run: PairwiseRun) -> str:
     b_cost = _cost_text(
         stats.b_cost, partial=stats.b_cost_partial, recorded=stats.b_cost_recorded, total=len(run.entries)
     )
-    a_latency = (
-        f'{stats.a_latency_ms / stats.a_latency_recorded:.2f} ms mean ({stats.a_latency_recorded} measured)'
-        if stats.a_latency_ms is not None and stats.a_latency_recorded
-        else 'Not recorded'
-    )
-    b_latency = (
-        f'{stats.b_latency_ms / stats.b_latency_recorded:.2f} ms mean ({stats.b_latency_recorded} measured)'
-        if stats.b_latency_ms is not None and stats.b_latency_recorded
-        else 'Not recorded'
-    )
+    a_latency = _mean_latency_text(stats.a_latency_ms, stats.a_latency_recorded, len(run.entries))
+    b_latency = _mean_latency_text(stats.b_latency_ms, stats.b_latency_recorded, len(run.entries))
+    total = len(run.entries)
+    delta_cost = '—'
+    if (
+        stats.a_cost is not None
+        and stats.b_cost is not None
+        and stats.a_cost > 0
+        and not stats.a_cost_partial
+        and not stats.b_cost_partial
+        and stats.paired_cost_entries == total
+    ):
+        delta_cost = f'{stats.b_cost / stats.a_cost:.1f}\u00d7'
+    delta_latency = '—'
+    if (
+        stats.a_latency_ms is not None
+        and stats.b_latency_ms is not None
+        and stats.a_latency_recorded
+        and stats.paired_latency_entries == total
+    ):
+        mean_a = stats.a_latency_ms / stats.a_latency_recorded
+        mean_b = stats.b_latency_ms / stats.b_latency_recorded
+        if mean_a > 0:
+            delta_latency = f'{mean_b - mean_a:+,.0f} ms ({(mean_b - mean_a) / mean_a:+.0%})'
+    delta_head = f'{run.label_b} vs {run.label_a}'
+    fully_measured = stats.a_latency_recorded == total == stats.b_latency_recorded
+    latency_scope = f'mean of {total}' if fully_measured else 'mean'
     table = (
         '<div class="pw-performance-table-wrap"><table class="pw-performance-table"><thead><tr>'
         f'<th>Metric</th><th class="pw-side-a">{esc(run.label_a)}</th><th class="pw-side-b">{esc(run.label_b)}</th>'
+        f'<th class="pw-perf-delta">{esc(delta_head)}</th>'
         '</tr></thead><tbody>'
-        f'<tr><th scope="row">Generation cost</th><td>{esc(a_cost)}</td><td>{esc(b_cost)}</td></tr>'
-        f'<tr><th scope="row">Generation latency</th><td>{esc(a_latency)}</td><td>{esc(b_latency)}</td></tr>'
-        '</tbody></table></div>'
+        + _perf_row('Generation cost (total)', run.label_a, a_cost, run.label_b, b_cost, delta_head, delta_cost)
+        + _perf_row(
+            f'Generation latency ({latency_scope})',
+            run.label_a,
+            a_latency,
+            run.label_b,
+            b_latency,
+            delta_head,
+            delta_latency,
+        )
+        + '</tbody></table></div>'
     )
-    total = len(run.entries)
     note = (
         f'<p class="pw-note">Fully priced A/B pairs: {stats.paired_cost_entries} of {total}. '
         f'Paired generation latencies: {stats.paired_latency_entries} of {total}.</p>'
@@ -258,16 +349,14 @@ def _generation_panel(run: PairwiseRun) -> str:
     )
 
 
-def _performance(run: PairwiseRun, *, filtered_empty: bool = False) -> str:
-    if filtered_empty:
-        return _EMPTY_FILTERED
+def _performance(run: PairwiseRun) -> str:
     if not run.entries:
         return _EMPTY_RUN
     usage = judge_usage(run)
     cost = _cost_text(usage.cost, partial=usage.cost_partial, recorded=usage.cost_recorded, total=len(run.entries))
     judge_latency = [e.comparison.judge_latency_ms for e in run.entries if e.comparison.judge_latency_ms is not None]
     latency = (
-        f'{math.fsum(judge_latency) / len(judge_latency):.2f} ms mean ({len(judge_latency)} measured)'
+        _latency_text(math.fsum(judge_latency) / len(judge_latency), len(judge_latency), len(run.entries))
         if judge_latency
         else 'Not recorded'
     )
@@ -278,7 +367,7 @@ def _performance(run: PairwiseRun, *, filtered_empty: bool = False) -> str:
             [('Input', usage.input_tokens), ('Output', usage.output_tokens)],
             width=520,
             label_w=70,
-            color='var(--chart-2)',
+            color='var(--text-muted)',
             fmt=lambda value: f'{int(value):,}',
         )
         judge_usage_panel = panel('Judge tokens', tokens, sub=sub)
@@ -297,14 +386,21 @@ def _performance(run: PairwiseRun, *, filtered_empty: bool = False) -> str:
     )
 
 
-def _overview(run: PairwiseRun, *, filtered_empty: bool = False) -> str:
-    if filtered_empty:
-        return _EMPTY_FILTERED
+def _overview(run: PairwiseRun, full_run: PairwiseRun, *, narrowed: bool = False) -> str:
+    """Verdict on *full_run*; counts, trust and outcomes on the (possibly filtered) *run*."""
     v = verdict(run)
+    scope_note = (
+        f'<p class="pw-note pw-scope-note">Below: {len(run.entries)} of {len(full_run.entries)} '
+        'filtered comparisons</p>'
+        if narrowed
+        else ''
+    )
     return (
-        _verdict_card(run, v)
-        + _kpis(run, v)
-        + f'<div class="pw-grid-2">{_outcomes_panel(run, v)}{_trust_panel(run)}</div>'
+        _verdict_card(full_run, verdict(full_run), narrowed=narrowed)
+        + scope_note
+        + _kpis(run, v, narrowed=narrowed)
+        + _trust_panel(run, narrowed=narrowed)
+        + _outcomes_panel(run, v)
     )
 
 
@@ -337,12 +433,18 @@ def _judge_notes(data: dict[str, Any]) -> str:
     return ''.join(f'<p class="pw-note">{esc(n)}</p>' for n in notes)
 
 
-def _judges_panel(run: PairwiseRun, data: dict[str, Any]) -> str:
+def _judges_panel(run: PairwiseRun, data: dict[str, Any], *, narrowed: bool = False) -> str:
     rows: list[dict[str, Any]] = data.get('rows', [])
     sub = (
         f'Position bias is flagged at {POSITION_BIAS_WARN:.2f} or more: '
-        f'the judge changed its pick on at least {POSITION_BIAS_WARN:.0%} of swapped pairs.'
+        f'the judge changed its pick on at least {POSITION_BIAS_WARN:.0%} of swapped pairs. '
+        'Side shares exclude ties and abstentions.'
     )
+    if narrowed:
+        sub = (
+            f'Covers only the {len(run.entries)} filtered comparisons; filters on thrown-out votes or splits '
+            f'push position bias up. {sub}'
+        )
     if not rows:
         return panel('Judges', '<p class="pw-note">No judge voted in this run.</p>', sub=sub)
     failed: dict[str, int] = {}
@@ -353,9 +455,9 @@ def _judges_panel(run: PairwiseRun, data: dict[str, Any]) -> str:
     show_consistency = bool(data.get('observed_consistency'))
     columns: list[tuple[str, str, str | None]] = [
         ('Judge', 'Judge', None),
-        (f'<span class="pw-side-a">{esc(run.label_a)}</span> rate', f'{run.label_a} rate', None),
-        (f'<span class="pw-side-b">{esc(run.label_b)}</span> rate', f'{run.label_b} rate', None),
-        ('Tie rate', 'Tie rate', None),
+        (f'<span class="pw-side-a">{esc(run.label_a)}</span> share of picks', f'{run.label_a} share of picks', None),
+        (f'<span class="pw-side-b">{esc(run.label_b)}</span> share of picks', f'{run.label_b} share of picks', None),
+        ('Tie (of all votes)', 'Tie (of all votes)', None),
         ('Position bias ⓘ', 'Position bias', _BIAS_HEADER_TIP),
         ('Failed passes', 'Failed passes', None),
     ]
@@ -413,13 +515,11 @@ def _weighted_panel(run: PairwiseRun, consensus: dict[str, Any]) -> str:
     )
 
 
-def _judges(run: PairwiseRun, *, filtered_empty: bool = False) -> str:
-    if filtered_empty:
-        return _EMPTY_FILTERED
+def _judges(run: PairwiseRun, *, narrowed: bool = False) -> str:
     by_kind = {s.kind: s for s in build_report_sections(run)}
     judges = by_kind['pairwise_judges'].data
     consensus = by_kind['pairwise_consensus'].data
-    return _judges_panel(run, judges) + _weighted_panel(run, consensus)
+    return _judges_panel(run, judges, narrowed=narrowed) + _weighted_panel(run, consensus)
 
 
 # ---------------------------------------------------------------------------
@@ -512,20 +612,24 @@ def pairwise_report_tabs(
     """
     view = run if entries is None else with_entries(run, entries)
     focus = valid_focus(run, view.entries, focus)
+    empty_filtered = _empty_filtered(rid)
     if view.entries:
         comparisons = render_pairwise_comparisons(rid, run, view.entries, focus=focus)
     else:
-        comparisons = _EMPTY_FILTERED if entries is not None else _EMPTY_RUN
+        comparisons = empty_filtered if entries is not None else _EMPTY_RUN
     filtered_empty = entries is not None and not view.entries
+    total = len(run.entries)
+    narrowed = entries is not None and bool(view.entries) and len(view.entries) < total
+    banner = _filtered_banner(rid, len(view.entries), total) if narrowed else ''
     tabs = _tabs(
         'pwtab',
         [
-            ('Overview', _overview(view, filtered_empty=filtered_empty)),
-            ('Performance', _performance(view, filtered_empty=filtered_empty)),
-            ('Judges', _judges(view, filtered_empty=filtered_empty)),
+            ('Overview', empty_filtered if filtered_empty else _overview(view, run, narrowed=narrowed)),
+            ('Performance', empty_filtered if filtered_empty else _performance(view)),
+            ('Judges', empty_filtered if filtered_empty else _judges(view, narrowed=narrowed)),
             ('Comparisons', comparisons, f'Comparisons <span class="tab-count">{len(view.entries)}</span>'),
             ('Config', _config(view)),
         ],
         active='Comparisons' if focus is not None else None,
     )
-    return f'<div class="report-aligned pw-report">{_hero(view, hero_actions_html)}{tabs}</div>'
+    return f'<div class="report-aligned pw-report">{_hero(view, hero_actions_html)}{banner}{tabs}</div>'

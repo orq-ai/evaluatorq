@@ -196,6 +196,55 @@ def test_filter_route_without_selections_shows_all(client: tuple[TestClient, str
     assert 'Showing all comparisons' in r.text
 
 
+def _chip_ids(html: str) -> list[str]:
+    import re
+
+    return re.findall(r'<input type="checkbox" id="(fc-[^"]+)"', html)
+
+
+def test_chip_ids_are_stable_across_a_filter_post(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    before = _chip_ids(c.get(f'/r/{rid}').text)
+    after = _chip_ids(c.post(f'/r/{rid}/filter', data={'split': 'yes'}).text)
+    assert before
+    assert len(set(before)) == len(before)
+    assert before == after
+
+
+def test_winner_chips_use_the_pairwise_dot_classes(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    text = c.get(f'/r/{rid}').text
+    assert 'filter-chip-dot chip-dot-pw-a' in text
+    assert 'filter-chip-dot chip-dot-pw-b' in text
+    assert 'chip-dot-jade' not in text.split('data-dim="winner"')[1].split('data-dim="panel"')[0]
+
+
+def test_judge_dropdown_inputs_have_stable_unique_ids(client: tuple[TestClient, str]) -> None:
+    import re
+
+    c, rid = client
+    pattern = r'<input type="checkbox" id="(fc-judge-[^"]+)"'
+    before = re.findall(pattern, c.get(f'/r/{rid}').text)
+    after = re.findall(pattern, c.post(f'/r/{rid}/filter', data={'judge': 'judge-one'}).text)
+    assert len(before) == len(JUDGES)
+    assert len(set(before)) == len(before)
+    assert before == after
+
+
+def test_inconclusive_chip_uses_the_pairwise_none_dot(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    winner_group = c.get(f'/r/{rid}').text.split('data-dim="winner"')[1].split('data-dim="panel"')[0]
+    assert 'chip-dot-pw-none' in winner_group
+    assert 'chip-dot-gray' not in winner_group
+
+
+
+def test_rail_footer_is_marked_only_when_filtered(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    assert 'filter-rail-footer is-filtered' not in c.get(f'/r/{rid}').text
+    assert 'filter-rail-footer is-filtered' in c.post(f'/r/{rid}/filter', data={'split': 'yes'}).text
+
+
 def test_side_label_colliding_with_an_outcome_falls_back_to_slot_letters() -> None:
     r = new_run(run_name='collide', label_a='tie', label_b='B2', judges=JUDGES)
     r.add(_comparison(['A', 'A', 'A'], 'A'), question='qa', response_a='a', response_b='b')

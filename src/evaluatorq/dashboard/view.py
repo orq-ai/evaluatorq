@@ -135,7 +135,7 @@ def _fmt_score(score: float | None) -> str:
 _SCORE_TITLES: dict[str, str] = {
     'redteam': 'Resistance rate: attacks the target withstood',
     'sim': 'Mean scorer average across this run',
-    'pairwise': 'Decided rate: comparisons the judge panel could call',
+    'pairwise': 'Called rate: comparisons ending in a win or tie (not inconclusive)',
 }
 
 
@@ -1386,6 +1386,11 @@ _FILTER_CHEVRON = (
 _GOAL_OUTCOME_DOT_CLASS: dict[str, str] = {'Achieved': 'chip-dot-green', 'Not achieved': 'chip-dot-red'}
 
 
+def _filter_input_id(name: str, value: str) -> str:
+    """Stable per (name, value) input id so htmx restores focus to the same control after a swap."""
+    return f'fc-{name}-{hashlib.sha1(value.encode(), usedforsecurity=False).hexdigest()[:8]}'
+
+
 def _chip(name: str, value: str, *, checked: bool, dot_cls: str, label: str | None = None) -> str:
     """One chip toggle: a <label>-wrapped visually-hidden checkbox.
 
@@ -1393,11 +1398,13 @@ def _chip(name: str, value: str, *, checked: bool, dot_cls: str, label: str | No
     """
     checked_attr = ' checked' if checked else ''
     active_cls = ' is-active' if checked else ''
+    chip_id = _filter_input_id(name, value)
     return (
         f'<label class="filter-chip{active_cls}">'
-        f'<input type="checkbox" class="filter-chip-input" name="{esc(name)}" value="{esc(value)}"{checked_attr}>'
-        f'<span class="filter-chip-dot {dot_cls}"></span>'
-        f'<span class="filter-chip-check {dot_cls}">✓</span>'
+        f'<input type="checkbox" id="{esc(chip_id)}" class="filter-chip-input" name="{esc(name)}"'
+        f' value="{esc(value)}"{checked_attr}>'
+        f'<span class="filter-chip-dot {dot_cls}" aria-hidden="true"></span>'
+        f'<span class="filter-chip-check {dot_cls}" aria-hidden="true">✓</span>'
         f'<span class="filter-chip-label">{esc(value if label is None else label)}</span>'
         f'</label>'
     )
@@ -1421,7 +1428,7 @@ def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
 
     rows = ''.join(
         f'<label class="filter-dd-row">'
-        f'<input type="checkbox" name="{esc(dim)}" value="{esc(opt)}"'
+        f'<input type="checkbox" id="{esc(_filter_input_id(dim, opt))}" name="{esc(dim)}" value="{esc(opt)}"'
         f'{" checked" if opt in selected_set else ""}>'
         f'<span>{esc(opt)}</span>'
         f'</label>'
@@ -1811,7 +1818,7 @@ def _render_pairwise_filter_rail(
     text and may collide with the outcome words). Like the sim rail's
     "Terminated by" chips, no selection renders every winner chip checked.
     """
-    winner_dots = ('chip-dot-gray', 'chip-dot-jade', 'chip-dot-amber', 'chip-dot-gray')
+    winner_dots = ('chip-dot-pw-a', 'chip-dot-pw-b', 'chip-dot-pw-tie', 'chip-dot-pw-none')
     winner_opts = opts.get('winner', [])
     winner_sel = set(selections.get('winner', [])) or set(winner_opts)
     winner_chips = ''.join(
@@ -1830,10 +1837,9 @@ def _render_pairwise_filter_rail(
 
     judge_dd = _dropdown('judge', 'Judge', opts.get('judge', []), selections.get('judge', []))
 
-    if shown is not None and total is not None and shown < total:
-        counter = f'{shown} of {total} comparisons'
-    else:
-        counter = 'Showing all comparisons'
+    filtered = shown is not None and total is not None and shown < total
+    counter = f'{shown} of {total} comparisons' if filtered else 'Showing all comparisons'
+    footer_cls = 'filter-rail-footer is-filtered' if filtered else 'filter-rail-footer'
 
     inner = (
         f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
@@ -1846,7 +1852,7 @@ def _render_pairwise_filter_rail(
         f'<div class="filter-chip-row">{panel_chips}</div>'
         f'</div>'
         f'<div class="filter-group" data-dim="judge">{judge_dd}</div>'
-        f'<div class="filter-rail-footer">{esc(counter)}</div>'
+        f'<div class="{footer_cls}">{esc(counter)}</div>'
     )
     return (
         f'<form id="filter-form" class="filter-form filter-form--sim filter-form--pairwise"'

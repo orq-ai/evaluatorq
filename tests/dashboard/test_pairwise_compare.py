@@ -213,3 +213,29 @@ def test_corrupt_pairwise_file_gets_the_compare_error_page(client_and_ids: tuple
     bad.write_text('{"judging": "pairwise", "entries": "nope"}')
     resp = client.get(f'/compare/pairwise?a={a}&b={report_id(bad)}')
     assert resp.status_code == 422
+
+
+def test_changed_rows_come_first_and_each_run_shows_an_interval_bar() -> None:
+    a = _run('a', [('same', 'A'), ('moved', 'A')])
+    b = _run('b', [('same', 'A'), ('moved', 'B')])
+    html = render_pairwise_compare_page('ra', 'rb', a, b)
+    assert html.index('moved') < html.index('same')
+    assert html.count('pw-cmp-run-ci') == 2
+    assert 'class="pw-vchip"' in html
+
+
+def test_both_runs_report_the_b_side_win_rate_and_the_diff_counts_changes() -> None:
+    a = _run('a', [('same', 'A'), ('moved', 'A')], b='newer')
+    b = _run('b', [('same', 'A'), ('moved', 'B')], b='newer')
+    html = render_pairwise_compare_page('ra', 'rb', a, b)
+    assert html.count('newer win rate') == 2
+    assert '2 compared · 1 changed' in html
+
+
+def test_leftover_counts_only_show_when_non_zero() -> None:
+    a = _run('a', [('q', 'A')])
+    clean = render_pairwise_compare_page('ra', 'rb', a, _run('b', [('q', 'A')]))
+    assert 'Only in run A' not in clean and 'only in A' not in clean
+    extra = render_pairwise_compare_page('ra', 'rb', a, _run('b', [('q', 'A'), ('r', 'B')]))
+    assert 'Only in run B' in extra
+    assert '0 only in A, 1 only in B' in extra

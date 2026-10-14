@@ -405,3 +405,33 @@ def test_a_pairwise_file_that_fails_validation_is_404_not_500(tmp_path: Path) ->
     rid = report_id(bad)
     assert c.get(f'/r/{rid}/pairwise/row-list').status_code == 404
     assert c.get(f'/r/{rid}/pairwise/comparison?idx=0').status_code == 404
+
+
+def test_pager_buttons_scroll_the_new_page_to_the_list_top(tmp_path: Path) -> None:
+    c, rid = _client(_big_run(), tmp_path)
+    html = c.get(f'/r/{rid}/pairwise/row-list?page=1').text
+    assert f'hx-swap="outerHTML show:#pw-row-list-{rid}:top"' in html
+    # sort buttons keep the plain swap
+    assert 'class="pw-th-sort"' in html
+    sort_btn = next(m for m in re.findall(r'<button[^>]*pw-th-sort[^>]*>', html))
+    assert 'show:' not in sort_btn
+
+
+def test_idle_sort_button_has_hint_and_label_instead_of_aria_sort(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    html = c.get(f'/r/{rid}/pairwise/row-list?sort=index&dir=asc').text
+    assert 'aria-sort' not in html
+    assert 'aria-label="Sort by winner"' in html
+    assert 'aria-label="Number, sorted ascending. Activate to sort descending."' in html
+    assert f'id="pw-sort-winner-{rid}"' in html and f'id="pw-sort-index-{rid}"' in html
+    assert html.count('pw-sort-hint') == 1
+
+
+def test_edge_pager_buttons_are_aria_disabled_without_hx(tmp_path: Path) -> None:
+    c, rid = _client(_big_run(), tmp_path)
+    html = c.get(f'/r/{rid}/pairwise/row-list?page=1').text
+    assert 'aria-label="Comparison pages"' in html
+    prev = re.findall(r'<button[^>]*id="pw-prev-[^>]*>', html)[0]
+    nxt = re.findall(r'<button[^>]*id="pw-next-[^>]*>', html)[0]
+    assert 'aria-disabled="true"' in prev and 'hx-' not in prev and ' disabled' not in prev
+    assert 'hx-' in nxt and 'aria-disabled' not in nxt

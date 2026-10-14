@@ -336,12 +336,22 @@ def trust_signals(run: PairwiseRun) -> list[TrustSignal]:
     else:
         longer = lean.longer_wins * 2 >= lean.compared
         wins = lean.longer_wins if longer else lean.compared - lean.longer_wins
+        word = 'longer' if longer else 'shorter'
+        low, high = wilson_interval(wins, lean.compared)
+        base = f'{wins} of {lean.compared} decided comparisons with answers of different length'
+        rng = f'95% range {low:.0%}\u2013{high:.0%}'
+        clear = low > 0.5
+        detail = (
+            f'{base}; {rng}; judges may favour {word} answers'
+            if clear
+            else f'{base}; {rng} includes 50%, so it could be chance'
+        )
         out.append(
             TrustSignal(
                 'Length',
-                f'{"longer" if longer else "shorter"} won {wins / lean.compared:.0%}',
-                f'{wins} of {lean.compared} decided comparisons with answers of different length',
-                '',
+                f'{word} won {wins / lean.compared:.0%}',
+                detail,
+                'warn' if clear else '',
             )
         )
     failures = sum(vote.repetition_failures for vote in votes)

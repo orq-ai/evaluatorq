@@ -19,7 +19,8 @@ from starlette.responses import Response
 from evaluatorq.common.matching import pair_indices_by_key
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.html_helpers import kpi_cards, pct
-from evaluatorq.dashboard.pairwise_palette import pw_side_label, verdict_eyebrow
+from evaluatorq.dashboard.pairwise_palette import pw_side_colour, pw_side_label, verdict_eyebrow
+from evaluatorq.dashboard.pairwise_tabs import _interval_bar
 from evaluatorq.dashboard.report_kit import panel
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_compare import error_page, resolve_run
@@ -92,6 +93,7 @@ def _run_panel(side: str, run: PairwiseRun) -> str:
         f'<dt>Decided</dt><dd>{share}</dd>'
         f'<dt>Judge agreement (κ)</dt><dd>{kappa_txt}</dd>'
         '</dl>'
+        f'<div class="pw-cmp-run-ci">{_interval_bar(v, side="B", label=run.label_b)}</div>'
     )
     return panel(f'{side} · {run.run_name}', body, sub=f'{run.label_a} vs {run.label_b}')
 
@@ -110,26 +112,33 @@ def _display_outcome(value: str | None, run: PairwiseRun, *, labels_collide: boo
 def _diff_table(rid_a: str, rid_b: str, run_a: PairwiseRun, run_b: PairwiseRun, m: PairwiseMatching) -> str:
     if not m.matched:
         return panel('Matched comparisons', '<p class="pw-empty">No question appears in both runs.</p>')
-    rows: list[str] = []
+    rows: list[tuple[bool, str]] = []
+    labels_collide = run_a.label_a == run_a.label_b or run_b.label_a == run_b.label_b
     for i, j in m.matched:
         ea, eb = run_a.entries[i], run_b.entries[j]
         outcome_a = ea.comparison.winner
         outcome_b = eb.comparison.winner
-        labels_collide = run_a.label_a == run_a.label_b or run_b.label_a == run_b.label_b
         wa = _display_outcome(outcome_a, run_a, labels_collide=labels_collide)
         wb = _display_outcome(outcome_b, run_b, labels_collide=labels_collide)
-        changed = '<span class="tag pw-changed">changed</span>' if outcome_a != outcome_b else ''
-        rows.append(
-            f'<tr><td>{_link(rid_a, i + 1)}</td><td>{_link(rid_b, j + 1)}</td>'
-            f'<td class="pw-cmp-q">{esc(ea.question)}</td>'
-            f'<td>{esc(wa)}</td><td>{esc(wb)} {changed}</td></tr>'
-        )
+        is_changed = outcome_a != outcome_b
+        changed = ' <span class="tag pw-changed">changed</span>' if is_changed else ''
+        rows.append((
+            is_changed,
+            (
+                f'<tr><td data-label="#A">{_link(rid_a, i + 1)}</td><td data-label="#B">{_link(rid_b, j + 1)}</td>'
+                f'<td class="pw-cmp-q" data-label="Question">{esc(ea.question)}</td>'
+                f'<td data-label="Winner in run A"><span class="pw-vchip" style="--c:{pw_side_colour(outcome_a)}">{esc(wa)}</span></td>'
+                f'<td data-label="Winner in run B"><span class="pw-vchip" style="--c:{pw_side_colour(outcome_b)}">{esc(wb)}</span>{changed}</td></tr>'
+            ),
+        ))
+    rows.sort(key=lambda r: not r[0])  # stable: changed rows first
     table = (
         '<table class="pw-cmp-table"><thead><tr>'
         '<th>#A</th><th>#B</th><th>Question</th><th>Winner in run A</th><th>Winner in run B</th>'
-        f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+        f'</tr></thead><tbody>{"".join(r for _, r in rows)}</tbody></table>'
     )
-    return panel('Matched comparisons', table, sub=f'{len(m.matched)} compared')
+    n_changed = sum(1 for is_changed, _ in rows if is_changed)
+    return panel('Matched comparisons', table, sub=f'{len(m.matched)} compared · {n_changed} changed')
 
 
 def render_pairwise_compare_page(rid_a: str, rid_b: str, run_a: PairwiseRun, run_b: PairwiseRun) -> str:
@@ -149,13 +158,18 @@ def render_pairwise_compare_page(rid_a: str, rid_b: str, run_a: PairwiseRun, run
         f'<h2 class="report-hero-title">{esc(run_a.run_name)} <span class="cmp-vs">vs</span> {esc(run_b.run_name)}</h2>'
         f'<p class="report-hero-sub">A: {esc(run_a.run_name)} · {date_a} &nbsp;&nbsp; B: {esc(run_b.run_name)} · {date_b}</p>'
         '</header>'
-        f'<p class="cmp-note">{len(m.matched)} of {m.total} comparisons matched by question.{warn}</p>'
+        f'<p class="cmp-note">{len(m.matched)} of {m.total} comparisons matched by question.'
+        f'{f" {len(m.a_only)} only in A, {len(m.b_only)} only in B." if m.a_only or m.b_only else ""}{warn}</p>'
     )
     columns = f'<div class="pw-cmp-cols">{_run_panel("A", run_a)}{_run_panel("B", run_b)}</div>'
-    leftovers = kpi_cards([
-        {'label': 'Only in run A', 'value': str(len(m.a_only)), 'status': 'neutral'},
-        {'label': 'Only in run B', 'value': str(len(m.b_only)), 'status': 'neutral'},
-    ])
+    leftovers = (
+        kpi_cards([
+            {'label': 'Only in run A', 'value': str(len(m.a_only)), 'status': 'neutral'},
+            {'label': 'Only in run B', 'value': str(len(m.b_only)), 'status': 'neutral'},
+        ])
+        if m.a_only or m.b_only
+        else ''
+    )
     return (
         f'<div class="report-aligned pw-report pw-compare">{hero}{columns}'
         f'{_diff_table(rid_a, rid_b, run_a, run_b, m)}{leftovers}</div>'
