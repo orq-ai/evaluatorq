@@ -3034,7 +3034,7 @@ def test_traces_missing_conversation_drawer_keeps_lazy_spans_tab_and_trace_actio
     assert 'No messages available' not in html
     assert 'Spans</button>' in html
     assert 'hx-get="/find/trace-spans?trace_id=trace%2Fwith%20slash"' in html
-    assert 'href="https://orq.example/workspace/traces?query=trace_id%3Ais%3Atrace%2Fwith%20slash"' in html
+    assert 'href="https://orq.example/workspace/traces/(trace:trace%2Fwith%20slash)"' in html
     assert 'Copy trace id' in html and 'data-trace-id="trace/with slash"' in html
 
 

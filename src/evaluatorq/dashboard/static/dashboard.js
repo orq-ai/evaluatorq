@@ -1096,6 +1096,26 @@
   });
   // Honor a tab hash on initial load / refresh.
   if (location.hash) selectRadio(location.hash.slice(1));
+  // A filter swap re-renders the report with the first tab checked; re-select
+  // the tab the URL hash names (restoring flag keeps this out of history).
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    var tgt = evt.detail && evt.detail.target;
+    if (tgt && tgt.id === 'filter-swap') {
+      if (location.hash) selectRadio(location.hash.slice(1));
+      // The swap replaces the focused element; when its id wasn't restorable, land on the active tab.
+      if (document.activeElement === document.body) {
+        var tab = document.querySelector('#filter-swap .tab-radio:checked');
+        if (tab) tab.focus({ preventScroll: true });
+      }
+    }
+    // Pairwise strip dot -> the swapped-in row is open; move focus onto its summary.
+    var elt = evt.detail && evt.detail.requestConfig && evt.detail.requestConfig.elt;
+    if (elt && elt.matches && elt.matches('.pw-dot')) {
+      var m = /#cmp-(\d+)$/.exec(elt.getAttribute('href') || '');
+      var summary = m && document.querySelector('#cmp-' + m[1] + ' details[open] > summary');
+      if (summary) summary.focus({ preventScroll: true });
+    }
+  });
 })();
 
 /**

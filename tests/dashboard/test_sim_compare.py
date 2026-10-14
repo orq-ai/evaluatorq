@@ -143,6 +143,17 @@ def test_compare_kpis_covers_aggregates_scorers_and_terminated():
 # ---------------------------------------------------------------------------
 
 
+def test_match_entries_counts_repeated_same_object_by_position() -> None:
+    from evaluatorq.dashboard.sim_compare import match_entries
+    from evaluatorq.simulation.reports.sections import individual_entries
+
+    entry = individual_entries(_run_a().results[:1])[0]
+    matching = match_entries([entry, entry], [entry, entry])
+    assert [(pair.a, pair.b) for pair in matching.matched] == [(entry, entry), (entry, entry)]
+    assert matching.a_only == []
+    assert matching.b_only == []
+
+
 def test_match_entries_pairs_and_flags_unmatched():
     from evaluatorq.dashboard.sim_compare import match_entries
     from evaluatorq.simulation.reports.sections import individual_entries
@@ -210,7 +221,9 @@ def test_compare_transcript_route_scopes_session_slug_to_one_response(
         return orq_scope.OrqScope(workspace_key=next(slugs))
 
     monkeypatch.setattr(orq_scope, 'discover_orq_scope', discover)
-    monkeypatch.setattr(sim_compare, 'render_transcript_fragment', lambda entry: thread_trace_url(str(entry.index)) or '')
+    monkeypatch.setattr(
+        sim_compare, 'render_transcript_fragment', lambda entry: thread_trace_url(str(entry.index)) or ''
+    )
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)
 
@@ -279,7 +292,9 @@ def test_compare_partially_empty_run_keeps_outcomes_panel(tmp_path: Path):
     sim = tmp_path / 'sim-runs'
     sim.mkdir()
     (sim / 'a.json').write_text(_run('empty-A', [], {}).model_dump_json())
-    (sim / 'b.json').write_text(_run('nonempty-B', [_result('alice', 'billing', goal=True, score=1.0, turns=1)], {}).model_dump_json())
+    (sim / 'b.json').write_text(
+        _run('nonempty-B', [_result('alice', 'billing', goal=True, score=1.0, turns=1)], {}).model_dump_json()
+    )
     rid_a = report_id(sim / 'a.json')
     rid_b = report_id(sim / 'b.json')
 
@@ -319,7 +334,7 @@ def test_compare_corrupt_report_is_422(tmp_path: Path):
 
 def test_compare_syntactically_corrupt_report_is_422(tmp_path: Path):
     # A file that isn't even valid JSON must be reported as corrupt (422), not masked
-    # as "not found" (404). Guards the load_surface_strict path in _resolve_run.
+    # as "not found" (404). Guards the load_surface_strict path in resolve_run.
     sim = tmp_path / 'sim-runs'
     sim.mkdir()
     (sim / 'good.json').write_text(_run_a().model_dump_json())

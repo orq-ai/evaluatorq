@@ -22,7 +22,21 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.run_store_dir import get_store_dir
+from evaluatorq.contracts import Usage  # noqa: TC001  # runtime-needed: pydantic field type on PairwiseResponseMetrics
 from evaluatorq.pairwise import PairwiseComparison, PairwiseReport, build_report
+
+
+class PairwiseResponseMetrics(BaseModel):
+    """Generation usage and latency for one supplied response."""
+
+    usage: Usage | None = None
+    latency_ms: float | None = Field(
+        default=None,
+        ge=0.0,
+        allow_inf_nan=False,
+        description='Response-generation wall time in milliseconds; None means unmeasured',
+    )
+
 
 _PAIRWISE_AGGREGATIONS = frozenset({'plurality', 'bt-sigma'})
 
@@ -42,6 +56,8 @@ class PairwiseEntry(BaseModel):
     response_a: str = Field(description='The response held in slot A')
     response_b: str = Field(description='The response held in slot B')
     comparison: PairwiseComparison = Field(description="The panel's reconciled result for this pair")
+    metrics_a: PairwiseResponseMetrics | None = None
+    metrics_b: PairwiseResponseMetrics | None = None
 
 
 class PairwiseRun(BaseModel):
@@ -83,14 +99,18 @@ class PairwiseRun(BaseModel):
         question: str,
         response_a: str,
         response_b: str,
+        metrics_a: PairwiseResponseMetrics | None = None,
+        metrics_b: PairwiseResponseMetrics | None = None,
     ) -> None:
-        """Append one judged comparison and the inputs it came from."""
+        """Append one judged comparison and the inputs and response metrics."""
         self.entries.append(
             PairwiseEntry(
                 question=question,
                 response_a=response_a,
                 response_b=response_b,
                 comparison=comparison,
+                metrics_a=metrics_a,
+                metrics_b=metrics_b,
             )
         )
 

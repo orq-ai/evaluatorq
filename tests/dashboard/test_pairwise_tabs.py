@@ -1,0 +1,359 @@
+"""Tests for the tabbed pairwise report: tabs, verdict, trust table, tokens, routing."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+from starlette.testclient import TestClient
+
+from evaluatorq.contracts import Usage
+from evaluatorq.dashboard.app import build_app
+from evaluatorq.dashboard.library import report_id
+from evaluatorq.dashboard.pairwise_palette import pw_side_label
+from evaluatorq.dashboard.pairwise_tabs import (
+    _interval_bar,
+    pairwise_report_tabs,
+    with_entries,
+)
+from evaluatorq.pairwise import PairwiseComparison, PairwiseVote
+from evaluatorq.pairwise_reports.stats import trust_signals, verdict
+from evaluatorq.pairwise_run import PairwiseRun, new_run
+
+JUDGES = ['judge-one', 'judge-two', 'judge-three']
+
+
+def _comparison(values: list[str | None], winner: str, *, usage: Usage | None = None) -> PairwiseComparison:
+    votes = [
+        PairwiseVote(model=m, vote=v, flipped=False, completed=True, explanation=f'{m} says {v}')
+        for m, v in zip(JUDGES, values)
+    ]
+    return PairwiseComparison(winner=winner, votes=votes, token_usage=usage)
+
+
+def _run(winners: list[str], *, usage: Usage | None = None, **kw: str) -> PairwiseRun:
+    r = new_run(run_name='v2 vs v3', label_a='prompt-v2', label_b='prompt-v3', judges=JUDGES, criteria='accuracy', **kw)
+    for i, w in enumerate(winners):
+        values: list[str | None] = [None] * 3 if w == 'inconclusive' else [w] * 3
+        r.add(_comparison(values, w, usage=usage), question=f'q{i}', response_a=f'a{i}', response_b=f'b{i}')
+    return r
+
+
+@pytest.fixture
+def run() -> PairwiseRun:
+    return _run(['A', 'tie', 'B', 'inconclusive'])
+
+
+def _kpis(html: str) -> dict[str, str]:
+    return {
+        label: value
+        for value, label in re.findall(r'<div class="kpi-value">(.*?)</div><div class="kpi-label">(.*?)</div>', html)
+    }
+
+
+def test_performance_preserves_tiny_costs_and_zero_latency() -> None:
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run(['A'])
+    run.entries[0].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.000001), latency_ms=0)
+    run.entries[0].metrics_b = PairwiseResponseMetrics(usage=Usage(total_cost=0), latency_ms=0)
+    run.entries[0].comparison.judge_latency_ms = 0
+    html = pairwise_report_tabs('rid', run)
+    assert '$0.000001' in html and '$0.000000' in html
+    assert html.count('0 ms') >= 3 and html.count('Not recorded') == html.count('Not recorded</p>')
+
+
+def test_performance_delta_only_when_fully_paired() -> None:
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run(['A', 'B'])
+    for e, (ca, cb, la, lb) in zip(run.entries, [(1.0, 2.0, 100, 150), (1.0, 4.0, 100, 150)], strict=True):
+        e.metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=ca, calls=1, priced_calls=1), latency_ms=la)
+        e.metrics_b = PairwiseResponseMetrics(usage=Usage(total_cost=cb, calls=1, priced_calls=1), latency_ms=lb)
+    html = pairwise_report_tabs('rid', run)
+    assert '3.0×' in html and '+50 ms (+50%)' in html
+    run.entries[1].metrics_b = PairwiseResponseMetrics()
+    html = pairwise_report_tabs('rid', run)
+    assert '×' not in html and '+50 ms' not in html
+    assert '(1 measured)' in html
+
+
+def test_performance_filtered_empty_is_explicit() -> None:
+    html = pairwise_report_tabs('rid', _run(['A']), entries=[])
+    assert html.count('No comparisons match the current filter.') >= 1
+    assert 'pw-filtered-clear' in html
+
+
+def test_hero_pluralises_judges() -> None:
+    assert '3 judges' in pairwise_report_tabs('rid', _run(['A']))
+
+
+@pytest.mark.parametrize(
+    ('winners', 'state'),
+    [
+        (['A'] * 10, 'clear'),
+        (['A', 'A', 'B', 'B', 'A'], 'too_close'),
+        (['tie', 'inconclusive'], 'no_decided'),
+    ],
+)
+def test_verdict_state_matches_the_outcomes(winners: list[str], state: str) -> None:
+    assert verdict(_run(winners)).state == state
+
+
+def test_trust_table_lists_the_six_signals(run: PairwiseRun) -> None:
+    assert [s.label for s in trust_signals(run)] == [
+        'Decided',
+        'Votes thrown out',
+        'Judge agreement',
+        'Position bias',
+        'Length',
+        'Judge failures',
+    ]
+
+
+def test_kpi_tiles_show_quality_counts_without_judge_spend(run: PairwiseRun) -> None:
+    kpis = _kpis(pairwise_report_tabs('rid', run))
+    assert (kpis['Comparisons'], kpis['Decided'], kpis['Ties'], kpis['Inconclusive']) == ('4', '2', '1', '1')
+    assert 'Judge cost' not in kpis and 'Judge tokens' not in kpis
+
+
+def test_entries_narrow_every_number(run: PairwiseRun) -> None:
+    html = pairwise_report_tabs('rid', run, entries=run.entries[:1])
+    assert _kpis(html)['Comparisons'] == '1'
+    assert 'Comparisons <span class="tab-count">1</span>' in html
+    # The caller's run is not mutated by the narrowing.
+    assert len(run.entries) == 4
+
+
+def test_with_entries_recomputes_the_rollup(run: PairwiseRun) -> None:
+    narrowed = with_entries(run, run.entries[:1])
+    assert narrowed.report is not None
+    assert narrowed.report.comparisons == 1
+    assert len(run.entries) == 4
+
+
+def test_judge_tokens_panel_is_present_with_explicit_unknown_usage(run: PairwiseRun) -> None:
+    assert 'Judge tokens' in pairwise_report_tabs('rid', run)
+
+
+def test_judge_tokens_panel_sums_recorded_usage() -> None:
+    usage = Usage(input_tokens=1000, output_tokens=200, total_tokens=1200)
+    html = pairwise_report_tabs('rid', _run(['A', 'B'], usage=usage))
+    assert 'Judge tokens' in html
+    assert '2,400 total' in html
+    assert 'Judge tokens' not in _kpis(html)
+
+
+def test_priced_usage_shows_the_cost() -> None:
+    usage = Usage(input_tokens=1000, output_tokens=200, total_tokens=1200, total_cost=0.25)
+    html = pairwise_report_tabs('rid', _run(['A', 'B'], usage=usage))
+    assert '$0.500000' in html
+
+def test_hostile_performance_labels_are_escaped() -> None:
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run(['A'])
+    run.label_a = '<img src=x>'
+    run.label_b = '<svg onload=alert(1)>'
+    run.entries[0].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.01), latency_ms=10)
+    html = pairwise_report_tabs('rid', run)
+    assert '<img src=x>' not in html and '<svg onload=alert(1)>' not in html
+    assert '&lt;img src=x&gt;' in html and '&lt;svg onload=alert(1)&gt;' in html
+
+def test_extremely_small_nonzero_cost_does_not_display_as_zero() -> None:
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run(['A'])
+    run.entries[0].metrics_a = PairwiseResponseMetrics(usage=Usage(total_cost=0.00000001))
+    assert '$1e-08' in pairwise_report_tabs('rid', run)
+
+
+
+
+def test_run_name_and_labels_are_escaped() -> None:
+    r = new_run(run_name='<script>alert(1)</script>', label_a='<script>a</script>', label_b='b', judges=JUDGES)
+    r.add(_comparison(['A'] * 3, 'A'), question='q', response_a='a', response_b='b')
+    html = pairwise_report_tabs('rid', r, hero_actions_html='<a>go</a>')
+    assert '<script>' not in html
+    assert '&lt;script&gt;alert(1)&lt;/script&gt;' in html
+    assert '<div class="report-hero-actions"><a>go</a></div>' in html
+
+
+def test_empty_run_still_renders_every_tab() -> None:
+    html = pairwise_report_tabs('rid', new_run(run_name='empty'))
+    assert html.count('class="tab-label"') == 5
+    assert 'No comparisons in this run.' in html
+
+
+def test_comparisons_tab_lists_the_entries(run: PairwiseRun) -> None:
+    html = pairwise_report_tabs('rid', run)
+    assert 'id="cmp-4"' in html
+
+
+def test_filtered_render_keeps_the_verdict_on_the_full_run(run: PairwiseRun) -> None:
+    # Full run: one A win and one B win, so the sides are level.
+    assert verdict(run).leader is None
+    only_b = [e for e in run.entries if e.comparison.winner == 'B']
+    narrowed = with_entries(run, only_b)
+    assert (verdict(narrowed).leader, verdict(narrowed).win_rate) == ('B', 1.0)
+
+    def card(html: str) -> str:
+        match = re.search(r'<div class="pw-verdict.*?</div></div>', html, re.S)
+        assert match is not None
+        return re.sub(r'<p class="pw-verdict-scope">.*?</p>', '', match.group(0))
+
+    full = pairwise_report_tabs('rid', run)
+    html = pairwise_report_tabs('rid', run, entries=only_b)
+    assert card(html) == card(full)
+    assert 'pw-verdict-scope' in html and 'pw-verdict-scope' not in full
+    assert 'Clear winner' not in card(html)
+    assert 'class="pw-filtered"' in html and 'Show all 4' in html and '1 of 4 comparisons' in html
+    assert 'pw-filtered"' not in full
+    # Original numbering is kept: the B win is comparison 3 of the full run.
+    assert 'id="cmp-3"' in html and 'id="cmp-1"' not in html
+
+
+def test_narrowed_view_turns_warning_tones_off_and_retitles_the_trust_panel() -> None:
+    run = _run(['inconclusive'] * 3 + ['A'] * 3)
+    thrown_out = [e for e in run.entries if e.comparison.winner == 'inconclusive']
+    full = pairwise_report_tabs('rid', run)
+    assert 'pw-tone-warn' in full and 'kpi-card--warn' in full
+    assert 'Signals in these comparisons' not in full
+    html = pairwise_report_tabs('rid', run, entries=thrown_out)
+    assert 'pw-tone-warn' not in html and 'kpi-card--warn' not in html
+    assert 'Signals in these comparisons' in html
+    assert 'Covers only the 3 filtered comparisons' in html
+    assert 'All 6 comparisons' in html and 'Below: 3 of 6' in html
+    assert 'pw-verdict-scope' not in full and 'pw-scope-note' not in full
+
+
+def test_interval_bar_plots_the_requested_side() -> None:
+    run = _run(['A'] * 3 + ['B'])
+    v = verdict(run)
+    assert (v.wins_a, v.wins_b) == (3, 1)
+    html = _interval_bar(v, side='B', label='prompt-v3')
+    assert 'left:25.0%' in html and 'prompt-v3 win rate' in html
+    assert 'left:75.0%' not in html
+    assert 'left:75.0%' in _interval_bar(v, side='A', label='prompt-v2')
+    assert _interval_bar(verdict(_run(['tie']))) == ''
+
+
+def test_generation_latency_header_states_the_sample_when_fully_measured() -> None:
+    from evaluatorq.pairwise_run import PairwiseResponseMetrics
+
+    run = _run(['A', 'B'])
+    for e in run.entries:
+        e.metrics_a = PairwiseResponseMetrics(latency_ms=100)
+        e.metrics_b = PairwiseResponseMetrics(latency_ms=150)
+    assert 'Generation latency (mean of 2)' in pairwise_report_tabs('rid', run)
+    run.entries[1].metrics_b = PairwiseResponseMetrics()
+    assert 'Generation latency (mean)' in pairwise_report_tabs('rid', run)
+
+def test_a_filter_matching_nothing_shows_the_note_not_a_verdict(run: PairwiseRun) -> None:
+    html = pairwise_report_tabs('rid', run, entries=[])
+    assert _kpis(html) == {}
+    # An unfiltered render of the same run does show the verdict KPIs.
+    assert _kpis(pairwise_report_tabs('rid', run))
+
+
+def test_single_ordering_run_has_no_position_bias_signal() -> None:
+    r = new_run(run_name='single', judges=JUDGES, swap=False)
+    r.add(
+        PairwiseComparison(winner='A', votes=[PairwiseVote(model=m, vote='A', completed=False) for m in JUDGES]),
+        question='q',
+        response_a='a',
+        response_b='b',
+    )
+    assert 'Position bias' not in [s.label for s in trust_signals(r)]
+
+
+def test_config_tab_states_swapping_was_disabled_for_single_ordering_run() -> None:
+    r = new_run(run_name='single', judges=JUDGES, swap=False)
+    r.add(
+        PairwiseComparison(winner='A', votes=[PairwiseVote(model=m, vote='A', completed=False) for m in JUDGES]),
+        question='q',
+        response_a='a',
+        response_b='b',
+    )
+    html = pairwise_report_tabs('rid', r)
+    assert 'Every judge sees each pair twice' not in html
+    assert 'Swapping was disabled' in html
+
+
+def test_config_tab_states_both_orders_were_completed_for_swapped_run() -> None:
+    r = new_run(run_name='swapped', judges=JUDGES, swap=True)
+    r.add(_comparison(['A', 'A', 'A'], 'A'), question='q', response_a='a', response_b='b')
+    html = pairwise_report_tabs('rid', r)
+    assert 'judgements completed in both orders' in html
+
+
+def test_side_labels(run: PairwiseRun) -> None:
+    assert [pw_side_label(v, run) for v in ('A', 'B', 'tie', 'inconclusive', None)] == [
+        'prompt-v2',
+        'prompt-v3',
+        'tie',
+        'inconclusive',
+        'abstain',
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Routes
+
+
+@pytest.fixture
+def client(run: PairwiseRun, tmp_path: Path) -> tuple[TestClient, str]:
+    runs_dir = tmp_path / 'pairwise-runs'
+    runs_dir.mkdir()
+    path = run.save(runs_dir / 'run.json')
+    return TestClient(build_app(roots=[runs_dir]), raise_server_exceptions=True), report_id(path)
+
+
+def test_report_route_serves_the_tabbed_page(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    resp = c.get(f'/r/{rid}')
+    assert resp.status_code == 200
+    assert _kpis(resp.text)['Comparisons'] == '4'
+
+
+def test_filter_route_returns_the_tabbed_body(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    resp = c.post(f'/r/{rid}/filter', data={})
+    assert resp.status_code == 200
+    assert _kpis(resp.text)['Comparisons'] == '4'
+
+
+def test_filter_keeps_the_compare_control(run: PairwiseRun, tmp_path: Path) -> None:
+    runs_dir = tmp_path / 'runs'
+    runs_dir.mkdir()
+    rid = report_id(run.save(runs_dir / 'one.json'))
+    run.save(runs_dir / 'two.json')
+    c = TestClient(build_app(roots=[runs_dir]))
+    assert 'action="/compare/pairwise"' in c.post(f'/r/{rid}/filter', data={}).text
+
+
+def test_report_page_has_the_comparisons_list(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    html = c.get(f'/r/{rid}').text
+    assert 'pw-row-list-' in html
+    assert 'id="cmp-1"' in html
+
+
+def test_filter_by_winner_narrows_the_comparisons_tab(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    html = c.post(f'/r/{rid}/filter', data={'winner': 'prompt-v3'}).text
+    assert 'Comparisons <span class="tab-count">1</span>' in html
+    assert 'id="cmp-3"' in html and 'id="cmp-1"' not in html
+    assert _kpis(html)['Comparisons'] == '1'
+
+
+def test_compare_control_needs_a_second_pairwise_run(run: PairwiseRun, tmp_path: Path) -> None:
+    runs_dir = tmp_path / 'runs'
+    runs_dir.mkdir()
+    rid = report_id(run.save(runs_dir / 'one.json'))
+    c = TestClient(build_app(roots=[runs_dir]))
+    assert 'action="/compare/pairwise"' not in c.get(f'/r/{rid}').text
+    run.save(runs_dir / 'two.json')
+    c = TestClient(build_app(roots=[runs_dir]))
+    assert 'action="/compare/pairwise"' in c.get(f'/r/{rid}').text

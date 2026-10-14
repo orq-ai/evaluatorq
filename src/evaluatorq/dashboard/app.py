@@ -55,6 +55,8 @@ from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
 from evaluatorq.dashboard.orq_scope import OAuthScopes, discover_oauth_scopes
+from evaluatorq.dashboard.pairwise_compare import register_pairwise_compare_routes
+from evaluatorq.dashboard.pairwise_views import register_pairwise_view_routes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import CSRF_FIELD, request_rejected
 from evaluatorq.dashboard.shell import current_sidebar_html, dashboard_css, dashboard_css_version, page
@@ -859,6 +861,14 @@ def _search(req: Request) -> NotStr:
     return NotStr(search_results(library.scan(roots), q))
 
 
+def _pairwise_hero_actions(rid: str, roots: list[Path] | None) -> str:
+    """The hero 'Compare with' control: the other pairwise runs, capped like the overview picker."""
+    from evaluatorq.dashboard.view import run_compare_control
+
+    choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'pairwise' and not c.error][:100]
+    return run_compare_control(rid, choices, '/compare/pairwise')
+
+
 def _report_view(rid: str, req: Request) -> NotStr | Response:
     roots = _roots(req)
     path = library.resolve(rid, roots)
@@ -911,14 +921,29 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
 
     with cli_slug_render_scope():
         if surface == 'sim':
-            from evaluatorq.dashboard.view import sim_run_compare_control
+            from evaluatorq.dashboard.view import run_compare_control
 
             # Same choice list as the overview picker (sim only, no error runs,
             # capped); the control itself drops the current run from the options.
             choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-            body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
+            body_html = report_tabs.sim_report_tabs(
+                rid, report_obj, compare_html=run_compare_control(rid, choices, '/compare/sim')
+            )
         elif surface == 'redteam':
             body_html = report_tabs.redteam_report_tabs(rid, report_obj)
+        elif surface == 'pairwise':
+            from evaluatorq.dashboard import pairwise_tabs
+
+            try:
+                focus: int | None = int(req.query_params.get('cmp', ''))
+            except ValueError:
+                focus = None
+            body_html = pairwise_tabs.pairwise_report_tabs(
+                rid,
+                report_obj,
+                hero_actions_html=_pairwise_hero_actions(rid, roots),
+                focus=focus,
+            )
         else:
             body_html = adapter.body(report_obj)
 
@@ -1002,6 +1027,16 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
 
             filtered_report = rebuild_filtered_report(report_obj, filtered)
             body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
+        elif surface == 'pairwise':
+            from evaluatorq.dashboard import pairwise_tabs
+
+            body_html = await asyncio.to_thread(
+                pairwise_tabs.pairwise_report_tabs,
+                rid,
+                report_obj,
+                filtered,
+                hero_actions_html=_pairwise_hero_actions(rid, roots),
+            )
         else:
             body_html = adapter.body_from_results(report_obj, filtered)
 
@@ -1282,11 +1317,13 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: GET /r/{rid}/sim/*  — sim interactive fragment views
     # ------------------------------------------------------------------
     register_sim_view_routes(app, roots)
+    register_pairwise_view_routes(app, roots)
 
     # ------------------------------------------------------------------
     # Routes: GET /compare/sim*  — side-by-side sim run comparison
     # ------------------------------------------------------------------
     register_sim_compare_routes(app, roots)
+    register_pairwise_compare_routes(app, roots)
 
     # ------------------------------------------------------------------
     # Routes: /find — classifier trace finder

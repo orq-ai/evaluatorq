@@ -136,7 +136,7 @@ def _fmt_score(score: float | None) -> str:
 _SCORE_TITLES: dict[str, str] = {
     'redteam': 'Resistance rate: attacks the target withstood',
     'sim': 'Mean scorer average across this run',
-    'pairwise': 'Decided rate: comparisons the judge panel could call',
+    'pairwise': 'Called rate: comparisons ending in a win or tie (not inconclusive)',
 }
 
 
@@ -705,15 +705,16 @@ def _sim_compare_bar(choices: list[tuple[str, str]]) -> str:
     )
 
 
-def sim_run_compare_control(rid: str, choices: list[tuple[str, str]]) -> str:
+def run_compare_control(rid: str, choices: list[tuple[str, str]], action: str) -> str:
     """Render the on-report compare control: this run is A, pick B from the
-    other sim runs. Empty when there is no other run to compare against."""
+    other runs of its surface. ``action`` is that surface's compare URL. Empty
+    when there is no other run to compare against."""
     others = [(r, name) for r, name in choices if r != rid]
     if not others:
         return ''
     opts = ''.join(f'<option value="{esc(r)}">{esc(name)}</option>' for r, name in others)
     return (
-        '<form class="cmp-bar" action="/compare/sim" method="get">'
+        f'<form class="cmp-bar" action="{esc(action)}" method="get">'
         f'<input type="hidden" name="a" value="{esc(rid)}">'
         '<span class="cmp-bar-label">Compare with</span>'
         f'<select name="b" aria-label="Run B">{opts}</select>'
@@ -1527,16 +1528,26 @@ _FILTER_CHEVRON = (
 _GOAL_OUTCOME_DOT_CLASS: dict[str, str] = {'Achieved': 'chip-dot-green', 'Not achieved': 'chip-dot-red'}
 
 
-def _chip(name: str, value: str, *, checked: bool, dot_cls: str) -> str:
-    """One chip toggle: a <label>-wrapped visually-hidden checkbox."""
+def _filter_input_id(name: str, value: str) -> str:
+    """Stable per (name, value) input id so htmx restores focus to the same control after a swap."""
+    return f'fc-{name}-{hashlib.sha1(value.encode(), usedforsecurity=False).hexdigest()[:8]}'
+
+
+def _chip(name: str, value: str, *, checked: bool, dot_cls: str, label: str | None = None) -> str:
+    """One chip toggle: a <label>-wrapped visually-hidden checkbox.
+
+    *label* is the visible text; it defaults to *value* (the submitted value).
+    """
     checked_attr = ' checked' if checked else ''
     active_cls = ' is-active' if checked else ''
+    chip_id = _filter_input_id(name, value)
     return (
         f'<label class="filter-chip{active_cls}">'
-        f'<input type="checkbox" class="filter-chip-input" name="{esc(name)}" value="{esc(value)}"{checked_attr}>'
-        f'<span class="filter-chip-dot {dot_cls}"></span>'
-        f'<span class="filter-chip-check {dot_cls}">✓</span>'
-        f'<span class="filter-chip-label">{esc(value)}</span>'
+        f'<input type="checkbox" id="{esc(chip_id)}" class="filter-chip-input" name="{esc(name)}"'
+        f' value="{esc(value)}"{checked_attr}>'
+        f'<span class="filter-chip-dot {dot_cls}" aria-hidden="true"></span>'
+        f'<span class="filter-chip-check {dot_cls}" aria-hidden="true">✓</span>'
+        f'<span class="filter-chip-label">{esc(value if label is None else label)}</span>'
         f'</label>'
     )
 
@@ -1559,7 +1570,7 @@ def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
 
     rows = ''.join(
         f'<label class="filter-dd-row">'
-        f'<input type="checkbox" name="{esc(dim)}" value="{esc(opt)}"'
+        f'<input type="checkbox" id="{esc(_filter_input_id(dim, opt))}" name="{esc(dim)}" value="{esc(opt)}"'
         f'{" checked" if opt in selected_set else ""}>'
         f'<span>{esc(opt)}</span>'
         f'</label>'
@@ -1934,6 +1945,68 @@ def _render_redteam_filter_rail(
     )
 
 
+def _render_pairwise_filter_rail(
+    rid: str,
+    opts: dict[str, list[str]],
+    selections: dict[str, list[str]],
+    *,
+    shown: int | None,
+    total: int | None,
+) -> str:
+    """Render the pairwise filter rail: winner chips, panel chips, judge dropdown, counter.
+
+    ``opts['winner']`` is ``[label_a, label_b, 'tie', 'inconclusive']`` in that
+    order, so the dot colour is picked by position (the side labels are free
+    text and may collide with the outcome words). Like the sim rail's
+    "Terminated by" chips, no selection renders every winner chip checked.
+    """
+    winner_dots = ('chip-dot-pw-a', 'chip-dot-pw-b', 'chip-dot-pw-tie', 'chip-dot-pw-none')
+    winner_opts = opts.get('winner', [])
+    winner_sel = set(selections.get('winner', [])) or set(winner_opts)
+    winner_chips = ''.join(
+        _chip('winner', opt, checked=(opt in winner_sel), dot_cls=dot)
+        for opt, dot in zip(winner_opts, winner_dots, strict=False)
+    )
+
+    panel_chips = ''.join(
+        _chip(dim, 'yes', checked=('yes' in selections.get(dim, [])), dot_cls=dot, label=label)
+        for dim, label, dot in (
+            ('split', 'Judges split', 'chip-dot-amber'),
+            ('thrown_out', 'Vote thrown out', 'chip-dot-red'),
+            ('judge_failed', 'Judge failed', 'chip-dot-red'),
+        )
+    )
+
+    judge_dd = _dropdown('judge', 'Judge', opts.get('judge', []), selections.get('judge', []))
+
+    filtered = shown is not None and total is not None and shown < total
+    counter = f'{shown} of {total} comparisons' if filtered else 'Showing all comparisons'
+    footer_cls = 'filter-rail-footer is-filtered' if filtered else 'filter-rail-footer'
+
+    inner = (
+        f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        f'<div class="filter-group" data-dim="winner">'
+        f'<label class="filter-label">Winner</label>'
+        f'<div class="filter-chip-row">{winner_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="panel">'
+        f'<label class="filter-label">Panel</label>'
+        f'<div class="filter-chip-row">{panel_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="judge">{judge_dd}</div>'
+        f'<div class="{footer_cls}">{esc(counter)}</div>'
+    )
+    return (
+        f'<form id="filter-form" class="filter-form filter-form--sim filter-form--pairwise"'
+        f' hx-post="/r/{esc(rid)}/filter"'
+        f' hx-trigger="change"'
+        f' hx-target="#filter-swap"'
+        f' hx-swap="outerHTML">'
+        f'{inner}'
+        f'</form>'
+    )
+
+
 def render_filter_form(
     rid: str,
     surface: str,
@@ -1951,7 +2024,7 @@ def render_filter_form(
 
     Args:
         rid:        Report ID (used to construct the POST URL).
-        surface:    Surface key (``'redteam'`` | ``'sim'``).
+        surface:    Surface key (``'redteam'`` | ``'sim'`` | ``'pairwise'``).
         opts:       Option lists per dimension (from ``FilterDef.options``).
         selections: Currently active selections per dimension.
         shown:      Count of currently-shown results (sim rail footer counter).
@@ -1965,13 +2038,15 @@ def render_filter_form(
         return _render_sim_filter_rail(rid, opts, selections, shown=shown, total=total)
     if surface == 'redteam':
         return _render_redteam_filter_rail(rid, opts, selections, shown=shown, total=total)
+    if surface == 'pairwise':
+        return _render_pairwise_filter_rail(rid, opts, selections, shown=shown, total=total)
 
     from evaluatorq.dashboard.filters import FILTERS
 
     filter_def = FILTERS.get(surface)
     if filter_def is None or not filter_def.dimensions:
-        # A surface with no dimensions (pairwise) would otherwise render an
-        # empty rail titled "Filters" with nothing under it.
+        # A surface with no dimensions would otherwise render an empty rail
+        # titled "Filters" with nothing under it.
         return ''
 
     parts: list[str] = []
