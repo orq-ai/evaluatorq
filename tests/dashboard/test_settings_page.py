@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
 
+import httpx
 import pytest
 from starlette.requests import Request
 from starlette.testclient import TestClient
@@ -1222,6 +1223,26 @@ def test_unexpected_auth_status_failure_is_distinguished_from_outage(
     assert response.status_code == 200
     assert response.json()['status'] == 'error'
     assert 'Check the dashboard logs' in response.json()['message']
+
+
+def test_unreachable_orq_is_unavailable_and_logs_without_traceback(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setattr(
+        app_module,
+        'build_auth_clients',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(httpx.ConnectError('')),
+    )
+    records: list[Any] = []
+    sink = app_module.logger.add(records.append, level='WARNING')
+    try:
+        response = client.get('/auth/status')
+    finally:
+        app_module.logger.remove(sink)
+
+    assert response.json()['status'] == 'unavailable'
+    assert [r.record['exception'] for r in records] == [None]
 
 
 def test_missing_cli_oauth_sign_in_returns_action_for_startup_toast(
