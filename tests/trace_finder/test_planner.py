@@ -646,3 +646,77 @@ async def test_effective_end_retains_actual_boundary_semantics(monkeypatch, case
     boundary = result.effective_population.end
     assert boundary is not None
     assert result.effective_population.contains_time(boundary) is expected_kept
+
+
+def _time_compiler(*windows: tuple[datetime, datetime]):
+    pending = iter(windows)
+
+    async def compile_stub(*_args, **_kwargs):
+        start, end = next(pending)
+        return SimpleNamespace(
+            dimensions=(), numeric=NumericFilters(), time=TimeFilters(start=start, end=end), unsupported_reason=None
+        )
+
+    return compile_stub
+
+
+@pytest.mark.asyncio
+async def test_generated_days_of_equal_length_load_their_own_facet_catalogues(monkeypatch):
+    from evaluatorq.trace_finder import facets, planner
+
+    anchor = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+    first = datetime(2026, 10, 12, tzinfo=timezone.utc)
+    second = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    offered: list[tuple[str, ...]] = []
+
+    async def load(_client, *, start, end, limit):
+        return FacetCatalogue(model=(f'model-{start.date()}',))
+
+    async def selector(_client, _model, catalogue, _query):
+        offered.append(catalogue.model)
+        return FilterSelectionResult(FacetSelection())
+
+    monkeypatch.setattr(facets, 'load_facet_catalogue', load)
+    monkeypatch.setattr(planner, 'compile_query', _time_compiler((first, second), (second, second + timedelta(days=1))))
+    monkeypatch.setattr(planner, 'select_filters_with_response', selector)
+    await invalidate_facet_catalogue_cache()
+    try:
+        for _ in range(2):
+            await planner.plan_query(
+                'find traces', PopulationRequest(), client=cast(Any, object()), orq=cast(Any, _client()),
+                compiler_model='compiler', classifier_model='classifier', fast_filter_model='fast', now=anchor,
+            )
+    finally:
+        await invalidate_facet_catalogue_cache()
+
+    assert offered == [('model-2026-10-12',), ('model-2026-10-13',)]
+
+
+@pytest.mark.asyncio
+async def test_literal_confirmation_searches_only_the_retained_generated_window(monkeypatch):
+    from evaluatorq.trace_finder import planner
+
+    anchor = datetime(2026, 10, 20, tzinfo=timezone.utc)
+    confirmations: list[tuple[str, str, datetime, datetime]] = []
+
+    async def loader(*_args, **_kwargs):
+        return FacetCatalogue()
+
+    async def selector(*_args, **_kwargs):
+        return FilterSelectionResult(FacetSelection())
+
+    async def confirmer(_orq, name, value, start, end):
+        confirmations.append((name, value, start, end))
+        return False
+
+    monkeypatch.setattr(
+        planner, 'compile_query', _time_compiler((anchor - timedelta(days=60), anchor - timedelta(days=20)))
+    )
+    monkeypatch.setattr(planner, 'select_filters_with_response', selector)
+    await planner.plan_query(
+        'traces from model acme/foo', PopulationRequest(), client=cast(Any, object()), orq=cast(Any, _client()),
+        compiler_model='compiler', classifier_model='classifier', fast_filter_model='fast', now=anchor,
+        catalogue_loader=loader, candidate_confirmer=confirmer,
+    )
+
+    assert confirmations == [('model', 'acme/foo', anchor - timedelta(days=30), anchor - timedelta(days=20))]

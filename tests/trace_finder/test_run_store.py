@@ -1259,6 +1259,39 @@ async def test_within_results_intersects_generated_time_locally_without_populati
 
 
 @pytest.mark.asyncio
+async def test_within_results_time_only_plan_narrows_before_taking_the_limited_rows() -> None:
+    loaded_start = datetime(2026, 9, 20, tzinfo=timezone.utc)
+    loaded_end = datetime(2026, 9, 22, tzinfo=timezone.utc)
+    generated = (datetime(2026, 9, 21, tzinfo=timezone.utc), loaded_end)
+    inside = trace(1).model_copy(update={'timestamp': datetime(2026, 9, 21, 12, tzinfo=timezone.utc)})
+    before = trace(2).model_copy(update={'timestamp': datetime(2026, 9, 20, 12, tzinfo=timezone.utc)})
+
+    async def plan(query: str, population: PopulationRequest, *, within_results: bool) -> PlanningResult:
+        effective = population.model_copy(update={'start': generated[0], 'end': generated[1]})
+        return PlanningResult(
+            dimensions=(compiled_query(),), generated_facets=FacetSelection(), generated_numeric=NumericFilters(),
+            generated_time=generated, effective_population=effective, selector_response=None,
+            selector_error=None, provenance={'time': 'within-results'}, usage={},
+        )
+
+    async def limited_loader(limit: int) -> tuple[TraceRecord, ...]:
+        return (before,)
+
+    store = RunStore(compiler=None, planner=plan, population_loader=Loader(), run_classifier=Runner())
+    snapshot = await store.compile(
+        request(
+            mode='review',
+            population=PopulationRequest(start=loaded_start, end=loaded_end, time_origin='within_results', limit=1),
+        ),
+        traces=lambda: asyncio.sleep(0, result=(before, inside)),
+        traces_limited=limited_loader,
+    )
+
+    assert snapshot.trace_ids == ('trace-1',)
+
+
+
+@pytest.mark.asyncio
 async def test_disjoint_within_results_finishes_empty_without_loading_again() -> None:
     loaded_start = datetime(2026, 9, 20, tzinfo=timezone.utc)
     loaded_end = datetime(2026, 9, 22, tzinfo=timezone.utc)

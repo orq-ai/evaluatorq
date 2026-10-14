@@ -446,10 +446,13 @@ class RunStore:
             if not staged_traces:
                 if traces is not None or traces_limited is not None or table is not None:
                     population = request.population
+                    # The limited loader takes the first usable rows of the whole view, so any
+                    # generated facet, numeric or time narrowing needs the full loader first.
                     use_limited_loader = (
                         traces_limited is not None
                         and generated_filters == FacetSelection()
                         and generated_numeric == NumericFilters()
+                        and generated_time is None
                     )
                     if use_limited_loader and traces_limited is not None:
                         loader = partial(traces_limited, population.limit)

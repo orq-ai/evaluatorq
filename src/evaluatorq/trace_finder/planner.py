@@ -71,22 +71,24 @@ async def plan_query(
     default_window = population.time_origin == 'default'
     initial_end = population.end or anchor
     initial_start = population.start or initial_end - timedelta(days=30)
+    default_bounds = (initial_start, initial_end)
     cache_events: list[dict[str, Any]] = []
     selector_usage_events: list[dict[str, Any]] = []
     catalogue = FacetCatalogue()
 
     async def load_catalogue(start: datetime, end: datetime) -> FacetCatalogue:
+        # Only the caller's own default window may share the duration-keyed rolling entry; a
+        # query-generated range keeps its exact dates in the key.
+        rolling = default_window and (start, end) == default_bounds
         started = time.monotonic()
-        cache_hit = not catalogue_loader and facet_catalogue_cache_hit(
-            orq, start, end, 50, default_window=default_window
-        )
+        cache_hit = not catalogue_loader and facet_catalogue_cache_hit(orq, start, end, 50, default_window=rolling)
         try:
             return await load_facet_catalogue_cached(
                 orq,
                 start,
                 end,
                 50,
-                default_window=default_window,
+                default_window=rolling,
                 now=anchor,
                 loader=catalogue_loader,
             )
@@ -180,7 +182,7 @@ async def plan_query(
     candidates = _literal_candidates(query, catalogue) if catalogue_valid else ()
     final_start, final_end = _candidate_window(
         population,
-        time_filter,
+        effective_time,
         within_results=within_results,
         fallback_start=anchor - timedelta(days=30),
         fallback_end=anchor,
@@ -324,27 +326,23 @@ def _earlier(left: datetime | None, right: datetime | None) -> datetime | None:
 
 def _candidate_window(
     population: PopulationRequest,
-    generated_time: Any,
+    generated_time: tuple[datetime, datetime] | None,
     *,
     within_results: bool,
     fallback_start: datetime,
     fallback_end: datetime,
 ) -> tuple[datetime, datetime]:
-    """Bound confirmation by caller bounds and final generated time bounds."""
+    """Bound confirmation by caller bounds and the normalized (retention-clipped) generated bounds."""
     start = population.start or fallback_start
     end = population.end or fallback_end
     if generated_time is None:
         return start, end
-    generated_start, generated_end = (
-        (generated_time[0], generated_time[1])
-        if isinstance(generated_time, tuple)
-        else (generated_time.start, generated_time.end)
-    )
+    generated_start, generated_end = generated_time
     if within_results or population.time_origin == 'within_results':
-        return _later(start, generated_start) or start, _earlier(end, generated_end) or end
+        return max(start, generated_start), min(end, generated_end)
     if population.time_origin == 'explicit':
         return start, end
-    return generated_start or start, generated_end or end
+    return generated_start, generated_end
 
 
 def _literal_candidates(query: str, catalogue: FacetCatalogue) -> tuple[tuple[FacetName, str], ...]:
