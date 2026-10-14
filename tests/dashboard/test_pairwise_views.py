@@ -290,7 +290,7 @@ class _Dots(HTMLParser):
         attributes = dict(attrs)
         if tag == 'a' and 'pw-dot' in (attributes.get('class') or '').split():
             href = attributes.get('href') or ''
-            number = int(href.removeprefix('#cmp-'))
+            number = int(href.rsplit('#cmp-', 1)[1])
             self.href[number] = href
             self.hx_get[number] = attributes.get('hx-get') or ''
 
@@ -300,7 +300,9 @@ def test_dots_fetch_the_row_list_focused_on_their_comparison(tmp_path: Path) -> 
     dots = _Dots()
     dots.feed(c.get(f'/r/{rid}').text)
     assert sorted(dots.hx_get) == list(range(1, 31))
-    assert dots.href[30] == '#cmp-30'
+    # Without HTMX, following the ordinary link must load and open the later row.
+    fallback_rows = _rows(c.get(dots.href[30]).text)
+    assert fallback_rows[30] is True
     # The dot's own request must return the page holding that comparison, open.
     rows = _rows(c.get(dots.hx_get[30]).text)
     assert list(rows) == [26, 27, 28, 29, 30]

@@ -200,6 +200,26 @@ def test_single_ordering_run_has_no_position_bias_signal() -> None:
     assert 'Position bias' not in [s.label for s in trust_signals(r)]
 
 
+def test_config_tab_states_swapping_was_disabled_for_single_ordering_run() -> None:
+    r = new_run(run_name='single', judges=JUDGES, swap=False)
+    r.add(
+        PairwiseComparison(winner='A', votes=[PairwiseVote(model=m, vote='A', completed=False) for m in JUDGES]),
+        question='q',
+        response_a='a',
+        response_b='b',
+    )
+    html = pairwise_report_tabs('rid', r)
+    assert 'Every judge sees each pair twice' not in html
+    assert 'Swapping was disabled' in html
+
+
+def test_config_tab_states_both_orders_were_completed_for_swapped_run() -> None:
+    r = new_run(run_name='swapped', judges=JUDGES, swap=True)
+    r.add(_comparison(['A', 'A', 'A'], 'A'), question='q', response_a='a', response_b='b')
+    html = pairwise_report_tabs('rid', r)
+    assert 'judgements completed in both orders' in html
+
+
 def test_side_labels(run: PairwiseRun) -> None:
     assert [pw_side_label(v, run) for v in ('A', 'B', 'tie', 'inconclusive', None)] == [
         'prompt-v2',

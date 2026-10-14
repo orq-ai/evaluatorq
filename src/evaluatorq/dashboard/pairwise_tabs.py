@@ -439,16 +439,34 @@ def _evaluatorq_version() -> str:
         return 'unknown'
 
 
-_METHOD_HTML = (
-    '<div class="rk-panel pw-method-panel"><details class="pw-method">'
-    '<summary>How this was judged</summary>'
-    '<p>Every judge sees each pair twice, once in each order. A judge that picks different sides in the two '
-    'orders has its vote thrown out for that pair; this is what the position-bias number counts. The panel '
-    'winner is the plurality of the remaining votes; with no votes left the comparison is inconclusive.</p>'
-    '<p>The 95% range on the headline win rate is a Wilson interval over decided comparisons only. When it '
-    'crosses 50% the page says the run is too close to call rather than naming a winner.</p>'
-    '</details></div>'
-)
+def _method_html(run: PairwiseRun) -> str:
+    if observed_swap(run):
+        ordering = 'Recorded votes include judgements completed in both orders.'
+        if not run.swap:
+            ordering += ' This differs from the saved configuration, which disables swapping.'
+        ordering += (
+            ' For a judge completing both orders, picking different sides throws out its vote for that pair; '
+            'position bias measures these completed judgements.'
+        )
+    elif run.swap:
+        ordering = (
+            'Swapping was configured, but no recorded judge completed both orderings. '
+            'Position bias cannot be measured from these votes.'
+        )
+    else:
+        ordering = (
+            'Swapping was disabled: judges were asked to evaluate one ordering. '
+            'Single-ordering votes do not measure position bias.'
+        )
+    return (
+        '<div class="rk-panel pw-method-panel"><details class="pw-method">'
+        '<summary>How this was judged</summary>'
+        f'<p>{ordering} The panel outcome follows the aggregation shown above; '
+        'with no votes left the comparison is inconclusive.</p>'
+        '<p>The 95% range on the headline win rate is a Wilson interval over decided comparisons only. When it '
+        'crosses 50% the page says the run is too close to call rather than naming a winner.</p>'
+        '</details></div>'
+    )
 
 
 def _config(run: PairwiseRun) -> str:
@@ -466,7 +484,7 @@ def _config(run: PairwiseRun) -> str:
         ('Comparisons', str(len(run.entries))),
     ])
     fingerprint = f'Run fingerprint · evaluatorq {_evaluatorq_version()} · judges: {", ".join(panel_judges)}'
-    return panel('Run configuration', grid) + _METHOD_HTML + f'<p class="pw-note">{esc(fingerprint)}</p>'
+    return panel('Run configuration', grid) + _method_html(run) + f'<p class="pw-note">{esc(fingerprint)}</p>'
 
 
 # ---------------------------------------------------------------------------

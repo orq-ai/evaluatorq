@@ -87,8 +87,8 @@ def fleiss_kappa(run: PairwiseRun) -> tuple[float | None, int]:
     """Fleiss' kappa over the configured panel, on comparisons where every panel judge voted.
 
     Stand-in (replacement) judges are not part of the panel; a comparison where a
-    panel judge failed is skipped. Returns ``(kappa, rows_used)``; ``(None, 0)``
-    with fewer than two judges or no full-panel comparison.
+    panel judge failed or has duplicate records is skipped. Returns ``(kappa, rows_used)``;
+    ``(None, 0)`` with fewer than two judges or no full-panel comparison.
     """
     judges = list(run.judges)
     n = len(judges)
@@ -96,15 +96,23 @@ def fleiss_kappa(run: PairwiseRun) -> tuple[float | None, int]:
         return (None, 0)
     rows: list[Counter[str]] = []
     for e in run.entries:
-        votes = {v.model: v.vote for v in e.comparison.votes}
-        if all(votes.get(j) is not None for j in judges):
+        votes: dict[str, str | None] = {}
+        duplicates: set[str] = set()
+        for vote in e.comparison.votes:
+            if vote.replacement or vote.model not in judges:
+                continue
+            if vote.model in votes:
+                duplicates.add(vote.model)
+            else:
+                votes[vote.model] = vote.vote
+        if all(j in votes and votes[j] is not None and j not in duplicates for j in judges):
             rows.append(Counter(str(votes[j]) for j in judges))
     if not rows:
         return (None, 0)
     p_bar = sum((sum(c[k] ** 2 for k in _CATEGORIES) - n) / (n * (n - 1)) for c in rows) / len(rows)
     p_e = sum((sum(c[k] for c in rows) / (len(rows) * n)) ** 2 for k in _CATEGORIES)
     if p_e >= 1:
-        return (1.0, len(rows))
+        return (None, len(rows))
     return ((p_bar - p_e) / (1 - p_e), len(rows))
 
 
@@ -285,7 +293,16 @@ def trust_signals(run: PairwiseRun) -> list[TrustSignal]:
         )
     )
     kappa, rows = fleiss_kappa(run)
-    if kappa is None:
+    if kappa is None and rows:
+        out.append(
+            TrustSignal(
+                'Judge agreement',
+                'undefined',
+                f'every judge chose the same outcome on all {rows} included comparisons, so agreement is undefined',
+                '',
+            )
+        )
+    elif kappa is None:
         out.append(
             TrustSignal(
                 'Judge agreement', 'not measurable', 'needs two or more judges voting on the same comparison', ''

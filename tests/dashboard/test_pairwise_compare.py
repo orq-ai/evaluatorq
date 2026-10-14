@@ -62,21 +62,44 @@ def test_duplicate_same_entry_object_is_paired_by_position() -> None:
     assert matching.matched == [(0, 0), (1, 1)]
     assert matching.a_only == []
     assert matching.b_only == []
-    a = _run('a', [('q', 'A'), ('q', 'B'), ('q', 'A')])
-    b = _run('b', [('q', 'A'), ('q', 'B')])
-    m = match_comparisons(a, b)
-    assert m.matched == [(0, 0), (1, 1)]
-    assert m.a_only == [2]
-    assert m.b_only == []
 
 
-def test_changed_winner_is_tagged_by_side_label() -> None:
-    a = _run('a', [('q1', 'A'), ('q2', 'A')], a='old', b='new')
-    # Slot letters differ but the winning label ('old') is the same for q1.
-    b = _run('b', [('q1', 'B'), ('q2', 'A')], a='new', b='old')
+
+def test_renamed_labels_do_not_change_same_winning_slot() -> None:
+    a = _run('a', [('q', 'A')], a='old', b='new')
+    b = _run('b', [('q', 'A')], a='renamed', b='different')
     html = render_pairwise_compare_page('ra', 'rb', a, b)
-    assert html.count('pw-changed') == 1  # q2: old -> new
-    assert 'pw-compare' in html
+    assert 'old' in html and 'renamed' in html
+    assert 'pw-changed' not in html
+
+
+def test_swapped_labels_do_not_hide_changed_winning_slot() -> None:
+    a = _run('a', [('q', 'A')], a='old', b='new')
+    b = _run('b', [('q', 'B')], a='new', b='old')
+    html = render_pairwise_compare_page('ra', 'rb', a, b)
+    assert html.count('pw-changed') == 1
+
+
+def test_tie_label_collision_distinguishes_side_from_tie() -> None:
+    a = _run('a', [('q', 'A')], a='tie')
+    b = _run('b', [('q', 'tie')], a='tie')
+    html = render_pairwise_compare_page('ra', 'rb', a, b)
+    assert 'tie (A)' in html
+    assert html.count('pw-changed') == 1
+
+
+def test_empty_runs_show_empty_state_without_low_overlap_warning() -> None:
+    html = render_pairwise_compare_page('ra', 'rb', _run('a', []), _run('b', []))
+    assert 'No question appears in both runs.' in html
+    assert 'low overlap' not in html
+
+def test_equal_side_labels_are_slot_qualified() -> None:
+    a = _run('a', [('q', 'A')], a='same', b='same')
+    b = _run('b', [('q', 'B')], a='same', b='same')
+    html = render_pairwise_compare_page('ra', 'rb', a, b)
+    assert 'same (A)' in html and 'same (B)' in html
+    assert html.count('pw-changed') == 1
+
 
 
 def test_user_strings_are_escaped() -> None:

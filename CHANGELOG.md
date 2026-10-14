@@ -6,6 +6,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ## [Unreleased]
 
+- **Pairwise review corrections keep outcomes separate from display labels and unknown agreement.** Renamed labels no longer create changed-winner badges, ambiguous labels include their A/B slot, and empty runs do not trigger a low-overlap warning. Fleiss’ κ excludes duplicate configured-judge records and remains unavailable when chance agreement is already 100%. Config explains the observed ordering coverage instead of claiming every judge ran twice, and ordinary comparison-dot links load later pages even without JavaScript.
 - **Pairwise costs distinguish complete totals from recorded subtotals.** Missing comparisons or partially priced calls never appear as a complete generation or judging cost; missing measurements remain unknown rather than zero.
 - **Pairwise agreement requires at least two explicitly configured judges; absent panel metadata is not inferred from stand-in votes.** Run comparison reports zero actual comparisons for empty runs and returns a corrupt-report error for invalid UTF-8 instead of crashing.
 - **The pairwise verdict chart is larger and centered, with separate labels for the observed win rate, its 95% range, and the 50% equal-win reference.** The full 0–100% scale and statistical calculation are unchanged.

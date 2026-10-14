@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 
 from evaluatorq.contracts import Usage
@@ -106,6 +108,60 @@ def test_fleiss_kappa_is_measured_over_the_panel_despite_a_stand_in():
         response_b='bb',
     )
     assert fleiss_kappa(r) == (pytest.approx(1.0), 3)
+
+
+@pytest.mark.parametrize(
+    'duplicate_votes',
+    [
+        [('j1', 'A'), ('j1', None)],
+        [('j1', None), ('j1', 'A')],
+        [('j1', 'A'), ('j1', 'B')],
+    ],
+)
+def test_fleiss_kappa_excludes_rows_with_duplicate_panel_votes(
+    duplicate_votes: list[tuple[str, Literal['A', 'B', 'tie'] | None]],
+):
+    r = new_run(run_name='r', judges=J)
+    rows: list[list[tuple[str, Literal['A', 'B', 'tie'] | None]]] = [
+        [('j1', 'A'), ('j2', 'A'), ('j3', 'A')],
+        [('j1', 'B'), ('j2', 'B'), ('j3', 'B')],
+        [*duplicate_votes, ('j2', 'A'), ('j3', 'A')],
+    ]
+    for i, votes in enumerate(rows):
+        r.add(
+            PairwiseComparison(
+                winner='A',
+                votes=[PairwiseVote(model=model, vote=vote) for model, vote in votes],
+            ),
+            question=f'q{i}',
+            response_a='a',
+            response_b='b',
+        )
+
+    assert fleiss_kappa(r) == (pytest.approx(1.0), 2)
+
+
+def test_fleiss_kappa_is_undefined_for_unanimous_single_category_panels():
+    r = _run([(['A'] * 3, 'A', {}), (['A'] * 3, 'A', {})])
+
+    assert fleiss_kappa(r) == (None, 2)
+
+
+def test_fleiss_kappa_matches_known_mixed_agreement_example():
+    r = new_run(run_name='r', judges=['j1', 'j2'])
+    ballots: list[list[Literal['A', 'B', 'tie']]] = [['A', 'A'], ['A', 'B']]
+    for i, votes in enumerate(ballots):
+        r.add(
+            PairwiseComparison(
+                winner='A',
+                votes=[PairwiseVote(model=f'j{j + 1}', vote=vote) for j, vote in enumerate(votes)],
+            ),
+            question=f'q{i}',
+            response_a='a',
+            response_b='b',
+        )
+
+    assert fleiss_kappa(r) == (pytest.approx(-1 / 3), 2)
 
 
 def test_fleiss_kappa_needs_two_judges():
@@ -304,6 +360,15 @@ def test_trust_signals_omit_position_bias_when_swap_was_never_observed():
         response_b='b',
     )
     assert 'Position bias' not in [s.label for s in trust_signals(r)]
+
+
+def test_judge_agreement_signal_explains_unanimous_single_outcome_panel():
+    sig = {s.label: s for s in trust_signals(_run([(['A'] * 3, 'A', {}), (['A'] * 3, 'A', {})]))}
+    row = sig['Judge agreement']
+    assert 'two or more judges' not in row.detail
+    assert '2' in row.detail
+    assert 'same outcome' in row.detail
+    assert row.tone == ''
 
 
 def test_position_bias_row_warns_and_counts_only_measured_judges():

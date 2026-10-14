@@ -221,7 +221,7 @@ def _dot_strip(rid: str, run: PairwiseRun, entries: list[PairwiseEntry]) -> str:
         # The row may be on another page, sorted away or not rendered yet: fetch the
         # list focused on it, then scroll to it. The href is the no-JS fallback.
         dots.append(
-            f'<a class="pw-dot{split}" href="#cmp-{n}" title="#{n} · {esc(pw_side_label(winner, run))}"'
+            f'<a class="pw-dot{split}" href="/r/{esc(rid)}?cmp={n}#cmp-{n}" title="#{n} · {esc(pw_side_label(winner, run))}"'
             f' hx-get="/r/{esc(rid)}/pairwise/row-list?focus={n}" hx-include="#filter-form"'
             f' hx-target="#pw-row-list-{esc(rid)}" hx-swap="outerHTML show:#cmp-{n}:top"'
             f' style="background:{colour};color:{colour}"></a>'

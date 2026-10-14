@@ -100,15 +100,25 @@ def _link(rid: str, n: int) -> str:
     return f'<a href="/r/{esc(rid)}?cmp={n}#cmp-{n}">#{n}</a>'
 
 
+def _display_outcome(value: str | None, run: PairwiseRun, *, labels_collide: bool = False) -> str:
+    label = pw_side_label(value, run)
+    if value in ('A', 'B') and (labels_collide or label in ('tie', 'inconclusive')):
+        return f'{label} ({value})'
+    return label
+
+
 def _diff_table(rid_a: str, rid_b: str, run_a: PairwiseRun, run_b: PairwiseRun, m: PairwiseMatching) -> str:
     if not m.matched:
         return panel('Matched comparisons', '<p class="pw-empty">No question appears in both runs.</p>')
     rows: list[str] = []
     for i, j in m.matched:
         ea, eb = run_a.entries[i], run_b.entries[j]
-        wa = pw_side_label(ea.comparison.winner, run_a)
-        wb = pw_side_label(eb.comparison.winner, run_b)
-        changed = '<span class="tag pw-changed">changed</span>' if wa != wb else ''
+        outcome_a = ea.comparison.winner
+        outcome_b = eb.comparison.winner
+        labels_collide = run_a.label_a == run_a.label_b or run_b.label_a == run_b.label_b
+        wa = _display_outcome(outcome_a, run_a, labels_collide=labels_collide)
+        wb = _display_outcome(outcome_b, run_b, labels_collide=labels_collide)
+        changed = '<span class="tag pw-changed">changed</span>' if outcome_a != outcome_b else ''
         rows.append(
             f'<tr><td>{_link(rid_a, i + 1)}</td><td>{_link(rid_b, j + 1)}</td>'
             f'<td class="pw-cmp-q">{esc(ea.question)}</td>'
@@ -130,7 +140,7 @@ def render_pairwise_compare_page(rid_a: str, rid_b: str, run_a: PairwiseRun, run
     warn = (
         f' <span class="cmp-warn">low overlap ({m.match_rate:.0%}) — the two runs share few questions, '
         "so most comparisons can't be set against each other.</span>"
-        if m.match_rate < _MATCH_WARN_BELOW
+        if m.total > 0 and m.match_rate < _MATCH_WARN_BELOW
         else ''
     )
     hero = (
