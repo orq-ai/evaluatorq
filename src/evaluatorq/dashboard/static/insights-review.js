@@ -323,7 +323,7 @@ function renderHeader() {
     const mark = status === 'completed' ? '✓' : status === 'error' ? '!' : status === 'running' ? '…' : '·';
     const stageCost = r.cost_by_stage_details?.[name];
     const costText = stageCost?.cost == null
-      ? 'Cost unavailable'
+      ? (r.stages_without_model_calls?.includes(name) ? 'No model calls' : 'Cost unavailable')
       : `${stageCost.is_partial ? 'Partial cost: ' : ''}$${stageCost.cost.toFixed(4)}`;
     return `<span class="${status === 'completed' ? 'ok' : 'na'}">${mark}</span><span>${esc(label)} · ${esc(status)}</span><span class="num" style="color:var(--text-muted)">${count}</span><span class="num">${esc(costText)}</span>`;
   }).join('') : '<span class="na">Stage history unavailable</span>';

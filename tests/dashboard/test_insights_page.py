@@ -487,6 +487,10 @@ def test_review_client_escapes_saved_ids_and_labels_partial_cost(minimal_run: In
     assert run_data['cost_by_stage_details']['summary'] == {
         'cost': 0.25, 'is_partial': True, 'priced_calls': 1, 'calls': 3,
     }
+    assert run_data['stages_without_model_calls'] == ['priority', 'write']
+    snapshot = build_review_payload(saved.model_copy(update={'population': {'mode': 'snapshot'}}))
+    assert cast(dict[str, Any], snapshot['run'])['stages_without_model_calls'] == ['population', 'priority', 'write']
+    assert "stages_without_model_calls?.includes(name) ? 'No model calls'" in script
     assert 'data-t="${esc(t.id)}"' in script
     assert 'data-t="${esc(id)}"' in script
     assert 'data-c="${esc(c.id)}"' in script
