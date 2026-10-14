@@ -117,8 +117,9 @@ def to_open_responses(
             # An assistant turn can carry text and/or tool_calls. Emit the text
             # message when there is content, then a function_call item per call
             # (separate Responses output items). A tool-only turn skips the empty
-            # text message. Mirrors the langchain integration's mapping.
-            if msg.content:
+            # text message. A turn with neither still emits an empty text message,
+            # so a silent reply keeps its place in the rebuilt conversation.
+            if msg.content or not msg.tool_calls:
                 out_content: _ContentList = [OutputTextContent(text=content_to_text(msg.content), annotations=[])]
                 message = Message(
                     type='message',

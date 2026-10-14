@@ -237,6 +237,15 @@ class PopulationRequest(BaseModel):
             raise ValueError('start must not be after end')
         return self
 
+    def contains_time(self, timestamp: datetime) -> bool:
+        """Whether *timestamp* falls inside this window: the start is inclusive, and the end is exclusive only for a generated calendar-day end."""
+
+        if self.start is not None and timestamp < self.start:
+            return False
+        if self.end is None:
+            return True
+        return timestamp < self.end if self.end_exclusive else timestamp <= self.end
+
 
 class ValueSelection(BaseModel):
     """Include classifications whose value is one of the listed values."""

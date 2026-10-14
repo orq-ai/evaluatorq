@@ -555,6 +555,24 @@ class TestTranscriptOrderRoundTrip:
         assert decoded is not None
         assert self._shape(decoded) == self._shape(messages)
 
+    def test_silent_assistant_turn_round_trips_as_an_empty_reply(self):
+        from evaluatorq.common.output_adapters import responses_transcript
+
+        messages = [
+            Message(role="user", content="Are you there?"),
+            Message(role="assistant", content=None),
+            Message(role="user", content="Hello?"),
+            Message(role="assistant", content="Sorry, yes."),
+        ]
+        decoded = responses_transcript(to_open_responses(_make_result(messages=messages)))
+        assert decoded is not None
+        assert [(m.role, m.content) for m in decoded] == [
+            ("user", "Are you there?"),
+            ("assistant", ""),
+            ("user", "Hello?"),
+            ("assistant", "Sorry, yes."),
+        ]
+
 
     def test_empty_transcript_emits_empty_order(self):
         out = to_open_responses(_make_result(messages=[]))

@@ -847,3 +847,31 @@ async def test_empty_query_plan_does_not_load_a_broader_population(monkeypatch, 
     assert resolved.n_scanned == 0
     assert resolved.compiled == (dimension,)
     assert resolved.echo['filter_selection_error'] == selection_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('end_exclusive', 'expected'), [(True, ['inside']), (False, ['inside', 'at-end'])])
+async def test_query_population_honours_the_effective_end_boundary(monkeypatch, end_exclusive, expected):
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 2, tzinfo=timezone.utc)
+
+    async def plan(query, population, **kwargs):
+        effective = PopulationRequest(start=start, end=end, time_origin='explicit', end_exclusive=end_exclusive)
+        return PlanningResult(
+            dimensions=(), generated_facets=FacetSelection(), generated_numeric=NumericFilters(),
+            generated_time=(start, end), effective_population=effective, selector_response=None,
+            selector_error=None, provenance={'time': 'query'}, usage={},
+        )
+
+    monkeypatch.setattr(population_module, 'plan_query', plan)
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=(
+        make_trace('inside').model_copy(update={'timestamp': end - timedelta(seconds=1)}),
+        make_trace('at-end').model_copy(update={'timestamp': end}),
+    ))
+    resolved = await resolve_population(
+        InsightsPopulation(query='traces from 1 September'), orq=_orq(), client=_client(),
+        compiler_model='compiler', classifier_model='classifier',
+    )
+    assert [trace.metadata.trace_id for trace in resolved.traces] == expected
+    assert resolved.n_scanned == len(expected)

@@ -988,19 +988,7 @@ def _narrowed(
         for trace in traces
         if _within_facets(trace, facets)
         and _within_numeric(trace, bounds)
-        and (population is None or _within_time(trace, population))
-    )
-
-
-def _within_time(trace: TraceRecord, population: PopulationRequest) -> bool:
-    """Apply generated-exclusive or caller-inclusive effective bounds locally."""
-
-    return not (
-        (population.start is not None and trace.timestamp < population.start)
-        or (
-            population.end is not None
-            and (trace.timestamp >= population.end if population.end_exclusive else trace.timestamp > population.end)
-        )
+        and (population is None or population.contains_time(trace.timestamp))
     )
 
 

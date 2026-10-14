@@ -174,7 +174,7 @@ Scoring both, as two separate evaluators, is usually what you want — criteria 
 
 ## What the job returns
 
-The job's output is an OpenResponses response dict. The transcript is in `input` and `output` — user turns as `input_text`, agent turns as `output_text` — and everything the judge concluded is under `metadata`:
+The job's output is an OpenResponses response dict. The transcript is in `input` and `output` — user turns as `input_text`, agent turns as `output_text` — and everything the judge concluded is under `metadata`. An agent turn with neither text nor tool calls is kept as an empty `output_text` message, so a silent reply stays in place in the conversation:
 
 | `metadata` key | Type | What it holds |
 |---|---|---|

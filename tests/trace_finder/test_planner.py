@@ -606,7 +606,6 @@ async def test_inferred_population_origin_preserves_only_supplied_bounds(monkeyp
 @pytest.mark.parametrize('case', ['inherited', 'clipped', 'date_only', 'caller_inclusive'])
 async def test_effective_end_retains_actual_boundary_semantics(monkeypatch, case):
     from evaluatorq.trace_finder import planner
-    from evaluatorq.trace_finder.run_store import _within_time
 
     anchor = datetime(2026, 5, 31, 12, tzinfo=timezone.utc)
     start = anchor - timedelta(days=3)
@@ -644,5 +643,6 @@ async def test_effective_end_retains_actual_boundary_semantics(monkeypatch, case
         compiler_model='compiler', classifier_model='classifier', fast_filter_model='fast',
         now=anchor, catalogue_loader=loader,
     )
-    boundary_trace = cast(Any, SimpleNamespace(timestamp=result.effective_population.end))
-    assert _within_time(boundary_trace, result.effective_population) is expected_kept
+    boundary = result.effective_population.end
+    assert boundary is not None
+    assert result.effective_population.contains_time(boundary) is expected_kept

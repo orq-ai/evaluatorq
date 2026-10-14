@@ -1352,8 +1352,6 @@ async def test_shared_planner_preserves_explicit_population_window() -> None:
 
 
 def test_local_population_bounds_respect_generated_exclusive_and_explicit_inclusive_ends() -> None:
-    from evaluatorq.trace_finder.run_store import _within_time
-
     midnight = datetime(2026, 10, 13, tzinfo=timezone.utc)
     selected = trace(1).model_copy(update={'timestamp': midnight})
     generated_day = PopulationRequest(
@@ -1364,8 +1362,8 @@ def test_local_population_bounds_respect_generated_exclusive_and_explicit_inclus
     )
     caller_window = generated_day.model_copy(update={'end_exclusive': False})
 
-    assert not _within_time(selected, generated_day)
-    assert _within_time(selected, caller_window)
+    assert not generated_day.contains_time(selected.timestamp)
+    assert caller_window.contains_time(selected.timestamp)
 
 
 @pytest.mark.asyncio

@@ -143,6 +143,30 @@ def test_load_inputs_validation_survives_python_optimization(tmp_path):
     assert result.returncode == 42, result.stderr
 
 
+@pytest.mark.parametrize("now_entry", [", 'now': 'not-a-date'", ", 'now': None", ""])
+def test_rescore_rejects_unusable_meta_now_under_python_optimization(tmp_path, now_entry):
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(json.dumps(_dp()) + "\n", encoding="utf-8")
+    catalogue = _catalogue_file(tmp_path)
+    code = (
+        "import hashlib, importlib.util, sys\n"
+        f"s=importlib.util.spec_from_file_location('bench', {str(BENCH_PATH)!r})\n"
+        "m=importlib.util.module_from_spec(s); sys.modules['bench']=m; s.loader.exec_module(m)\n"
+        f"dataset={str(dataset)!r}; catalogue={str(catalogue)!r}\n"
+        "sha=lambda p: hashlib.sha256(open(p, 'rb').read()).hexdigest()\n"
+        "meta={'dataset_path': dataset, 'dataset_sha256': sha(dataset), "
+        f"'catalogue_path': catalogue, 'catalogue_sha256': sha(catalogue){now_entry}}}\n"
+        "try:\n"
+        " m.rescore([], meta)\n"
+        "except SystemExit as exc:\n"
+        " print(exc); raise SystemExit(42)\n"
+    )
+    result = subprocess.run([sys.executable, "-O", "-c", code], cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 42, result.stderr
+    assert "meta.json" in result.stdout
+    assert "now" in result.stdout
+
+
 @pytest.mark.parametrize("target", [
     'https://example.test/"onmouseover="alert',
     'https://example.test/?x=1&y=2',

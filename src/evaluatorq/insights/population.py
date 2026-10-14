@@ -281,8 +281,13 @@ async def _load_traces(
     facets: FacetSelection,
     numeric: NumericFilters,
     target_trace_ids: set[str] | None = None,
+    window: PopulationRequest | None = None,
 ) -> tuple[TraceDocument, ...]:
-    """Load a population's traces through `OrqTraceSource`; any failure becomes a `PopulationError`."""
+    """Load a population's traces through `OrqTraceSource`; any failure becomes a `PopulationError`.
+
+    *window* re-applies the effective time bounds locally, because the source query only carries
+    ``start``/``end`` and cannot express a generated calendar-day end as exclusive.
+    """
     source = OrqTraceSource(orq)
     try:
         if target_trace_ids is None:
@@ -296,7 +301,10 @@ async def _load_traces(
                 numeric=numeric,
                 target_trace_ids=target_trace_ids,
             )
-        traces = await source.enrich_selected_signal_spans(snapshot.traces)
+        loaded = snapshot.traces
+        if window is not None:
+            loaded = tuple(trace for trace in loaded if window.contains_time(trace.timestamp))
+        traces = await source.enrich_selected_signal_spans(loaded)
     except Exception as error:
         raise PopulationError(f'loading the trace population failed: {error}') from error
     finally:
@@ -372,6 +380,7 @@ async def _resolve_from_query(
             limit=effective.limit,
             facets=effective.facets,
             numeric=effective.numeric,
+            window=effective,
         )
     echo: dict[str, Any] = {
         'mode': 'query',

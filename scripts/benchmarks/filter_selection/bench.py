@@ -694,8 +694,13 @@ def rescore(rows: list[dict[str, Any]], meta: dict[str, Any] | None) -> tuple[li
         if line.strip()
     }
     catalogue = FacetCatalogue.model_validate(json.loads(catalogue_path.read_text(encoding='utf-8'))['catalogue'])
-    now = parse_time(meta['now'])
-    assert now is not None
+    now_value = meta.get('now')
+    try:
+        now = parse_time(now_value)
+    except (AttributeError, TypeError, ValueError):
+        now = None
+    if now is None:
+        raise SystemExit(f'meta.json has invalid or missing now value: {now_value!r}')
     rescored: list[dict] = []
     for row in rows:
         if row['kind'] != 'query':
