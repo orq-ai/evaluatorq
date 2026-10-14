@@ -694,6 +694,110 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     color: var(--text-faint);
     margin-top: 4px;
 }
+/* Red team overview, styled after the Insights review: a KPI strip (one white card split by hairlines) over a run
+   grid with tinted chips. Everything is scoped to .rt-overview so the other pages keep their look. */
+.dash-wrap.rt-overview {
+    --radius-lg: 14px; --rt-amber-chip: color-mix(in srgb, #c9a13f 16%, transparent);
+    margin-inline: auto; width: 100%;
+}
+.rt-overview .rt-scope { margin: 0 0 -6px; line-height: 16px; padding-left: 2px; font-size: 12px; color: var(--text-muted); }
+.kpi-band.kpi-band--strip {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin: 0;
+    align-items: stretch;
+    background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+}
+.kpi-band--strip .kpi-card {
+    background: none; border: 0; border-left: 1px solid var(--border-subtle); border-radius: 0;
+    padding: 16px 20px 18px; min-width: 0;
+}
+.kpi-band--strip .kpi-card:first-child { border-left: 0; }
+/* The number sits on a tinted chip like the Insights frustration score (.fr): teal when fine, amber when
+   flagged, red when high. The tint only reinforces the number and the sub-line; it is never the only signal. */
+.kpi-band--strip .kpi-value {
+    display: block; width: fit-content; max-width: 100%; padding: 2px 10px; margin: 0 0 0 -10px; border-radius: 5px;
+    font-family: var(--font-mono); font-size: clamp(18px, 2.2vw, 24px); font-weight: 700; font-variant-numeric: tabular-nums;
+    color: var(--text-strong); line-height: 1.15; white-space: normal; overflow-wrap: anywhere;
+}
+.kpi-band--strip .kpi-label { font-size: 12px; color: var(--text-muted); margin-top: 7px; }
+.kpi-band--strip .kpi-sub { font-size: 11px; line-height: 1.4; color: var(--text-faint); margin-top: 3px; text-wrap: pretty; }
+.kpi-band--strip .kpi-card--pass .kpi-value { background: var(--green-100); color: var(--teal-600); }
+.kpi-band--strip .kpi-card--warn .kpi-value { background: var(--rt-amber-chip); color: var(--amber-ink); }
+.kpi-band--strip .kpi-card--fail .kpi-value { background: var(--red-50); color: var(--red-700); }
+@media (max-width: 900px) {
+    .kpi-band.kpi-band--strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kpi-band--strip .kpi-card:nth-child(odd) { border-left: 0; }
+    .kpi-band--strip .kpi-card:nth-child(n+3) { border-top: 1px solid var(--border-subtle); padding-top: 14px; }
+}
+
+/* Run grid: right-aligned numbers, one-chip targets, keyboard focus, and a stacked layout on narrow screens.
+   The Agent Sim grid is untouched. The panel pads 16px so rows and the title share one left edge. */
+.rt-overview .panel { padding-inline: 16px; overflow: hidden; }
+.rt-overview .panel--flush { padding-bottom: 0; }
+.rt-overview .panel-title { margin-bottom: 14px; }
+.rt-overview .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.rt-overview .runs-grid { margin-inline: -16px; }
+.rt-overview .runs-grid-head, .rt-overview .runs-grid-row { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) 72px 64px 56px 88px 18px; padding-inline: 16px; }
+@media (min-width: 901px) and (max-width: 1279px) {
+    .rt-overview .runs-grid-head, .rt-overview .runs-grid-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) 72px 64px 56px 88px 18px; }
+}
+/* Same head and row treatment as the Insights trace table: small caps head over a rule, ruled rows. */
+.rt-overview .runs-grid-head {
+    padding-block: 8px; font-family: var(--font-sans); font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em;
+    color: var(--text-muted); border-bottom: 1px solid var(--border-default);
+}
+.rt-overview .runs-grid-row { padding-block: 10px; border-top: 0; border-bottom: 1px solid var(--border-subtle); }
+.rt-overview .runs-grid-row:last-child { border-bottom: 0; }
+.rt-overview .rg-job { gap: 0; }
+.rt-overview .rg-name, .rt-overview .rg-sub { line-height: 1.35; }
+.rt-overview .runs-grid-head span:nth-child(n+3):nth-child(-n+6) { text-align: right; }
+.rt-overview .rg-status { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.rt-overview .rg-broke-n { font-family: var(--font-mono); font-size: 13px; color: var(--text-body); }
+.rt-overview .rg-broke-n.is-none { color: var(--text-faint); }
+/* ASR chip: the Insights .fr box, coloured by band. */
+.rt-overview .rg-score.good, .rt-overview .rg-score.mid, .rt-overview .rg-score.high {
+    display: inline-grid; place-items: center; justify-self: end; min-width: 36px; height: 24px; padding: 0 5px;
+    border-radius: 5px; font: 600 12px/1 var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.rt-overview .rg-score.good { background: var(--green-100); color: var(--teal-600); }
+.rt-overview .rg-score.mid { background: var(--rt-amber-chip); color: var(--amber-ink); }
+.rt-overview .rg-score.high { background: var(--red-50); color: var(--red-700); }
+.rt-overview .rg-score.none { color: var(--text-faint); }
+.rt-overview .rg-targets { flex-wrap: nowrap; overflow: hidden; }
+.rt-overview .rg-targets .target-pill { flex: 0 1 auto; min-width: 88px; white-space: nowrap; }
+.rt-overview .target-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rt-overview .target-more {
+    flex: 0 0 auto; font-size: 12px; font-weight: 500; color: var(--text-muted);
+    padding: 2px 7px; border: 1px solid var(--border-subtle); border-radius: 999px;
+}
+.rt-overview .runs-grid-row:focus-visible,
+.rt-overview .runs-pager-link:focus-visible { outline: 2px solid var(--teal-600); outline-offset: -2px; }
+/* The pager is a footer under the last row, so it carries its own rule and breathing room. */
+.rt-overview .runs-pager { margin-inline: -16px; padding: 10px 16px 0; border-top: 1px solid var(--border-subtle); }
+.rt-overview .runs-pager-link { display: inline-grid; place-items: center; min-width: 32px; min-height: 32px; padding: 0 8px; }
+.rt-overview .runs-pager-link.is-active { text-decoration: underline; text-underline-offset: 4px; }
+.rt-overview .runs-pager-link.is-disabled { opacity: 1; color: var(--text-muted); cursor: default; }
+.rt-overview .runs-pager-link.is-disabled:hover { background: none; }
+@media (max-width: 900px) {
+    .rt-overview .runs-grid-head { display: none; }
+    .rt-overview .runs-grid-row {
+        grid-template-columns: auto auto 1fr auto;
+        grid-template-areas: "job job job job" "targets targets targets targets" "broke score cases cost";
+        row-gap: 8px; column-gap: 16px;
+    }
+    .rt-overview .rg-job { grid-area: job; }
+    .rt-overview .rg-targets { grid-area: targets; }
+    .rt-overview .rg-status { grid-area: broke; flex-direction: row; align-items: center; gap: 8px; }
+    .rt-overview .rg-score, .rt-overview .rg-score:is(.good, .mid, .high) {
+        grid-area: score; text-align: left; justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px;
+    }
+    .rt-overview .rg-cases { grid-area: cases; text-align: left; }
+    .rt-overview .rg-cost { grid-area: cost; }
+    .rt-overview .rg-score::before { content: "ASR "; font-family: var(--font-sans); font-weight: 400; color: var(--text-muted); }
+    .rt-overview .rg-broke-n:not(.is-none)::after { content: " broke"; font-family: var(--font-sans); color: var(--text-muted); }
+    .rt-overview .rg-cases::after { content: " cases"; font-family: var(--font-sans); color: var(--text-muted); }
+    .rt-overview .runs-grid-row .row-chevron { display: none; }
+    .rt-overview .runs-pager { flex-wrap: wrap; row-gap: 8px; }
+}
 .dash-row2 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; }
 .dash-row-eq { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 

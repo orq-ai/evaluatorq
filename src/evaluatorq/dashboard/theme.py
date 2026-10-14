@@ -83,6 +83,7 @@ EDITORIAL_CSS = """
     --red-50:    #fdeee9;
     --amber-600: #ff8f34;
     --amber-100: #ffe8d2;
+    --amber-ink: #765400;   /* AA-contrast dark amber for text on the Insights yellow chip tint */
     --green-600: #299D8F;
     --green-100: #d6ece8;
     --green-50:  #eef6f4;

@@ -1154,6 +1154,8 @@ class RedTeamRunRow:
     cases: int  # number of attacks in the run
     cost: float | None  # summed cost_usd for the run; None when not recorded
     error: bool
+    vulnerable: int = 0  # evaluated attacks that broke the agent
+    evaluated: int = 0  # attacks that produced a verdict (the ASR denominator)
 
 
 @dataclass(frozen=True)
@@ -1342,6 +1344,8 @@ def _redteam_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int, 
                 cases=stats.cases,
                 cost=stats.cost,
                 error=bool(card.error),
+                vulnerable=stats.vulnerable,
+                evaluated=stats.evaluated,
             )
         )
 
@@ -1366,6 +1370,6 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
     """Aggregate the red team run store into headline KPIs plus a run-level table
     (one row per full red team run). Rows are newest-first, sliced to the requested
     page of ``per_page`` (``total_runs`` carries the full count)."""
-    page = max(1, page)
     agg = _redteam_aggregate(_roots_key(roots), library.fingerprint(roots))
+    page = min(max(1, page), max(1, -(-agg.total_runs // per_page)))  # past the end shows the last page
     return replace(agg, recent=agg.recent[(page - 1) * per_page : page * per_page], page=page, per_page=per_page)

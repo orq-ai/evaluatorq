@@ -1026,7 +1026,7 @@ class TestDashboardCostCoverage:
 
         ov = metrics.redteam_overview([rt, sim])
         assert (ov.priced_calls, ov.cost_calls) == (3, 10)
-        assert '(3 of 10 calls)' in view.redteam_overview_body(ov)
+        assert '3 of 10 calls' in view.redteam_overview_body(ov)
 
     def test_no_label_when_every_call_priced(self, tmp_path: Path) -> None:
         rt, sim = self._roots(tmp_path, self._redteam_payload('P', created='2026-06-29T10:00:00', priced=10, calls=10))
