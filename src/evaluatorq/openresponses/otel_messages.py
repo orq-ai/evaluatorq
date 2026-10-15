@@ -17,21 +17,13 @@ tool calls) fall into the generic ``data`` branch rather than being guessed at.
 
 from __future__ import annotations
 
-import json
 from typing import Any
+
+from evaluatorq.common.messages import parse_json_or_value, tool_result_to_text
+from evaluatorq.openresponses.tool_records import failure_payload, is_tool_record, normalize_tool_records
 
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text', 'summary_text'})
 _REASONING_PART_TYPES = frozenset({'reasoning_text', 'reasoning'})
-
-
-def _parse_json_or_value(raw: Any) -> Any:
-    """Return ``raw`` parsed as JSON when it is a JSON string, else unchanged."""
-    if not isinstance(raw, str):
-        return raw
-    try:
-        return json.loads(raw)
-    except (TypeError, ValueError):
-        return raw
 
 
 def _generic_part(value: Any) -> dict[str, Any]:
@@ -70,9 +62,9 @@ def _content_to_parts(content: Any, *, as_reasoning: bool = False) -> list[dict[
 def _tool_call_part(item: dict[str, Any], *, name_key: str = 'name', args_key: str = 'arguments') -> dict[str, Any]:
     return {
         'type': 'tool_call',
-        'id': item.get('call_id') or item.get('id') or '',
+        'id': item.get('call_id') or item.get('id'),
         'name': item.get(name_key) or item.get('tool_name') or '',
-        'arguments': _parse_json_or_value(item.get(args_key)),
+        'arguments': parse_json_or_value(item.get(args_key)),
     }
 
 
@@ -84,11 +76,6 @@ def _reasoning_parts(item: dict[str, Any]) -> list[dict[str, Any]]:
     if not parts and item.get('encrypted_content'):
         parts.append({'type': 'reasoning', 'content': '[encrypted]'})
     return parts
-
-
-def _is_orq_tool_call(item_type: str) -> bool:
-    """Orq's built-in tools are items typed ``orq:<tool name>`` — there is no single literal."""
-    return item_type.startswith('orq:')
 
 
 RESPONSES_ITEM_TYPES = frozenset({
@@ -105,13 +92,13 @@ RESPONSES_ITEM_TYPES = frozenset({
 def is_responses_item(value: Any) -> bool:
     """Whether *value* is a typed Responses API item rather than a chat message or content part."""
     item_type = value.get('type') if isinstance(value, dict) else None
-    return isinstance(item_type, str) and (item_type in RESPONSES_ITEM_TYPES or _is_orq_tool_call(item_type))
+    return isinstance(item_type, str) and (item_type in RESPONSES_ITEM_TYPES or is_tool_record(item_type))
 
 
 def _tool_response_message(call_id: Any, response: Any) -> dict[str, Any]:
     return {
         'role': 'tool',
-        'parts': [{'type': 'tool_call_response', 'id': call_id or '', 'response': _parse_json_or_value(response)}],
+        'parts': [{'type': 'tool_call_response', 'id': call_id, 'response': parse_json_or_value(response)}],
     }
 
 
@@ -132,7 +119,7 @@ def items_to_input_messages(items: Any) -> list[dict[str, Any]]:
         return []
 
     messages: list[dict[str, Any]] = []
-    for raw in items:
+    for raw in normalize_tool_records(items):
         if not isinstance(raw, dict):
             messages.append({'role': 'assistant', 'parts': [_generic_part(raw)]})
             continue
@@ -149,13 +136,13 @@ def items_to_input_messages(items: Any) -> list[dict[str, Any]]:
             messages.append({'role': 'assistant', 'parts': [_tool_call_part(raw)]})
             error = raw.get('error')
             if error:
-                messages.append(_tool_response_message(raw.get('call_id'), {'error': error}))
+                output = raw.get('output')
+                payload = failure_payload(
+                    None if output is None else tool_result_to_text(output), tool_result_to_text(error)
+                )
+                messages.append(_tool_response_message(raw.get('call_id'), payload))
             elif raw.get('output'):
                 messages.append(_tool_response_message(raw.get('call_id'), raw.get('output')))
-        elif _is_orq_tool_call(item_type):
-            messages.append({'role': 'assistant', 'parts': [_tool_call_part(raw)]})
-            if raw.get('result') is not None:
-                messages.append(_tool_response_message(raw.get('call_id'), raw.get('result')))
         elif item_type == 'reasoning':
             messages.append({'role': 'assistant', 'parts': _reasoning_parts(raw)})
         else:
@@ -173,7 +160,7 @@ def items_to_output_messages(items: Any, finish_reason: str = '') -> list[dict[s
         return []
 
     messages: list[dict[str, Any]] = []
-    for raw in items:
+    for raw in normalize_tool_records(items):
         if not isinstance(raw, dict):
             messages.append({'role': 'assistant', 'parts': [_generic_part(raw)], 'finish_reason': finish_reason})
             continue
@@ -183,7 +170,7 @@ def items_to_output_messages(items: Any, finish_reason: str = '') -> list[dict[s
         if item_type == 'message':
             parts = _content_to_parts(raw.get('content'))
             role = raw.get('role') or 'assistant'
-        elif item_type == 'function_call' or _is_orq_tool_call(item_type):
+        elif item_type == 'function_call':
             parts = [_tool_call_part(raw)]
             role = 'assistant'
         elif item_type == 'custom_tool_call':

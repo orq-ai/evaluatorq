@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 import sys
 from abc import ABC, abstractmethod
@@ -14,11 +13,13 @@ from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from typing_extensions import TypedDict
 
+from evaluatorq.common.messages import tool_result_to_text
 from evaluatorq.openresponses.convert_models import (
     InputFileContent,
     InputImageContent,
     InputTextContent,
 )
+from evaluatorq.openresponses.tool_records import PairedToolCall, iter_paired
 
 # A single part of multi-modal message content (Responses-API input shapes).
 # Tagged on ``type`` (mirroring ``OutputMessage``) so Pydantic dispatches on the
@@ -91,41 +92,6 @@ def content_to_text(content: str | list[ContentPart] | None) -> str:
                 'Use a Responses-API target (OrqResponsesTarget) for image/file content.'
             )
     return ''.join(out)
-
-
-def tool_result_to_text(result: object) -> str:
-    """Render a tool's return value for ``ToolCallOutputItem.result``.
-
-    Tools routinely return structured data (``{"temp": 12}``), and ``result``
-    has to be text because it ends up as a tool ``Message.content``. ``str()``
-    would give the Python repr — single-quoted, ``None``/``True`` instead of
-    ``null``/``true`` — which no downstream reader can parse back, so the data
-    is there but unusable. JSON keeps it readable by both a model and a parser.
-    """
-    if isinstance(result, str):
-        return result
-    model_dump_json = getattr(result, 'model_dump_json', None)
-    if callable(model_dump_json):
-        try:
-            rendered = model_dump_json()
-        except Exception as exc:  # noqa: BLE001 - any renderer failure must reach the text fallback
-            logger.warning(
-                'tool_result_to_text: {}.model_dump_json() failed with {}: {}; falling back to JSON encoding',
-                type(result).__name__,
-                type(exc).__name__,
-                exc,
-            )
-        else:
-            if isinstance(rendered, str):
-                return rendered
-            logger.warning(
-                'tool_result_to_text: {}.model_dump_json() returned {}; falling back to JSON encoding',
-                type(result).__name__,
-                type(rendered).__name__,
-            )
-    # default=str: a value JSON cannot encode degrades to its repr rather than
-    # failing the whole response over one odd tool return.
-    return json.dumps(result, default=str)
 
 
 if sys.version_info >= (3, 11):
@@ -1243,9 +1209,19 @@ class AgentResponse(BaseModel):
         """Build an AgentResponse from bare Responses ``output`` items, with no usage or metadata."""
         items: list[OutputMessage] = []
         refusal: str | None = None
-        for item in output_items:
+        for item in iter_paired(output_items):
             item_type = _gf(item, 'type')
-            if item_type == 'message':
+            if isinstance(item, PairedToolCall):
+                fields: dict[str, Any] = {
+                    'call_id': item.call_id,
+                    'name': item.name,
+                    'arguments': item.arguments,
+                    'result': item.result,
+                }
+                if item.item_id:
+                    fields['id'] = item.item_id
+                items.append(ToolCallOutputItem(**fields))
+            elif item_type == 'message':
                 for part in _gf(item, 'content') or []:
                     part_type = _gf(part, 'type')
                     # A message part is 'output_text' or 'refusal'. Keeping only
@@ -1263,26 +1239,6 @@ class AgentResponse(BaseModel):
                         logger.warning(
                             'AgentResponse.from_openresponses: skipping unknown message part type={!r}', part_type
                         )
-            # 'function_call' is the standard Responses shape; the Orq router
-            # instead types agent tool calls as 'orq:<tool_name>' (e.g.
-            # 'orq:query_knowledge_base'). Treat both as tool calls so the
-            # agent's tool activity is captured rather than silently dropped.
-            elif item_type == 'function_call' or (isinstance(item_type, str) and item_type.startswith('orq:')):
-                raw_args = _gf(item, 'arguments') or '{}'
-                call_id = _gf(item, 'call_id') or _gf(item, 'id') or ''
-                result = _gf(item, 'result')
-                if result is None:
-                    result = _gf(item, 'output')
-                name = _gf(item, 'name') or (item_type.split(':', 1)[1] if item_type.startswith('orq:') else '')
-                items.append(
-                    ToolCallOutputItem(
-                        type='function_call',
-                        name=str(name),
-                        call_id=str(call_id),
-                        arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args),
-                        result=tool_result_to_text(result) if result is not None else None,
-                    )
-                )
             elif item_type == 'reasoning':
                 pass  # o1/o3/o4-mini reasoning steps intentionally excluded
             else:
