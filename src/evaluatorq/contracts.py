@@ -19,7 +19,7 @@ from evaluatorq.openresponses.convert_models import (
     InputImageContent,
     InputTextContent,
 )
-from evaluatorq.openresponses.tool_records import pair_tool_records
+from evaluatorq.openresponses.tool_records import PairedToolCall, iter_paired
 
 # A single part of multi-modal message content (Responses-API input shapes).
 # Tagged on ``type`` (mirroring ``OutputMessage``) so Pydantic dispatches on the
@@ -1210,26 +1210,18 @@ class AgentResponse(BaseModel):
         items: list[OutputMessage] = []
         refusal: str | None = None
         raw_items = list(output_items)
-        calls = {call.source_index: call for call in pair_tool_records(raw_items)}
-        consumed = {index for call in calls.values() for index in call.indices}
-        for index, item in enumerate(raw_items):
+        for item in iter_paired(raw_items):
             item_type = _gf(item, 'type')
-            call = calls.get(index)
-            if call is not None:
-                # One call per call_id: the Orq router's split ``function_call`` /
-                # ``orq:<tool>`` records and native ``function_call_output`` items
-                # are already merged by pair_tool_records.
+            if isinstance(item, PairedToolCall):
                 fields: dict[str, Any] = {
-                    'call_id': call.call_id,
-                    'name': call.name,
-                    'arguments': call.arguments,
-                    'result': call.result,
+                    'call_id': item.call_id,
+                    'name': item.name,
+                    'arguments': item.arguments,
+                    'result': item.result,
                 }
-                if call.item_id:
-                    fields['id'] = call.item_id
+                if item.item_id:
+                    fields['id'] = item.item_id
                 items.append(ToolCallOutputItem(**fields))
-            elif index in consumed:
-                continue
             elif item_type == 'message':
                 for part in _gf(item, 'content') or []:
                     part_type = _gf(part, 'type')

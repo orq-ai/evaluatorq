@@ -227,6 +227,16 @@ def messages_to_text(messages: Iterable[Any]) -> str:
     return '\n'.join(lines)
 
 
+def parse_json_or_value(raw: Any) -> Any:
+    """Return ``raw`` parsed as JSON when it is a JSON string, else unchanged."""
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+
+
 def tool_result_to_text(result: object) -> str:
     """Render a tool's return value as text.
 

@@ -304,6 +304,11 @@ def test_decisions_post_detector_actually_fires() -> None:
 
 def _orq_prefix_lines(source: str) -> list[int]:
     """Line numbers of ``x.startswith('orq:')`` / ``x.removeprefix('orq:')`` calls."""
+    def is_orq_prefix(arg: ast.expr) -> bool:
+        if isinstance(arg, ast.Tuple):
+            return any(is_orq_prefix(element) for element in arg.elts)
+        return isinstance(arg, ast.Constant) and arg.value == 'orq:'
+
     return [
         node.lineno
         for node in ast.walk(ast.parse(source))
@@ -311,8 +316,7 @@ def _orq_prefix_lines(source: str) -> list[int]:
         and isinstance(node.func, ast.Attribute)
         and node.func.attr in {'startswith', 'removeprefix'}
         and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and node.args[0].value == 'orq:'
+        and is_orq_prefix(node.args[0])
     ]
 
 
@@ -323,6 +327,13 @@ ORQ_PREFIX_ALLOW = frozenset({
     'trace_finder/orq_source.py',  # RES-1756
     'redteam/frameworks/owasp/evaluatorq_bridge.py',  # dataset specifier, unrelated
 })
+
+
+def test_orq_prefix_allowlist_does_not_grow() -> None:
+    assert len(ORQ_PREFIX_ALLOW) == 3, (
+        'ORQ_PREFIX_ALLOW changed size. Removing an entry (good) means lowering this number; '
+        'adding one means a new hand-rolled orq: tool-record reader slipped in.'
+    )
 
 
 def test_orq_tool_records_are_read_through_tool_records() -> None:
@@ -343,6 +354,7 @@ def test_orq_tool_records_are_read_through_tool_records() -> None:
 def test_orq_prefix_detector_actually_fires() -> None:
     assert _orq_prefix_lines("x.startswith('orq:')") == [1]
     assert _orq_prefix_lines("x.removeprefix('orq:')") == [1]
+    assert _orq_prefix_lines("x.startswith(('orq:', 'a'))") == [1]
     assert _orq_prefix_lines("x.startswith('orq_')") == []
     assert _orq_prefix_lines("# x.startswith('orq:')") == []
 

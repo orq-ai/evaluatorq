@@ -263,12 +263,11 @@ def test_orq_record_with_only_an_id_gets_a_unique_call_id_and_never_pairs():
     assert ids[1] not in ('', 'fc_1')
 
 
-def test_function_call_id_fallback_still_pairs():
+def test_function_call_wire_id_does_not_pair_with_an_orq_call_id():
     call = {'type': 'function_call', 'id': 'c7', 'name': 't', 'arguments': '{"k":1}'}
     res = {'type': 'orq:t', 'call_id': 'c7', 'result': 'ok'}
     r = AgentResponse.from_output_items([call, res])
-    assert len(r.tool_calls) == 1 and r.tool_calls[0].arguments == '{"k":1}'
-    assert r.tool_calls[0].call_id == 'c7'
+    assert [t.result for t in r.tool_calls] == [None, 'ok']
 
 
 def test_lone_orq_record_with_real_empty_arguments_agrees_across_readers():

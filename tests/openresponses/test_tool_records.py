@@ -9,7 +9,13 @@ import logging
 
 import pytest
 
-from evaluatorq.openresponses.tool_records import is_tool_record, normalize_tool_records, pair_tool_records
+from evaluatorq.openresponses.tool_records import (
+    PairedToolCall,
+    is_tool_record,
+    iter_paired,
+    normalize_tool_records,
+    pair_tool_records,
+)
 
 CALL = {'type': 'function_call', 'id': 'fc_1', 'call_id': 'c1', 'name': 'refund', 'arguments': '{"order_id":"a2"}'}
 RESULT = {'type': 'orq:refund', 'id': 'orq_9', 'call_id': 'c1', 'name': 'refund', 'result': {'ok': False}}
@@ -32,7 +38,6 @@ def test_split_pair_becomes_one_call() -> None:
     (call,) = pair_tool_records([CALL, RESULT])
     assert (call.call_id, call.item_id, call.name) == ('c1', 'fc_1', 'refund')
     assert call.arguments == '{"order_id":"a2"}'
-    assert call.has_arguments
     assert call.result == '{"ok": false}'
     assert call.source_index == 0
 
@@ -65,7 +70,6 @@ def test_calls_come_back_in_input_order() -> None:
 
 def test_orphan_result_has_no_arguments_and_keeps_its_wire_id(caplog) -> None:
     (call,) = pair_tool_records([RESULT])
-    assert not call.has_arguments
     assert call.arguments == '{}'
     assert call.item_id == 'orq_9'
     assert not _warnings(caplog)
@@ -78,7 +82,7 @@ def test_unmatched_result_warns_when_the_list_has_a_call(caplog) -> None:
 
 
 def test_unmatched_call_warns_beside_an_orq_record_but_a_lone_call_does_not(caplog) -> None:
-    other = {'type': 'orq:other', 'call_id': 'c2', 'arguments': '{}', 'result': 'ok'}
+    other = {'type': 'orq:refund', 'call_id': 'c2', 'arguments': '{}', 'result': 'ok'}
     pair_tool_records([CALL, other])
     assert 'has no result record' in _warnings(caplog)
     caplog.clear()
@@ -179,7 +183,6 @@ def test_record_with_an_error_but_no_failed_status_is_wrapped_as_failed() -> Non
 
 def test_lone_orq_record_with_real_empty_arguments_keeps_them() -> None:
     (call,) = pair_tool_records([{'type': 'orq:kb', 'call_id': 'k', 'arguments': {}, 'result': 'x'}])
-    assert call.has_arguments
     assert call.arguments == '{}'
 
 
@@ -245,7 +248,7 @@ def test_same_call_id_in_separate_lists_is_not_cross_paired() -> None:
     (only_call,) = pair_tool_records([CALL])
     (only_result,) = pair_tool_records([RESULT])
     assert only_call.result is None
-    assert not only_result.has_arguments
+    assert only_result.arguments == '{}'
 
 
 def test_parallel_native_calls_pair_by_call_id_not_adjacency(caplog) -> None:
@@ -291,3 +294,43 @@ def test_empty_error_on_a_successful_record_stays_a_success(empty) -> None:
 def test_non_empty_error_marks_the_call_failed(error) -> None:
     (call,) = pair_tool_records([CALL, {**RESULT, 'error': error}])
     assert json.loads(call.result or '')['status'] == 'failed'
+
+
+def test_lone_failed_function_call_gets_no_invented_output() -> None:
+    (call,) = pair_tool_records([{**CALL, 'status': 'failed'}])
+    assert call.result is None
+    (with_error,) = pair_tool_records([{**CALL, 'error': 'boom'}])
+    assert json.loads(with_error.result or '') == {'status': 'failed', 'error': 'boom'}
+
+
+def test_unpaired_native_output_with_an_error_keeps_it() -> None:
+    orphan = {'type': 'function_call_output', 'call_id': 'z', 'error': 'boom'}
+    (out,) = normalize_tool_records([orphan])
+    assert out['call_id'] == 'z'
+    assert json.loads(out['output']) == {'status': 'failed', 'error': 'boom'}
+
+
+def test_iter_paired_yields_a_call_at_its_first_record_and_passes_the_rest_through() -> None:
+    entries = list(iter_paired([TEXT, RESULT, CALL]))
+    assert entries[0] == TEXT
+    assert isinstance(entries[1], PairedToolCall)
+    assert len(entries) == 2
+
+
+def test_warning_flags_are_scoped_to_the_turn(caplog) -> None:
+    user = {'type': 'message', 'role': 'user', 'content': 'next'}
+    other = {'type': 'orq:other', 'call_id': 'c9', 'arguments': '{}', 'result': 'ok'}
+    pair_tool_records([other, user, CALL])
+    assert not _warnings(caplog)
+
+
+def test_pending_client_call_beside_an_orq_tool_stays_silent(caplog) -> None:
+    other = {'type': 'orq:other', 'call_id': 'c9', 'arguments': '{}', 'result': 'ok'}
+    pair_tool_records([CALL, other])
+    assert not _warnings(caplog)
+
+
+def test_call_without_call_id_does_not_pair_with_an_orq_call_id_equal_to_its_wire_id() -> None:
+    bare = {'type': 'function_call', 'id': 'fc_1', 'name': 'refund', 'arguments': '{}'}
+    first, second = pair_tool_records([bare, {'type': 'orq:refund', 'call_id': 'fc_1', 'result': 'x'}])
+    assert (first.result, second.result) == (None, 'x')
