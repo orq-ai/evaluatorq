@@ -103,7 +103,7 @@ def test_mcp_and_custom_tool_calls_map_to_tool_calls() -> None:
         {'type': 'custom_tool_call_output', 'call_id': 'k1', 'output': 'match'},
     ])
     assert messages[0]['parts'][0] == {'type': 'tool_call', 'id': 'm1', 'name': 'search', 'arguments': {}}
-    assert messages[1] == {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'm1', 'response': {'error': 'boom'}}]}
+    assert messages[1] == {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'm1', 'response': {'status': 'failed', 'error': 'boom'}}]}
     assert messages[2]['parts'][0] == {'type': 'tool_call', 'id': 'k1', 'name': 'grep', 'arguments': 'pattern'}
     assert messages[3] == {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'k1', 'response': 'match'}]}
 
@@ -175,3 +175,28 @@ def test_unmatched_orq_record_keeps_its_result_and_has_empty_arguments() -> None
 
     assert messages[0]['parts'] == [{'type': 'tool_call', 'id': 'c9', 'name': 'refund', 'arguments': {}}]
     assert messages[1]['parts'] == [{'type': 'tool_call_response', 'id': 'c9', 'response': 'ok'}]
+
+
+def test_parallel_native_calls_keep_their_order_in_input_messages() -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call', 'call_id': 'b', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'ra'},
+        {'type': 'function_call_output', 'call_id': 'b', 'output': 'rb'},
+    ]
+    messages = items_to_input_messages(items)
+    assert [(m['parts'][0]['type'], m['parts'][0]['id']) for m in messages] == [
+        ('tool_call', 'a'),
+        ('tool_call', 'b'),
+        ('tool_call_response', 'a'),
+        ('tool_call_response', 'b'),
+    ]
+
+
+def test_unpaired_failed_native_output_reaches_input_messages_as_a_failure() -> None:
+    (message,) = items_to_input_messages([
+        {'type': 'function_call_output', 'call_id': 'z', 'output': 'x', 'error': 'boom'},
+    ])
+    response = message['parts'][0]['response']
+    assert response['status'] == 'failed'
+    assert response['error'] == 'boom'

@@ -1209,8 +1209,7 @@ class AgentResponse(BaseModel):
         """Build an AgentResponse from bare Responses ``output`` items, with no usage or metadata."""
         items: list[OutputMessage] = []
         refusal: str | None = None
-        raw_items = list(output_items)
-        for item in iter_paired(raw_items):
+        for item in iter_paired(output_items):
             item_type = _gf(item, 'type')
             if isinstance(item, PairedToolCall):
                 fields: dict[str, Any] = {

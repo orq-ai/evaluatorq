@@ -135,14 +135,11 @@ def test_result_on_the_function_call_record_beats_an_orq_result(caplog) -> None:
     assert 'Conflicting result' in _warnings(caplog)
 
 
-def test_conflicting_second_function_call_keeps_the_first_and_warns_once(caplog) -> None:
-    (call,) = pair_tool_records([CALL, {**CALL, 'id': 'fc_2', 'arguments': '{"order_id":"zz"}', 'name': 'other'}])
-    assert call.arguments == '{"order_id":"a2"}'
-    assert call.name == 'refund'
-    assert call.item_id == 'fc_1'
-    warnings = _warnings(caplog)
-    assert warnings.count('Conflicting arguments') == 1
-    assert warnings.count('Conflicting name') == 1
+def test_second_function_call_for_a_call_id_is_its_own_call(caplog) -> None:
+    first, second = pair_tool_records([CALL, {**CALL, 'id': 'fc_2', 'arguments': '{"order_id":"zz"}', 'name': 'other'}])
+    assert (first.arguments, first.name, first.item_id) == ('{"order_id":"a2"}', 'refund', 'fc_1')
+    assert (second.arguments, second.name, second.item_id) == ('{"order_id":"zz"}', 'other', 'fc_2')
+    assert 'Conflicting' not in _warnings(caplog)
 
 
 def test_conflicting_errors_keep_the_first_and_warn_once(caplog) -> None:
@@ -217,12 +214,55 @@ def test_function_call_output_item_counts_as_the_result(caplog) -> None:
     assert not _warnings(caplog)
 
 
-def test_minted_ids_are_deterministic_and_positional() -> None:
-    items = [TEXT, {'type': 'orq:t', 'arguments': '{"a":1}', 'result': 'x'}, {'type': 'orq:t', 'result': 'y'}]
-    ids = [c.call_id for c in pair_tool_records(items)]
-    assert ids == ['call_unpaired_1', 'call_unpaired_2']
-    assert ids == [c.call_id for c in pair_tool_records(items)]
-    assert normalize_tool_records(items) == normalize_tool_records(items)
+def test_minted_ids_are_content_derived_and_unique_within_a_list() -> None:
+    first = {'type': 'orq:t', 'arguments': '{"a":1}', 'result': 'x'}
+    second = {'type': 'orq:t', 'result': 'y'}
+    ids = [c.call_id for c in pair_tool_records([TEXT, first, second])]
+    assert len(set(ids)) == 2
+    assert all(i.startswith('call_unpaired_') for i in ids)
+    assert ids == [c.call_id for c in pair_tool_records([TEXT, first, second])]
+    assert normalize_tool_records([first, second]) == normalize_tool_records([first, second])
+    twins = [c.call_id for c in pair_tool_records([second, second])]
+    assert len(set(twins)) == 2
+
+
+def test_minted_ids_do_not_repeat_across_responses() -> None:
+    one = [{'type': 'orq:t', 'arguments': '{"a":1}', 'result': 'x'}]
+    other = [{'type': 'orq:t', 'arguments': '{"a":2}', 'result': 'y'}]
+    (first,) = pair_tool_records([TEXT, *one])
+    (again,) = pair_tool_records(one)
+    (different,) = pair_tool_records([TEXT, *other])
+    assert first.call_id == again.call_id
+    assert first.call_id != different.call_id
+
+
+def test_reused_call_id_in_one_turn_starts_a_new_call() -> None:
+    items = [CALL, RESULT, {**CALL, 'arguments': '{"order_id":"b3"}'}, {**RESULT, 'result': 'second'}]
+    first, second = pair_tool_records(items)
+    assert (first.arguments, first.result) == ('{"order_id":"a2"}', '{"ok": false}')
+    assert (second.arguments, second.result) == ('{"order_id":"b3"}', 'second')
+    identical = pair_tool_records([CALL, CALL, RESULT])
+    assert [c.result for c in identical] == [None, '{"ok": false}']
+    assert [c.source_index for c in identical] == [0, 1]
+
+
+def test_only_a_result_side_record_marks_a_call_failed() -> None:
+    (call,) = pair_tool_records([{**CALL, 'status': 'failed'}, RESULT])
+    assert call.result == '{"ok": false}'
+    (failed,) = pair_tool_records([CALL, {**RESULT, 'status': 'failed'}])
+    assert json.loads(failed.result or '')['status'] == 'failed'
+
+
+def test_incomplete_status_is_not_a_failure() -> None:
+    (call,) = pair_tool_records([CALL, {**RESULT, 'status': 'incomplete'}])
+    assert call.result == '{"ok": false}'
+
+
+def test_failed_native_output_without_a_call_is_yielded_as_a_failure_payload() -> None:
+    orphan = {'type': 'function_call_output', 'call_id': 'z', 'output': 'x', 'status': 'failed'}
+    (entry,) = list(iter_paired([orphan]))
+    assert entry['call_id'] == 'z'
+    assert json.loads(entry['output'])['status'] == 'failed'
 
 
 def test_normalize_rewrites_records_in_place_and_passes_other_items_through() -> None:
@@ -259,12 +299,7 @@ def test_parallel_native_calls_pair_by_call_id_not_adjacency(caplog) -> None:
         {'type': 'function_call_output', 'call_id': 'b', 'output': 'rb'},
     ]
     assert [(c.call_id, c.result) for c in pair_tool_records(items)] == [('a', 'ra'), ('b', 'rb')]
-    assert normalize_tool_records(items) == [
-        {'type': 'function_call', 'call_id': 'a', 'name': 'x', 'arguments': '{}'},
-        {'type': 'function_call_output', 'call_id': 'a', 'output': 'ra'},
-        {'type': 'function_call', 'call_id': 'b', 'name': 'x', 'arguments': '{}'},
-        {'type': 'function_call_output', 'call_id': 'b', 'output': 'rb'},
-    ]
+    assert normalize_tool_records(items) == items
     assert not _warnings(caplog)
 
 

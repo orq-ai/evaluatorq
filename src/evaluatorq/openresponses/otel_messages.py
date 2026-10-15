@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from evaluatorq.common.messages import parse_json_or_value
-from evaluatorq.openresponses.tool_records import is_tool_record, normalize_tool_records
+from evaluatorq.common.messages import parse_json_or_value, tool_result_to_text
+from evaluatorq.openresponses.tool_records import failure_payload, is_tool_record, normalize_tool_records
 
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text', 'summary_text'})
 _REASONING_PART_TYPES = frozenset({'reasoning_text', 'reasoning'})
@@ -136,7 +136,11 @@ def items_to_input_messages(items: Any) -> list[dict[str, Any]]:
             messages.append({'role': 'assistant', 'parts': [_tool_call_part(raw)]})
             error = raw.get('error')
             if error:
-                messages.append(_tool_response_message(raw.get('call_id'), {'error': error}))
+                output = raw.get('output')
+                payload = failure_payload(
+                    None if output is None else tool_result_to_text(output), tool_result_to_text(error)
+                )
+                messages.append(_tool_response_message(raw.get('call_id'), payload))
             elif raw.get('output'):
                 messages.append(_tool_response_message(raw.get('call_id'), raw.get('output')))
         elif item_type == 'reasoning':

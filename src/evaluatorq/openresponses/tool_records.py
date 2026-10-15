@@ -12,6 +12,7 @@ they live here, on plain wire dicts or objects, with no dependency on
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -74,10 +75,7 @@ def _has_error(raw: Any) -> bool:
 
 
 def _is_placeholder_arguments(text: str) -> bool:
-    try:
-        parsed = json.loads(text)
-    except ValueError:
-        return False
+    parsed = parse_json_or_value(text)
     return parsed is None or parsed in ({}, [], '')
 
 
@@ -140,7 +138,8 @@ def _pick(field: str, values: list[str], call_id: str) -> str | None:
     return kept
 
 
-def _failure_payload(result: str | None, error: str | None) -> str:
+def failure_payload(result: str | None, error: str | None) -> str:
+    """The one JSON envelope for a failed tool call, shared by every reader of tool records."""
     payload: dict[str, Any] = {'status': 'failed', 'error': error}
     if result is not None:
         payload['result'] = parse_json_or_value(result)
@@ -170,8 +169,8 @@ def _merge(members: list[tuple[int, _ToolRecord]], *, call_id: str) -> PairedToo
     )
     result = _pick('result', [r.result for r in records if r.result is not None], call_id)
     error = _pick('error', [r.error for r in records if r.error is not None], call_id)
-    if error is not None or (any(not r.is_function_call for r in records) and any(r.failed for r in records)):
-        result = _failure_payload(result, error)
+    if error is not None or any(r.failed for r in records if not r.is_function_call):
+        result = failure_payload(result, error)
     return PairedToolCall(
         call_id=call_id,
         item_id=primary.wire_id,
@@ -204,23 +203,35 @@ def _starts_turn(item: Any) -> bool:
     return is_message and _gf(item, 'role') == 'user'
 
 
-def pair_tool_records(items: Any) -> list[PairedToolCall]:
-    """Pair the tool records in ``items`` into calls, in input order; other items are ignored.
+def _mint_ids(records: list[tuple[int, int, _ToolRecord]]) -> dict[int, str]:
+    """Content-derived ids for records without a usable id, unique within one list."""
+    minted: dict[int, str] = {}
+    used: set[str] = set()
+    for _, index, record in records:
+        if record.key:
+            continue
+        digest = hashlib.sha1(  # noqa: S324
+            json.dumps(
+                [
+                    record.is_function_call,
+                    record.is_native_output,
+                    record.explicit_name or record.derived_name,
+                    record.arguments,
+                    record.result,
+                    record.error,
+                ],
+                default=str,
+            ).encode()
+        ).hexdigest()[:8]
+        call_id = f'call_unpaired_{digest}'
+        if call_id in used:
+            call_id = f'{call_id}_{index}'
+        used.add(call_id)
+        minted[index] = call_id
+    return minted
 
-    Pairing is scoped to one turn: a ``user`` message starts a new scope, so the
-    same ``call_id`` in another turn (or another list) never pairs. The wire ``id``
-    names the call only for a ``function_call`` without a ``call_id``, and then it
-    pairs only with records that name the call the same way, never with an
-    ``orq:`` record's ``call_id``. A record with no usable id gets the id
-    ``call_unpaired_<index>`` and never pairs.
-    Records that share a ``call_id`` become one call: a ``function_call`` record's
-    fields win, otherwise the first value seen, and a field on which they disagree
-    logs one warning naming the discarded values. A native ``function_call_output``
-    item is a result record like an ``orq:<tool>`` one, so it merges into the call
-    with its ``call_id`` through the same rules; one with no call or ``orq:`` record
-    to join is left out of the result.
-    """
-    items = list(items)
+
+def _pair(items: list[Any]) -> tuple[list[PairedToolCall], dict[int, str]]:
     records: list[tuple[int, int, _ToolRecord]] = []
     scope = 0
     for index, item in enumerate(items):
@@ -229,20 +240,31 @@ def pair_tool_records(items: Any) -> list[PairedToolCall]:
         item_type = _gf(item, 'type')
         if is_tool_record(item_type) or item_type == 'function_call_output':
             records.append((scope, index, _read_tool_record(item, str(item_type))))
+    minted = _mint_ids(records)
     scope_has_call = {scope for scope, _, r in records if r.is_function_call}
     scope_orq_names: dict[int, set[str]] = {}
     for scope, _, r in records:
         if not r.is_function_call and not r.is_native_output:
             scope_orq_names.setdefault(scope, set()).add(r.derived_name)
-    groups: dict[tuple[int, bool, str], list[tuple[int, _ToolRecord]]] = {}
+    groups: dict[tuple[Any, ...], list[tuple[int, _ToolRecord]]] = {}
+    generation: dict[tuple[Any, ...], int] = {}
+    has_call: set[tuple[Any, ...]] = set()
     for scope, index, record in records:
-        key = record.key or f'call_unpaired_{index}'
-        groups.setdefault((scope, record.keyed_by_wire_id, key), []).append((index, record))
+        if not record.key:
+            groups[scope, False, None, index] = [(index, record)]
+            continue
+        base = (scope, record.keyed_by_wire_id, record.key)
+        if record.is_function_call:
+            if (base, generation.get(base, 0)) in has_call:
+                generation[base] = generation.get(base, 0) + 1
+            has_call.add((base, generation.get(base, 0)))
+        groups.setdefault((*base, generation.get(base, 0)), []).append((index, record))
     paired: list[PairedToolCall] = []
-    for (scope, _, _), members in groups.items():
+    for group_key, members in groups.items():
         if all(r.is_native_output for _, r in members):
             continue
-        key = members[0][1].key or f'call_unpaired_{members[0][0]}'
+        key = members[0][1].key or minted[members[0][0]]
+        scope = group_key[0]
         paired.append(_merge(members, call_id=key))
         _warn_unmatched(
             [r for _, r in members],
@@ -250,23 +272,53 @@ def pair_tool_records(items: Any) -> list[PairedToolCall]:
             scope_has_call=scope in scope_has_call,
             scope_orq_names=frozenset(scope_orq_names.get(scope, ())),
         )
-    return sorted(paired, key=lambda call: call.source_index)
+    return sorted(paired, key=lambda call: call.source_index), minted
+
+
+def pair_tool_records(items: Any) -> list[PairedToolCall]:
+    """Pair the tool records in ``items`` into calls, in input order; other items are ignored.
+
+    Pairing is scoped to one turn: a ``user`` message starts a new scope, so the
+    same ``call_id`` in another turn (or another list) never pairs. The wire ``id``
+    names the call only for a ``function_call`` without a ``call_id``, and then it
+    pairs only with records that name the call the same way, never with an
+    ``orq:`` record's ``call_id``. A second ``function_call`` for a ``call_id`` that
+    already has one starts a new call, and later results join that newest call. A
+    record with no usable id never pairs and gets the id ``call_unpaired_<hash>``,
+    where the hash derives from its content, so the same record always gets the same
+    id (``_<index>`` is appended only when two records in one list would collide).
+    Records that share a ``call_id`` become one call: a ``function_call`` record's
+    fields win, otherwise the first value seen, and a field on which they disagree
+    logs one warning naming the discarded values. A native ``function_call_output``
+    item is a result record like an ``orq:<tool>`` one, so it merges into the call
+    with its ``call_id`` through the same rules; one with no call or ``orq:`` record
+    to join is left out of the result. Only a result-side record (an ``orq:`` record
+    or a native output) can mark a call failed.
+    """
+    return _pair(list(items))[0]
+
+
+def _failed_output(record: _ToolRecord, call_id: str) -> dict[str, Any]:
+    return {'type': 'function_call_output', 'call_id': call_id, 'output': failure_payload(record.result, record.error)}
 
 
 def iter_paired(items: Any) -> Iterator[Any]:
     """Walk ``items`` in order, yielding each merged call once and every other item untouched.
 
     A ``PairedToolCall`` is yielded at the position of its ``function_call`` record
-    (its first record when there is none) and the rest of its records are skipped. A native ``function_call_output`` with no call
-    to join passes through, except one that reports a failure: it is yielded as a
-    ``function_call_output`` dict whose output carries the failure payload, so its
-    error is not lost.
+    (its first record when there is none) and the rest of its records are skipped.
+    A native ``function_call_output`` with no call to join passes through, except
+    one that reports a failure: it is yielded as a ``function_call_output`` dict
+    whose output carries the failure payload. That dict is consumed only by the
+    OTel readers; ``AgentResponse.from_output_items`` still skips such an output
+    with its existing warning.
 
     Yields:
         A ``PairedToolCall`` per merged call, otherwise the input item.
     """
     items = list(items)
-    calls = {call.source_index: call for call in pair_tool_records(items)}
+    calls_list, minted = _pair(items)
+    calls = {call.source_index: call for call in calls_list}
     consumed = {index for call in calls.values() for index in call.indices}
     for index, item in enumerate(items):
         if index in calls:
@@ -276,12 +328,7 @@ def iter_paired(items: Any) -> Iterator[Any]:
         elif _gf(item, 'type') == 'function_call_output':
             record = _read_tool_record(item, 'function_call_output')
             if record.error is not None or record.failed:
-                call_id = record.key or f'call_unpaired_{index}'
-                yield {
-                    'type': 'function_call_output',
-                    'call_id': call_id,
-                    'output': _failure_payload(record.result, record.error),
-                }
+                yield _failed_output(record, record.key or minted[index])
             else:
                 yield item
         else:
@@ -289,23 +336,43 @@ def iter_paired(items: Any) -> Iterator[Any]:
 
 
 def normalize_tool_records(items: Any) -> list[Any]:
-    """Return ``items`` with every tool record rewritten as standard Responses items.
+    """Return ``items`` with split Orq tool records rewritten as standard Responses items.
 
-    Each call becomes one ``function_call`` item (``type``, ``id`` when the wire id
-    is known, ``call_id``, ``name``, ``arguments``) followed by a
-    ``function_call_output`` item when a result exists, at the position of the
-    call's ``function_call`` record. Other items pass through untouched, in order.
+    A call with an ``orq:`` result becomes one ``function_call`` item (``type``,
+    ``id`` when the wire id is known, ``call_id``, ``name``, ``arguments``) at the
+    position of its ``function_call`` record, followed by one ``function_call_output``
+    item when a result exists. Calls made only of native records keep every record
+    at its original index, so parallel calls keep their order and wire fields; a
+    native output that reports a failure is replaced in place by its failure
+    payload. Other items pass through untouched, in order.
     """
+    items = list(items)
+    calls, minted = _pair(items)
+    rewritten = {
+        call.source_index: call
+        for call in calls
+        if any(str(_gf(items[i], 'type')).startswith('orq:') for i in call.indices)
+    }
+    consumed = {index for call in rewritten.values() for index in call.indices}
     normalized: list[Any] = []
-    for entry in iter_paired(items):
-        if not isinstance(entry, PairedToolCall):
-            normalized.append(entry)
+    for index, item in enumerate(items):
+        if index in rewritten:
+            entry = rewritten[index]
+            function_call: dict[str, Any] = {'type': 'function_call'}
+            if entry.item_id:
+                function_call['id'] = entry.item_id
+            function_call.update(call_id=entry.call_id, name=entry.name, arguments=entry.arguments)
+            normalized.append(function_call)
+            if entry.result is not None:
+                normalized.append({'type': 'function_call_output', 'call_id': entry.call_id, 'output': entry.result})
+        elif index in consumed:
             continue
-        function_call: dict[str, Any] = {'type': 'function_call'}
-        if entry.item_id:
-            function_call['id'] = entry.item_id
-        function_call.update(call_id=entry.call_id, name=entry.name, arguments=entry.arguments)
-        normalized.append(function_call)
-        if entry.result is not None:
-            normalized.append({'type': 'function_call_output', 'call_id': entry.call_id, 'output': entry.result})
+        elif _gf(item, 'type') == 'function_call_output':
+            record = _read_tool_record(item, 'function_call_output')
+            if record.error is not None or record.failed:
+                normalized.append(_failed_output(record, record.key or minted[index]))
+            else:
+                normalized.append(item)
+        else:
+            normalized.append(item)
     return normalized

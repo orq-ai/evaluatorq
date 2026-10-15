@@ -10,7 +10,7 @@ from typing import Any, TypeVar, overload
 
 from pydantic import BaseModel
 
-from evaluatorq.simulation._datapoint_io import _as_obj
+from evaluatorq.common.messages import parse_json_or_value
 from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Persona,
@@ -102,7 +102,7 @@ def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
 
         # Reconstruct persona (accept dict or JSON-stringified object — the orq
         # dataset envelope stringifies nested objects, see to_orq_dataset_rows).
-        persona_raw = _as_obj(inputs.get('persona'))
+        persona_raw = parse_json_or_value(inputs.get('persona'))
         if isinstance(persona_raw, dict):
             persona = Persona.model_validate(persona_raw)
         else:
@@ -125,7 +125,7 @@ def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
             )
 
         # Reconstruct scenario (dict or JSON-stringified, as with persona above)
-        scenario_raw = _as_obj(inputs.get('scenario'))
+        scenario_raw = parse_json_or_value(inputs.get('scenario'))
         if isinstance(scenario_raw, dict):
             scenario = Scenario.model_validate(scenario_raw)
         else:

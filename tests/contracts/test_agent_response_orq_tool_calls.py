@@ -200,8 +200,8 @@ def test_empty_string_result_is_kept():
     assert r.tool_calls[0].result == ''
 
 
-def test_identical_duplicate_is_collapsed():
-    assert len(AgentResponse.from_output_items([CALL, CALL, RESULT, RESULT]).tool_calls) == 1
+def test_reused_call_id_yields_one_tool_call_per_function_call():
+    assert len(AgentResponse.from_output_items([CALL, CALL, RESULT, RESULT]).tool_calls) == 2
 
 
 def test_dict_and_string_arguments_pair():
