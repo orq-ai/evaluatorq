@@ -302,6 +302,51 @@ def test_decisions_post_detector_actually_fires() -> None:
     assert _decisions_post_lines('await client.post(DECISIONS_PATH, body=b)') == [1]
 
 
+def _orq_prefix_lines(source: str) -> list[int]:
+    """Line numbers of ``x.startswith('orq:')`` / ``x.removeprefix('orq:')`` calls."""
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {'startswith', 'removeprefix'}
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == 'orq:'
+    ]
+
+
+# Sites that predate normalize_tool_records. trace_finder/orq_source.py shrinks away with
+# RES-1756; the owasp bridge parses a dataset specifier ('orq:<dataset_id>'), not a tool record.
+ORQ_PREFIX_ALLOW = frozenset({
+    'openresponses/tool_records.py',  # canonical
+    'trace_finder/orq_source.py',  # RES-1756
+    'redteam/frameworks/owasp/evaluatorq_bridge.py',  # dataset specifier, unrelated
+})
+
+
+def test_orq_tool_records_are_read_through_tool_records() -> None:
+    extra = [
+        f'{path.relative_to(SRC).as_posix()}:{lineno}'
+        for path in sorted(SRC.rglob('*.py'))
+        if path.relative_to(SRC).as_posix() not in ORQ_PREFIX_ALLOW
+        for lineno in _orq_prefix_lines(path.read_text(encoding='utf-8'))
+    ]
+    assert not extra, (
+        "'orq:' prefix test outside openresponses/tool_records.py: "
+        + ', '.join(extra)
+        + '. Read function_call / orq:<tool> records with normalize_tool_records — it pairs the '
+        'split records by call_id.'
+    )
+
+
+def test_orq_prefix_detector_actually_fires() -> None:
+    assert _orq_prefix_lines("x.startswith('orq:')") == [1]
+    assert _orq_prefix_lines("x.removeprefix('orq:')") == [1]
+    assert _orq_prefix_lines("x.startswith('orq_')") == []
+    assert _orq_prefix_lines("# x.startswith('orq:')") == []
+
+
 def test_openai_clients_come_from_llm_client() -> None:
     extra = _hits(lambda name: _tail(name) in OPENAI_CLIENT_NAMES, allow={'common/llm_client.py'})
     assert not extra, (

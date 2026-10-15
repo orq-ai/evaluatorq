@@ -17,23 +17,12 @@ tool calls) fall into the generic ``data`` branch rather than being guessed at.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from evaluatorq.openresponses.tool_records import is_tool_record, normalize_tool_records
+from evaluatorq.openresponses.tool_records import is_tool_record, normalize_tool_records, parse_json_or_value
 
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text', 'summary_text'})
 _REASONING_PART_TYPES = frozenset({'reasoning_text', 'reasoning'})
-
-
-def _parse_json_or_value(raw: Any) -> Any:
-    """Return ``raw`` parsed as JSON when it is a JSON string, else unchanged."""
-    if not isinstance(raw, str):
-        return raw
-    try:
-        return json.loads(raw)
-    except (TypeError, ValueError):
-        return raw
 
 
 def _generic_part(value: Any) -> dict[str, Any]:
@@ -74,7 +63,7 @@ def _tool_call_part(item: dict[str, Any], *, name_key: str = 'name', args_key: s
         'type': 'tool_call',
         'id': item.get('call_id') or item.get('id') or '',
         'name': item.get(name_key) or item.get('tool_name') or '',
-        'arguments': _parse_json_or_value(item.get(args_key)),
+        'arguments': parse_json_or_value(item.get(args_key)),
     }
 
 
@@ -108,7 +97,7 @@ def is_responses_item(value: Any) -> bool:
 def _tool_response_message(call_id: Any, response: Any) -> dict[str, Any]:
     return {
         'role': 'tool',
-        'parts': [{'type': 'tool_call_response', 'id': call_id or '', 'response': _parse_json_or_value(response)}],
+        'parts': [{'type': 'tool_call_response', 'id': call_id or '', 'response': parse_json_or_value(response)}],
     }
 
 

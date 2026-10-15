@@ -246,3 +246,48 @@ def test_same_call_id_in_separate_lists_is_not_cross_paired() -> None:
     (only_result,) = pair_tool_records([RESULT])
     assert only_call.result is None
     assert not only_result.has_arguments
+
+
+def test_parallel_native_calls_pair_by_call_id_not_adjacency(caplog) -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call', 'call_id': 'b', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'ra'},
+        {'type': 'function_call_output', 'call_id': 'b', 'output': 'rb'},
+    ]
+    assert [(c.call_id, c.result) for c in pair_tool_records(items)] == [('a', 'ra'), ('b', 'rb')]
+    assert normalize_tool_records(items) == [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'ra'},
+        {'type': 'function_call', 'call_id': 'b', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call_output', 'call_id': 'b', 'output': 'rb'},
+    ]
+    assert not _warnings(caplog)
+
+
+def test_orq_result_and_native_output_with_one_call_id_collapse_to_one_output(caplog) -> None:
+    same = {'type': 'function_call_output', 'call_id': 'c1', 'output': '{"ok": false}'}
+    assert [i['type'] for i in normalize_tool_records([CALL, RESULT, same])] == ['function_call', 'function_call_output']
+    assert not _warnings(caplog)
+    differing = {**same, 'output': 'other'}
+    normalized = normalize_tool_records([CALL, RESULT, differing])
+    assert [i['output'] for i in normalized if i['type'] == 'function_call_output'] == ['{"ok": false}']
+    assert _warnings(caplog).count('Conflicting result for call_id') == 1
+
+
+def test_native_output_without_a_call_passes_through_unpaired() -> None:
+    orphan = {'type': 'function_call_output', 'call_id': 'z', 'output': 'x'}
+    assert pair_tool_records([orphan]) == []
+    assert normalize_tool_records([orphan]) == [orphan]
+
+
+@pytest.mark.parametrize('empty', [{}, [], '', None, False])
+def test_empty_error_on_a_successful_record_stays_a_success(empty) -> None:
+    (call,) = pair_tool_records([CALL, {**RESULT, 'error': empty}])
+    assert call.result == '{"ok": false}'
+
+
+@pytest.mark.parametrize('error', [{'message': 'boom'}, ['boom'], 'boom'])
+def test_non_empty_error_marks_the_call_failed(error) -> None:
+    (call,) = pair_tool_records([CALL, {**RESULT, 'error': error}])
+    assert json.loads(call.result or '')['status'] == 'failed'

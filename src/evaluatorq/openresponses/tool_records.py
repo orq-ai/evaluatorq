@@ -2,7 +2,7 @@
 
 The Orq router can report one tool call as two wire records: a ``function_call``
 (the arguments) and an ``orq:<tool>`` record (the result), tied together by
-``call_id``. Every reader of those records needs the same pairing rules, so they
+``call_id``; a native ``function_call_output`` item is one more result record for its ``call_id``. Every reader of those records needs the same pairing rules, so they
 live here, on plain wire dicts or objects, with no dependency on ``contracts``.
 ``normalize_tool_records`` is the entry point for readers: it rewrites the
 records into standard ``function_call`` / ``function_call_output`` items.
@@ -29,7 +29,7 @@ class PairedToolCall:
     non-tool items it also handles. ``has_arguments`` is False for a result whose
     call record never arrived; ``arguments`` is then ``'{}'``. ``item_id`` is the
     wire ``id`` of the ``function_call`` record, or of the lone record when no call
-    record exists.
+    record exists. ``indices`` are the input positions of every record merged into the call.
     """
 
     call_id: str
@@ -39,6 +39,7 @@ class PairedToolCall:
     has_arguments: bool
     result: str | None
     source_index: int
+    indices: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class _ToolRecord:
     key: str | None
     wire_id: str | None
     is_function_call: bool
+    is_native_output: bool
     explicit_name: str | None
     derived_name: str
     arguments: str | None
@@ -59,6 +61,21 @@ class _ToolRecord:
 def is_tool_record(item_type: Any) -> bool:
     """Whether a wire item type is a tool record: a ``function_call`` or an ``orq:<tool>``."""
     return isinstance(item_type, str) and (item_type == 'function_call' or item_type.startswith('orq:'))
+
+
+def parse_json_or_value(raw: Any) -> Any:
+    """Return ``raw`` parsed as JSON when it is a JSON string, else unchanged."""
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+
+
+def _has_error(raw: Any) -> bool:
+    """Whether an ``error`` field reports a failure: a non-empty string, dict or list."""
+    return bool(raw) and isinstance(raw, (str, dict, list))
 
 
 def _is_placeholder_arguments(text: str) -> bool:
@@ -73,6 +90,7 @@ def _read_tool_record(item: Any, item_type: str) -> _ToolRecord:
     explicit_call_id = _gf(item, 'call_id')
     wire_id = _gf(item, 'id')
     is_function_call = item_type == 'function_call'
+    is_native_output = item_type == 'function_call_output'
     key = explicit_call_id or (wire_id if is_function_call else None)
     raw_args = _gf(item, 'arguments')
     arguments = (
@@ -86,13 +104,14 @@ def _read_tool_record(item: Any, item_type: str) -> _ToolRecord:
     if result is None:
         result = _gf(item, 'output')
     raw_error = _gf(item, 'error')
-    error = tool_result_to_text(raw_error) if raw_error not in (None, '') else None
+    error = tool_result_to_text(raw_error) if _has_error(raw_error) else None
     return _ToolRecord(
         key=str(key) if key else None,
         wire_id=wire_id if isinstance(wire_id, str) and wire_id else None,
         is_function_call=is_function_call,
+        is_native_output=is_native_output,
         explicit_name=str(_gf(item, 'name')) if _gf(item, 'name') else None,
-        derived_name='' if is_function_call else item_type.split(':', 1)[1],
+        derived_name=item_type.split(':', 1)[1] if item_type.startswith('orq:') else '',
         arguments=arguments,
         result=tool_result_to_text(result) if result is not None else None,
         error=error,
@@ -124,14 +143,6 @@ def _pick(field: str, values: list[str], call_id: str) -> str | None:
     return kept
 
 
-def _result_value(text: str) -> Any:
-    """A result text as its parsed JSON value when it is JSON, else the string."""
-    try:
-        return json.loads(text)
-    except ValueError:
-        return text
-
-
 def _merge(members: list[tuple[int, _ToolRecord]], *, call_id: str) -> PairedToolCall:
     """Merge the records of one call; a function_call record's fields win."""
     ordered = sorted(members, key=lambda m: not m[1].is_function_call)
@@ -158,7 +169,7 @@ def _merge(members: list[tuple[int, _ToolRecord]], *, call_id: str) -> PairedToo
     if error is not None or any(r.failed for r in records):
         payload: dict[str, Any] = {'status': 'failed', 'error': error}
         if result is not None:
-            payload['result'] = _result_value(result)
+            payload['result'] = parse_json_or_value(result)
         result = json.dumps(payload, default=str)
     return PairedToolCall(
         call_id=call_id,
@@ -168,21 +179,20 @@ def _merge(members: list[tuple[int, _ToolRecord]], *, call_id: str) -> PairedToo
         has_arguments=arguments is not None,
         result=result,
         source_index=primary_index,
+        indices=tuple(sorted(index for index, _ in members)),
     )
 
 
-def _warn_unmatched(
-    records: list[_ToolRecord], *, label: str, has_output_item: bool, response_has_call: bool, response_has_orq: bool
-) -> None:
+def _warn_unmatched(records: list[_ToolRecord], *, label: str, response_has_call: bool, response_has_orq: bool) -> None:
     has_args = any(r.arguments is not None for r in records)
-    has_result = any(r.result is not None or r.error is not None or r.failed for r in records) or has_output_item
+    has_result = any(r.result is not None or r.error is not None or r.failed for r in records)
     # A lone function_call is the normal Responses shape when the caller runs the tool
     # itself; only the router's split shape (an orq: record in the response) makes a
     # missing result worth a warning.
     if has_args and not has_result:
         if response_has_orq:
             logger.warning('Tool call {!r} has no result record', label)
-    elif has_result and not has_args and response_has_call and not has_output_item:
+    elif has_result and not has_args and response_has_call:
         logger.warning('Tool result {!r} has no matching call record; its arguments are unknown', label)
 
 
@@ -201,34 +211,35 @@ def pair_tool_records(items: Any) -> list[PairedToolCall]:
     usable ``call_id`` gets the id ``call_unpaired_<index>`` and never pairs.
     Records that share a ``call_id`` become one call: a ``function_call`` record's
     fields win, otherwise the first value seen, and a field on which they disagree
-    logs one warning naming the discarded values. A ``function_call_output`` item
-    with the call's ``call_id`` counts as its result for the unmatched-call warning.
+    logs one warning naming the discarded values. A native ``function_call_output``
+    item is a result record like an ``orq:<tool>`` one, so it merges into the call
+    with its ``call_id`` through the same rules; one with no call or ``orq:`` record
+    to join is left out of the result.
     """
     items = list(items)
     records: list[tuple[int, int, _ToolRecord]] = []
-    output_ids: set[tuple[int, str]] = set()
     scope = 0
     for index, item in enumerate(items):
         if _starts_turn(item):
             scope += 1
         item_type = _gf(item, 'type')
-        if is_tool_record(item_type):
+        if is_tool_record(item_type) or item_type == 'function_call_output':
             records.append((scope, index, _read_tool_record(item, str(item_type))))
-        elif item_type == 'function_call_output' and _gf(item, 'call_id'):
-            output_ids.add((scope, str(_gf(item, 'call_id'))))
     response_has_call = any(r.is_function_call for _, _, r in records)
-    response_has_orq = any(not r.is_function_call for _, _, r in records)
+    response_has_orq = any(not r.is_function_call and not r.is_native_output for _, _, r in records)
     groups: dict[tuple[int, str], list[tuple[int, _ToolRecord]]] = {}
     for scope, index, record in records:
         key = record.key or f'call_unpaired_{index}'
         groups.setdefault((scope, key), []).append((index, record))
     paired: list[PairedToolCall] = []
-    for (scope, key), members in groups.items():
+    for members in groups.values():
+        if all(r.is_native_output for _, r in members):
+            continue
+        key = members[0][1].key or f'call_unpaired_{members[0][0]}'
         paired.append(_merge(members, call_id=key))
         _warn_unmatched(
             [r for _, r in members],
             label=key,
-            has_output_item=(scope, key) in output_ids,
             response_has_call=response_has_call,
             response_has_orq=response_has_orq,
         )
@@ -244,7 +255,9 @@ def normalize_tool_records(items: Any) -> list[Any]:
     call's ``function_call`` record. Other items pass through untouched, in order.
     """
     items = list(items)
-    calls = {call.source_index: call for call in pair_tool_records(items)}
+    paired = pair_tool_records(items)
+    calls = {call.source_index: call for call in paired}
+    consumed = {index for call in paired for index in call.indices}
     normalized: list[Any] = []
     for index, item in enumerate(items):
         call = calls.get(index)
@@ -256,6 +269,6 @@ def normalize_tool_records(items: Any) -> list[Any]:
             normalized.append(function_call)
             if call.result is not None:
                 normalized.append({'type': 'function_call_output', 'call_id': call.call_id, 'output': call.result})
-        elif not is_tool_record(_gf(item, 'type')):
+        elif index not in consumed:
             normalized.append(item)
     return normalized

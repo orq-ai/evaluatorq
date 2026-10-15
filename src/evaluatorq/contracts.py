@@ -19,7 +19,7 @@ from evaluatorq.openresponses.convert_models import (
     InputImageContent,
     InputTextContent,
 )
-from evaluatorq.openresponses.tool_records import normalize_tool_records
+from evaluatorq.openresponses.tool_records import pair_tool_records
 
 # A single part of multi-modal message content (Responses-API input shapes).
 # Tagged on ``type`` (mirroring ``OutputMessage``) so Pydantic dispatches on the
@@ -1209,9 +1209,28 @@ class AgentResponse(BaseModel):
         """Build an AgentResponse from bare Responses ``output`` items, with no usage or metadata."""
         items: list[OutputMessage] = []
         refusal: str | None = None
-        for item in normalize_tool_records(output_items):
+        raw_items = list(output_items)
+        calls = {call.source_index: call for call in pair_tool_records(raw_items)}
+        consumed = {index for call in calls.values() for index in call.indices}
+        for index, item in enumerate(raw_items):
             item_type = _gf(item, 'type')
-            if item_type == 'message':
+            call = calls.get(index)
+            if call is not None:
+                # One call per call_id: the Orq router's split ``function_call`` /
+                # ``orq:<tool>`` records and native ``function_call_output`` items
+                # are already merged by pair_tool_records.
+                fields: dict[str, Any] = {
+                    'call_id': call.call_id,
+                    'name': call.name,
+                    'arguments': call.arguments,
+                    'result': call.result,
+                }
+                if call.item_id:
+                    fields['id'] = call.item_id
+                items.append(ToolCallOutputItem(**fields))
+            elif index in consumed:
+                continue
+            elif item_type == 'message':
                 for part in _gf(item, 'content') or []:
                     part_type = _gf(part, 'type')
                     # A message part is 'output_text' or 'refusal'. Keeping only
@@ -1229,26 +1248,6 @@ class AgentResponse(BaseModel):
                         logger.warning(
                             'AgentResponse.from_openresponses: skipping unknown message part type={!r}', part_type
                         )
-            # normalize_tool_records has already turned the Orq router's split
-            # ``function_call`` / ``orq:<tool>`` records into one function_call
-            # item followed by its function_call_output.
-            elif item_type == 'function_call':
-                fields: dict[str, Any] = {
-                    'call_id': _gf(item, 'call_id'),
-                    'name': _gf(item, 'name'),
-                    'arguments': _gf(item, 'arguments'),
-                    'result': None,
-                }
-                if _gf(item, 'id'):
-                    fields['id'] = _gf(item, 'id')
-                items.append(ToolCallOutputItem(**fields))
-            elif (
-                item_type == 'function_call_output'
-                and items
-                and isinstance(items[-1], ToolCallOutputItem)
-                and items[-1].call_id == _gf(item, 'call_id')
-            ):
-                items[-1] = items[-1].model_copy(update={'result': tool_result_to_text(_gf(item, 'output'))})
             elif item_type == 'reasoning':
                 pass  # o1/o3/o4-mini reasoning steps intentionally excluded
             else:

@@ -142,7 +142,8 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Console / HTML / MD report output | `common/reports/` (`console`, `render`, `vega`, `palette`) | new renderer or colour set |
 | CLI output, errors, JSON, width | `common/cli_*.py` | bespoke `typer.echo` formatting |
 | Normalising agent output shapes | `common.output_adapters`, `common.messages` | per-surface `isinstance` ladders |
-| Turning message content or a tool result into text | `contracts.content_to_text` / `tool_result_to_text` | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
+| Turning message content or a tool result into text | `contracts.content_to_text` / `common.messages.tool_result_to_text` | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
+| Reading `function_call` / `orq:` tool records from a response or trace | `openresponses.tool_records.normalize_tool_records` | `startswith('orq:')` or hand-pairing by `call_id` |
 | Rendering a whole message list as one text blob | `common.messages.messages_to_text` | `''.join(...)` over `content` — it glues turns into one word, drops `tool_calls` (so an agent that acted scores as silent) and lets tool JSON read as the agent's answer |
 | Turning a `TraceInput` or loaded traces into rows | `common.trace_input.load_traces` (fetch + one `partition_traces` log) | `fetch_traces` then a hand-rolled usable/failed split |
 | Computing trace signals | `evaluatorq.signals.compute_signals` | ad-hoc counting over trajectories |
