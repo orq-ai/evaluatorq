@@ -112,6 +112,90 @@ def test_ask_confirm_reraises_the_prompt_error(monkeypatch: pytest.MonkeyPatch) 
         asyncio.run(ask_confirm("Go?"))
 
 
+class _PipeStdin:
+    """Stands in for ``sys.stdin``: the terminal reader only needs ``fileno`` and ``encoding``."""
+
+    encoding = "utf-8"
+
+    def __init__(self, fd: int) -> None:
+        self._fd = fd
+
+    def fileno(self) -> int:
+        return self._fd
+
+
+def _terminal_answer(monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], *chunks: bytes) -> bool:
+    import os
+    import sys
+
+    from evaluatorq.common.reports import console
+
+    read_fd, write_fd = os.pipe()
+    for chunk in chunks:
+        os.write(write_fd, chunk)
+    os.close(write_fd)
+    monkeypatch.setattr(sys, "stdin", _PipeStdin(read_fd))
+    try:
+        return console._confirm_from_terminal("Go?")
+    finally:
+        os.close(read_fd)
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [(b"y\n", True), (b"YES\n", True), (b"\n", True), (b"n\n", False), (b" no \n", False)],
+)
+def test_terminal_confirm_answers_like_typer_confirm(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], typed: bytes, expected: bool
+) -> None:
+    assert _terminal_answer(monkeypatch, capfd, typed) is expected
+    assert capfd.readouterr().out == ""
+
+
+def test_terminal_confirm_reprompts_after_invalid_input(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    assert _terminal_answer(monkeypatch, capfd, b"maybe\n", b"n\n") is False
+    assert capfd.readouterr().out == "Error: invalid input\nGo? [Y/n]: "
+
+
+def test_terminal_confirm_joins_a_line_split_across_reads(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    import os
+
+    from evaluatorq.common.reports import console
+
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"n")
+    reads: list[bytes] = []
+    real_read = os.read
+
+    def read_then_finish_the_line(fd: int, n: int) -> bytes:
+        chunk = real_read(fd, n)
+        reads.append(chunk)
+        if len(reads) == 1:
+            os.write(write_fd, b"o\n")
+        return chunk
+
+    monkeypatch.setattr(console.os, "read", read_then_finish_the_line)
+    try:
+        assert console._read_terminal_line(read_fd) == "no\n"
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+    assert reads == [b"n", b"o", b"\n"]
+
+
+def test_terminal_confirm_aborts_on_end_of_input(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    import click
+
+    with pytest.raises(click.Abort):
+        _terminal_answer(monkeypatch, capfd)
+
+
 def test_write_text_report_creates_file(tmp_path: Path) -> None:
     out_dir = tmp_path / "reports"
     path = write_text_report(out_dir, stem="my-report", fmt="md", content="# Hello")

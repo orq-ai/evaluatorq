@@ -32,15 +32,15 @@ termios.tcsetattr(0, termios.TCSANOW, terminal)
 assert os.tcgetpgrp(0) == os.getpgrp()
 signal.signal(signal.SIGINT, signal.default_int_handler)
 if sys.argv[1] == 'worker':
-    import typer
+    from evaluatorq.common.reports import console
 
-    real_confirm = typer.confirm
+    real_confirm = console._confirm_from_terminal
 
     def worker_confirm(*args, **kwargs):
         signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
         return real_confirm(*args, **kwargs)
 
-    typer.confirm = worker_confirm
+    console._confirm_from_terminal = worker_confirm
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
 else:
     signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})

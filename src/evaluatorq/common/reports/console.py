@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import importlib
 import os
 import sys
 import threading
@@ -47,6 +46,66 @@ def render_plan_table(
     console.print(table)
 
 
+def _read_terminal_line(fd: int) -> str | None:
+    """Read one line from ``fd`` with ``os.read``; ``None`` on end of input before any text.
+
+    One byte per read, so a second line already waiting (type-ahead, a paste) stays unread.
+    """
+    data = b''
+    while not data.endswith(b'\n'):
+        chunk = os.read(fd, 1)
+        if not chunk:
+            break
+        data += chunk
+    if not data:
+        return None
+    return data.decode(sys.stdin.encoding or 'utf-8', errors='replace')
+
+
+def _write_terminal(text: str) -> None:
+    """Write ``text`` to stdout's file descriptor, bypassing the lock ``sys.stdout`` holds while writing."""
+    data = text.encode(sys.stdout.encoding or 'utf-8', errors='replace')
+    fd = sys.stdout.fileno()
+    while data:
+        data = data[os.write(fd, data) :]
+
+
+def _terminal_prompt(prompt: str) -> str:
+    return f'{prompt} [Y/n]: '
+
+
+def _confirm_from_terminal(prompt: str) -> bool:
+    """Same answers and errors as ``typer.confirm(prompt, default=True)``, read with ``os.read``.
+
+    The caller shows the first prompt; this repeats it after an invalid answer.
+
+    ``input()`` is not safe on the background reader thread: with ``readline`` loaded (libedit on
+    macOS) the library swaps its own process-wide SIGINT handler in and out around the read, and a
+    Ctrl-C landing in that window never reaches Python, so the prompt ignores it. Without
+    ``readline``, the stdio fallback holds the stdin ``FILE`` lock and blocks interpreter shutdown
+    after Ctrl-C. A raw ``os.read`` holds no lock and installs no handler; the terminal's own line
+    discipline still provides backspace editing.
+
+    Output goes through `_write_terminal` for the same reason: if Ctrl-C lands while this thread
+    is inside a ``sys.stdout`` write, it still holds that stream's lock when the interpreter shuts
+    down, and CPython aborts on it.
+    """
+    import click
+
+    fd = sys.stdin.fileno()
+    while True:
+        line = _read_terminal_line(fd)
+        if line is None:
+            # Ctrl-D, as click.confirm treats EOFError; click's handler prints the newline.
+            raise click.Abort
+        value = line.strip().lower()
+        if value in ('y', 'yes', ''):
+            return True
+        if value in ('n', 'no'):
+            return False
+        _write_terminal(f'Error: invalid input\n{_terminal_prompt(prompt)}')
+
+
 async def ask_confirm(prompt: str) -> bool:
     """Ask ``typer.confirm(prompt, default=True)`` without pinning the event loop.
 
@@ -54,20 +113,15 @@ async def ask_confirm(prompt: str) -> bool:
     cancels the awaiting task and then waits for its default executor, which would block on the
     unfinished stdin read until the user pressed Enter.
 
-    Before a POSIX terminal read, load the optional standard-library ``readline`` module when
-    available. Without it, CPython's stdio fallback can keep its stream lock held by the daemon
-    reader during interpreter shutdown after Ctrl-C. Call this only from a CLI entry point that
-    exits after the run, not from a long-lived process. If the awaiting task is cancelled without
-    interrupting the read, the daemon thread remains blocked until a line arrives, and discards it.
+    On a POSIX terminal the thread reads with ``os.read`` instead of ``input()`` (see
+    `_confirm_from_terminal`), so Ctrl-C always reaches the event loop and shutdown never waits on
+    the reader. Call this only from a CLI entry point that exits after the run, not from a
+    long-lived process. If the awaiting task is cancelled without interrupting the read, the daemon
+    thread remains blocked until a line arrives, and discards it.
     """
     import typer
 
-    if os.name == 'posix' and sys.stdin.isatty():
-        # On CPython builds with GNU readline, builtin input's plain stdio
-        # fallback can leave its FILE lock held by the daemon reader when the
-        # CLI exits on Ctrl-C. That blocks interpreter finalization.
-        with contextlib.suppress(ImportError):
-            importlib.import_module('readline')
+    read_terminal = os.name == 'posix' and sys.stdin.isatty()
 
     loop = asyncio.get_running_loop()
     answer: asyncio.Future[bool] = loop.create_future()
@@ -79,14 +133,21 @@ async def ask_confirm(prompt: str) -> bool:
 
     def ask() -> None:
         try:
-            result = typer.confirm(prompt, default=True)
+            result = _confirm_from_terminal(prompt) if read_terminal else typer.confirm(prompt, default=True)
         except BaseException as exc:  # noqa: BLE001 (handed to the awaiting task, e.g. click.Abort on Ctrl-D)
             error = exc
             settle(lambda: answer.set_exception(error))
         else:
             settle(lambda: answer.set_result(result))
 
+    if read_terminal:
+        # The reader writes to the raw descriptor; flush first so earlier output stays in order.
+        sys.stdout.flush()
     threading.Thread(target=ask, name='evaluatorq-confirm', daemon=True).start()
+    if read_terminal:
+        # Shown only once start() has returned: on Python 3.10 a Ctrl-C raised inside
+        # Thread.start() corrupts its lock ("release unlocked lock") instead of interrupting.
+        _write_terminal(_terminal_prompt(prompt))
     # A terminal SIGINT can be delivered to the stdin worker instead of the
     # event-loop thread. Periodic wakeups let the loop process that signal.
     try:
