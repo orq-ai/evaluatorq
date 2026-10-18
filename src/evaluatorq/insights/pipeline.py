@@ -156,6 +156,8 @@ def _discard_dimension(traces: list[TraceInsight], dimension: DimensionName) -> 
     for trace in traces:
         trace.assignments.pop(dimension, None)
         trace.coords.pop(dimension, None)
+        if trace.coords_2d is not None:
+            trace.coords_2d.pop(dimension, None)
         trace.errors.pop(f'dimension:{dimension}', None)
 
 
@@ -179,7 +181,11 @@ async def _build_dimension(  # noqa: C901
 
     from evaluatorq.insights.cluster import centroids, cluster_two_level, nearest_neighbours
     from evaluatorq.insights.merge import merge_similar
-    from evaluatorq.insights.reduce import reduce_3d
+    from evaluatorq.insights.reduce import project_2d, reduce_3d
+
+    for trace in traces:
+        if trace.coords_2d is None:
+            trace.coords_2d = {}
 
     source_field = DIMENSION_FIELDS[dimension]
     usable: list[tuple[TraceInsight, str]] = []
@@ -403,6 +409,19 @@ async def _build_dimension(  # noqa: C901
                 trace.coords[dimension] = (float(coord[0]), float(coord[1]), float(coord[2]))
         else:
             warning = f'dimension {dimension} group {group!r}: UMAP unavailable for {len(indices)} traces'
+            result.warnings.append(warning)
+            logger.warning(warning)
+    mapped = [trace for trace in traces if dimension in trace.coords]
+    if mapped:
+        review_coords = await asyncio.to_thread(
+            project_2d, coordinates=np.asarray([trace.coords[dimension] for trace in mapped], dtype=float)
+        )
+        if review_coords is not None:
+            for trace, coord in zip(mapped, review_coords, strict=True):
+                if trace.coords_2d is not None:
+                    trace.coords_2d[dimension] = (float(coord[0]), float(coord[1]))
+        else:
+            warning = f'dimension {dimension}: 2D review layout unavailable for {len(mapped)} traces'
             result.warnings.append(warning)
             logger.warning(warning)
     result.n_failed = _dimension_failed_count(traces, dimension)
@@ -639,6 +658,7 @@ async def insights(  # noqa: C901
                     tool_stats=tool_stats(trace),
                     signals=trace.metadata.signals,
                     source_coverage=trace.source_coverage,
+                    coords_2d={},
                 )
                 for trace in resolved.traces
             ]

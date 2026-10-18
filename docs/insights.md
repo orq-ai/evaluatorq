@@ -14,7 +14,7 @@ The classifier and summary model read different inputs. The classifier reads its
 |---|---|---|
 | Population | Filters, semantic query, Finder export, or local snapshot | Traces selected for analysis. A semantic query removes traces that do not match. |
 | Labels | Fixed classifier questions | Yes/no (`noul`), choice, or score answers with confidence and probabilities. Labels do not filter traces. |
-| Dimensions | Per-trace summaries | Two-level clusters and 3D UMAP coordinates when a group has enough traces to project. |
+| Dimensions | Per-trace summaries | Two-level clusters, 3D UMAP coordinates, and a saved 2D review layout when enough traces can be projected. |
 | Signals | Trace structure and recorded activity | Deterministic measurements computed before labeling and summarizing. They are kept out of model prompts. |
 
 The built-in dimensions are `intent` (`request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). Requesting the `sentiment` dimension adds the sentiment label if you did not select it. Summaries use the detailed [conversation view](#the-conversation-view), including tool calls and the start and end of tool results.
@@ -454,7 +454,7 @@ Dashboard runs save the Orq identity used for the run. API keys use the authenti
 
 When the same account is selected in Settings, the page reloads from the run's saved workspace and project. With a different account it makes no Orq request and reports the mismatch. Older saved scopes keep strict credential-fingerprint matching; runs without a saved scope use current Settings. CLI and Python runs also use the account and workspace currently selected in Settings.
 
-Read the saved reports from Python. This prints one line per saved trace; if there are no saved runs, it prints nothing.
+Read the saved reports from Python. This prints one line per saved trace; if there are no saved runs, it prints nothing. `Unmeasured` means the saved report contains no signal measurements for that trace; reading it does not compute new measurements.
 
 ```python
 from evaluatorq.insights.models import InsightsRun
@@ -495,7 +495,9 @@ Selecting an Activity item narrows the trace list to traces that used it; rankin
 
 Co-occurrence describes observed overlap and does not establish that one item caused another. A `Potentially state-changing` badge is a heuristic based on a shell-command name, not a finding that a trace changed state.
 
-**Map** draws a two-dimensional display projection from the run's saved three-dimensional UMAP coordinates. It does not rerun embeddings or change the saved run. Five valid points are required; invalid coordinates are skipped, and unavailable projections show why the map is empty. Filtered points remain visible in a muted style so you can compare them with the selected cohort. Select a point or brush an area to filter the shared trace list.
+**Map** displays the 2D layout saved during analysis. Analysis computes the 3D UMAP coordinates and the 2D review layout before saving the run; opening the dashboard does not load UMAP or calculate a new layout. Older reports without a saved 2D layout use the X/Y components of their saved 3D coordinates, so their 2D arrangement can differ from earlier dashboard versions.
+
+Five valid points are required. A valid point has two finite numeric coordinates; legacy 3D records must have three. Missing or invalid coordinates are skipped, and unavailable layouts show why the map is empty. If a new run's 2D calculation failed, the dashboard reports the missing layout instead of calculating it on demand. Filtered points remain visible in a muted style so you can compare them with the selected cohort. Select a point or brush an area to filter the shared trace list.
 
 The dashboard uses the source selected under **Settings → Authentication** for facet values and Insights runs. You can use `ORQ_API_KEY` from the dashboard process, a local Orq CLI API-key profile, the CLI's OAuth session, or an API key entered in Settings. The selected method persists in the dashboard settings file.
 

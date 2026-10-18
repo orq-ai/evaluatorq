@@ -1,12 +1,8 @@
-"""Deterministic 2D projections for the Insights review map."""
+"""Read persisted 2D coordinates for the Insights review map."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
-from collections import OrderedDict
-from threading import RLock
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -14,109 +10,67 @@ from loguru import logger
 if TYPE_CHECKING:
     from evaluatorq.insights.models import InsightsRun, TraceInsight
 
-_CACHE_LIMIT = 32
-_PROJECTIONS: OrderedDict[str, dict[str, tuple[float, float]]] = OrderedDict()
-_CACHE_LOCK = RLock()
-
 
 def review_trace_key(trace: TraceInsight) -> str:
     """Return the shared map and review-payload key for one trace span."""
     return f'{trace.trace_id}:{trace.span_id or ""}'
 
 
-def _coordinates(run: InsightsRun, dimension: str, *, warn: bool = True) -> tuple[list[str], list[list[float]]]:
-    ids: list[str] = []
-    rows: list[list[float]] = []
+def _finite_pair(values: object) -> tuple[float, float] | None:
+    if not isinstance(values, (list, tuple)):
+        return None
+    try:
+        pair = tuple(float(value) for value in values)
+    except (TypeError, ValueError):
+        return None
+    if len(pair) != 2 or not all(math.isfinite(value) for value in pair):
+        return None
+    return pair[0], pair[1]
+
+
+def _legacy_xy(run: InsightsRun, dimension: str) -> dict[str, tuple[float, float]]:
+    points: dict[str, tuple[float, float]] = {}
     for trace in run.traces:
         coords = trace.coords.get(dimension)
         if coords is None:
             continue
         try:
-            row = [float(value) for value in coords]
+            values = tuple(float(value) for value in coords)
         except (TypeError, ValueError):
-            if warn:
-                logger.warning(
-                    'Insights review map skipped invalid coordinates for {} in dimension {}', trace.trace_id, dimension
-                )
-            continue
-        if len(row) != 3 or not all(math.isfinite(value) for value in row):
-            if warn:
-                logger.warning(
-                    'Insights review map skipped invalid coordinates for {} in dimension {}', trace.trace_id, dimension
-                )
-            continue
-        ids.append(review_trace_key(trace))
-        rows.append(row)
-    return ids, rows
-
-
-def _cache_key(run: InsightsRun, dimension: str, ids: list[str], rows: list[list[float]]) -> str:
-    content = json.dumps([ids, rows], separators=(',', ':'), allow_nan=False)
-    return hashlib.sha256(f'{run.run_id}\0{dimension}\0{content}'.encode()).hexdigest()
+            values = ()
+        if len(values) == 3 and all(math.isfinite(value) for value in values):
+            points[review_trace_key(trace)] = (values[0], values[1])
+        else:
+            logger.warning(
+                'Insights review map skipped invalid coordinates for {} in dimension {}', trace.trace_id, dimension
+            )
+    return points
 
 
 def review_xy(run: InsightsRun, dimension: str) -> dict[str, tuple[float, float]]:
-    """Project saved finite 3D coordinates to deterministic display XY points.
-
-    Fewer than five valid points and UMAP failures return an empty map. UMAP is
-    imported only when this review projection is requested.
-    """
-    ids, rows = _coordinates(run, dimension)
-    if len(rows) < 5:
+    """Read saved finite 2D coordinates, with an announced 3D fallback for legacy reports."""
+    if all(trace.coords_2d is None for trace in run.traces):
+        logger.warning('Insights review map is using the legacy report 3D XY fallback for dimension {}', dimension)
+        points = _legacy_xy(run, dimension)
+    else:
+        points = {}
+        for trace in run.traces:
+            coords_2d = trace.coords_2d or {}
+            if dimension not in coords_2d:
+                continue
+            pair = _finite_pair(coords_2d[dimension])
+            if pair is None:
+                logger.warning(
+                    'Insights review map skipped invalid coordinates for {} in dimension {}', trace.trace_id, dimension
+                )
+                continue
+            points[review_trace_key(trace)] = pair
+    if len(points) < 5:
         logger.warning(
-            'Insights review map unavailable for dimension {}: only {} valid points (need >= 5)', dimension, len(rows)
+            'Insights review map unavailable for dimension {}: only {} valid points (need >= 5)', dimension, len(points)
         )
         return {}
-    key = _cache_key(run, dimension, ids, rows)
-    # UMAP's default Numba workqueue layer is not safe for concurrent calls from
-    # multiple request threads. Keep the lock through cache misses so all UMAP
-    # fitting in this process is serialized, including misses for different runs.
-    with _CACHE_LOCK:
-        cached = _PROJECTIONS.get(key)
-        if cached is not None:
-            _PROJECTIONS.move_to_end(key)
-            return cached.copy()
-        try:
-            import numpy as np
-            import umap
-
-            projected = np.asarray(
-                umap.UMAP(
-                    n_components=2,
-                    n_neighbors=min(15, len(rows) - 1),
-                    metric='euclidean',
-                    random_state=7,
-                ).fit_transform(np.asarray(rows, dtype=float))
-            )
-            if projected.shape != (len(rows), 2) or not np.isfinite(projected).all():
-                raise ValueError(f'UMAP returned invalid coordinates with shape {projected.shape}')
-            result = {
-                trace_id: (float(point[0]), float(point[1])) for trace_id, point in zip(ids, projected, strict=True)
-            }
-        except Exception as exc:  # noqa: BLE001 - display projection degrades to an explicit empty map
-            logger.warning(
-                'Insights review map unavailable for dimension {}: UMAP projection failed: {}', dimension, exc
-            )
-            return {}
-        _PROJECTIONS[key] = result.copy()
-        _PROJECTIONS.move_to_end(key)
-        while len(_PROJECTIONS) > _CACHE_LIMIT:
-            _PROJECTIONS.popitem(last=False)
-        return result
-
-
-def warm_review_projection() -> None:
-    """Pay UMAP's import and first-fit compile (~8s cold) before the first review request does."""
-    with _CACHE_LOCK:
-        try:
-            import numpy as np
-            import umap
-
-            umap.UMAP(n_components=2, n_neighbors=4, random_state=7).fit_transform(
-                np.random.default_rng(7).random((8, 3))
-            )
-        except Exception as exc:  # noqa: BLE001 - warm-up is best effort; review_xy reports real failures
-            logger.debug('Insights review map warm-up skipped: {}', exc)
+    return points
 
 
 def review_xy_state(
@@ -124,20 +78,24 @@ def review_xy_state(
     dimension: str,
     xy: dict[str, tuple[float, float]] | None = None,
 ) -> dict[str, object]:
-    """Return explicit availability metadata for a review-map projection."""
+    """Return explicit availability metadata for saved review-map coordinates."""
     if xy is None:
         xy = review_xy(run, dimension)
     if xy:
         return {'available': True, 'reason': None, 'n_points': len(xy)}
-    valid_ids, _ = _coordinates(run, dimension, warn=False)
-    if len(valid_ids) < 5:
-        reason = f'Only {len(valid_ids)} valid points are available; at least 5 are needed.'
+    if all(trace.coords_2d is None for trace in run.traces):
+        valid_points = _legacy_xy(run, dimension)
     else:
-        reason = 'The 2D projection could not be produced.'
-    return {'available': False, 'reason': reason, 'n_points': len(valid_ids)}
-
-
-def _clear_review_xy_cache() -> None:
-    """Clear the process cache for isolated tests."""
-    with _CACHE_LOCK:
-        _PROJECTIONS.clear()
+        valid_points = {
+            review_trace_key(trace)
+            for trace in run.traces
+            if dimension in (trace.coords_2d or {}) and _finite_pair((trace.coords_2d or {})[dimension]) is not None
+        }
+    has_saved_dimension = any(dimension in (trace.coords_2d or {}) for trace in run.traces)
+    if not has_saved_dimension and not all(trace.coords_2d is None for trace in run.traces):
+        reason = 'Saved 2D coordinates are unavailable for this dimension.'
+    elif len(valid_points) < 5:
+        reason = f'Only {len(valid_points)} valid points are available; at least 5 are needed.'
+    else:
+        reason = 'Saved 2D coordinates are unavailable for this dimension.'
+    return {'available': False, 'reason': reason, 'n_points': len(valid_points)}

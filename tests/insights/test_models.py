@@ -351,13 +351,14 @@ def test_priority_point_rejects_invalid_ratios(field: str, value: float) -> None
 
 
 @pytest.mark.parametrize('coordinate', [float('nan'), float('inf'), float('-inf')])
-def test_trace_insight_rejects_non_finite_coordinates(coordinate: float) -> None:
+@pytest.mark.parametrize('field', ['coords', 'coords_2d'])
+def test_trace_insight_rejects_non_finite_coordinates(coordinate: float, field: str) -> None:
     with pytest.raises(ValidationError):
         TraceInsight.model_validate({
             'trace_id': 'trace-1',
             'span_id': 'span-1',
             'timestamp': datetime.now(timezone.utc),
-            'coords': {'intent': (coordinate, 0.0, 0.0)},
+            field: {'intent': (coordinate, 0.0, 0.0) if field == 'coords' else (coordinate, 0.0)},
         })
 
 

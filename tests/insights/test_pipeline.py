@@ -55,6 +55,18 @@ def test_dimension_failure_count_excludes_run_wide_summary_errors() -> None:
     assert pipeline._dimension_failed_count([summary_failed, dimension_failed], 'intent') == 1
 
 
+def test_discard_dimension_removes_both_layouts_and_keeps_other_dimensions():
+    trace = TraceInsight(
+        trace_id='trace', coords={'intent': (1, 2, 3), 'task': (4, 5, 6)},
+        coords_2d={'intent': (7, 8), 'task': (9, 10)},
+    )
+
+    pipeline._discard_dimension(traces=[trace], dimension='intent')
+
+    assert trace.coords == {'task': (4.0, 5.0, 6.0)}
+    assert trace.coords_2d == {'task': (9.0, 10.0)}
+
+
 @pytest.mark.asyncio
 async def test_local_snapshot_pipeline_does_not_resolve_orq_client(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1449,3 +1461,72 @@ async def test_compiler_model_is_saved_in_the_config_for_rerun(monkeypatch: pyte
     run = await pipeline.insights(_population(), runs_dir=tmp_path, compiler_model='acme/compiler-2')
 
     assert run.config.compiler_model == 'acme/compiler-2'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('projection_fails', [False, True])
+async def test_dimension_persists_one_review_layout_across_sentiment_groups(
+    monkeypatch: pytest.MonkeyPatch, minimal_run: InsightsRun, tmp_path: Path, projection_fails: bool,
+) -> None:
+    import numpy as np
+    from evaluatorq.insights import cluster, reduce, merge as merge_module
+    from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.describe import ClusterName
+    from evaluatorq.insights.merge import MergeResult
+    from evaluatorq.insights.store import save_run
+
+    traces = [TraceInsight(
+        trace_id=f'trace-{index}', span_id=f'span-{index}',
+        summary=_summary().model_copy(update={'sentiment_explanation': f'sentiment-{index}'}),
+        labels={'sentiment': LabelAnswer(
+            value='positive' if index % 2 else 'negative', confidence=1.0, probabilities=None, error=None,
+        )},
+    ) for index in range(10)]
+
+    async def embeddings(texts, **kwargs):
+        return {text: [float(text.split('-')[-1]), 1.0, 2.0] for text in texts}
+
+    def tree(vectors, **kwargs):
+        return cluster.ClusterTree(base_labels=np.zeros(len(vectors), dtype=int), top_of_base={0: 0})
+
+    async def descriptions(*args, **kwargs):
+        return {0: ClusterName(name='Example', description='Example group')}
+
+    async def merge(*args, **kwargs):
+        return MergeResult(representatives={0: 0}, n_pairs=0, n_failed=0)
+
+    def coordinates(vectors):
+        return np.asarray([[value[0], value[0] + 0.1, value[0] + 0.2] for value in vectors])
+
+    calls = []
+    def review_layout(coordinates):
+        calls.append(coordinates.copy())
+        return None if projection_fails else np.asarray([[row[0] + 100, row[0] + 200] for row in coordinates])
+
+    monkeypatch.setattr(pipeline, 'embed_texts', embeddings)
+    monkeypatch.setattr(cluster, 'cluster_two_level', tree)
+    monkeypatch.setattr(pipeline, 'describe_clusters', descriptions)
+    monkeypatch.setattr(pipeline, 'describe_top_level', descriptions)
+    monkeypatch.setattr(merge_module, 'merge_similar', merge)
+    monkeypatch.setattr(reduce, 'reduce_3d', coordinates)
+    monkeypatch.setattr(reduce, 'project_2d', review_layout)
+    cache = InsightsCache(enabled=False)
+    try:
+        result = await pipeline._build_dimension(
+            dimension='sentiment', traces=traces, client=cast(Any, object()), cache=cache,
+            embedding_model='unused', summary_model='unused', max_clusters=15, max_subclusters=15,
+            outlier_zscore=None, parallelism=10, classifier_model='unused',
+        )
+    finally:
+        cache.close()
+
+    assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0][:, 0], np.arange(10))
+    minimal_run.traces = traces
+    minimal_run.dimensions = {'sentiment': result}
+    restored = load_run(path=save_run(run=minimal_run, runs_dir=tmp_path))
+    for index, trace in enumerate(restored.traces):
+        assert trace.coords['sentiment'] == (float(index), index + 0.1, index + 0.2)
+        assert trace.coords_2d == ({} if projection_fails else {'sentiment': (index + 100, index + 200)})
+        assert 'sentiment' in trace.assignments
+    assert any('2D' in warning for warning in result.warnings) is projection_fails
