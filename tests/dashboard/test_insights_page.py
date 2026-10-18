@@ -501,7 +501,7 @@ def test_review_client_escapes_saved_ids_and_labels_partial_cost(minimal_run: In
     assert cast(dict[str, Any], build_review_payload(queried)['run'])['stages_without_model_calls'] == [
         'priority', 'write'
     ]
-    assert "stages_without_model_calls?.includes(name) ? 'No model calls'" in script
+    assert "const noModelCalls = r.stages_without_model_calls?.includes(name)" in script
     assert 'data-t="${esc(t.id)}"' in script
     assert 'data-t="${esc(id)}"' in script
     assert 'data-c="${esc(c.id)}"' in script
@@ -511,7 +511,9 @@ def test_review_client_escapes_saved_ids_and_labels_partial_cost(minimal_run: In
     assert 'data-c="${c.id}"' not in script
     assert 'run.cost_is_partial ? `Partial cost: $${run.cost.toFixed(3)}`' in script
     assert "stageCost.is_partial ? 'Partial cost: ' : ''" in script
-    assert "stageCost?.cost == null" in script
+    assert "stageCost?.cost != null" in script
+    assert "'Model calls made; cache hits are not counted'" in script
+    assert "const statusText = status === 'completed' ? '' : ` · ${status}`" in script
 
 
 def test_review_client_uses_full_trace_keys_and_label_score_keys() -> None:

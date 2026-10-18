@@ -319,13 +319,20 @@ function renderHeader() {
     const stage = stageRows.find(item => item.name === name);
     const status = stage?.status || (progress?.status === 'running' ? 'pending' : progress?.status === 'error' && name === progress?.stage ? 'error' : 'skipped');
     const label = progress?.stage_labels?.[name] || name.replace(/_/g, ' ');
-    const count = stage?.completed != null && stage?.total != null ? `${stage.completed}/${stage.total}` : '—';
+    const progressCount = stage?.completed != null && stage?.total != null ? `${stage.completed}/${stage.total}` : '—';
     const mark = status === 'completed' ? '✓' : status === 'error' ? '!' : status === 'running' ? '…' : '·';
     const stageCost = r.cost_by_stage_details?.[name];
-    const costText = stageCost?.cost == null
-      ? (r.stages_without_model_calls?.includes(name) ? 'No model calls' : 'Cost unavailable')
-      : `${stageCost.is_partial ? 'Partial cost: ' : ''}$${stageCost.cost.toFixed(4)}`;
-    return `<span class="${status === 'completed' ? 'ok' : 'na'}">${mark}</span><span>${esc(label)} · ${esc(status)}</span><span class="num" style="color:var(--text-muted)">${count}</span><span class="num">${esc(costText)}</span>`;
+    const noModelCalls = r.stages_without_model_calls?.includes(name);
+    const callCount = stageCost?.calls;
+    const callsText = status === 'running' ? progressCount
+      : callCount != null ? `${callCount} ${callCount === 1 ? 'call' : 'calls'}`
+      : noModelCalls ? 'No model calls' : '—';
+    const callsTitle = status === 'running' ? 'Traces processed so far' : 'Model calls made; cache hits are not counted';
+    const costText = stageCost?.cost != null
+      ? `${stageCost.is_partial ? 'Partial cost: ' : ''}$${stageCost.cost.toFixed(4)}`
+      : noModelCalls ? '—' : 'Cost unavailable';
+    const statusText = status === 'completed' ? '' : ` · ${status}`;
+    return `<span class="${status === 'completed' ? 'ok' : 'na'}">${mark}</span><span>${esc(label)}${esc(statusText)}</span><span class="num" style="color:var(--text-muted)" title="${esc(callsTitle)}">${esc(callsText)}</span><span class="num">${esc(costText)}</span>`;
   }).join('') : '<span class="na">Stage history unavailable</span>';
   const projectionKnown = p.classifier_state_chars != null && p.source_chars != null;
   const sourceChars = projectionKnown ? p.source_chars : 0;
