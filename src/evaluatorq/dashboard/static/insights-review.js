@@ -328,8 +328,9 @@ function renderHeader() {
     const stageCost = r.cost_by_stage_details?.[name];
     const noModelCalls = r.stages_without_model_calls?.includes(name);
     const callCount = stageCost?.calls;
-    const statusText = status === 'completed' ? '' : ` · ${status}`;
-    const head = `<span class="${status === 'completed' ? 'ok' : 'na'}">${mark}</span><span class="stage-label">${esc(label)}${esc(statusText)}</span>`;
+    const statusText = status === 'completed' ? '' : status === 'error' ? ' · <span class="err">error</span>' : ` · ${esc(status)}`;
+    const markClass = status === 'completed' ? 'ok' : status === 'error' ? 'err' : 'na';
+    const head = `<span class="${markClass}" title="${esc(status)}">${mark}</span><span class="stage-label">${esc(label)}${statusText}</span>`;
     if (noModelCalls && !stageCost && status !== 'running') {
       return `${head}<span class="calls nocalls" style="grid-column:3 / 5">No model calls</span>`;
     }
@@ -337,19 +338,25 @@ function renderHeader() {
       : callCount != null ? `${callCount} ${callCount === 1 ? 'call' : 'calls'}`
       : noModelCalls ? 'No model calls' : '—';
     const callsTitle = status === 'running' ? 'Traces processed so far' : 'Model calls made; cache hits are not counted';
-    let costText = noModelCalls ? '—' : 'n/a';
-    let costTitle = noModelCalls ? '' : 'Cost unavailable: the provider reported no usage for these calls';
-    let costClass = 'num cost';
+    const notRun = !stageCost && ['pending', 'skipped', 'running'].includes(status);
+    let costText = noModelCalls || notRun ? '—' : 'n/a';
+    let costTitle = noModelCalls || notRun ? '' : 'Cost unavailable: the provider reported no usage for these calls';
+    let costClass = 'num cost' + (notRun ? ' na' : '');
     if (stageCost?.cost != null) {
       costText = `${stageCost.is_partial ? '≥ ' : ''}$${stageCost.cost.toFixed(4)}`;
       costTitle = stageCost.is_partial ? 'Partial cost: some calls had no price, so this is a lower bound' : '';
       if (stageCost.is_partial) costClass += ' partial';
       if (topCost != null && stageCost.cost === topCost) costClass += ' priciest';
     }
-    return `${head}<span class="num calls" title="${esc(callsTitle)}">${esc(callsText)}</span><span class="${costClass}"${costTitle ? ` title="${esc(costTitle)}"` : ''}>${esc(costText)}</span>`;
+    return `${head}<span class="num calls${notRun ? ' na' : ''}" title="${esc(callsTitle)}">${esc(callsText)}</span><span class="${costClass}"${costTitle ? ` title="${esc(costTitle)}"` : ''}>${esc(costText)}</span>`;
   }).join('') : '<span class="na">Stage history unavailable</span>';
+  const totalCostCell = r.cost == null
+    ? '<span class="num cost total" title="Cost unavailable">n/a</span>'
+    : r.cost_is_partial
+      ? `<span class="num cost total partial" title="Partial cost: some calls had no price, so this is a lower bound">≥ $${r.cost.toFixed(4)}</span>`
+      : `<span class="num cost total">$${r.cost.toFixed(4)}</span>`;
   const totalHtml = detailRows.length
-    ? `<span class="total-rule"></span><span class="total"></span><span class="total stage-label">Total</span><span class="num calls total">${totalCalls} ${totalCalls === 1 ? 'call' : 'calls'}</span><span class="num cost total">${esc(costLabel(r))}</span>`
+    ? `<span class="total-rule"></span><span class="total"></span><span class="total stage-label">Total</span><span class="num calls total">${totalCalls} ${totalCalls === 1 ? 'call' : 'calls'}</span>${totalCostCell}`
     : '';
   const stageHtml = stageRowsHtml + totalHtml;
   const projectionKnown = p.classifier_state_chars != null && p.source_chars != null;
@@ -385,7 +392,9 @@ function renderHeader() {
   $('detBtn').onclick = e => {
     e.stopPropagation();
     const b = e.target.getBoundingClientRect(), pop = $('details');
-    pop.style.left = (b.left - 60) + 'px'; pop.style.top = (b.bottom + 8) + 'px';
+    pop.style.left = Math.max(16, Math.min(b.left - 60, innerWidth - Math.min(460, innerWidth - 32) - 16)) + 'px';
+    pop.style.top = (b.bottom + 8) + 'px';
+    pop.style.maxHeight = (innerHeight - b.bottom - 24) + 'px';
     pop.classList.toggle('open');
   };
 }
