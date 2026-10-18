@@ -63,10 +63,16 @@ except KeyboardInterrupt:
     if child_pid == 0:
         os.execv(sys.executable, [sys.executable, '-c', program, interrupt_thread])
     output = bytearray()
+    prompt_ready = b'Proceed? [Y/n]: '
     child_reaped = False
     try:
         deadline = time.monotonic() + 15
-        while b'Proceed?' not in output and time.monotonic() < deadline:
+        # Wait for the trailing space of the prompt, not just its text. click
+        # writes 'Proceed? [Y/n]:' itself and then calls input(' '), which is
+        # where the line editor installs its signal handling and starts the
+        # read. Ctrl-C sent in between lands before the read is armed, is only
+        # echoed, and the pending read never wakes up.
+        while prompt_ready not in output and time.monotonic() < deadline:
             ready, _, _ = select.select([master_fd], [], [], 0.1)
             if ready:
                 try:
@@ -74,7 +80,7 @@ except KeyboardInterrupt:
                 except OSError:
                     break
 
-        assert b'Proceed?' in output, f'confirmation prompt did not appear: {output!r}'
+        assert prompt_ready in output, f'confirmation prompt did not appear: {output!r}'
         waited_pid, _ = os.waitpid(child_pid, os.WNOHANG)
         child_reaped = waited_pid != 0
         assert waited_pid == 0, 'child exited before Ctrl-C was sent'
