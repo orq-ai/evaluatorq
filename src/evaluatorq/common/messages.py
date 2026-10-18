@@ -8,7 +8,7 @@ judge then scores. Use these helpers or ``contracts.content_to_text``.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -321,45 +321,74 @@ class ToolPairing:
         return self.row_of.get(index, {})
 
 
-def pair_tool_rows(messages: list[Message]) -> ToolPairing:
-    """Pair tool rows to calls by position, for provider replay.
+def match_tool_results(
+    rows: Sequence[tuple[str | None, Sequence[str | None], str | None]],
+    *,
+    tolerant: bool = False,
+) -> tuple[dict[tuple[int, int], list[int]], list[int]]:
+    """Match tool rows to calls by id inside a turn window; the one rule every pairing reader shares.
 
-    A block is the consecutive assistant turns that carry tool calls (parallel calls may be split
-    across rows) plus the tool rows that directly follow them; system rows between the pieces are
-    skipped. A tool row answers the first call in its block with that id, and the first row per id
-    wins. A repeated id (in the same row, another row of the block, a later turn), a result after a
-    later user turn, a result before its call and a duplicate result do not pair.
+    Each row is ``(role, call_ids, tool_call_id)``: the ids of an assistant row's calls (``None`` for
+    one without a string id) and the id a tool row answers. A tool row answers a call when the call's
+    assistant row comes before it and no user row sits between them; any rows may sit in between. A
+    result before its call, after a later user row, or with no call in its window is an orphan.
+    Returns ``({(row, position): [result_row, ...]}, [orphan_row, ...])``.
+
+    Strict (replay): the first call per id owns it while unanswered, the first result per id wins and
+    a duplicate result is an orphan, so every call has at most one result. ``tolerant`` (display of
+    logs): calls repeating an id in one row queue up and take results in order, a later row's call replaces an unanswered earlier one, and a surplus result attaches to
+    the last call it answered instead of being an orphan.
+
+    The window follows what providers accept, probed live through the Orq router: Anthropic wants the
+    result after its call and before the next user turn but not adjacent, OpenAI chat completions wants
+    it directly after the call (`drop_unreplayable_tool_records` reorders the replay copy for that),
+    and OpenAI Responses accepts any order.
+    """
+    open_calls: dict[str, list[tuple[int, int]]] = {}
+    answered: dict[str, tuple[int, int]] = {}
+    pairs: dict[tuple[int, int], list[int]] = {}
+    orphans: list[int] = []
+    for index, (role, call_ids, result_id) in enumerate(rows):
+        if role == 'user':
+            open_calls.clear()
+            answered.clear()
+        elif role == 'assistant':
+            for position, call_id in enumerate(call_ids):
+                if call_id is None:
+                    continue
+                queue = open_calls.setdefault(call_id, [])
+                if tolerant and queue and queue[0][0] != index:
+                    queue.clear()
+                if tolerant or not queue:
+                    queue.append((index, position))
+        elif role == 'tool':
+            queue = open_calls.get(result_id or '')
+            if queue:
+                owner = queue.pop(0)
+                answered[result_id or ''] = owner
+            else:
+                owner = answered.get(result_id or '') if tolerant else None
+            if owner is None:
+                orphans.append(index)
+            else:
+                pairs.setdefault(owner, []).append(index)
+    return pairs, orphans
+
+
+def pair_tool_rows(messages: list[Message]) -> ToolPairing:
+    """Pair tool rows to calls by id inside a turn window, for provider replay.
+
+    See `match_tool_results` for the rule and the provider findings behind it. This is the single
+    implementation: the display pairing in `common.model_input.pair_tool_call_results` calls it too.
 
     Position is authoritative for replay and for `call_is_incomplete` over a full transcript. The
     recorded `StrategyToolCall.incomplete` flag only stands in where no position is available (a
-    loose dict, an export). The display pairing in `common.model_input.pair_tool_call_results` is
-    a different job: FIFO within a call group, tolerant of out-of-order logs, where replay must be
-    strict.
+    loose dict, an export).
     """
+    pairs, _ = match_tool_results([(m.role, [tc.id for tc in m.tool_calls or []], m.tool_call_id) for m in messages])
     row_of: dict[int, dict[int, int]] = {}
-    index = 0
-    while index < len(messages):
-        if messages[index].role != 'assistant' or not messages[index].tool_calls:
-            index += 1
-            continue
-        owner: dict[str, tuple[int, int]] = {}
-        cursor = index
-        while cursor < len(messages) and messages[cursor].role in ('assistant', 'system'):
-            if messages[cursor].role == 'assistant':
-                if not messages[cursor].tool_calls:
-                    break
-                for position, tc in enumerate(messages[cursor].tool_calls or []):
-                    owner.setdefault(tc.id, (cursor, position))
-            cursor += 1
-        answered: set[str] = set()
-        while cursor < len(messages) and messages[cursor].role in ('tool', 'system'):
-            call_id = messages[cursor].tool_call_id
-            if messages[cursor].role == 'tool' and call_id in owner and call_id not in answered:
-                answered.add(call_id)
-                row, position = owner[call_id]
-                row_of.setdefault(row, {})[position] = cursor
-            cursor += 1
-        index = cursor
+    for (row, position), results in pairs.items():
+        row_of.setdefault(row, {})[position] = results[0]
     return ToolPairing(row_of)
 
 
@@ -394,8 +423,9 @@ def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_tex
 
     Rows that need no change are the same objects; a changed row is a `model_copy`, so the
     recorded transcript is never mutated and keeps its incomplete calls. An assistant tool call
-    needs a tool row after it (see `pair_tool_rows`) and a tool row needs the call it answers;
-    every other call and row is removed, and a repeated call id in one row keeps only its first
+    needs a tool row after it in its turn (see `pair_tool_rows`) and a tool row needs the call it
+    answers; every other call and row is removed, each kept result is moved to sit directly after
+    its call's row (OpenAI chat completions requires that; parallel results keep call order), and a repeated call id in one row keeps only its first
     call. A turn left with no text and no calls (and any other empty assistant turn) gets
     `EMPTY_ASSISTANT_TEXT`, which keeps the user/assistant alternation and satisfies providers
     that reject an empty assistant message. Arguments are not touched here; the serializers send
@@ -416,9 +446,7 @@ def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_tex
     out: list[Message] = []
     for index, m in enumerate(messages):
         if m.role == 'tool':
-            if index in pairing.rows:
-                out.append(m)
-            else:
+            if index not in pairing.rows:
                 dropped_results.append(('result', m.tool_call_id or '<no id>'))
             continue
         if m.role != 'assistant':
@@ -430,8 +458,9 @@ def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_tex
         lost = [tc for position, tc in enumerate(calls) if position not in answered]
         unknown = [tc for tc in kept if tc.function.arguments == UNKNOWN_ARGUMENTS]
         silent = not coerce_content_text(m.content).strip()
+        results = [messages[row] for _, row in sorted(answered.items())]
         if not lost and not (incomplete_as_text and unknown) and (calls or not silent):
-            out.append(m)
+            out.extend([m, *results])
             continue
         content = m.content
         if incomplete_as_text:
@@ -449,7 +478,7 @@ def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_tex
             dropped_calls.extend(('call', tc.id, tc.function.name, tc.function.arguments) for tc in lost)
         if not kept and not coerce_content_text(content).strip():
             content = EMPTY_ASSISTANT_TEXT
-        out.append(m.model_copy(update={'content': content, 'tool_calls': kept or None}))
+        out.extend([m.model_copy(update={'content': content, 'tool_calls': kept or None}), *results])
     _warn_dropped(dropped_calls, dropped_results)
     return out
 

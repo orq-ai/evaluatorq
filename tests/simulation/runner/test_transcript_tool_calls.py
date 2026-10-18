@@ -139,12 +139,12 @@ def _system() -> Message:
         (
             'parallel_calls_split_across_assistant_rows',
             [_assistant('a'), _assistant('b'), _tool('a'), _tool('b')],
-            ['assistant', 'assistant', 'tool', 'tool'],
+            ['assistant', 'tool', 'assistant', 'tool'],
         ),
         (
             'system_row_between_call_and_result',
             [_assistant('a'), _system(), _tool('a')],
-            ['assistant', 'system', 'tool'],
+            ['assistant', 'tool', 'system'],
         ),
     ],
 )
@@ -152,10 +152,48 @@ def test_pairing_is_positional(label, messages, expected_roles):
     assert [m.role for m in drop_unreplayable_tool_records(messages)] == expected_roles
 
 
+@pytest.mark.parametrize(
+    ('label', 'messages', 'expected'),
+    [
+        ('adjacent', [_assistant('a'), _tool('a')], ['A a', 'T a']),
+        ('system_between', [_assistant('a'), _system(), _tool('a')], ['A a', 'T a', 'S']),
+        ('split_assistant_rows', [_assistant('a'), _assistant('b'), _tool('a'), _tool('b')], ['A a', 'T a', 'A b', 'T b']),
+        ('parallel_results_keep_call_order', [_assistant('a', 'b'), _tool('b'), _tool('a')], ['A a,b', 'T a', 'T b']),
+        ('other_row_between', [_assistant('a'), _assistant('b'), _tool('b'), _tool('a')], ['A a', 'T a', 'A b', 'T b']),
+        ('result_after_later_user_turn', [_assistant('a'), _user(), _tool('a')], ['A -', 'U']),
+        ('result_before_call', [_tool('a'), _assistant('a')], ['A -']),
+        ('duplicate_result', [_assistant('a'), _tool('a'), _tool('a')], ['A a', 'T a']),
+    ],
+)
+def test_replay_copy_puts_each_result_directly_after_its_call(label, messages, expected):
+    def show(m):
+        ids = ','.join(tc.id for tc in m.tool_calls or []) or '-'
+        return {'assistant': f'A {ids}', 'tool': f'T {m.tool_call_id}', 'system': 'S', 'user': 'U'}[m.role]
+
+    assert [show(m) for m in drop_unreplayable_tool_records(messages)] == expected
+
+
+def test_orphan_shapes_warn_once(caplog):
+    messages = [_assistant('a'), _user(), _tool('a'), _tool('zzz')]
+    with conversation_thread('t'), caplog.at_level(logging.WARNING):
+        drop_unreplayable_tool_records(messages)
+        drop_unreplayable_tool_records(messages)
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) <= 1
+
+
+def test_replay_copy_leaves_the_recorded_transcript_untouched():
+    messages = [_assistant('a'), _system(), _tool('a')]
+    before = list(messages)
+
+    drop_unreplayable_tool_records(messages)
+
+    assert messages == before
+
+
 def test_parallel_calls_split_across_rows_keep_their_calls():
     replay = drop_unreplayable_tool_records([_assistant('a'), _assistant('b'), _tool('a'), _tool('b')])
 
-    assert [[tc.id for tc in m.tool_calls or []] for m in replay[:2]] == [['a'], ['b']]
+    assert [[tc.id for tc in m.tool_calls or []] for m in replay if m.role == 'assistant'] == [['a'], ['b']]
 
 
 def test_emptied_assistant_row_keeps_the_alternation_placeholder():
