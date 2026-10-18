@@ -9,6 +9,7 @@ from evaluatorq.insights import reduce as reduce_module
 from evaluatorq.insights.reduce import reduce_3d
 
 
+@pytest.mark.filterwarnings('error:n_jobs value.*overridden to 1:UserWarning')
 def test_reduce_3d_shape_and_determinism():
     rng = np.random.default_rng(0)
     vectors = rng.normal(size=(40, 16))

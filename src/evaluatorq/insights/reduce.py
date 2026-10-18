@@ -44,6 +44,7 @@ def reduce_3d(vectors: NDArray[Any], *, random_state: int = 42) -> NDArray[Any] 
             n_neighbors=min(15, n - 1),
             metric='cosine',
             random_state=random_state,
+            n_jobs=1,
         )
         coordinates = np.asarray(reducer.fit_transform(vectors))
         if coordinates.shape != (n, 3) or not np.isfinite(coordinates).all():
