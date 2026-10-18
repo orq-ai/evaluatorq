@@ -65,38 +65,55 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
     pass `memory_entity_id="..."` (CLI: `--memory-entity`) to run every
     conversation against one specific, e.g. pre-seeded, entity instead.
 
-    ```python
-    import asyncio
+    === "CLI"
 
-    from evaluatorq.simulation import generate_and_simulate
+        ```bash
+        # No CLI flag for experiment_description, orq_folder_path or
+        # raise_on_execution_failure: set them from Python or in --config
+        eq sim run \
+          --name support-agent-sim \
+          --target agent:my-support-agent \
+          --agent-description "Support agent for an e-commerce store" \
+          --num-personas 3 --num-scenarios 4 \
+          --max-turns 6 \
+          --evaluator goal_achieved --evaluator criteria_met \
+          --report support-simulation.json
+        ```
 
+    === "Python"
 
-    async def main():
-        results = await generate_and_simulate(
-            run_name="support-agent-sim",
-            target="agent:my-support-agent",     # hosted Orq agent, routed via ORQ_API_KEY
-            agent_description=(
-                "Customer support agent for an e-commerce store; "
-                "handles refunds, orders, and product questions."
-            ),
-            num_personas=3,
-            num_scenarios=4,                     # → 12 persona × scenario simulations
-            max_turns=6,
-            evaluator_names=["goal_achieved", "criteria_met"],
-            experiment_description="September support regression",
-            orq_folder_path="Support/September",
-            report_path="support-simulation.json",
-            save=True,
-            raise_on_execution_failure=True,
-        )
+        ```python
+        import asyncio
 
-        passed = sum(r.goal_achieved for r in results)
-        print(f"Pass rate: {passed}/{len(results)}")
+        from evaluatorq.simulation import generate_and_simulate
 
 
-    if __name__ == "__main__":
-        asyncio.run(main())
-    ```
+        async def main():
+            results = await generate_and_simulate(
+                run_name="support-agent-sim",
+                target="agent:my-support-agent",     # hosted Orq agent, routed via ORQ_API_KEY
+                agent_description=(
+                    "Customer support agent for an e-commerce store; "
+                    "handles refunds, orders, and product questions."
+                ),
+                num_personas=3,
+                num_scenarios=4,                     # → 12 persona × scenario simulations
+                max_turns=6,
+                evaluator_names=["goal_achieved", "criteria_met"],
+                experiment_description="September support regression",
+                orq_folder_path="Support/September",
+                report_path="support-simulation.json",
+                save=True,
+                raise_on_execution_failure=True,
+            )
+
+            passed = sum(r.goal_achieved for r in results)
+            print(f"Pass rate: {passed}/{len(results)}")
+
+
+        if __name__ == "__main__":
+            asyncio.run(main())
+        ```
 
 === "OpenAI"
 
@@ -173,33 +190,48 @@ The earlier names `evaluation_description`, `orq_results_path`, `report`, and `e
 
 The middle ground between "just give me five" and specifying every trait: name the archetype, and `generate_persona()` / `generate_scenario()` fill the rest. You get back real `Persona` / `Scenario` objects to inspect, tweak, and pass to `simulate()`.
 
-```python
-import asyncio
+=== "CLI"
 
-from evaluatorq.simulation import generate_persona, generate_scenario, simulate
+    ```bash
+    eq sim run \
+      --name seeded-simulation \
+      --target agent:my-support-agent \
+      --agent-description "e-commerce support agent" \
+      --persona-seed "angry customer" \
+      --scenario-seed "disputes a refund denial" \
+      --max-turns 6 \
+      --evaluator goal_achieved --evaluator criteria_met
+    ```
 
+=== "Python"
 
-async def main():
-    persona = await generate_persona(
-        "angry customer",
-        agent_description="e-commerce support agent",
-    )
-    scenario = await generate_scenario("disputes a refund denial")
+    ```python
+    import asyncio
 
-    results = await simulate(
-        run_name="seeded-simulation",
-        target="agent:my-support-agent",
-        personas=[persona],
-        scenarios=[scenario],
-        max_turns=6,
-        evaluator_names=["goal_achieved", "criteria_met"],
-    )
-    print(f"Goal achieved: {results[0].goal_achieved}")
+    from evaluatorq.simulation import generate_persona, generate_scenario, simulate
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
-```
+    async def main():
+        persona = await generate_persona(
+            "angry customer",
+            agent_description="e-commerce support agent",
+        )
+        scenario = await generate_scenario("disputes a refund denial")
+
+        results = await simulate(
+            run_name="seeded-simulation",
+            target="agent:my-support-agent",
+            personas=[persona],
+            scenarios=[scenario],
+            max_turns=6,
+            evaluator_names=["goal_achieved", "criteria_met"],
+        )
+        print(f"Goal achieved: {results[0].goal_achieved}")
+
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
 
 Batch forms `generate_personas([...])` / `generate_scenarios([...])` take a list of seeds and return one object each.
 
@@ -420,25 +452,48 @@ The `criteria_met` evaluator's `raw_output` carries either per-criterion `Criter
 
 ### Changing the policy
 
-```python
-from evaluatorq.simulation import SimulationScoringConfig, simulate
+=== "CLI"
 
-results = await simulate(
-    run_name="onboarding-sim",
-    target="agent:my-onboarding-agent",
-    evaluator_names=["goal_achieved", "criteria_met", "turn_efficiency", "conversation_quality"],
-    # A guided onboarding flow needs ~6 turns before anyone should call it slow.
-    scoring=SimulationScoringConfig(
-        turn_efficiency_cliffs=((6, 1.0), (10, 0.9), (16, 0.7)),
-        # Criteria matter more than speed for this agent.
-        goal_achieved_weight=0.4,
-        criteria_met_weight=0.5,
-        turn_efficiency_weight=0.1,
-    ),
-)
-```
+    ```bash
+    cat > scoring.json <<'EOF'
+    {
+      "scoring": {
+        "turn_efficiency_cliffs": [[6, 1.0], [10, 0.9], [16, 0.7]],
+        "goal_achieved_weight": 0.4,
+        "criteria_met_weight": 0.5,
+        "turn_efficiency_weight": 0.1
+      }
+    }
+    EOF
 
-`scoring=` is accepted by both `simulate()` and `generate_and_simulate()`, and omitting it uses the defaults above. The config is bounded and rejects unknown fields, so a typo fails at construction rather than silently scoring with the shipped policy. Two shapes it refuses on purpose, because both produce a report that is quietly wrong rather than obviously broken:
+    eq sim simulate --input cases.jsonl --target agent:my-onboarding-agent \
+      --name onboarding-sim \
+      --evaluator goal_achieved --evaluator criteria_met \
+      --evaluator turn_efficiency --evaluator conversation_quality \
+      --config scoring.json
+    ```
+
+=== "Python"
+
+    ```python
+    from evaluatorq.simulation import SimulationScoringConfig, simulate
+
+    results = await simulate(
+        run_name="onboarding-sim",
+        target="agent:my-onboarding-agent",
+        evaluator_names=["goal_achieved", "criteria_met", "turn_efficiency", "conversation_quality"],
+        # A guided onboarding flow needs ~6 turns before anyone should call it slow.
+        scoring=SimulationScoringConfig(
+            turn_efficiency_cliffs=((6, 1.0), (10, 0.9), (16, 0.7)),
+            # Criteria matter more than speed for this agent.
+            goal_achieved_weight=0.4,
+            criteria_met_weight=0.5,
+            turn_efficiency_weight=0.1,
+        ),
+    )
+    ```
+
+`scoring=` is accepted by both `simulate()` and `generate_and_simulate()`, and `scoring` is a field of the `--config` file on the CLI. Omitting it uses the defaults above. The config is bounded and rejects unknown fields, so a typo fails at construction rather than silently scoring with the shipped policy. Two shapes it refuses on purpose, because both produce a report that is quietly wrong rather than obviously broken:
 
 - cliffs that are not ordered — turn thresholds must strictly increase and scores must not increase with them, so a longer conversation can never score higher than a shorter one;
 - weights that do not sum to `1.0`.
@@ -563,14 +618,28 @@ An **Orq dataset** is a stored collection of rows. Here, one row is one **simula
 
 To **replay** those rows as they are, pass the ID to `simulate()`:
 
-```python
-results = await simulate(
-    run_name="support-dataset-replay",
-    target="agent:my-support-agent",
-    dataset_id="your-dataset-id",            # ID printed by upload-dataset
-    evaluator_names=["goal_achieved", "criteria_met"],
-)
-```
+=== "CLI"
+
+    ```bash
+    # Prints the dataset ID
+    eq sim upload-dataset --input cases.jsonl --name "Support cases"
+
+    eq sim simulate --dataset-id your-dataset-id \
+      --target agent:my-support-agent \
+      --name support-dataset-replay \
+      --evaluator goal_achieved --evaluator criteria_met
+    ```
+
+=== "Python"
+
+    ```python
+    results = await simulate(
+        run_name="support-dataset-replay",
+        target="agent:my-support-agent",
+        dataset_id="your-dataset-id",            # ID printed by upload-dataset
+        evaluator_names=["goal_achieved", "criteria_met"],
+    )
+    ```
 
 `run_name` is an optional label you choose for this execution in its run record, results, and traces. It is separate from `dataset_id`, which selects the stored cases, and `evaluator_names`, which selects the scoring checks. `target` names the agent being tested. Existing calls with `evaluation_name` still work; if you supply both names, their values must match.
 
@@ -676,17 +745,26 @@ The async `datapoints_from_traces(...)` helper accepts the same `TraceInput` use
 
 Query mode pulls a bounded recent batch, no trace ID required:
 
-```python
-from datetime import datetime, timedelta, timezone
+=== "CLI"
 
-from evaluatorq import TraceInput
-from evaluatorq.simulation import datapoints_from_traces, simulate
+    ```bash
+    eq sim from-traces --output traces_datapoints.jsonl --limit 50 --lookback-hours 24
+    eq sim simulate --input traces_datapoints.jsonl --target agent:my-support-agent
+    ```
 
-datapoints = await datapoints_from_traces(
-    source=TraceInput(limit=50, start_time=datetime.now(timezone.utc) - timedelta(days=1)),
-)
-results = await simulate(target='agent:my-support-agent', datapoints=datapoints)
-```
+=== "Python"
+
+    ```python
+    from datetime import datetime, timedelta, timezone
+
+    from evaluatorq import TraceInput
+    from evaluatorq.simulation import datapoints_from_traces, simulate
+
+    datapoints = await datapoints_from_traces(
+        source=TraceInput(limit=50, start_time=datetime.now(timezone.utc) - timedelta(days=1)),
+    )
+    results = await simulate(target='agent:my-support-agent', datapoints=datapoints)
+    ```
 
 Pass one `trace_id` instead once you already have a specific conversation to ground a case on:
 
@@ -698,26 +776,44 @@ This call bills: unlike `redteam.datapoints_from_traces`, which is pure and free
 
 The trace is source material for a new simulation, not a scored result. Simulation infers a persona and scenario from each conversation and writes a fresh opening message by default. The trace analysis and simulation calls use their own budgets; `max_turns` applies to the generated conversation and does not count trace analysis.
 
-The direct route is `eq sim from-traces`, which pulls recent traces from the Orq traces API and writes one datapoint per conversation — persona and scenario inferred from a short summary of it, opening message written from that persona and scenario:
+The direct route is `eq sim from-traces`, which pulls recent traces from the Orq traces API and writes one datapoint per conversation — persona and scenario inferred from a short summary of it, opening message written from that persona and scenario. Add `--extend N` to also generate N new datapoints matching the traffic distribution of the fetched traces, so you get cases *around* real traffic rather than only the recorded ones. The same thing is available from Python as `datapoints_from_traces()` and `extend_from_traces()`:
 
-```bash
-eq sim from-traces --output traces_datapoints.jsonl --limit 50 --lookback-hours 24
-eq sim simulate --input traces_datapoints.jsonl --target agent:my-agent
-```
+=== "CLI"
 
-Add `--extend N` to also generate N new datapoints matching the traffic distribution of the fetched traces, so you get cases *around* real traffic rather than only the recorded ones. The same thing is available from Python as `datapoints_from_traces()` and `extend_from_traces()`:
+    ```bash
+    eq sim from-traces --output traces_datapoints.jsonl \
+      --limit 50 --lookback-hours 24 --extend 20
+    eq sim simulate --input traces_datapoints.jsonl --target agent:my-support-agent
+    ```
 
-```python
-from evaluatorq.simulation import (
-    datapoints_from_traces,
-    fetch_trace_conversations,
-    summarize_conversations,
-)
+=== "Python"
 
-conversations = await fetch_trace_conversations(limit=50)
-summaries = await summarize_conversations(conversations)
-datapoints = await datapoints_from_traces(conversations, summaries=summaries)
-```
+    ```python
+    import asyncio
+
+    from evaluatorq.simulation import (
+        datapoints_from_traces,
+        extend_from_traces,
+        fetch_trace_conversations,
+        simulate,
+        summarize_conversations,
+    )
+
+
+    async def main():
+        conversations = await fetch_trace_conversations(limit=50)
+        summaries = await summarize_conversations(conversations)
+
+        # One datapoint per recorded conversation, plus 20 new ones around that traffic
+        recorded = await datapoints_from_traces(conversations, summaries=summaries)
+        extra = await extend_from_traces(conversations, num_datapoints=20, summaries=summaries)
+
+        await simulate(target="agent:my-support-agent", datapoints=recorded + extra)
+
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
 
 Full flag list: [`eq sim from-traces`](../cli-reference/simulation.md).
 
@@ -794,35 +890,54 @@ Replaying the real user's first message looks like the faithful choice and behav
 
 When you want curated archetypes rather than a straight pull from traffic, seed generation yourself. Pull the recurring patterns out of your traces (the impatient buyer disputing a charge, the confused first-time user, the edge case that broke last week), then hand them to `generate_personas()` / `generate_scenarios()` as short seed phrases:
 
-```python
-import asyncio
+=== "CLI"
 
-from evaluatorq.simulation import generate_personas, generate_scenarios, simulate
+    ```bash
+    eq sim run \
+      --name trace-grounded-sim \
+      --target agent:my-support-agent \
+      --agent-description "e-commerce support agent" \
+      --persona-seed "impatient repeat buyer" \
+      --persona-seed "confused first-time user" \
+      --persona-seed "polite but persistent negotiator" \
+      --scenario-seed "disputes a duplicate charge" \
+      --scenario-seed "cannot find order confirmation" \
+      --scenario-seed "asks for a discount after a late delivery" \
+      --max-turns 6 \
+      --evaluator goal_achieved --evaluator criteria_met
+    ```
 
-# Archetypes and situations distilled from real traces
-persona_seeds = ["impatient repeat buyer", "confused first-time user", "polite but persistent negotiator"]
-scenario_seeds = ["disputes a duplicate charge", "cannot find order confirmation", "asks for a discount after a late delivery"]
+=== "Python"
+
+    ```python
+    import asyncio
+
+    from evaluatorq.simulation import generate_personas, generate_scenarios, simulate
+
+    # Archetypes and situations distilled from real traces
+    persona_seeds = ["impatient repeat buyer", "confused first-time user", "polite but persistent negotiator"]
+    scenario_seeds = ["disputes a duplicate charge", "cannot find order confirmation", "asks for a discount after a late delivery"]
 
 
-async def main():
-    personas = await generate_personas(persona_seeds, agent_description="e-commerce support agent")
-    scenarios = await generate_scenarios(scenario_seeds, agent_description="e-commerce support agent")
+    async def main():
+        personas = await generate_personas(persona_seeds, agent_description="e-commerce support agent")
+        scenarios = await generate_scenarios(scenario_seeds, agent_description="e-commerce support agent")
 
-    results = await simulate(
-        run_name="trace-grounded-sim",
-        target="agent:my-support-agent",
-        personas=personas,                    # 3 personas × 3 scenarios → 9 simulations
-        scenarios=scenarios,
-        max_turns=6,
-        evaluator_names=["goal_achieved", "criteria_met"],
-    )
-    passed = sum(r.goal_achieved for r in results)
-    print(f"Pass rate: {passed}/{len(results)}")
+        results = await simulate(
+            run_name="trace-grounded-sim",
+            target="agent:my-support-agent",
+            personas=personas,                    # 3 personas × 3 scenarios → 9 simulations
+            scenarios=scenarios,
+            max_turns=6,
+            evaluator_names=["goal_achieved", "criteria_met"],
+        )
+        passed = sum(r.goal_achieved for r in results)
+        print(f"Pass rate: {passed}/{len(results)}")
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
-```
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
 
 The seed is a steer, not a transcript: generation fills in the persona traits and scenario criteria and writes a natural opening message, so each run explores the space around the pattern rather than replaying one recorded conversation. Persist the generated cases (`eq sim generate --datapoints`, or `eq sim run --datapoints`) and they become a replayable bank for the section above.
 
