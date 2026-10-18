@@ -31,10 +31,10 @@ import json
 import logging
 import os
 import sys
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn, cast
 
-import click
 import typer
 from loguru import logger
 
@@ -77,6 +77,12 @@ if TYPE_CHECKING:
 
     from evaluatorq.common.cli_config import ModelT
     from evaluatorq.simulation.contracts import SimulationDatapoint, SimulationRun
+
+
+class _SchemaCommand(str, Enum):
+    SIMULATE = 'simulate'
+    RUN = 'run'
+
 
 app = typer.Typer(
     name='sim',
@@ -689,13 +695,12 @@ def schema(
         ),
     ] = True,
     command: Annotated[
-        str,
+        _SchemaCommand,
         typer.Option(
             '--command',
-            click_type=click.Choice(['simulate', 'run']),
             help="Which command's --config to describe with --input: `sim simulate` or `sim run`.",
         ),
-    ] = 'simulate',
+    ] = _SchemaCommand.SIMULATE,
 ) -> None:
     """Print the JSON schema of `sim simulate` / `sim run`'s config or of their JSON result."""
     from evaluatorq.simulation.contracts import SimulationRun

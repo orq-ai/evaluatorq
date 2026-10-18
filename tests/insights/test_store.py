@@ -24,6 +24,28 @@ def test_round_trip_and_truncated_file(minimal_run, tmp_path: Path) -> None:
     assert isinstance(listed[1][1], type(minimal_run))
 
 
+def test_map_layouts_survive_save_and_legacy_reports_remain_readable(minimal_run, tmp_path: Path) -> None:
+    import json
+
+    from evaluatorq.insights.models import TraceInsight
+
+    minimal_run.traces = [TraceInsight(
+        trace_id='map-trace',
+        coords={'intent': (1.0, 2.0, 3.0)},
+        coords_2d={'intent': (9.0, 8.0)},
+    )]
+    path = save_run(run=minimal_run, runs_dir=tmp_path)
+    restored = load_run(path=path)
+
+    assert restored.traces[0].coords == {'intent': (1.0, 2.0, 3.0)}
+    assert restored.traces[0].coords_2d == {'intent': (9.0, 8.0)}
+    raw = json.loads(path.read_text())
+    raw['traces'][0].pop('coords_2d')
+    path.write_text(json.dumps(raw))
+
+    assert load_run(path=path).traces[0].coords_2d is None
+
+
 def test_same_name_and_second_never_overwrites(tmp_path: Path, minimal_run) -> None:
     first = save_run(minimal_run, tmp_path)
     second_run = minimal_run.model_copy(update={'run_id': 'run-2'})

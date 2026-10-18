@@ -161,6 +161,30 @@ jobs:
       - name: Test SDK compatibility
         run: uv run --no-sync pytest tests/redteam/test_orq_backend_context.py tests/redteam/test_contracts.py
 
+  typer-latest:
+    name: CLI on latest Typer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
+
+      - name: Install latest allowed Typer
+        run: uv pip install --upgrade typer
+
+      - name: Test CLI compatibility
+        run: uv run --no-sync pytest tests/unit/test_cli_parameter_sources.py tests/test_cli_config_parity.py tests/redteam/test_cli*.py tests/simulation/test_cli*.py tests/trace_finder/test_cli.py tests/insights/test_cli.py tests/dashboard/test_launch.py
+
   fasthtml-floor:
     name: Dashboard on fasthtml floor
     runs-on: ubuntu-latest
