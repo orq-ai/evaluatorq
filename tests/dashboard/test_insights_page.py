@@ -34,7 +34,7 @@ from evaluatorq.insights.models import (
     TraceInsight,
     TraceSummary,
 )
-from evaluatorq.insights.presets import SENTIMENT
+from evaluatorq.insights.presets import MADE_ERRORS, SENTIMENT
 from evaluatorq.insights.usage import UsageLedger
 
 
@@ -70,6 +70,34 @@ def test_insights_review_shows_only_questions_the_run_asked() -> None:
         pytest.skip('Node.js is unavailable')
     script = Path(__file__).with_name('insights_review_trace_columns.cjs')
     subprocess.run(['node', str(script)], check=True, cwd=Path(__file__).parents[2])
+
+
+def test_insights_review_reads_noul_answers_from_the_payload(minimal_run, tmp_path) -> None:
+    if shutil.which('node') is None:
+        pytest.skip('Node.js is unavailable')
+    from evaluatorq.dashboard.insights_review_data import build_review_payload
+
+    answers = [True, False]
+    run = minimal_run.model_copy(update={
+        'config': minimal_run.config.model_copy(update={'labels': [SENTIMENT, MADE_ERRORS]}),
+        'traces': [
+            trace.model_copy(update={'labels': {
+                **trace.labels,
+                'made_errors': LabelAnswer(value=value, confidence=0.9, probabilities=None, error=None),
+            }})
+            for trace, value in zip(minimal_run.traces, answers)
+        ],
+        'labels': {
+            **minimal_run.labels,
+            'made_errors': LabelResult(
+                spec=MADE_ERRORS, counts={'yes': 1, 'no': 1}, mean_confidence=0.9, n_low_confidence=0, n_failed=0
+            ),
+        },
+    })
+    payload_path = tmp_path / 'payload.json'
+    payload_path.write_text(json.dumps(build_review_payload(run), default=str), encoding='utf-8')
+    script = Path(__file__).with_name('insights_review_noul.cjs')
+    subprocess.run(['node', str(script), str(payload_path)], check=True, cwd=Path(__file__).parents[2])
 
 
 def test_insights_header_marks_priced_and_missing_usage_calls_partial(minimal_run) -> None:
@@ -494,6 +522,25 @@ def test_review_client_escapes_saved_ids_and_labels_partial_cost(minimal_run: In
     assert run_data['cost_by_stage_details']['summary'] == {
         'cost': 0.25, 'is_partial': True, 'priced_calls': 1, 'calls': 3,
     }
+    assert run_data['stages_without_model_calls'] == ['priority', 'write']
+    snapshot = build_review_payload(saved.model_copy(update={'population': {'mode': 'snapshot'}}))
+    assert cast(dict[str, Any], snapshot['run'])['stages_without_model_calls'] == ['population', 'priority', 'write']
+    unlabeled = saved.model_copy(update={
+        'population': {'mode': 'snapshot'},
+        'config': saved.config.model_copy(update={'labels': [], 'coding_labels': [], 'coding_analysis': False}),
+    })
+    assert cast(dict[str, Any], build_review_payload(unlabeled)['run'])['stages_without_model_calls'] == [
+        'population', 'label', 'priority', 'write'
+    ]
+    filtered = unlabeled.model_copy(update={'population': {'mode': 'filter'}})
+    assert cast(dict[str, Any], build_review_payload(filtered)['run'])['stages_without_model_calls'] == [
+        'population', 'label', 'priority', 'write'
+    ]
+    queried = unlabeled.model_copy(update={'population': {'mode': 'query'}})
+    assert cast(dict[str, Any], build_review_payload(queried)['run'])['stages_without_model_calls'] == [
+        'priority', 'write'
+    ]
+    assert "const noModelCalls = r.stages_without_model_calls?.includes(name)" in script
     assert 'data-t="${esc(t.id)}"' in script
     assert 'data-t="${esc(id)}"' in script
     assert 'data-c="${esc(c.id)}"' in script
@@ -501,9 +548,19 @@ def test_review_client_escapes_saved_ids_and_labels_partial_cost(minimal_run: In
     assert 'data-backto="${esc(S.sel.prev.id)}"' in script
     assert 'data-t="${t.id}"' not in script
     assert 'data-c="${c.id}"' not in script
-    assert 'run.cost_is_partial ? `Partial cost: $${run.cost.toFixed(3)}`' in script
-    assert "stageCost.is_partial ? 'Partial cost: ' : ''" in script
-    assert "stageCost?.cost == null" in script
+    assert 'run.cost_is_partial ? `Partial cost: $${run.cost.toFixed(4)}`' in script
+    assert "stageCost.is_partial ? '≥ ' : ''" in script
+    assert 'Partial cost: some calls had no price, so this is a lower bound' in script
+    assert 'Cost unavailable: the provider reported no usage for these calls' in script
+    assert 'class="calls nocalls" style="grid-column:3 / 5">No model calls' in script
+    assert '<span class="total stage-label">Total</span>' in script
+    assert "stageCost?.cost != null" in script
+    assert "'Model calls made; cache hits are not counted'" in script
+    assert "const statusText = status === 'completed' ? '' : status === 'error' ? ' · <span class=\"err\">error</span>' : ` · ${esc(status)}`" in script
+    assert "const notRun = !stageCost && status !== 'completed'" in script
+    assert "let costText = noModelCalls || notRun ? '—' : 'n/a'" in script
+    assert "'num cost' + (notRun ? ' na' : '')" in script
+    assert 'title="Cost unavailable">n/a</span>' in script
 
 
 def test_review_client_uses_full_trace_keys_and_label_score_keys() -> None:

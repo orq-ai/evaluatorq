@@ -170,9 +170,8 @@ class TestLangGraphTarget:
         assert item.call_id == 'toolu_01ABC'
         assert item.id.startswith('fc_')
 
-        rendered = render_tool_call(item.model_copy(update={'result': 'done'}))
-        assert rendered is not None
-        tool_call, tool_message = rendered
+        tool_call, tool_message = render_tool_call(item.model_copy(update={'result': 'done'}))
+        assert tool_message is not None
         input_items = messages_to_responses_input(
             [Message(role='assistant', content=None, tool_calls=[tool_call]), tool_message]
         )
@@ -234,8 +233,8 @@ class TestLangGraphTarget:
     async def test_tool_result_is_backfilled_from_tool_message(self, tool_content: Any, expected: str) -> None:
         """A tool call paired with its ToolMessage survives into the transcript.
 
-        Without the pairing ``result`` stays None and `render_tool_call` drops the
-        call, so a judge asked "did the agent use the tool?" sees nothing.
+        Without the pairing ``result`` stays None and `render_tool_call` renders the
+        call incomplete, so a judge asked "did the agent use the tool?" sees nothing.
         """
         from evaluatorq.contracts import render_tool_call
 
@@ -246,7 +245,7 @@ class TestLangGraphTarget:
         response = await LangGraphTarget(graph).respond([Message(role='user', content='where is my order')])
         item = response.tool_calls[0]
         assert item.result == expected
-        assert render_tool_call(item) is not None
+        assert render_tool_call(item)[1] is not None
 
     @pytest.mark.asyncio
     async def test_hand_built_dicts_pair_like_message_objects(self) -> None:
@@ -261,19 +260,20 @@ class TestLangGraphTarget:
         assert response.tool_calls[0].result == '{"status": "shipped"}'
 
     @pytest.mark.asyncio
-    async def test_tool_call_without_result_stays_none_and_is_dropped(self) -> None:
-        """No ToolMessage this turn keeps result=None, so render_tool_call drops the call."""
+    async def test_tool_call_without_result_stays_none_and_renders_incomplete(self) -> None:
+        """No ToolMessage this turn keeps result=None, so render_tool_call keeps the call incomplete with no tool message."""
         from evaluatorq.contracts import render_tool_call
 
         response = await LangGraphTarget(_graph_returning(_tool_turn())).respond([Message(role='user', content='hi')])
         assert response.tool_calls[0].result is None
-        assert render_tool_call(response.tool_calls[0]) is None
+        tool_call, tool_message = render_tool_call(response.tool_calls[0])
+        assert tool_call.incomplete and tool_message is None
 
     @pytest.mark.asyncio
     async def test_late_tool_message_warns_naming_the_call(self, caplog: pytest.LogCaptureFixture) -> None:
         """The interrupt/resume shape: the result lands a turn after the call, and must announce itself.
 
-        Turn 1 emits the call and drops it (result=None). Turn 2 carries the
+        Turn 1 emits the call incomplete (result=None). Turn 2 carries the
         ToolMessage, whose call is no longer in this turn's index — the tool's
         output is discarded, and the only signal anyone gets is this warning.
         """
@@ -315,7 +315,8 @@ class TestLangGraphTarget:
 
         assert 'ghost' in caplog.text
         assert response.tool_calls[0].result is None
-        assert render_tool_call(response.tool_calls[0]) is None
+        tool_call, tool_message = render_tool_call(response.tool_calls[0])
+        assert tool_call.incomplete and tool_message is None
 
     @pytest.mark.asyncio
     async def test_results_pair_by_id_not_by_arrival_order(self) -> None:

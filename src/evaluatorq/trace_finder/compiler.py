@@ -22,6 +22,7 @@ from pydantic import (
 )
 
 from evaluatorq.common.structured_output import generate_structured
+from evaluatorq.contracts import Usage  # noqa: TC001 - pydantic resolves the CompiledPlan.usages annotation at runtime
 
 from .debug import enabled as debug_enabled
 from .models import (
@@ -395,6 +396,8 @@ class CompiledPlan(BaseModel):
     time: TimeFilters | None = None
     # Set when the question asks for an aggregate (total, average, ranking) that finding traces cannot answer.
     unsupported_reason: str | None = None
+    # One entry per compiler call (a retry adds one); ``None`` is a call whose response carried no usage.
+    usages: tuple[Usage | None, ...] = Field(default=(), exclude=True)
 
 
 async def compile_query(
@@ -423,6 +426,7 @@ async def compile_query(
         logger.debug(
             'Trace finder compiler request model={} messages={}', model, json.dumps(messages, ensure_ascii=False)
         )
+    usages: list[Usage | None] = []
     for attempt in range(2):
         result = await generate_structured(
             client,
@@ -434,6 +438,7 @@ async def compile_query(
             api='responses',
             config=cfg,
         )
+        usages.append(result.usage)
         if result.parsed is None:
             if debug_enabled():
                 logger.debug('Trace finder compiler response model={} raw={}', model, result.raw)
@@ -466,7 +471,13 @@ async def compile_query(
                 error_kind = 'contradictory numeric bounds'
             else:
                 reason = (wire.unsupported_reason or '').strip() or None
-                return CompiledPlan(dimensions=dimensions, numeric=numeric, time=time, unsupported_reason=reason)
+                return CompiledPlan(
+                    dimensions=dimensions,
+                    numeric=numeric,
+                    time=time,
+                    unsupported_reason=reason,
+                    usages=tuple(usages),
+                )
         if attempt:
             raise CompileError(f'Compiler produced {error_kind}: {error}') from error
         logger.warning('Trace query compiler returned an invalid plan; retrying: {}', error)

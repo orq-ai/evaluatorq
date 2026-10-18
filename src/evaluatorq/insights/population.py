@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from orq_ai_sdk import Orq
 
     from evaluatorq.insights.models import InsightsPopulation
+    from evaluatorq.insights.usage import UsageLedger
     from evaluatorq.trace_finder.export import ExportFilters
     from evaluatorq.trace_finder.models import CompiledQuery, TraceRecord
 
@@ -331,6 +332,7 @@ async def _resolve_from_query(
     classifier_model: str,
     fast_filter_model: str,
     filter_selection: Literal['llm', 'llm+jev'],
+    usage: UsageLedger | None = None,
 ) -> ResolvedPopulation:
     assert pop.query is not None  # noqa: S101 - guarded by the caller's dispatch before this is reached
     start, end = _window(pop)
@@ -364,6 +366,9 @@ async def _resolve_from_query(
         )
     except Exception as error:
         raise PopulationError(f'planning the population query failed: {error}') from error
+    if usage is not None:
+        for call_usage in planned.model_calls:
+            usage.add('population', call_usage)
 
     effective = planned.effective_population
     if planned.empty_match:
@@ -522,8 +527,12 @@ async def resolve_population(
     trace_input_chars: int | None = None,
     label_classifier_model: str | None = None,
     classifier_questions: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
+    usage: UsageLedger | None = None,
 ) -> ResolvedPopulation:
-    """Resolve `pop` into traces via a local file or the Orq-backed paths."""
+    """Resolve `pop` into traces via a local file or the Orq-backed paths.
+
+    Only a query population calls models here; each call is recorded in *usage* under ``'population'``.
+    """
     if pop.snapshot_path is not None:
         resolved = _resolve_from_snapshot(pop)
     elif pop.finder_export is not None:
@@ -545,6 +554,7 @@ async def resolve_population(
             classifier_model=classifier_model,
             fast_filter_model=fast_filter_model or role_model('fast', task='finder.filters'),
             filter_selection=selected_mode,
+            usage=usage,
         )
     else:
         if orq is None:

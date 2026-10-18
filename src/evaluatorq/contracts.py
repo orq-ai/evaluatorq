@@ -13,7 +13,7 @@ from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from typing_extensions import TypedDict
 
-from evaluatorq.common.messages import tool_result_to_text
+from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, tool_result_to_text, wire_arguments
 from evaluatorq.openresponses.convert_models import (
     InputFileContent,
     InputImageContent,
@@ -111,7 +111,7 @@ class ConversationHistoryMode(StrEnum):
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
 
     from openai import AsyncOpenAI
 
@@ -395,6 +395,13 @@ class StrategyToolCall(BaseModel):
     # item back to the Responses API on subsequent turns. ``None`` for tool calls
     # that did not originate from a Responses-API turn.
     item_id: str | None = Field(default=None, description='Responses-API function_call item id (fc_*)')
+    incomplete: bool = Field(
+        default=False,
+        description=(
+            'The recorded fact that this call has no result. Judge text and exports mark it from this flag; '
+            'provider replay does not trust it and pairs by position instead (`common.messages.pair_tool_rows`).'
+        ),
+    )
 
 
 class Message(BaseModel):
@@ -429,7 +436,8 @@ class Message(BaseModel):
         Preserves tool-call structure that a naive ``{"role", "content"}`` flatten
         would drop: an assistant message's ``tool_calls`` and a ``tool`` row's
         ``tool_call_id``/``name``. Used by stateless targets to replay a transcript
-        (built by ``turns_to_messages``) without losing multi-turn tool context.
+        (built by ``turns_to_messages``) without losing multi-turn tool context. Arguments go out
+        through `common.messages.wire_arguments`, so unknown ones are ``'{}'`` on the wire.
         """
         if self.role == 'tool':
             # A tool message carries a result keyed to tool_call_id; tool_calls belong
@@ -451,7 +459,7 @@ class Message(BaseModel):
                     {
                         'id': tc.id,
                         'type': 'function',
-                        'function': {'name': tc.function.name, 'arguments': tc.function.arguments},
+                        'function': {'name': tc.function.name, 'arguments': wire_arguments(tc.function.arguments)},
                     }
                     for tc in self.tool_calls
                 ],
@@ -459,30 +467,22 @@ class Message(BaseModel):
         return {'role': self.role, 'content': _render_chat_content(self.content)}
 
 
-def render_tool_call(
-    item: ToolCallOutputItem,
-    *,
-    warn: Callable[[str], None] | None = None,
-) -> tuple[StrategyToolCall, Message] | None:
-    """Render one completed tool call as its paired transcript messages.
+def render_tool_call(item: ToolCallOutputItem) -> tuple[StrategyToolCall, Message | None]:
+    """Render one tool call as its transcript messages.
 
-    A function call without a result cannot be replayed safely: emitting its
-    assistant row would leave an unpaired ``function_call`` on either provider
-    contract. Such calls are dropped and logged. An empty string is a valid result
-    and is therefore retained.
+    A call without a result keeps its place: it is returned with ``incomplete=True`` and no tool
+    message. The replay filter (`common.messages.drop_unreplayable_tool_records`) owns the warning
+    about it, so this logs at debug. An empty string is a valid result.
     """
-    if item.result is None:
-        warning = warn or logger.warning
-        warning(
-            f'Dropping tool call {item.call_id!r} ({item.name!r}): result is None, '
-            'so no paired tool message can be emitted.'
-        )
-        return None
     tool_call = StrategyToolCall(
         id=item.call_id,
         item_id=item.id or None,
         function=FunctionCall(name=item.name, arguments=item.arguments),
+        incomplete=item.result is None,
     )
+    if item.result is None:
+        logger.debug(f'Tool call {item.call_id!r} ({item.name!r}) has no result (None); kept without a tool message.')
+        return tool_call, None
     tool_message = Message(
         role='tool',
         tool_call_id=item.call_id,
@@ -1215,7 +1215,7 @@ class AgentResponse(BaseModel):
                 fields: dict[str, Any] = {
                     'call_id': item.call_id,
                     'name': item.name,
-                    'arguments': item.arguments,
+                    'arguments': UNKNOWN_ARGUMENTS if item.arguments is None else item.arguments,
                     'result': item.result,
                 }
                 if item.item_id:
@@ -1239,6 +1239,10 @@ class AgentResponse(BaseModel):
                         logger.warning(
                             'AgentResponse.from_openresponses: skipping unknown message part type={!r}', part_type
                         )
+            elif item_type == 'function_call_output':
+                logger.warning(
+                    'Result for call_id {!r} has no matching call (call input missing); dropped', _gf(item, 'call_id')
+                )
             elif item_type == 'reasoning':
                 pass  # o1/o3/o4-mini reasoning steps intentionally excluded
             else:

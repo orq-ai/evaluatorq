@@ -23,8 +23,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Hashable, Iterator, Sequence
 
     from opentelemetry.trace import Span
 
@@ -45,6 +47,23 @@ _run_id: ContextVar[str | None] = ContextVar('evaluatorq_run_id', default=None)
 # thread id. Kept out of the OQL query grammar's way: the run id is uuid hex and
 # the parts are ints / sanitized keys, so ':' never appears inside a segment.
 _THREAD_ID_SEP = ':'
+
+# Keys of the warnings already shown for the active conversation, so a transcript rebuilt or
+# replayed every turn warns about a tool record once instead of once per turn.
+_warned_keys: ContextVar[set[Hashable] | None] = ContextVar('evaluatorq_warned_keys', default=None)
+
+
+def warn_once(keys: Sequence[Hashable], message: str, *args: object) -> None:
+    """Log ``message`` at WARNING the first time in this conversation, at DEBUG after that.
+
+    ``keys`` identify the records the message is about; the message warns when any key is new and
+    marks all of them. Outside a `conversation_thread` nothing is remembered, so every call warns.
+    """
+    seen = _warned_keys.get()
+    fresh = seen is None or any(key not in seen for key in keys)
+    if seen is not None:
+        seen.update(keys)
+    (logger.warning if fresh else logger.debug)(message, *args)
 
 
 def build_thread_id(run_id: str | None, *parts: object) -> str | None:
@@ -170,7 +189,8 @@ def _evaluatorq_run_scope(run_id: str, span: Span | None = None) -> Iterator[str
 def conversation_thread(thread_id: str | None = None) -> Iterator[str]:
     """Bind a thread id for the duration of one conversation.
 
-    Generates a uuid when none is given. Restores the previous value on exit so
+    Generates a uuid when none is given. Also opens the conversation's set of already-shown
+    warning keys (`warn_once`). Restores the previous values on exit so
     nested/sequential conversations don't bleed into each other.
 
     Yields:
@@ -178,9 +198,11 @@ def conversation_thread(thread_id: str | None = None) -> Iterator[str]:
     """
     tid = thread_id or str(uuid.uuid4())
     token = _thread_id.set(tid)
+    warned_token = _warned_keys.set(set())
     try:
         yield tid
     finally:
+        _warned_keys.reset(warned_token)
         _thread_id.reset(token)
 
 
@@ -194,4 +216,5 @@ __all__ = [
     'pipeline_metadata',
     'pipeline_metadata_param',
     'thread_body_param',
+    'warn_once',
 ]

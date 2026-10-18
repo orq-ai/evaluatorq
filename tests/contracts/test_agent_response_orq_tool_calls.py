@@ -270,12 +270,12 @@ def test_function_call_wire_id_does_not_pair_with_an_orq_call_id():
     assert [t.result for t in r.tool_calls] == [None, 'ok']
 
 
-def test_lone_orq_record_with_real_empty_arguments_agrees_across_readers():
+def test_lone_orq_record_with_placeholder_arguments_is_unknown_across_readers():
     from evaluatorq.openresponses.otel_messages import items_to_input_messages
 
     record = {'type': 'orq:kb', 'call_id': 'k', 'arguments': {}, 'result': 'x'}
-    assert AgentResponse.from_output_items([record]).tool_calls[0].arguments == '{}'
-    assert items_to_input_messages([record])[0]['parts'][0]['arguments'] == {}
+    assert AgentResponse.from_output_items([record]).tool_calls[0].arguments == ''
+    assert 'arguments' not in items_to_input_messages([record])[0]['parts'][0]
 
 
 def test_plain_function_call_with_its_function_call_output_item_gets_the_result():
@@ -311,4 +311,4 @@ def test_orq_result_and_native_output_for_one_call_id_make_one_result(caplog):
 def test_orphan_native_output_is_still_skipped_with_a_warning(caplog):
     r = AgentResponse.from_output_items([{'type': 'function_call_output', 'call_id': 'z', 'output': 'x'}])
     assert r.output == []
-    assert 'unknown item type' in _messages(caplog)
+    assert 'has no matching call (call input missing)' in _messages(caplog)

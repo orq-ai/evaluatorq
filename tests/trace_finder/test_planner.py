@@ -155,6 +155,7 @@ async def test_calendar_end_is_exclusive_only_when_it_is_the_effective_upper_bou
             numeric=NumericFilters(),
             time=TimeFilters(start=start, end=generated_end, calendar_day=True),
             unsupported_reason=None,
+            usages=(),
         )
 
     async def loader(*_args, **_kwargs):
@@ -272,6 +273,7 @@ async def test_disjoint_within_results_plan_is_explicitly_empty(monkeypatch):
             numeric=NumericFilters(),
             time=TimeFilters(start=later_start, end=later_end),
             unsupported_reason=None,
+            usages=(),
         )
 
     async def catalogue_loader(*_args, **_kwargs):
@@ -348,6 +350,7 @@ async def test_llm_selector_time_drives_catalogue_reselection_and_candidate_conf
             dimensions=(), numeric=NumericFilters(),
             time=TimeFilters(start=datetime(2026, 5, 25, tzinfo=timezone.utc), end=anchor),
             unsupported_reason=None,
+            usages=(),
         )
 
     async def loader(_orq, *, start, end, **_kwargs):
@@ -394,6 +397,7 @@ async def test_final_selector_time_confirms_skipped_candidate_in_explicit_scope(
             time=TimeFilters(start=datetime(2026, 5, 25, tzinfo=timezone.utc),
                              end=datetime(2026, 5, 31, tzinfo=timezone.utc)),
             unsupported_reason=None,
+            usages=(),
         )
     async def loader(*_args, **_kwargs):
         return FacetCatalogue()
@@ -432,7 +436,7 @@ async def test_reselection_accepts_equivalent_whole_calendar_day_bounds(monkeypa
     calls = 0
 
     async def compile_stub(*_args, **_kwargs):
-        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=None, unsupported_reason=None)
+        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=None, unsupported_reason=None, usages=())
 
     async def loader(*_args, **_kwargs):
         return FacetCatalogue(model=('some/model',))
@@ -472,7 +476,7 @@ async def test_reselection_time_flip_fails_closed_with_visible_error(monkeypatch
     calls = 0
 
     async def compile_stub(*_args, **_kwargs):
-        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=None, unsupported_reason=None)
+        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=None, unsupported_reason=None, usages=())
 
     async def loader(*_args, **_kwargs):
         return FacetCatalogue(model=('some/model',))
@@ -511,7 +515,7 @@ async def test_generated_time_outside_retention_returns_empty_without_reloading_
     loaded: list[tuple[datetime, datetime]] = []
 
     async def compile_stub(*_args, **_kwargs):
-        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=None, unsupported_reason=None)
+        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=None, unsupported_reason=None, usages=())
 
     async def loader(_orq, *, start, end, **_kwargs):
         loaded.append((start, end))
@@ -548,6 +552,7 @@ async def test_initial_catalogue_failure_keeps_compiled_semantics_and_fails_clos
             numeric=NumericFilters(),
             time=None,
             unsupported_reason=None,
+            usages=(),
         )
 
     async def broken_loader(*_args, **_kwargs):
@@ -583,7 +588,7 @@ async def test_inferred_population_origin_preserves_only_supplied_bounds(monkeyp
     population = PopulationRequest.model_validate_json(population.model_dump_json())
 
     async def compile_stub(*_args, **_kwargs):
-        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=generated, unsupported_reason=None)
+        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=generated, unsupported_reason=None, usages=())
 
     async def loader(*_args, **_kwargs):
         return FacetCatalogue()
@@ -628,7 +633,7 @@ async def test_effective_end_retains_actual_boundary_semantics(monkeypatch, case
         expected_kept = True
 
     async def compile_stub(*_args, **_kwargs):
-        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=generated, unsupported_reason=None)
+        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=generated, unsupported_reason=None, usages=())
 
     async def loader(*_args, **_kwargs):
         return FacetCatalogue()
@@ -654,7 +659,8 @@ def _time_compiler(*windows: tuple[datetime, datetime]):
     async def compile_stub(*_args, **_kwargs):
         start, end = next(pending)
         return SimpleNamespace(
-            dimensions=(), numeric=NumericFilters(), time=TimeFilters(start=start, end=end), unsupported_reason=None
+            dimensions=(), numeric=NumericFilters(), time=TimeFilters(start=start, end=end), unsupported_reason=None,
+            usages=(),
         )
 
     return compile_stub

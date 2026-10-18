@@ -26,3 +26,17 @@ def test_ledger_claims_each_warning_key_once_per_run() -> None:
     assert ledger.claim_warning('unpriced_embedding_cost') is True
     assert ledger.claim_warning('unpriced_embedding_cost') is False
     assert ledger.claim_warning('other_warning') is True
+
+
+def test_scoped_view_records_under_its_stage_and_shares_the_warning_slot() -> None:
+    ledger = UsageLedger()
+    scoped = ledger.scoped('dimension:intent')
+
+    scoped.add('embed', Usage(calls=1))
+    scoped.add('merge', None)
+
+    totals = ledger.totals()
+    assert set(totals) == {'dimension:intent'}
+    assert totals['dimension:intent'] is not None and totals['dimension:intent'].calls == 2
+    assert scoped.claim_warning('w') is True
+    assert ledger.claim_warning('w') is False

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from evaluatorq.common.messages import EMPTY_ASSISTANT_TEXT
 from evaluatorq.contracts import (
     AgentResponse,
     AgentResponseError,
@@ -58,7 +59,7 @@ def test_empty_output_emits_empty_assistant_row():
         target=AgentResponse(output=[]),
     )
     msgs = turns_to_messages([turn])
-    assert [(m.role, m.content) for m in msgs] == [("user", "q"), ("assistant", "")]
+    assert [(m.role, m.content) for m in msgs] == [("user", "q"), ("assistant", EMPTY_ASSISTANT_TEXT)]
 
 
 def test_tool_result_emits_following_tool_row():
@@ -104,7 +105,7 @@ def test_reasoning_only_output_emits_empty_assistant_row():
         target=AgentResponse(output=[ReasoningOutputItem(text="thinking...")]),
     )
     msgs = turns_to_messages([turn])
-    assert [(m.role, m.content) for m in msgs] == [("user", "q"), ("assistant", "")]
+    assert [(m.role, m.content) for m in msgs] == [("user", "q"), ("assistant", EMPTY_ASSISTANT_TEXT)]
 
 
 def test_tool_call_with_result_does_not_emit_extra_assistant_row():
