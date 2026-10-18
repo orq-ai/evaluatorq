@@ -25,14 +25,27 @@ An Orq deployment (`target="deployment:<key>"`) runs in static mode only, with t
 
 Replay is not a separate mode. It re-runs a previous run's exact attacks against the target you give it now, so a before/after comparison changes the agent while holding the attack set fixed. See [Replay a previous run](#replay-a-previous-run).
 
-```python
-# static mode replays Orq's public attack dataset by default
-report = await red_team(target=target, mode="static")
+=== "CLI"
 
-# ...or bring your own — a local JSON file or a HuggingFace repo
-report = await red_team(target=target, mode="static", dataset="./my_attacks.json")
-report = await red_team(target=target, mode="static", dataset="hf:my-org/my-attacks")
-```
+    ```bash
+    # static mode replays Orq's public attack dataset by default
+    eq redteam run --target agent:my-agent --mode static --yes
+
+    # ...or bring your own — a local JSON file or a HuggingFace repo
+    eq redteam run --target agent:my-agent --mode static --dataset ./my_attacks.json --yes
+    eq redteam run --target agent:my-agent --mode static --dataset hf:my-org/my-attacks --yes
+    ```
+
+=== "Python"
+
+    ```python
+    # static mode replays Orq's public attack dataset by default
+    report = await red_team(target="agent:my-agent", mode="static")
+
+    # ...or bring your own — a local JSON file or a HuggingFace repo
+    report = await red_team(target="agent:my-agent", mode="static", dataset="./my_attacks.json")
+    report = await red_team(target="agent:my-agent", mode="static", dataset="hf:my-org/my-attacks")
+    ```
 
 ## Seed a dynamic attack from a trace
 
@@ -97,23 +110,51 @@ The [deliberately vulnerable support agent](https://github.com/orq-ai/evaluatorq
 
 ### Fastest first run
 
-If you prefer the CLI, start with a small static run against a test agent. Static mode uses the built-in attack dataset, so it is a predictable way to verify your setup before exploring dynamic or hybrid runs.
+Start with a small static run against a test agent. Static mode uses the built-in attack dataset, so it is a predictable way to verify your setup before exploring dynamic or hybrid runs.
 
 ```bash
 export ORQ_API_KEY=...
 uv add "evaluatorq[redteam]"
-eq redteam run \
-  --target agent:your-agent-key \
-  --mode static \
-  --category LLM01 \
-  --max-static-datapoints 5 \
-  --no-executive-summary \
-  --no-recommendations \
-  --report redteam-report.json \
-  --yes
 ```
 
-The command writes a JSON report and exits non-zero if no attacks receive a verdict or evaluation coverage falls below the configured floor. See the [CLI reference](../cli-reference/redteam.md) for the other output formats and run options.
+=== "CLI"
+
+    ```bash
+    eq redteam run \
+      --target agent:my-agent \
+      --mode static \
+      --category LLM01 \
+      --max-static-datapoints 5 \
+      --no-executive-summary \
+      --no-recommendations \
+      --report redteam-report.json \
+      --yes
+    ```
+
+=== "Python"
+
+    ```python
+    import asyncio
+
+    from evaluatorq.redteam import red_team
+
+
+    async def main():
+        report = await red_team(
+            target="agent:my-agent",
+            mode="static",
+            categories=["LLM01"],
+            max_static_datapoints=5,
+            generate_executive_summary=False,
+            recommendations=False,
+        )
+        print(report.summary.resistance_rate)
+
+
+    asyncio.run(main())
+    ```
+
+The CLI command writes a JSON report and exits non-zero if no attacks receive a verdict or evaluation coverage falls below the configured floor. In Python, check `report.summary` yourself. See the [CLI reference](../cli-reference/redteam.md) for the other output formats and run options.
 
 ### Choose a cookbook
 
