@@ -23,7 +23,7 @@ from evaluatorq.common.llm_call import (
     execute_response,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, UNKNOWN_ARGUMENTS_TEXT, coerce_content_text
 from evaluatorq.common.model_catalogue import is_known_classify_model, qualified_model, supports_classify
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
@@ -312,6 +312,10 @@ def judge_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, A
     }
 
 
+def _arguments_for_judge(item: ToolCallOutputItem) -> Any:
+    return UNKNOWN_ARGUMENTS_TEXT if item.arguments == UNKNOWN_ARGUMENTS else item.arguments_dict
+
+
 def _format_output_message(item: OutputMessage) -> dict[str, Any] | None:
     if isinstance(item, TextOutputItem):
         return {'role': 'assistant', 'content': item.text}
@@ -323,7 +327,7 @@ def _format_output_message(item: OutputMessage) -> dict[str, Any] | None:
                 {
                     'id': item.id,
                     'type': 'function',
-                    'function': {'name': item.name, 'arguments': item.arguments_dict},
+                    'function': {'name': item.name, 'arguments': _arguments_for_judge(item)},
                 }
             ],
             'result': item.result,
@@ -350,7 +354,7 @@ def _build_namespace(
     ]
     response = ''.join(i.text for i in output_messages if isinstance(i, TextOutputItem))
     tools_called = [
-        {'name': i.name, 'arguments': i.arguments_dict, 'result': i.result, 'id': i.id}
+        {'name': i.name, 'arguments': _arguments_for_judge(i), 'result': i.result, 'id': i.id}
         for i in output_messages
         if isinstance(i, ToolCallOutputItem)
     ]

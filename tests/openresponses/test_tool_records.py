@@ -70,9 +70,36 @@ def test_calls_come_back_in_input_order() -> None:
 
 def test_orphan_result_has_no_arguments_and_keeps_its_wire_id(caplog) -> None:
     (call,) = pair_tool_records([RESULT])
-    assert call.arguments == '{}'
+    assert call.arguments is None
     assert call.item_id == 'orq_9'
+    warnings = _warnings(caplog)
+    assert warnings.count('has no matching call record') == 1
+    assert "'refund'" in warnings
+    assert "'c1'" in warnings
+
+
+def test_orphan_result_in_normalized_items_has_unknown_empty_arguments(caplog) -> None:
+    function_call, _ = normalize_tool_records([RESULT])
+    assert function_call['arguments'] == ''
+
+
+def test_call_with_real_arguments_and_orq_result_does_not_warn(caplog) -> None:
+    (call,) = pair_tool_records([CALL, RESULT])
+    assert call.arguments == '{"order_id":"a2"}'
     assert not _warnings(caplog)
+
+
+def test_call_record_without_arguments_warns_about_arguments_not_a_missing_call(caplog) -> None:
+    (call,) = pair_tool_records([{**CALL, 'arguments': ''}, RESULT])
+    assert call.arguments is None
+    warnings = _warnings(caplog)
+    assert 'no matching call record' not in warnings
+    assert warnings.count('call record carried no arguments') == 1
+
+
+def test_explicit_empty_call_arguments_stay_empty_object() -> None:
+    (call,) = pair_tool_records([{**CALL, 'arguments': '{}'}, RESULT])
+    assert call.arguments == '{}'
 
 
 def test_unmatched_result_warns_when_the_list_has_a_call(caplog) -> None:
@@ -102,7 +129,7 @@ def test_record_without_call_id_gets_a_unique_id_and_never_pairs(caplog) -> None
 def test_unmatched_result_without_call_id_warns_with_the_minted_id(caplog) -> None:
     calls = pair_tool_records([CALL, {'type': 'orq:refund', 'result': 'x'}])
     minted = next(c.call_id for c in calls if c.call_id != 'c1')
-    assert f'{minted!r} has no matching call record' in _warnings(caplog)
+    assert f'call_id {minted!r}) has no matching call record' in _warnings(caplog)
 
 
 @pytest.mark.parametrize('placeholder', [{}, '{}', [], None, ''])
@@ -178,13 +205,14 @@ def test_record_with_an_error_but_no_failed_status_is_wrapped_as_failed() -> Non
     assert json.loads(call.result or '') == {'status': 'failed', 'error': 'boom'}
 
 
-def test_lone_orq_record_with_real_empty_arguments_keeps_them() -> None:
+def test_lone_orq_record_with_placeholder_arguments_is_unknown() -> None:
     (call,) = pair_tool_records([{'type': 'orq:kb', 'call_id': 'k', 'arguments': {}, 'result': 'x'}])
-    assert call.arguments == '{}'
+    assert call.arguments is None
 
 
 def test_non_json_arguments_are_encoded_with_a_str_fallback() -> None:
     (call,) = pair_tool_records([{**CALL, 'arguments': {'when': object}}])
+    assert call.arguments is not None
     assert call.arguments.startswith('{"when": "<class')
 
 
@@ -288,7 +316,7 @@ def test_same_call_id_in_separate_lists_is_not_cross_paired() -> None:
     (only_call,) = pair_tool_records([CALL])
     (only_result,) = pair_tool_records([RESULT])
     assert only_call.result is None
-    assert only_result.arguments == '{}'
+    assert only_result.arguments is None
 
 
 def test_parallel_native_calls_pair_by_call_id_not_adjacency(caplog) -> None:
@@ -356,13 +384,13 @@ def test_warning_flags_are_scoped_to_the_turn(caplog) -> None:
     user = {'type': 'message', 'role': 'user', 'content': 'next'}
     other = {'type': 'orq:other', 'call_id': 'c9', 'arguments': '{}', 'result': 'ok'}
     pair_tool_records([other, user, CALL])
-    assert not _warnings(caplog)
+    assert 'has no result record' not in _warnings(caplog)
 
 
 def test_pending_client_call_beside_an_orq_tool_stays_silent(caplog) -> None:
     other = {'type': 'orq:other', 'call_id': 'c9', 'arguments': '{}', 'result': 'ok'}
     pair_tool_records([CALL, other])
-    assert not _warnings(caplog)
+    assert 'has no result record' not in _warnings(caplog)
 
 
 def test_call_without_call_id_does_not_pair_with_an_orq_call_id_equal_to_its_wire_id() -> None:

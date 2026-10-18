@@ -170,10 +170,10 @@ def test_split_pair_in_output_is_one_call_part_and_no_result() -> None:
     assert messages[0]['parts'] == [{'type': 'tool_call', 'id': 'c1', 'name': 'refund', 'arguments': {'order': 'a2'}}]
 
 
-def test_unmatched_orq_record_keeps_its_result_and_has_empty_arguments() -> None:
+def test_unmatched_orq_record_keeps_its_result_and_omits_arguments() -> None:
     messages = items_to_input_messages([{'type': 'orq:refund', 'call_id': 'c9', 'result': 'ok'}])
 
-    assert messages[0]['parts'] == [{'type': 'tool_call', 'id': 'c9', 'name': 'refund', 'arguments': {}}]
+    assert messages[0]['parts'] == [{'type': 'tool_call', 'id': 'c9', 'name': 'refund'}]
     assert messages[1]['parts'] == [{'type': 'tool_call_response', 'id': 'c9', 'response': 'ok'}]
 
 

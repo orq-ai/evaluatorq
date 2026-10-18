@@ -13,7 +13,7 @@ from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from typing_extensions import TypedDict
 
-from evaluatorq.common.messages import tool_result_to_text
+from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, tool_result_to_text
 from evaluatorq.openresponses.convert_models import (
     InputFileContent,
     InputImageContent,
@@ -1215,7 +1215,7 @@ class AgentResponse(BaseModel):
                 fields: dict[str, Any] = {
                     'call_id': item.call_id,
                     'name': item.name,
-                    'arguments': item.arguments,
+                    'arguments': UNKNOWN_ARGUMENTS if item.arguments is None else item.arguments,
                     'result': item.result,
                 }
                 if item.item_id:
@@ -1239,6 +1239,10 @@ class AgentResponse(BaseModel):
                         logger.warning(
                             'AgentResponse.from_openresponses: skipping unknown message part type={!r}', part_type
                         )
+            elif item_type == 'function_call_output':
+                logger.warning(
+                    'Result for call_id {!r} has no matching call (call input missing); dropped', _gf(item, 'call_id')
+                )
             elif item_type == 'reasoning':
                 pass  # o1/o3/o4-mini reasoning steps intentionally excluded
             else:
