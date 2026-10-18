@@ -361,7 +361,7 @@ def test_orq_prefix_detector_actually_fires() -> None:
 
 def test_targets_are_called_only_through_call_target_with_retry() -> None:
     extra = _hits(
-        lambda name: name.endswith('target.respond') or name in {'target.respond', 'effective.respond'},
+        lambda name: _tail(name) == 'respond',
         allow={'common/target_call.py'},
     )
     assert not extra, (

@@ -1240,10 +1240,10 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
 
     Each turn becomes a ``user`` message (the attacker prompt) followed by the
     target's output rows: consecutive text runs collapse into one ``assistant``
-    message; each completed tool call becomes an ``assistant`` message with one
-    ``tool_calls`` entry plus its following ``tool`` row; calls without a result
-    are dropped because they cannot form a valid pair. Reasoning items are
-    dropped. An empty target output still emits an empty ``assistant`` row so
+    message; each tool call becomes an ``assistant`` message with one
+    ``tool_calls`` entry plus its following ``tool`` row; a call without a result
+    is kept, flagged ``incomplete``, with no ``tool`` row (the replay filter removes it
+    before a target sees it). Reasoning items are dropped. An empty target output still emits an empty ``assistant`` row so
     consumers can rely on a user/assistant pair per turn.
 
     When ``skip_errors`` is True, turns whose target carries an

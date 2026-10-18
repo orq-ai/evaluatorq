@@ -198,7 +198,6 @@ async def call_target_with_retry(
     map_error: Callable[[Exception], tuple[str, str] | None] = default_map_error,
     on_attempt: Callable[[int], AbstractAsyncContextManager[Any]] | None = None,
     on_attempt_response: Callable[[Any, AgentResponse], None] | None = None,
-    warned_tool_ids: set[str] | None = None,
 ) -> TargetCallResult:
     """Call ``target.respond(messages)`` with bounded retry + per-call timeout.
 
@@ -211,13 +210,13 @@ async def call_target_with_retry(
     caller-supplied context value and each returned response while that context
     is still open, so callers can annotate per-attempt spans. The target receives a copy of
     ``messages`` from `drop_unreplayable_tool_records`; the caller's list stays the evidence
-    transcript, and ``warned_tool_ids`` carries the run's already-reported call ids. Returns a uniform
+    transcript. Returns a uniform
     `TargetCallResult`. A target with ``manages_own_timeout`` set gets no per-call
     timeout here; it bounds itself. Such a target raises
     ``NonRetryableTargetError`` when its own deadline expires. A plain
     ``TimeoutError`` can come from a downstream call and remains retryable.
     """
-    messages = drop_unreplayable_tool_records(messages, warned=warned_tool_ids)
+    messages = drop_unreplayable_tool_records(messages)
     timeout_s = target_agent_timeout_ms / 1000.0
     manages_own_timeout = getattr(target, 'manages_own_timeout', False) is True
     own_timeout_ms = getattr(target, 'timeout_ms', None)

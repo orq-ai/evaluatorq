@@ -59,10 +59,7 @@ def _agent_response_text(response: AgentResponse) -> str:
         if isinstance(item, TextOutputItem):
             turns.append({'role': 'assistant', 'content': item.text})
         elif isinstance(item, ToolCallOutputItem):
-            turns.append({
-                'role': 'assistant',
-                'tool_calls': [{'name': item.name, 'arguments': item.arguments, 'incomplete': item.result is None}],
-            })
+            turns.append({'role': 'assistant', 'tool_calls': [item]})
     return messages_to_text(turns)
 
 
@@ -349,6 +346,7 @@ def responses_transcript(output: Any) -> list[Message] | None:
                     id=item['call_id'],
                     function=FunctionCall(name=item['name'], arguments=item['arguments']),
                     item_id=item.get('id'),
+                    incomplete=item.get('status') == 'incomplete',
                 )
                 previous = messages[-1] if messages else None
                 previous_group = last_assistant_group

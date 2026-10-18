@@ -2,6 +2,7 @@ import logging
 
 import pytest
 
+from evaluatorq.common.thread_context import conversation_thread
 from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, drop_unreplayable_tool_records, messages_to_text
 from evaluatorq.contracts import AgentResponse, FunctionCall, StrategyToolCall, TextOutputItem, ToolCallOutputItem
 from evaluatorq.openresponses.input_items import messages_to_responses_input
@@ -108,40 +109,153 @@ def _user() -> Message:
     return Message(role='user', content='u')
 
 
+def _system() -> Message:
+    return Message(role='system', content='s')
+
+
 @pytest.mark.parametrize(
     ('label', 'messages', 'expected_roles'),
     [
         ('orphan_result', [_user(), _tool('c1')], ['user']),
-        ('result_before_call', [_tool('c1'), _assistant('c1')], []),
-        ('result_after_later_user_turn', [_assistant('c1'), _user(), _tool('c1')], ['user']),
+        ('result_before_call', [_tool('c1'), _assistant('c1')], ['assistant']),
+        ('result_after_later_user_turn', [_assistant('c1'), _user(), _tool('c1')], ['assistant', 'user']),
         ('duplicate_result_keeps_first', [_assistant('c1'), _tool('c1'), _tool('c1')], ['assistant', 'tool']),
         (
             'id_reused_in_a_later_turn',
             [_assistant('c1'), _tool('c1'), _user(), _assistant('c1')],
-            ['assistant', 'tool', 'user'],
+            ['assistant', 'tool', 'user', 'assistant'],
         ),
-        ('result_for_another_turns_call', [_assistant('c1'), _tool('c1'), _assistant('c2'), _tool('c1')], ['assistant', 'tool']),
+        (
+            'result_for_another_turns_call',
+            [_assistant('c1'), _tool('c1'), _assistant('c2'), _tool('c1')],
+            ['assistant', 'tool', 'assistant'],
+        ),
+        (
+            'parallel_calls_split_across_assistant_rows',
+            [_assistant('a'), _assistant('b'), _tool('a'), _tool('b')],
+            ['assistant', 'assistant', 'tool', 'tool'],
+        ),
+        (
+            'system_row_between_call_and_result',
+            [_assistant('a'), _system(), _tool('a')],
+            ['assistant', 'system', 'tool'],
+        ),
     ],
 )
 def test_pairing_is_positional(label, messages, expected_roles):
     assert [m.role for m in drop_unreplayable_tool_records(messages)] == expected_roles
 
 
-def test_replay_warns_once_per_call_id_across_turns(caplog):
-    warned: set[str] = set()
-    messages = [_user(), _assistant('c1')]
+def test_parallel_calls_split_across_rows_keep_their_calls():
+    replay = drop_unreplayable_tool_records([_assistant('a'), _assistant('b'), _tool('a'), _tool('b')])
 
-    with caplog.at_level(logging.DEBUG):
-        drop_unreplayable_tool_records(messages, warned=warned)
-        drop_unreplayable_tool_records(messages, warned=warned)
-
-    assert [r.levelname for r in caplog.records if 'Not replaying' in r.message] == ['WARNING', 'DEBUG']
+    assert [[tc.id for tc in m.tool_calls or []] for m in replay[:2]] == [['a'], ['b']]
 
 
-def test_whitespace_only_assistant_turn_with_only_dropped_calls_is_dropped():
+def test_emptied_assistant_row_keeps_the_alternation_placeholder():
+    from evaluatorq.contracts import AgentResponse as _AR
+    from evaluatorq.redteam.contracts import Turn, turns_to_messages
+
+    turns = [
+        Turn(attacker=_AR(text='one'), target=_AR(output=[ToolCallOutputItem(name='f', arguments='{}', call_id='c1')])),
+        Turn(attacker=_AR(text='two'), target=_AR(text='fine')),
+    ]
+    messages = turns_to_messages(turns)
+
+    replay = drop_unreplayable_tool_records(messages)
+
+    assert [m.role for m in replay] == ['user', 'assistant', 'user', 'assistant']
+    assert (replay[1].content, replay[1].tool_calls) == ('', None)
+
+
+def test_whitespace_only_assistant_turn_with_only_dropped_calls_becomes_empty():
     message = Message(role='assistant', content='  \n', tool_calls=[_call('c1')])
 
-    assert drop_unreplayable_tool_records([_user(), message]) == [_user()]
+    replay = drop_unreplayable_tool_records([_user(), message])
+
+    assert [(m.role, m.content, m.tool_calls) for m in replay] == [('user', 'u', None), ('assistant', '', None)]
+
+
+def test_replay_warns_once_per_call_across_turns(caplog):
+    messages = [_user(), _assistant('c1')]
+
+    with conversation_thread(), caplog.at_level(logging.DEBUG):
+        for _ in range(3):
+            drop_unreplayable_tool_records(messages)
+
+    assert [r.levelname for r in caplog.records if 'Not replaying' in r.message] == ['WARNING', 'DEBUG', 'DEBUG']
+
+
+def test_judge_copy_loses_no_call_so_only_an_orphan_result_warns(caplog):
+    messages = [_user(), _assistant('c1'), _tool('stray')]
+
+    with conversation_thread(), caplog.at_level(logging.WARNING):
+        drop_unreplayable_tool_records(messages, incomplete_as_text=True)
+        drop_unreplayable_tool_records(messages, incomplete_as_text=True)
+
+    warnings = [r.message for r in caplog.records if 'Not replaying' in r.message]
+    assert len(warnings) == 1 and 'stray' in warnings[0] and 'c1' not in warnings[0]
+
+
+def test_rebuilding_the_red_team_transcript_every_turn_warns_once_per_call(caplog):
+    from evaluatorq.contracts import AgentResponse as _AR
+    from evaluatorq.redteam.contracts import Turn, turns_to_messages
+
+    turns = [
+        Turn(attacker=_AR(text='x'), target=_AR(output=[ToolCallOutputItem(name='f', arguments='{}', call_id='c1')]))
+    ]
+
+    with conversation_thread(), caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            drop_unreplayable_tool_records(turns_to_messages(turns))
+
+    assert sum('c1' in r.message for r in caplog.records if r.levelno == logging.WARNING) == 2
+
+
+def test_simulation_warns_once_per_call_across_turns(caplog):
+    with conversation_thread(), caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            messages = build_assistant_message(_incomplete_response())
+            drop_unreplayable_tool_records(messages)
+
+    assert sum('call_refund_1' in r.message for r in caplog.records if r.levelno == logging.WARNING) == 2
+
+
+def test_tool_traffic_text_shares_the_marker_grammar():
+    from evaluatorq.simulation.runner.simulation import _tool_traffic_text
+
+    message = Message(role='assistant', tool_calls=[_call('a'), _call('b')])
+
+    assert _tool_traffic_text(message, {'a': 'ok'}).splitlines()[1:] == [
+        '[tool_call: f({}) -> ok]',
+        '[tool_call: f({}) -> no result recorded]',
+    ]
+
+
+def test_export_round_trip_keeps_the_marker():
+    from evaluatorq.common.output_adapters import responses_transcript
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.simulation.convert import to_open_responses
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+
+    result = SimulationResult(
+        messages=[Message(role='user', content='refund'), *build_assistant_message(_incomplete_response())],
+        terminated_by=TerminatedBy.judge,
+        reason='done',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        turn_metrics=[],
+    )
+
+    transcript = responses_transcript(to_open_responses(result))
+
+    assert transcript is not None
+    text = messages_to_text(transcript)
+    assert '[tool_call: refund({}) -> no result recorded]' in text
+    assert '[tool_call: lookup({})]' in text
 
 
 def test_incomplete_calls_become_text_for_the_judge_but_not_for_targets():
@@ -229,9 +343,7 @@ def test_assistant_text_and_tool_calls_are_kept_together():
 
 
 def test_tool_only_turn_warns(caplog):
-    response = AgentResponse(
-        output=[ToolCallOutputItem(name='refund', arguments='{}', result='approved')]
-    )
+    response = AgentResponse(output=[ToolCallOutputItem(name='refund', arguments='{}', result='approved')])
     with caplog.at_level(logging.WARNING, logger='evaluatorq.simulation.runner.simulation'):
         build_assistant_message(response)
     assert any('tool call' in r.message.lower() for r in caplog.records)

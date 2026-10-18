@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.common.thread_context import conversation_warned_keys
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -169,7 +171,7 @@ UNKNOWN_ARGUMENTS_TEXT = 'arguments unavailable'
 NO_RESULT_TEXT = 'no result recorded'
 
 
-def tool_call_text(call: Any, *, incomplete: bool = False) -> str:
+def tool_call_text(call: Any, *, incomplete: bool = False, result: str | None = None) -> str:
     """Render one tool call as a marker a judge can read.
 
     The ``-> no result recorded`` suffix comes from the recorded fact, an ``incomplete`` flag on
@@ -184,7 +186,10 @@ def tool_call_text(call: Any, *, incomplete: bool = False) -> str:
     rendered = arguments if isinstance(arguments, str) else _json_or_text(arguments)
     if arguments == UNKNOWN_ARGUMENTS:
         rendered = UNKNOWN_ARGUMENTS_TEXT
-    suffix = f' -> {NO_RESULT_TEXT}' if incomplete or _field(call, 'incomplete') is True else ''
+    if result is not None:
+        suffix = f' -> {result}'
+    else:
+        suffix = f' -> {NO_RESULT_TEXT}' if incomplete or _field(call, 'incomplete') is True else ''
     return f'[tool_call: {name or "unknown"}({rendered or ""}){suffix}]'
 
 
@@ -288,66 +293,92 @@ def tool_result_to_text(result: object) -> str:
     return json.dumps(result, default=str)
 
 
-def _pair_tool_rows(messages: list[Message]) -> tuple[dict[int, set[str]], set[int]]:
-    """Pair tool rows to calls by position: the tool rows directly after an assistant turn answer it.
+@dataclass(frozen=True)
+class ToolPairing:
+    """Which tool calls and tool rows of a transcript answer each other, by position."""
 
-    Returns the paired call ids per assistant index and the indices of tool rows that answer a
-    call. The first row per id wins. An id reused in a later turn, a result after a later user
-    turn, a result before its call and a duplicate result do not pair.
+    paired: dict[int, set[str]]
+    rows: set[int]
+    row_of: dict[tuple[int, str], int]
+
+
+def pair_tool_rows(messages: list[Message]) -> ToolPairing:
+    """Pair tool rows to calls by position, for provider replay.
+
+    A block is the consecutive assistant turns that carry tool calls (parallel calls may be split
+    across rows) plus the tool rows that directly follow them; system rows between the pieces are
+    skipped. A tool row answers the first call in its block with that id, and the first row per id
+    wins. A reused id, a result after a later user turn, a result before its call and a duplicate
+    result do not pair.
+
+    Position is authoritative for replay only. What the judge reads as "no result recorded" is the
+    recorded fact, `StrategyToolCall.incomplete`; the display pairing in
+    `common.model_input.pair_tool_call_results` is a different job (FIFO within a call group for
+    rendering) and stays separate.
     """
     paired: dict[int, set[str]] = {}
     rows: set[int] = set()
-    for index, message in enumerate(messages):
+    row_of: dict[tuple[int, str], int] = {}
+    index = 0
+    while index < len(messages):
+        message = messages[index]
         if message.role != 'assistant' or not message.tool_calls:
+            index += 1
             continue
-        wanted = {tc.id for tc in message.tool_calls}
-        matched: set[str] = set()
-        cursor = index + 1
-        while cursor < len(messages) and messages[cursor].role == 'tool':
-            call_id = messages[cursor].tool_call_id
-            if call_id in wanted and call_id not in matched:
-                matched.add(call_id)
-                rows.add(cursor)
+        owner: dict[str, int] = {}
+        cursor = index
+        while cursor < len(messages) and messages[cursor].role in ('assistant', 'system'):
+            if messages[cursor].role == 'assistant':
+                if not messages[cursor].tool_calls:
+                    break
+                paired.setdefault(cursor, set())
+                for tc in messages[cursor].tool_calls or []:
+                    owner.setdefault(tc.id, cursor)
             cursor += 1
-        paired[index] = matched
-    return paired, rows
+        while cursor < len(messages) and messages[cursor].role in ('tool', 'system'):
+            call_id = messages[cursor].tool_call_id
+            if messages[cursor].role == 'tool' and call_id in owner and call_id not in paired[owner[call_id]]:
+                paired[owner[call_id]].add(call_id)
+                rows.add(cursor)
+                row_of[owner[call_id], call_id] = cursor
+            cursor += 1
+        index = cursor
+    return ToolPairing(paired=paired, rows=rows, row_of=row_of)
 
 
-def drop_unreplayable_tool_records(
-    messages: list[Message],
-    *,
-    incomplete_as_text: bool = False,
-    warned: set[str] | None = None,
-) -> list[Message]:
+def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_text: bool = False) -> list[Message]:
     """Return a copy of ``messages`` without the tool records a provider would reject.
 
     The recorded transcript is evidence and keeps an incomplete tool call; this builds the copy
-    that is sent. An assistant tool call needs a tool row right after its turn with the same
-    ``tool_call_id`` (see `_pair_tool_rows`), and a tool row needs the call it answers. Every
-    other call and row is removed. With ``incomplete_as_text`` a removed call is appended to its
-    turn's text as ``[tool_call: name(args) -> no result recorded]``, for a reader (the judge)
-    that must still see the attempt. A paired call with unknown arguments is kept and replays
-    with ``''``, never an invented ``'{}'``. An assistant turn left with no text and no calls is
-    dropped. Run this on the whole transcript, never on a slice.
+    that is sent. An assistant tool call needs a tool row after it with the same ``tool_call_id``
+    (see `pair_tool_rows`), and a tool row needs the call it answers. Every other call and row is
+    removed. A turn left with no text and no calls stays as an empty assistant row, so the
+    user/assistant alternation survives. A paired call with unknown arguments is kept and replays
+    with ``''``, never an invented ``'{}'``. Run this on the whole transcript, never on a slice.
 
-    One warning names the call ids not yet in ``warned``; ids already there log at debug, so a
-    transcript replayed every turn warns once per call. The set is updated in place.
+    With ``incomplete_as_text`` a call without a result is not lost: it is appended to its turn's
+    text as ``[tool_call: name(args) -> no result recorded]``, for a reader (the judge) that must
+    still see the attempt, and only an orphan result warns.
+
+    One warning per record per conversation: keys already in `conversation_warned_keys` log at
+    debug. A call is keyed by id, name and arguments, a result by id.
     """
-    paired, rows = _pair_tool_rows(messages)
-    dropped: list[str] = []
+    pairing = pair_tool_rows(messages)
+    dropped_calls: list[tuple[str, str]] = []
+    dropped_results: list[tuple[str, str]] = []
     out: list[Message] = []
     for index, m in enumerate(messages):
         if m.role == 'tool':
-            if index in rows:
+            if index in pairing.rows:
                 out.append(m)
             else:
-                dropped.append(m.tool_call_id or '<no id>')
+                call_id = m.tool_call_id or '<no id>'
+                dropped_results.append((call_id, f'result|{call_id}'))
             continue
         if m.role == 'assistant' and m.tool_calls:
-            kept = [tc for tc in m.tool_calls if tc.id in paired[index]]
-            lost = [tc for tc in m.tool_calls if tc.id not in paired[index]]
+            kept = [tc for tc in m.tool_calls if tc.id in pairing.paired[index]]
+            lost = [tc for tc in m.tool_calls if tc.id not in pairing.paired[index]]
             if lost:
-                dropped.extend(tc.id for tc in lost)
                 content = m.content
                 if incomplete_as_text:
                     from evaluatorq.contracts import InputTextContent
@@ -357,18 +388,34 @@ def drop_unreplayable_tool_records(
                         content = [*content, InputTextContent(type='input_text', text=marker)]
                     else:
                         content = f'{content}\n{marker}' if content and content.strip() else marker
-                if not kept and not coerce_content_text(content).strip():
-                    continue
+                else:
+                    dropped_calls.extend(
+                        (tc.id, f'call|{tc.id}|{tc.function.name}|{tc.function.arguments}') for tc in lost
+                    )
+                    if not coerce_content_text(content).strip():
+                        content = ''
                 m = m.model_copy(update={'content': content, 'tool_calls': kept or None})
         out.append(m)
-    if dropped:
-        seen = warned if warned is not None else set()
-        fresh = sorted({i for i in dropped if i not in seen})
-        seen.update(dropped)
-        report = logger.warning if fresh else logger.debug
-        report(
-            'Not replaying tool record(s) {} to the provider: a call needs a result right after it '
-            'and a result needs its call. They stay in the recorded transcript.',
-            fresh or sorted(set(dropped)),
-        )
+    _warn_dropped(dropped_calls, dropped_results)
     return out
+
+
+def _warn_dropped(calls: list[tuple[str, str]], results: list[tuple[str, str]]) -> None:
+    if not calls and not results:
+        return
+    seen = conversation_warned_keys()
+    fresh = [(i, k) for i, k in [*calls, *results] if k not in seen]
+    seen.update(k for _, k in [*calls, *results])
+    shown = fresh or [*calls, *results]
+    fresh_calls = sorted({i for i, k in shown if k.startswith('call|')})
+    fresh_results = sorted({i for i, k in shown if k.startswith('result|')})
+    parts = []
+    if fresh_calls:
+        parts.append(f'tool call(s) {fresh_calls} (no result follows them)')
+    if fresh_results:
+        parts.append(f'tool result(s) {fresh_results} (no call precedes them)')
+    report = logger.warning if fresh else logger.debug
+    report(
+        'Not replaying {} to the target. They stay in the recorded transcript.',
+        ' and '.join(parts),
+    )

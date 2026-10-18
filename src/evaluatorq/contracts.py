@@ -14,6 +14,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import TypedDict
 
 from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, tool_result_to_text
+from evaluatorq.common.thread_context import conversation_warned_keys
 from evaluatorq.openresponses.convert_models import (
     InputFileContent,
     InputImageContent,
@@ -397,7 +398,10 @@ class StrategyToolCall(BaseModel):
     item_id: str | None = Field(default=None, description='Responses-API function_call item id (fc_*)')
     incomplete: bool = Field(
         default=False,
-        description='True when the call was recorded without a result; judge text marks it, provider replay drops it',
+        description=(
+            'The recorded fact that this call has no result. Judge text and exports mark it from this flag; '
+            'provider replay does not trust it and pairs by position instead (`common.messages.pair_tool_rows`).'
+        ),
     )
 
 
@@ -471,7 +475,10 @@ def render_tool_call(
     """Render one tool call as its transcript messages.
 
     A call without a result keeps its place: it is returned with ``incomplete=True`` and no tool
-    message, and logged. The recorded transcript is evidence. Provider replay removes such a call
+    message, and logged once per call per conversation (later rebuilds log at debug).
+
+    Signature change: this used to return ``None`` for a call without a result and took no
+    ``keep_incomplete``; it now always returns a pair whose message may be ``None``. The recorded transcript is evidence. Provider replay removes such a call
     through `common.messages.drop_unreplayable_tool_records`. An empty string is a valid result.
     """
     tool_call = StrategyToolCall(
@@ -481,8 +488,14 @@ def render_tool_call(
         incomplete=item.result is None,
     )
     if item.result is None:
-        warning = warn or logger.warning
-        warning(f'Tool call {item.call_id!r} ({item.name!r}) has no result (None); kept without a tool message.')
+        warned = conversation_warned_keys()
+        key = f'incomplete|{item.call_id}|{item.name}|{item.arguments}'
+        message = f'Tool call {item.call_id!r} ({item.name!r}) has no result (None); kept without a tool message.'
+        if key in warned:
+            logger.debug(message)
+        else:
+            warned.add(key)
+            (warn or logger.warning)(message)
         return tool_call, None
     tool_message = Message(
         role='tool',

@@ -46,6 +46,20 @@ _run_id: ContextVar[str | None] = ContextVar('evaluatorq_run_id', default=None)
 # the parts are ints / sanitized keys, so ':' never appears inside a segment.
 _THREAD_ID_SEP = ':'
 
+# Keys of the warnings already shown for the active conversation, so a transcript rebuilt or
+# replayed every turn warns about a tool record once instead of once per turn.
+_warned_keys: ContextVar[set[str] | None] = ContextVar('evaluatorq_warned_keys', default=None)
+
+
+def conversation_warned_keys() -> set[str]:
+    """Return the set of warning keys already shown in this conversation.
+
+    Outside a `conversation_thread` there is no conversation to dedupe within, so a throwaway set
+    comes back and every call warns.
+    """
+    keys = _warned_keys.get()
+    return keys if keys is not None else set()
+
 
 def build_thread_id(run_id: str | None, *parts: object) -> str | None:
     """Compose a run-scoped thread id, or None when there is no run to link.
@@ -170,7 +184,8 @@ def _evaluatorq_run_scope(run_id: str, span: Span | None = None) -> Iterator[str
 def conversation_thread(thread_id: str | None = None) -> Iterator[str]:
     """Bind a thread id for the duration of one conversation.
 
-    Generates a uuid when none is given. Restores the previous value on exit so
+    Generates a uuid when none is given. Also opens the conversation's set of already-shown
+    warning keys (`conversation_warned_keys`). Restores the previous values on exit so
     nested/sequential conversations don't bleed into each other.
 
     Yields:
@@ -178,9 +193,11 @@ def conversation_thread(thread_id: str | None = None) -> Iterator[str]:
     """
     tid = thread_id or str(uuid.uuid4())
     token = _thread_id.set(tid)
+    warned_token = _warned_keys.set(set())
     try:
         yield tid
     finally:
+        _warned_keys.reset(warned_token)
         _thread_id.reset(token)
 
 
@@ -188,6 +205,7 @@ __all__ = [
     'build_static_thread_id',
     'build_thread_id',
     'conversation_thread',
+    'conversation_warned_keys',
     'current_thread_id',
     'evaluatorq_pipeline',
     'evaluatorq_run_id',
