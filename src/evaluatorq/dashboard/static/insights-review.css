@@ -229,7 +229,7 @@ main{min-width:0;padding:0 28px 48px}
 .tlist .th h3{margin:0;font-size:14px;font-weight:600}
 .tlist .th .c{color:var(--text-muted)}
 .tlist .th input{margin-left:auto;height:30px;border:1px solid var(--border-default);border-radius:var(--radius-md);padding:0 10px;width:220px;font:inherit;background:var(--surface-app)}
-.tr{display:grid;grid-template-columns:52px minmax(220px,1fr) 160px 104px 94px 52px repeat(4,70px) 42px;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border-subtle);width:100%;min-width:1160px}
+.tr{display:grid;grid-template-columns:52px minmax(220px,1fr) 160px 104px 94px 52px repeat(3,70px) 112px 52px;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border-subtle);width:100%;min-width:1212px}
 .tr:hover{background:var(--app-gray-50)}.tr.on{background:var(--teal-50)}
 .tr .when{color:var(--text-faint);font-size:12px}
 .tr .req{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
