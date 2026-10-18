@@ -517,8 +517,6 @@ A `SimulationDatapoint` bundles one persona, one scenario, and the opening messa
 
 === "Python"
 
-    From the SDK, `generate()` builds the cases, you write one `model_dump_json()` line per datapoint (the same file `--datapoints` writes, ids included), and `load_datapoints_from_jsonl()` reads them back:
-
     ```python
     import asyncio
     from pathlib import Path
@@ -528,7 +526,8 @@ A `SimulationDatapoint` bundles one persona, one scenario, and the opening messa
 
 
     async def main():
-        # Generate cases once and keep them
+        # Generate cases once and keep them: one model_dump_json() line per datapoint,
+        # the same file `--datapoints` writes (ids included)
         if not Path("cases.jsonl").exists():
             generated = await generate(
                 agent_description="e-commerce support agent",
