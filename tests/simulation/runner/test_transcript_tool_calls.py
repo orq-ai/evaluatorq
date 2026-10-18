@@ -307,18 +307,6 @@ def test_replay_keeps_a_complete_pair_untouched(caplog):
     assert not [r for r in caplog.records if 'Not replaying' in r.message]
 
 
-def test_replay_keeps_a_paired_unknown_arguments_call_with_empty_arguments():
-    messages = build_assistant_message(
-        AgentResponse(output=[ToolCallOutputItem(name='x', arguments=UNKNOWN_ARGUMENTS, call_id='c1', result='ok')])
-    )
-
-    replay = drop_unreplayable_tool_records(messages)
-    items = messages_to_responses_input(replay)
-
-    assert replay == messages
-    assert [i['arguments'] for i in items if i.get('type') == 'function_call'] == ['']
-
-
 def test_replay_keeps_text_of_an_assistant_turn_whose_only_call_is_dropped():
     replay = drop_unreplayable_tool_records(build_assistant_message(_incomplete_response())[:1])
 
@@ -441,3 +429,19 @@ def test_max_tool_result_chars_is_configurable():
     raised_content = raised_inverted[0].content
     assert isinstance(raised_content, str)
     assert raised_content.count('x') == 2000
+
+
+@pytest.mark.parametrize('incomplete_as_text', [False, True])
+def test_wire_copy_sends_empty_object_for_unknown_arguments_and_evidence_keeps_it(incomplete_as_text):
+    messages = [_user(), Message(role='assistant', tool_calls=[_call('c1', UNKNOWN_ARGUMENTS)]), _tool('c1')]
+    snapshot = [m.model_copy(deep=True) for m in messages]
+
+    replay = drop_unreplayable_tool_records(messages, incomplete_as_text=incomplete_as_text)
+    items = messages_to_responses_input(replay)
+
+    assert [tc.function.arguments for tc in replay[1].tool_calls or []] == ['{}']
+    assert replay[1].to_chat_completion()['tool_calls'][0]['function']['arguments'] == '{}'
+    assert [i['arguments'] for i in items if i.get('type') == 'function_call'] == ['{}']
+    assert messages == snapshot
+    assert [tc.function.arguments for tc in messages[1].tool_calls or []] == [UNKNOWN_ARGUMENTS]
+    assert 'arguments unavailable' in messages_to_text(messages)

@@ -346,6 +346,20 @@ def pair_tool_rows(messages: list[Message]) -> ToolPairing:
     return ToolPairing(paired=paired, rows=rows, row_of=row_of)
 
 
+WIRE_EMPTY_ARGUMENTS = '{}'
+
+
+def _wire_call(call: Any) -> Any:
+    """Return ``call`` as it goes on the wire: unknown arguments become ``'{}'`` on a copy.
+
+    Anthropic behind the Orq router rejects ``''`` (``tool_use.input: Input should be an object``);
+    the recorded call keeps ``''`` so evidence still reads "arguments unavailable".
+    """
+    if call.function.arguments != UNKNOWN_ARGUMENTS:
+        return call
+    return call.model_copy(update={'function': call.function.model_copy(update={'arguments': WIRE_EMPTY_ARGUMENTS})})
+
+
 def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_text: bool = False) -> list[Message]:
     """Return a copy of ``messages`` without the tool records a provider would reject.
 
@@ -353,8 +367,9 @@ def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_tex
     that is sent. An assistant tool call needs a tool row after it with the same ``tool_call_id``
     (see `pair_tool_rows`), and a tool row needs the call it answers. Every other call and row is
     removed. A turn left with no text and no calls stays as an empty assistant row, so the
-    user/assistant alternation survives. A paired call with unknown arguments is kept and replays
-    with ``''``, never an invented ``'{}'``. Run this on the whole transcript, never on a slice.
+    user/assistant alternation survives. A paired call with unknown arguments is kept, and the copy
+    sends ``'{}'`` for it (a provider-required object); the recorded call keeps ``''``.
+    Run this on the whole transcript, never on a slice.
 
     With ``incomplete_as_text`` a call without a result is not lost: it is appended to its turn's
     text as ``[tool_call: name(args) -> no result recorded]``, for a reader (the judge) that must
@@ -378,9 +393,10 @@ def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_tex
         if m.role == 'assistant' and m.tool_calls:
             kept = [tc for tc in m.tool_calls if tc.id in pairing.paired[index]]
             lost = [tc for tc in m.tool_calls if tc.id not in pairing.paired[index]]
-            if lost:
+            wire_kept = [_wire_call(tc) for tc in kept]
+            if lost or any(a is not b for a, b in zip(wire_kept, kept, strict=True)):
                 content = m.content
-                if incomplete_as_text:
+                if incomplete_as_text and lost:
                     from evaluatorq.contracts import InputTextContent
 
                     marker = '\n'.join(tool_call_text(tc, incomplete=True) for tc in lost)
@@ -392,9 +408,9 @@ def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_tex
                     dropped_calls.extend(
                         (tc.id, f'call|{tc.id}|{tc.function.name}|{tc.function.arguments}') for tc in lost
                     )
-                    if not coerce_content_text(content).strip():
+                    if not kept and not coerce_content_text(content).strip():
                         content = ''
-                m = m.model_copy(update={'content': content, 'tool_calls': kept or None})
+                m = m.model_copy(update={'content': content, 'tool_calls': wire_kept or None})
         out.append(m)
     _warn_dropped(dropped_calls, dropped_results)
     return out
