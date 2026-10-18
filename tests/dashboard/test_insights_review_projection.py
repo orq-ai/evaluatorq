@@ -103,38 +103,42 @@ def test_review_xy_returns_explicit_no_map_state_below_five_points():
     }
 
 
-def test_dashboard_payload_and_startup_do_not_import_heavy_reducers():
+def test_dashboard_payload_and_startup_do_not_import_heavy_reducers(tmp_path: Path):
     script = r"""import importlib.abc
-import os
 import sys
-import tempfile
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 forbidden = {'umap', 'numpy', 'sklearn', 'numba'}
 class BlockHeavy(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in forbidden:
+        if fullname.split('.')[0] in forbidden or fullname == 'evaluatorq.insights.reduce':
             raise AssertionError(f'unexpected heavy import: {fullname}')
         return None
 sys.meta_path.insert(0, BlockHeavy())
 
+from evaluatorq.dashboard.insights_review_projection import review_xy
+traces = [SimpleNamespace(trace_id=f't-{i}', span_id=f's-{i}', coords_2d={'intent': (float(i), float(i + 1))}) for i in range(5)]
+assert review_xy(SimpleNamespace(traces=traces), 'intent')['t-0:s-0'] == (0.0, 1.0)
+
+# FastHTML's supported dependency stack may import NumPy; the saved-coordinate
+# reader above must not, and the full app must still avoid the analysis reducer.
+forbidden.remove('numpy')
 from evaluatorq.insights.models import DimensionResult, InsightsConfig, InsightsRun, TraceInsight
 from evaluatorq.dashboard.insights_review_data import build_review_payload
 traces = [TraceInsight(trace_id=f't-{i}', span_id=f's-{i}', coords_2d={'intent': (float(i), float(i + 1))}) for i in range(5)]
 run = InsightsRun(run_id='fresh-process', run_name='Fresh', created_at=datetime.now(timezone.utc), status='completed', stage_failures=[], population={}, config=InsightsConfig(labels=[], dimensions=['intent']), traces=traces, dimensions={'intent': DimensionResult(name='intent', source_field='request', clusters=[])}, labels={}, priority=None, priority_reason=None, counts={'n_traces': 5}, warnings=[])
 payload = build_review_payload(run)
 assert payload['traces'][0]['xy'] == {'intent': [0.0, 1.0]}
-with tempfile.TemporaryDirectory() as cwd:
-    os.chdir(cwd)
-    from evaluatorq.dashboard.launch import build_app_from_env
-    build_app_from_env()
+from evaluatorq.dashboard.launch import build_app_from_env
+build_app_from_env()
 print('dashboard payload and startup stayed free of heavy reducers')
 """
     result = subprocess.run(
         [sys.executable, '-c', script],
         capture_output=True,
         text=True,
-        cwd=Path(__file__).parents[2],
+        cwd=tmp_path,
         check=False,
     )
 
