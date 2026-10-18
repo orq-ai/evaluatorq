@@ -16,6 +16,7 @@ from evaluatorq.common.llm_call import (
     strip_known_rejected_responses_reasoning,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.messages import drop_unreplayable_tool_records
 from evaluatorq.common.prompt_cache import caching_applies, mark_responses_input
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
@@ -137,7 +138,7 @@ class OrqResponsesTarget(AgentTarget):
         back. ``volatile_items=0`` because nothing in the list is rebuilt — the
         caller owns the transcript and this target only ever appends.
         """
-        responses_input = messages_to_responses_input(messages)
+        responses_input = messages_to_responses_input(drop_unreplayable_tool_records(messages))
         if caching_applies(self._client, self.config.model):
             responses_input = mark_responses_input(responses_input, volatile_items=0)
         return await self._call_responses_api(responses_input=responses_input)

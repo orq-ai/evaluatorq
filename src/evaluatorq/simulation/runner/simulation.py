@@ -183,13 +183,14 @@ def build_assistant_message(response: AgentResponse) -> list[Message]:
     the target actually did, not just any text it produced alongside it — a
     target that resolves a request purely through tool calls (no text) previously
     left the judge looking at an empty assistant turn. Completed tool calls are
-    followed by their separate ``role='tool'`` rows so both provider serializers
-    receive a valid pair. Calls without results are dropped by ``render_tool_call``.
+    followed by their separate ``role='tool'`` rows. A call without a result stays in the
+    assistant row as evidence, with no tool row; replay drops it through
+    `drop_unreplayable_tool_records`.
     """
     rendered_tool_calls = [
         rendered
         for item in response.tool_calls
-        if (rendered := render_tool_call(item, warn=logger.warning)) is not None
+        if (rendered := render_tool_call(item, warn=logger.warning, keep_incomplete=True)) is not None
     ]
     tool_calls = [tool_call for tool_call, _ in rendered_tool_calls]
     text = response.text
@@ -200,7 +201,7 @@ def build_assistant_message(response: AgentResponse) -> list[Message]:
         )
     return [
         Message(role='assistant', content=text, tool_calls=tool_calls or None),
-        *(tool_message for _, tool_message in rendered_tool_calls),
+        *(tool_message for _, tool_message in rendered_tool_calls if tool_message is not None),
     ]
 
 

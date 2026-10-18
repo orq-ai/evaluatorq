@@ -18,6 +18,7 @@ from evaluatorq.common.llm_call import (
     execute_response,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.messages import drop_unreplayable_tool_records
 from evaluatorq.common.prompt_cache import (
     apply_cache_breakpoints,
     caching_applies,
@@ -481,6 +482,7 @@ class BaseAgent(UsageTracking, ABC):
         timeout_s = self._resolved_timeout_s(timeout)
         reasoning_effort = self._resolved_reasoning_effort()
 
+        messages = drop_unreplayable_tool_records(messages)
         full_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': self.system_prompt},
             *[m.to_chat_completion() for m in messages],
@@ -595,6 +597,7 @@ class BaseAgent(UsageTracking, ABC):
         # Canonical renderer: an assistant turn must arrive as output_text parts or
         # the Orq router silently drops it, leaving the judge blind to the agent's
         # replies (RES-1308). Never hand-build this list.
+        messages = drop_unreplayable_tool_records(messages)
         input_messages = messages_to_responses_input(messages)
         # A per-item breakpoint, not the top-level switch: the latter marks the end
         # of the whole input, so a caller that rebuilds its trailing item (the

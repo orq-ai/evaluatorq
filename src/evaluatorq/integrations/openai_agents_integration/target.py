@@ -9,6 +9,7 @@ from typing import Any
 from agents import Agent, Runner
 from loguru import logger
 
+from evaluatorq.common.messages import drop_unreplayable_tool_records
 from evaluatorq.contracts import (
     AgentContext,
     AgentResponse,
@@ -104,7 +105,9 @@ class OpenAIAgentTarget(AgentTarget):
         ``_build_response``, so the returned ``AgentResponse`` reflects just
         this turn's output.
         """
-        input_data: list[Any] = [item for m in messages for item in message_to_responses_input_items(m)]
+        input_data: list[Any] = [
+            item for m in drop_unreplayable_tool_records(messages) for item in message_to_responses_input_items(m)
+        ]
         prev_len = len(input_data)
         try:
             result = await Runner.run(self._agent, input_data, **self._run_kwargs)

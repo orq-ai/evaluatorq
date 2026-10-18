@@ -17,6 +17,8 @@ from loguru import logger
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from evaluatorq.contracts import Message
+
 
 _TEXT_PART_TYPES = frozenset({'text', 'input_text', 'output_text', 'summary_text', 'refusal'})
 
@@ -164,9 +166,14 @@ def coerce_content_text(content: Any) -> str:
 
 UNKNOWN_ARGUMENTS = ''
 UNKNOWN_ARGUMENTS_TEXT = 'arguments unavailable'
+NO_RESULT_TEXT = 'no result recorded'
 
 
-def _tool_call_text(call: Any) -> str:
+def _field_of(obj: Any, key: str) -> Any:
+    return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+
+def _tool_call_text(call: Any, *, incomplete: bool = False) -> str:
     """Render one tool call as a marker a judge can read."""
     function = call.get('function') if isinstance(call, dict) else getattr(call, 'function', None)
     source = function if function is not None else call
@@ -177,7 +184,8 @@ def _tool_call_text(call: Any) -> str:
     rendered = arguments if isinstance(arguments, str) else _json_or_text(arguments)
     if arguments == UNKNOWN_ARGUMENTS:
         rendered = UNKNOWN_ARGUMENTS_TEXT
-    return f'[tool_call: {name or "unknown"}({rendered or ""})]'
+    suffix = f' -> {NO_RESULT_TEXT}' if incomplete else ''
+    return f'[tool_call: {name or "unknown"}({rendered or ""}){suffix}]'
 
 
 def _legacy_result_text(result: Any) -> str:
@@ -207,10 +215,21 @@ def messages_to_text(messages: Iterable[Any]) -> str:
     a single-message output would otherwise score trimmed text the trace never
     had. The legacy ``function_call`` / ``function_call_output`` fields render
     alongside ``tool_calls``: `has_meaningful_output` counts them, so skipping
-    them here would hand a judge an empty string for an agent that acted.
+    them here would hand a judge an empty string for an agent that acted. A tool call on a
+    typed `Message` that no ``role='tool'`` message in ``messages`` answers renders with
+    ``-> no result recorded``, so the judge reads an attempt that never returned instead of
+    a call whose result was lost. Loose dicts are never marked: their results may live
+    outside the list.
     """
+    messages = list(messages)
+    answered = {
+        call_id
+        for message in messages
+        if _field_of(message, 'role') == 'tool' and isinstance(call_id := _field_of(message, 'tool_call_id'), str)
+    }
     lines: list[str] = []
     for message in messages:
+        typed = not isinstance(message, dict)
         if isinstance(message, dict):
             role, content, tool_calls = message.get('role'), message.get('content'), message.get('tool_calls')
             legacy_call, legacy_result = message.get('function_call'), message.get('function_call_output')
@@ -223,7 +242,16 @@ def messages_to_text(messages: Iterable[Any]) -> str:
         text = coerce_content_text(content)
         parts = [text] if text.strip() else []
         calls = [*(tool_calls or []), *([legacy_call] if legacy_call is not None else [])]
-        parts.extend(_tool_call_text(call) for call in calls)
+        parts.extend(
+            _tool_call_text(
+                call,
+                incomplete=typed
+                and role == 'assistant'
+                and (call_id := _field_of(call, 'id')) is not None
+                and call_id not in answered,
+            )
+            for call in calls
+        )
         if legacy_result is not None:
             parts.append(f'[tool_result: {_legacy_result_text(legacy_result)}]')
         if not parts:
@@ -276,3 +304,44 @@ def tool_result_to_text(result: object) -> str:
     # default=str: a value JSON cannot encode degrades to its repr rather than
     # failing the whole response over one odd tool return.
     return json.dumps(result, default=str)
+
+
+def drop_unreplayable_tool_records(messages: list[Message]) -> list[Message]:
+    """Return ``messages`` without the tool records a provider would reject, warning once.
+
+    The recorded transcript is evidence and keeps an incomplete tool call. A provider
+    replay is stricter: an assistant tool call needs a tool result with the same
+    ``tool_call_id`` and a tool result needs the call it answers. Every call without a
+    result and every result without its call is removed, and one warning names the call
+    ids. A paired call with unknown arguments (`UNKNOWN_ARGUMENTS`) is kept and replays
+    with ``''``, never an invented ``'{}'``. An assistant message left with neither content nor calls is dropped.
+    Run this on the whole transcript, never on a slice, or a slice boundary orphans a pair.
+    """
+    result_ids = {m.tool_call_id for m in messages if m.role == 'tool' and m.tool_call_id}
+    sendable = {
+        tc.id for m in messages if m.role == 'assistant' and m.tool_calls for tc in m.tool_calls if tc.id in result_ids
+    }
+    dropped: list[str] = []
+    out: list[Message] = []
+    for m in messages:
+        if m.role == 'tool':
+            if m.tool_call_id in sendable:
+                out.append(m)
+            else:
+                dropped.append(m.tool_call_id or '<no id>')
+            continue
+        if m.role == 'assistant' and m.tool_calls:
+            kept = [tc for tc in m.tool_calls if tc.id in sendable]
+            dropped.extend(tc.id for tc in m.tool_calls if tc.id not in sendable)
+            if len(kept) != len(m.tool_calls):
+                if not kept and not m.content:
+                    continue
+                m = m.model_copy(update={'tool_calls': kept or None})
+        out.append(m)
+    if dropped:
+        logger.warning(
+            'Not replaying tool call(s) {} to the provider: a call needs a result '
+            'and a result needs its call. They stay in the recorded transcript.',
+            sorted(set(dropped)),
+        )
+    return out

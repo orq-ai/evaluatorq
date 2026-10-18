@@ -1,5 +1,6 @@
 import logging
 
+from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, drop_unreplayable_tool_records, messages_to_text
 from evaluatorq.contracts import AgentResponse, TextOutputItem, ToolCallOutputItem
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.simulation.contracts import Message
@@ -53,18 +54,87 @@ def test_tool_result_is_paired_in_chat_completion_order():
     }
 
 
-def test_tool_call_without_result_is_dropped_and_warns(caplog):
-    response = AgentResponse(
+def _incomplete_response():
+    return AgentResponse(
         output=[
+            TextOutputItem(text='Checking.', annotations=[]),
             ToolCallOutputItem(name='refund', arguments='{}', id='fc_refund_1', call_id='call_refund_1'),
+            ToolCallOutputItem(name='lookup', arguments='{}', id='fc_2', call_id='call_2', result='ok'),
         ]
     )
 
-    with caplog.at_level(logging.WARNING, logger='evaluatorq.simulation.runner.simulation'):
-        messages = build_assistant_message(response)
 
-    assert [item for item in messages_to_responses_input(messages) if item.get('type') == 'function_call'] == []
-    assert any('result is none' in record.message.lower() for record in caplog.records)
+def test_tool_call_without_result_stays_in_the_transcript_and_warns(caplog):
+    with caplog.at_level(logging.WARNING, logger='evaluatorq.simulation.runner.simulation'):
+        messages = build_assistant_message(_incomplete_response())
+
+    assistant, *tool_messages = messages
+    assert assistant.tool_calls is not None
+    assert [tc.id for tc in assistant.tool_calls] == ['call_refund_1', 'call_2']
+    assert [m.tool_call_id for m in tool_messages] == ['call_2']
+    assert any('call_refund_1' in r.message and 'no result' in r.message.lower() for r in caplog.records)
+
+
+def test_judge_text_marks_the_incomplete_call():
+    text = messages_to_text(build_assistant_message(_incomplete_response()))
+
+    assert '[tool_call: refund({}) -> no result recorded]' in text
+    assert '[tool_call: lookup({})]' in text
+
+
+def test_judge_text_marks_incomplete_call_with_unknown_arguments():
+    response = AgentResponse(output=[ToolCallOutputItem(name='refund', arguments=UNKNOWN_ARGUMENTS, call_id='c1')])
+
+    assert '[tool_call: refund(arguments unavailable) -> no result recorded]' in messages_to_text(
+        build_assistant_message(response)
+    )
+
+
+def test_replay_drops_unpaired_call_and_orphan_result_with_one_warning(caplog):
+    messages = [
+        *build_assistant_message(_incomplete_response()),
+        Message(role='tool', tool_call_id='call_orphan', content='stray'),
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        replay = drop_unreplayable_tool_records(messages)
+        items = messages_to_responses_input(replay)
+
+    assert [i['call_id'] for i in items if i.get('type') == 'function_call'] == ['call_2']
+    assert [i['call_id'] for i in items if i.get('type') == 'function_call_output'] == ['call_2']
+    warnings = [r.message for r in caplog.records if 'Not replaying' in r.message]
+    assert len(warnings) == 1
+    assert 'call_refund_1' in warnings[0] and 'call_orphan' in warnings[0] and 'call_2' not in warnings[0]
+
+
+def test_replay_keeps_a_complete_pair_untouched(caplog):
+    response = AgentResponse(
+        output=[ToolCallOutputItem(name='lookup', arguments='{}', id='fc_2', call_id='call_2', result='ok')]
+    )
+    messages = build_assistant_message(response)
+
+    with caplog.at_level(logging.WARNING):
+        assert drop_unreplayable_tool_records(messages) == messages
+
+    assert not [r for r in caplog.records if 'Not replaying' in r.message]
+
+
+def test_replay_keeps_a_paired_unknown_arguments_call_with_empty_arguments():
+    messages = build_assistant_message(
+        AgentResponse(output=[ToolCallOutputItem(name='x', arguments=UNKNOWN_ARGUMENTS, call_id='c1', result='ok')])
+    )
+
+    replay = drop_unreplayable_tool_records(messages)
+    items = messages_to_responses_input(replay)
+
+    assert replay == messages
+    assert [i['arguments'] for i in items if i.get('type') == 'function_call'] == ['']
+
+
+def test_replay_keeps_text_of_an_assistant_turn_whose_only_call_is_dropped():
+    replay = drop_unreplayable_tool_records(build_assistant_message(_incomplete_response())[:1])
+
+    assert [(m.content, m.tool_calls) for m in replay] == [('Checking.', None)]
 
 
 def test_assistant_text_and_tool_calls_are_kept_together():

@@ -7,7 +7,7 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime  # noqa: TC003 — runtime-required by pydantic manifest models
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias, overload
 
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
@@ -459,30 +459,50 @@ class Message(BaseModel):
         return {'role': self.role, 'content': _render_chat_content(self.content)}
 
 
+@overload
 def render_tool_call(
     item: ToolCallOutputItem,
     *,
     warn: Callable[[str], None] | None = None,
-) -> tuple[StrategyToolCall, Message] | None:
-    """Render one completed tool call as its paired transcript messages.
+    keep_incomplete: Literal[False] = False,
+) -> tuple[StrategyToolCall, Message] | None: ...
 
-    A function call without a result cannot be replayed safely: emitting its
-    assistant row would leave an unpaired ``function_call`` on either provider
-    contract. Such calls are dropped and logged. An empty string is a valid result
-    and is therefore retained.
+
+@overload
+def render_tool_call(
+    item: ToolCallOutputItem,
+    *,
+    warn: Callable[[str], None] | None = None,
+    keep_incomplete: bool,
+) -> tuple[StrategyToolCall, Message | None] | None: ...
+
+
+def render_tool_call(
+    item: ToolCallOutputItem,
+    *,
+    warn: Callable[[str], None] | None = None,
+    keep_incomplete: bool = False,
+) -> tuple[StrategyToolCall, Message | None] | None:
+    """Render one tool call as its transcript messages.
+
+    A call without a result has no tool message to pair with. By default it is
+    dropped and logged (``None``), so a caller that sends the result straight to a
+    provider never emits an unpaired call. With ``keep_incomplete=True`` it is
+    logged the same way but returned as ``(tool_call, None)``: the evidence
+    transcript keeps the call, and `common.messages.drop_unreplayable_tool_records`
+    removes it at provider replay. An empty string is a valid result and is
+    therefore retained.
     """
-    if item.result is None:
-        warning = warn or logger.warning
-        warning(
-            f'Dropping tool call {item.call_id!r} ({item.name!r}): result is None, '
-            'so no paired tool message can be emitted.'
-        )
-        return None
     tool_call = StrategyToolCall(
         id=item.call_id,
         item_id=item.id or None,
         function=FunctionCall(name=item.name, arguments=item.arguments),
     )
+    if item.result is None:
+        warning = warn or logger.warning
+        outcome = 'kept in the transcript without a tool message' if keep_incomplete else 'dropped'
+        warning(f'Tool call {item.call_id!r} ({item.name!r}) has no result (None); {outcome}.')
+        return (tool_call, None) if keep_incomplete else None
     tool_message = Message(
         role='tool',
         tool_call_id=item.call_id,
