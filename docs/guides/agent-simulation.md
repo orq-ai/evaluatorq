@@ -517,14 +517,14 @@ A `SimulationDatapoint` bundles one persona, one scenario, and the opening messa
 
 === "Python"
 
-    From the SDK, `generate()` builds the cases, `export_datapoints_to_jsonl()` saves them, and `load_datapoints_from_jsonl()` reads them back:
+    From the SDK, `generate()` builds the cases, you write one `model_dump_json()` line per datapoint (the same file `--datapoints` writes, ids included), and `load_datapoints_from_jsonl()` reads them back:
 
     ```python
     import asyncio
     from pathlib import Path
 
     from evaluatorq.simulation import generate, simulate
-    from evaluatorq.simulation.utils import export_datapoints_to_jsonl, load_datapoints_from_jsonl
+    from evaluatorq.simulation.utils import load_datapoints_from_jsonl
 
 
     async def main():
@@ -535,7 +535,8 @@ A `SimulationDatapoint` bundles one persona, one scenario, and the opening messa
                 num_personas=3,
                 num_scenarios=4,
             )
-            export_datapoints_to_jsonl(generated, "cases.jsonl")
+            lines = [dp.model_dump_json() for dp in generated]
+            Path("cases.jsonl").write_text("\n".join(lines) + "\n")
 
         # Re-load the exact same cases on every later run
         datapoints = load_datapoints_from_jsonl("cases.jsonl")
@@ -557,7 +558,7 @@ A `SimulationDatapoint` bundles one persona, one scenario, and the opening messa
 
 Because the file pins the personas, scenarios, and first messages, the run is reproducible. That makes it the natural way to compare two agent versions, or the same agent under a new set of evaluators, on an identical bank of cases.
 
-`load_datapoints_from_jsonl()` reads datapoint files, such as the ones `generate` and `--datapoints` write. To replay a saved run instead, see [Replay a previous run](#replay-a-previous-run).
+`load_datapoints_from_jsonl()` reads datapoint files, such as the ones `eq sim generate --datapoints` and `eq sim run --datapoints` write, or a file you save from `generate()`. To replay a saved run instead, see [Replay a previous run](#replay-a-previous-run).
 
 An **Orq dataset** is a stored collection of rows. Here, one row is one **simulation datapoint**: a persona (who the simulated user is), a scenario (what they want), and an opening message. `dataset_id` is the dataset's identifier, not its display name. If you create one with `eq sim upload-dataset --input cases.jsonl --name "Support cases"`, the command prints the ID to use below; see the [upload command reference](../cli-reference/simulation.md#eq-sim-upload-dataset). For an existing dataset, use its ID. Each row's `inputs` must contain a `datapoint` object or a `persona` + `scenario` pair, matching the `SimulationDatapoint` shape above.
 
@@ -608,7 +609,7 @@ if __name__ == "__main__":
 
 ### Replay a previous run
 
-A saved run already holds the personas, scenarios, and first messages it used, so you can re-run it against a new target or new evaluators without exporting anything. The CLI saves every run to `.evaluatorq/sim-runs/`. From Python, pass `save=True` to `simulate()` to get the same file. List what is there with `eq sim runs`; its `File` column is the file name to pass below.
+A saved run already holds the personas, scenarios, and first messages it used, so you can re-run it against a new target or new evaluators without exporting anything. The CLI saves each run to `.evaluatorq/sim-runs/` by default (`--no-save` skips it). From Python, pass `save=True` to `simulate()` to get the same file. List what is there with `eq sim runs`; its `File` column is the file name to pass below.
 
 Replay the most recent run, or pick a specific one:
 
@@ -616,12 +617,13 @@ Replay the most recent run, or pick a specific one:
 
     ```bash
     # Most recent saved run
-    eq sim simulate --from-run latest --target agent:my-support-agent-v2
+    eq sim simulate --from-run latest --target agent:support-v2
 
     # A specific run: file name (the .json is optional), run id, or path
-    eq sim simulate --from-run refund-bot_20261015-093012 --target agent:my-support-agent-v2
-    eq sim simulate --from-run 3f9a1c2e --target agent:my-support-agent-v2
-    eq sim simulate --from-run ./archive/refund-bot_20261015-093012.json --target agent:my-support-agent-v2
+    eq sim simulate --from-run refund-bot_20261015-093012 \
+      --target agent:support-v2
+    eq sim simulate --from-run ./archive/refund-bot_20261015-093012.json \
+      --target agent:support-v2
     ```
 
 === "Python"
@@ -634,12 +636,16 @@ Replay the most recent run, or pick a specific one:
 
     async def main():
         # Most recent saved run
-        latest = await simulate(previous_run="latest", target="agent:my-support-agent-v2")
+        latest = await simulate(
+            previous_run="latest",
+            target="agent:support-v2",
+            evaluator_names=["goal_achieved", "criteria_met"],
+        )
 
         # A specific run, by file name, run name, run id, or path
         pinned = await simulate(
             previous_run="refund-bot_20261015-093012",
-            target="agent:my-support-agent-v2",
+            target="agent:support-v2",
             evaluator_names=["goal_achieved", "criteria_met"],
         )
         print(len(latest), len(pinned))
@@ -654,14 +660,14 @@ Replay the most recent run, or pick a specific one:
 | Pass | Matches |
 |---|---|
 | `latest` | The newest run in `.evaluatorq/sim-runs/` by modification time |
-| A file name, such as `refund-bot_20261015-093012` | That file, with or without `.json`. The part after the last underscore is the save time in UTC, `YYYYmmdd-HHMMSS` |
-| A run name, such as `refund-bot` | The newest run saved under that name |
-| A run id, such as `3f9a1c2e` | The run with that id, as recorded in the run's manifest (`eq sim runs` does not print it; prefer the file name). A prefix works if it is at least 8 characters and matches one run |
+| A file name, such as `refund-bot_20261015-093012` | That file, with or without `.json`. Auto-saved files are named `<run-name>_<UTC time YYYYmmdd-HHMMSS>.json` |
+| A run name, such as `refund-bot` | The newest run whose file name is `<that name>_<timestamp>`, as it appears in the `File` column (lowercased, other characters replaced with `_`). A shorter name also matches longer names that start with it plus `_`, so `refund` matches `refund_bot_<timestamp>` runs; pass the full name |
+| A run id prefix, such as `3f9a1c2e` | The run with that id, which is the saved file's `run_id` field (`eq sim runs` does not print it, and `report_id` in `eq sim runs --json` is a different value; prefer the file name). A prefix works if it is at least 8 characters and matches one run |
 | A path | That file, wherever it lives |
 
-A timestamp on its own does not match; use the whole file name. If a name or id prefix matches several runs, a name takes the newest and an ambiguous id prefix raises `ReplayError`, so use a longer prefix. `latest` on an empty store raises `ReplayError: No saved simulation runs found in <runs directory> — nothing to replay.` A run saved before replay support has no stored cases and raises `ReplayError` too; re-run it once to get a replayable file.
+A timestamp on its own does not match; use the whole file name. If a name matches several runs, the newest wins. An id prefix that matches several runs raises `ReplayError`, so use a longer prefix. `latest` on an empty store raises `ReplayError: No saved simulation runs found in <runs directory> — nothing to replay.` A run saved before replay support has no stored cases and raises `ReplayError` too; re-run it once to get a replayable file.
 
-Replay reuses the stored cases and the stored turn limit, so only the target and the evaluators change. It is a separate source from `load_datapoints_from_jsonl()`, which reads datapoint files, not saved runs.
+Replay reuses the stored cases and the stored turn limit. It does not restore the evaluators: pass `--evaluator` or `evaluator_names`, or the defaults run. Pass `--max-turns` or `max_turns` to override the stored limit.
 
 ### Ground new cases in real traces
 
