@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.fields import get_field as _gf
-from evaluatorq.common.messages import parse_json_or_value, tool_result_to_text
+from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, parse_json_or_value, tool_result_to_text
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -32,8 +32,10 @@ class PairedToolCall:
 
     ``source_index`` is the input position of the ``function_call`` record (of the
     first record when there is none), so a reader can place the call among the
-    non-tool items it also handles. ``arguments`` is ``'{}'`` for a result whose call
-    record never arrived. ``item_id`` is the wire ``id`` of the ``function_call``
+    non-tool items it also handles. ``arguments`` is ``None`` when no record carried
+    real arguments (a result whose call record never arrived, or an ``orq:`` placeholder
+    such as ``{}``); ``'{}'`` is kept only for a call that was made with no arguments.
+    ``item_id`` is the wire ``id`` of the ``function_call``
     record, or of the lone record when no call record exists. ``indices`` are the
     input positions of every record merged into the call.
     """
@@ -41,7 +43,7 @@ class PairedToolCall:
     call_id: str
     item_id: str | None
     name: str
-    arguments: str
+    arguments: str | None
     result: str | None
     source_index: int
     indices: tuple[int, ...]
@@ -151,18 +153,11 @@ def _merge(members: list[tuple[int, _ToolRecord]], *, call_id: str) -> PairedToo
     ordered = sorted(members, key=lambda m: not m[1].is_function_call)
     primary_index, primary = ordered[0]
     records = [r for _, r in ordered]
-    call_arguments = [r.arguments for r in records if r.is_function_call and r.arguments is not None]
-    # An orq: record's empty arguments are a placeholder only when a function_call carries real ones.
-    argument_values = (
-        call_arguments
-        + [
-            r.arguments
-            for r in records
-            if not r.is_function_call and r.arguments and not _is_placeholder_arguments(r.arguments)
-        ]
-        if call_arguments
-        else [r.arguments for r in records if r.arguments is not None]
-    )
+    argument_values = [r.arguments for r in records if r.is_function_call and r.arguments is not None] + [
+        r.arguments
+        for r in records
+        if not r.is_function_call and r.arguments and not _is_placeholder_arguments(r.arguments)
+    ]
     arguments = _pick('arguments', argument_values, call_id)
     name = _pick('name', [r.explicit_name for r in records if r.explicit_name], call_id) or next(
         (r.derived_name for r in records if r.derived_name), ''
@@ -175,16 +170,14 @@ def _merge(members: list[tuple[int, _ToolRecord]], *, call_id: str) -> PairedToo
         call_id=call_id,
         item_id=primary.wire_id,
         name=name,
-        arguments='{}' if arguments is None else arguments,
+        arguments=arguments,
         result=result,
         source_index=primary_index,
         indices=tuple(sorted(index for index, _ in members)),
     )
 
 
-def _warn_unmatched(
-    records: list[_ToolRecord], *, label: str, scope_has_call: bool, scope_orq_names: frozenset[str]
-) -> None:
+def _warn_unmatched(records: list[_ToolRecord], call: PairedToolCall, *, scope_orq_names: frozenset[str]) -> None:
     has_args = any(r.arguments is not None for r in records)
     has_result = any(r.result is not None or r.error is not None or r.failed for r in records)
     # A lone function_call is the normal Responses shape when the caller runs the tool
@@ -192,9 +185,13 @@ def _warn_unmatched(
     # the same turn) makes a missing result worth a warning.
     if has_args and not has_result:
         if any(r.explicit_name in scope_orq_names for r in records if r.is_function_call and r.explicit_name):
-            logger.warning('Tool call {!r} has no result record', label)
-    elif has_result and not has_args and scope_has_call:
-        logger.warning('Tool result {!r} has no matching call record; its arguments are unknown', label)
+            logger.warning('Tool call {!r} has no result record', call.call_id)
+    elif has_result and call.arguments is None:
+        logger.warning(
+            'Tool result for {!r} (call_id {!r}) has no matching call record; its arguments are unavailable',
+            call.name,
+            call.call_id,
+        )
 
 
 def _starts_turn(item: Any) -> bool:
@@ -241,7 +238,6 @@ def _pair(items: list[Any]) -> tuple[list[PairedToolCall], dict[int, str]]:
         if is_tool_record(item_type) or item_type == 'function_call_output':
             records.append((scope, index, _read_tool_record(item, str(item_type))))
     minted = _mint_ids(records)
-    scope_has_call = {scope for scope, _, r in records if r.is_function_call}
     scope_orq_names: dict[int, set[str]] = {}
     for scope, _, r in records:
         if not r.is_function_call and not r.is_native_output:
@@ -265,13 +261,9 @@ def _pair(items: list[Any]) -> tuple[list[PairedToolCall], dict[int, str]]:
             continue
         key = members[0][1].key or minted[members[0][0]]
         scope = group_key[0]
-        paired.append(_merge(members, call_id=key))
-        _warn_unmatched(
-            [r for _, r in members],
-            label=key,
-            scope_has_call=scope in scope_has_call,
-            scope_orq_names=frozenset(scope_orq_names.get(scope, ())),
-        )
+        call = _merge(members, call_id=key)
+        paired.append(call)
+        _warn_unmatched([r for _, r in members], call, scope_orq_names=frozenset(scope_orq_names.get(scope, ())))
     return sorted(paired, key=lambda call: call.source_index), minted
 
 
@@ -361,7 +353,11 @@ def normalize_tool_records(items: Any) -> list[Any]:
             function_call: dict[str, Any] = {'type': 'function_call'}
             if entry.item_id:
                 function_call['id'] = entry.item_id
-            function_call.update(call_id=entry.call_id, name=entry.name, arguments=entry.arguments)
+            function_call.update(
+                call_id=entry.call_id,
+                name=entry.name,
+                arguments=UNKNOWN_ARGUMENTS if entry.arguments is None else entry.arguments,
+            )
             normalized.append(function_call)
             if entry.result is not None:
                 normalized.append({'type': 'function_call_output', 'call_id': entry.call_id, 'output': entry.result})

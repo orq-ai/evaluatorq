@@ -162,6 +162,10 @@ def coerce_content_text(content: Any) -> str:
     return '\n'.join(rendered)
 
 
+UNKNOWN_ARGUMENTS = ''
+UNKNOWN_ARGUMENTS_TEXT = 'arguments unavailable'
+
+
 def _tool_call_text(call: Any) -> str:
     """Render one tool call as a marker a judge can read."""
     function = call.get('function') if isinstance(call, dict) else getattr(call, 'function', None)
@@ -171,6 +175,8 @@ def _tool_call_text(call: Any) -> str:
     else:
         name, arguments = getattr(source, 'name', None), getattr(source, 'arguments', None)
     rendered = arguments if isinstance(arguments, str) else _json_or_text(arguments)
+    if arguments == UNKNOWN_ARGUMENTS:
+        rendered = UNKNOWN_ARGUMENTS_TEXT
     return f'[tool_call: {name or "unknown"}({rendered or ""})]'
 
 
