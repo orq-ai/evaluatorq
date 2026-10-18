@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.common.messages import wire_arguments
+
 if TYPE_CHECKING:
     from evaluatorq.contracts import ContentPart, Message
 
@@ -97,7 +99,7 @@ def _tool_output(content: str | list[ContentPart] | None) -> str | list[dict[str
     return _content_parts(content)
 
 
-def message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
+def message_to_responses_input_items(m: Message, *, wire: bool = True) -> list[dict[str, Any]]:
     """Render a single `Message` as one or more Responses-API input items.
 
     An assistant turn with tool calls becomes a ``function_call`` item per call
@@ -130,7 +132,7 @@ def message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
                 'type': 'function_call',
                 'call_id': tc.id,
                 'name': tc.function.name,
-                'arguments': tc.function.arguments,
+                'arguments': wire_arguments(tc.function.arguments) if wire else tc.function.arguments,
             }
             # Echo a real fc_* item id so the call round-trips; drop a foreign one.
             if (item_id := responses_function_call_item_id(tc.item_id)) is not None:
@@ -146,9 +148,13 @@ def message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
     return [{'role': m.role, 'content': m.content or ''}]
 
 
-def messages_to_responses_input(messages: list[Message]) -> list[dict[str, Any]]:
-    """Render a full transcript as the Responses-API ``input`` array."""
-    return [item for m in messages for item in message_to_responses_input_items(m)]
+def messages_to_responses_input(messages: list[Message], *, wire: bool = True) -> list[dict[str, Any]]:
+    """Render a full transcript as the Responses-API ``input`` array.
+
+    ``wire=True`` sends tool-call arguments through `common.messages.wire_arguments` (unknown
+    arguments become ``'{}'``). Format converters pass ``wire=False`` to keep the record as is.
+    """
+    return [item for m in messages for item in message_to_responses_input_items(m, wire=wire)]
 
 
 __all__ = ['message_to_responses_input_items', 'messages_to_responses_input', 'responses_function_call_item_id']

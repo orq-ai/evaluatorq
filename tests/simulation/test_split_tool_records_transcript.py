@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from evaluatorq.common.messages import messages_to_text
 from evaluatorq.contracts import AgentResponse
 from evaluatorq.simulation.runner.simulation import build_assistant_message
 
@@ -35,3 +36,20 @@ def test_conflicting_results_render_one_call_with_the_calls_arguments_and_result
     assert [c.id for c in assistant.tool_calls] == ['c1']
     assert [c.function.arguments for c in assistant.tool_calls] == ['{"order_id":"a2"}']
     assert [m.tool_call_id for m in tool_messages] == ['c1']
+
+
+def test_lone_result_renders_a_tool_call_with_unavailable_arguments(caplog):
+    response = AgentResponse.from_output_items([RESULT])
+    assert [c.arguments for c in response.tool_calls] == ['']
+    assistant, *tool_messages = build_assistant_message(response)
+    assert assistant.tool_calls is not None and len(assistant.tool_calls) == 1
+    assert assistant.tool_calls[0].function.arguments == ''
+    assert [m.tool_call_id for m in tool_messages] == ['c1']
+    assert messages_to_text([assistant, *tool_messages]).splitlines()[0] == '[tool_call: refund(arguments unavailable)]'
+    assert sum('has no matching call record' in r.getMessage() for r in caplog.records) == 1
+
+
+def test_orphan_native_output_is_dropped_with_a_call_input_missing_warning(caplog):
+    response = AgentResponse.from_output_items([{'type': 'function_call_output', 'call_id': 'zz', 'output': 'x'}])
+    assert response.tool_calls == []
+    assert any('call input missing' in r.getMessage() and "'zz'" in r.getMessage() for r in caplog.records)

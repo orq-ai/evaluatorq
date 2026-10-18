@@ -230,6 +230,7 @@ async def _build_dimension(  # noqa: C901
     else:
         group_indices[None] = list(range(len(usable)))
 
+    usage = usage.scoped(f'dimension:{dimension}') if usage is not None else None
     next_base = next_top = 0
     for group, indices in group_indices.items():
         if len(indices) == 1:
@@ -596,6 +597,7 @@ async def insights(  # noqa: C901
                 trace_input_chars=trace_input_chars,
                 label_classifier_model=classifier_model,
                 classifier_questions=classifier_questions,
+                usage=ledger,
             )
             measured = []
             for source_trace in resolved.traces:

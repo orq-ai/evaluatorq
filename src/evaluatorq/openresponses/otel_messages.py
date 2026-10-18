@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from evaluatorq.common.messages import parse_json_or_value, tool_result_to_text
+from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, parse_json_or_value, tool_result_to_text
 from evaluatorq.openresponses.tool_records import failure_payload, is_tool_record, normalize_tool_records
 
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text', 'summary_text'})
@@ -60,12 +60,15 @@ def _content_to_parts(content: Any, *, as_reasoning: bool = False) -> list[dict[
 
 
 def _tool_call_part(item: dict[str, Any], *, name_key: str = 'name', args_key: str = 'arguments') -> dict[str, Any]:
-    return {
+    part: dict[str, Any] = {
         'type': 'tool_call',
         'id': item.get('call_id') or item.get('id'),
         'name': item.get(name_key) or item.get('tool_name') or '',
-        'arguments': parse_json_or_value(item.get(args_key)),
     }
+    raw_arguments = item.get(args_key)
+    if raw_arguments is not None and raw_arguments != UNKNOWN_ARGUMENTS:
+        part['arguments'] = parse_json_or_value(raw_arguments)
+    return part
 
 
 def _reasoning_parts(item: dict[str, Any]) -> list[dict[str, Any]]:

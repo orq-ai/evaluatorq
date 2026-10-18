@@ -40,7 +40,7 @@ class _State:
 
 def chat_to_responses(conv: ChatConversation) -> ResponsesConversation:
     """Render chat messages as Responses input items."""
-    return ResponsesConversation(items=messages_to_responses_input(conv.messages))
+    return ResponsesConversation(items=messages_to_responses_input(conv.messages, wire=False))
 
 
 def responses_to_chat(conv: ResponsesConversation) -> ChatConversation:

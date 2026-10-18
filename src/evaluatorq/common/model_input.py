@@ -12,7 +12,7 @@ from typing import Any, SupportsIndex
 
 from typing_extensions import Self
 
-from evaluatorq.common.messages import MediaContent, iter_content_parts
+from evaluatorq.common.messages import MediaContent, iter_content_parts, match_tool_results
 from evaluatorq.common.redact import scrub_known_secrets
 
 CHARS_PER_ESTIMATED_TOKEN = 4
@@ -244,39 +244,30 @@ def effective_trace_input_chars() -> int:
 def pair_tool_call_results(
     messages: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[tuple[int, dict[str, Any]]]]:
-    """Pair results with duplicate call ids FIFO within the latest assistant message group."""
-    calls: list[dict[str, Any]] = []
-    latest_call_group_by_id: dict[str, tuple[int, list[dict[str, Any]]]] = {}
-    next_call_index_by_id: dict[str, int] = {}
-    orphan_results: list[tuple[int, dict[str, Any]]] = []
+    """Pair results with calls by id inside a turn window, the rule `common.messages.match_tool_results` owns.
 
+    Display is tolerant of logs: repeated ids queue and a surplus result joins the call it last answered.
+    """
+    calls: list[dict[str, Any]] = []
+    rows: list[tuple[str | None, list[str | None], str | None]] = []
+    record_of: dict[tuple[int, int], dict[str, Any]] = {}
     for index, message in enumerate(messages):
-        role = message.get('role')
-        if role == 'assistant':
+        call_ids: list[str | None] = []
+        if message.get('role') == 'assistant':
             for call_index, call in enumerate(message.get('tool_calls') or []):
                 if not isinstance(call, dict):
                     continue
                 record = {'index': index, 'call_index': call_index, 'call': call, 'results': []}
                 calls.append(record)
+                record_of[index, len(call_ids)] = record
                 call_id = call.get('id')
-                if isinstance(call_id, str):
-                    group = latest_call_group_by_id.get(call_id)
-                    if group is None or group[0] != index:
-                        latest_call_group_by_id[call_id] = (index, [record])
-                        next_call_index_by_id[call_id] = 0
-                    else:
-                        group[1].append(record)
-        elif role == 'tool':
-            call_id = message.get('tool_call_id')
-            if not isinstance(call_id, str) or call_id not in latest_call_group_by_id:
-                orphan_results.append((index, message))
-            else:
-                _, matching_calls = latest_call_group_by_id[call_id]
-                call_index = min(next_call_index_by_id.get(call_id, 0), len(matching_calls) - 1)
-                matching_calls[call_index]['results'].append((index, message))
-                next_call_index_by_id[call_id] = min(call_index + 1, len(matching_calls))
-
-    return calls, orphan_results
+                call_ids.append(call_id if isinstance(call_id, str) else None)
+        tool_call_id = message.get('tool_call_id')
+        rows.append((message.get('role'), call_ids, tool_call_id if isinstance(tool_call_id, str) else None))
+    pairs, orphans = match_tool_results(rows, tolerant=True)
+    for key, results in pairs.items():
+        record_of[key]['results'].extend((result, messages[result]) for result in results)
+    return calls, [(index, messages[index]) for index in orphans]
 
 
 @dataclass(frozen=True)

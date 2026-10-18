@@ -28,6 +28,10 @@ class UsageLedger:
         self._warnings.add(key)
         return True
 
+    def scoped(self, stage: str) -> UsageLedger:
+        """A view of this ledger that records every call under ``stage``, whatever key the caller passes."""
+        return _ScopedLedger(self, stage)
+
     def totals(self) -> dict[str, Usage | None]:
         totals: dict[str, Usage | None] = {}
         for stage, items in self._calls.items():
@@ -41,3 +45,21 @@ class UsageLedger:
                 recorded.append(UsageModel(calls=unknown))
             totals[stage] = sum_structured_usage(recorded)
         return totals
+
+
+class _ScopedLedger(UsageLedger):
+    """Forwards every record to ``parent`` under one fixed stage key."""
+
+    def __init__(self, parent: UsageLedger, stage: str) -> None:
+        super().__init__()
+        self._parent = parent
+        self._stage = stage
+
+    def add(self, stage: str, usage: Usage | None) -> None:
+        self._parent.add(self._stage, usage)
+
+    def claim_warning(self, key: str) -> bool:
+        return self._parent.claim_warning(key)
+
+    def totals(self) -> dict[str, Usage | None]:
+        return self._parent.totals()

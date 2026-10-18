@@ -18,6 +18,7 @@ from evaluatorq.common.llm_call import (
     execute_response,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.messages import drop_unreplayable_tool_records
 from evaluatorq.common.prompt_cache import (
     apply_cache_breakpoints,
     caching_applies,
@@ -434,6 +435,7 @@ class BaseAgent(UsageTracking, ABC):
         `apply_cache_breakpoints` on the chat path, `mark_responses_input` on the
         Responses path (which is the judge's default).
         """
+        messages = drop_unreplayable_tool_records(messages, incomplete_as_text=True)
         if self.config.api == 'responses':
             return await self._call_responses(
                 messages,

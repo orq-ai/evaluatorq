@@ -7,6 +7,8 @@ import json
 from typing import Any, cast
 
 import pytest
+
+from evaluatorq.contracts import Usage
 from loguru import logger
 from pydantic import ValidationError
 
@@ -105,9 +107,10 @@ async def test_compile_query_wraps_inconsistent_task_criteria(monkeypatch) -> No
 
 
 class FakeStructuredResult:
-    def __init__(self, parsed: object | None, raw: str = '') -> None:
+    def __init__(self, parsed: object | None, raw: str = '', usage: object | None = None) -> None:
         self.parsed = parsed
         self.raw = raw
+        self.usage = usage
 
 
 @pytest.mark.asyncio
@@ -682,3 +685,19 @@ def test_generated_whole_calendar_day_normalization_does_not_hide_changed_dates(
         reference=reference,
     )
     assert canonical != changed
+
+
+@pytest.mark.asyncio
+async def test_compile_query_reports_one_usage_entry_per_attempt(monkeypatch) -> None:
+    invalid = choice_document()
+    invalid['dimensions'][0]['selection']['values'] = ['billing', 'technical']
+    responses = iter([(invalid, Usage(input_tokens=3, total_tokens=3)), (choice_document(), None)])
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        document, usage = next(responses)
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document), usage=usage)
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+    plan = await compile_query(cast(Any, object()), 'compiler-model', 'find billing requests')
+
+    assert plan.usages == (Usage(input_tokens=3, total_tokens=3), None)

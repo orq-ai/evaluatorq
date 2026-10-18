@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.common.messages import pair_tool_rows, tool_call_text
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
@@ -129,13 +130,10 @@ def _tool_traffic_text(message: Message, results: Mapping[str, str], max_chars: 
     """
     lines: list[str] = []
     for call in message.tool_calls or []:
-        line = f'{call.function.name}({call.function.arguments})'
         result = results.get(call.id)
-        if result is not None:
-            if len(result) > max_chars:
-                result = f'{result[:max_chars]}… (truncated)'
-            line = f'{line} -> {result}'
-        lines.append(line)
+        if result is not None and len(result) > max_chars:
+            result = f'{result[:max_chars]}… (truncated)'
+        lines.append(tool_call_text(call, incomplete=result is None, result=result))
     return '[The agent used tools instead of replying]\n' + '\n'.join(lines)
 
 
@@ -160,15 +158,19 @@ def _invert_roles_for_simulator(
     `_tool_traffic_text`); defaults to the module constant, overridden by
     `SimulationRunner.__init__`'s ``max_tool_result_chars``.
     """
-    tool_results = {m.tool_call_id: content_to_text(m.content) for m in messages if m.role == 'tool' and m.tool_call_id}
+    pairing = pair_tool_rows(messages)
     inverted: list[Message] = []
-    for m in messages:
+    for index, m in enumerate(messages):
         if m.role == 'tool':
             continue
         if m.role == 'user':
             inverted.append(m.model_copy(update={'role': 'assistant'}))
         elif m.role == 'assistant':
             blank_with_tools = not content_to_text(m.content) and m.tool_calls
+            tool_results = {
+                (m.tool_calls or [])[position].id: content_to_text(messages[row].content)
+                for position, row in pairing.results_for(index).items()
+            }
             content = _tool_traffic_text(m, tool_results, max_tool_result_chars) if blank_with_tools else m.content
             inverted.append(m.model_copy(update={'role': 'user', 'content': content, 'tool_calls': None}))
         else:
@@ -183,14 +185,11 @@ def build_assistant_message(response: AgentResponse) -> list[Message]:
     the target actually did, not just any text it produced alongside it — a
     target that resolves a request purely through tool calls (no text) previously
     left the judge looking at an empty assistant turn. Completed tool calls are
-    followed by their separate ``role='tool'`` rows so both provider serializers
-    receive a valid pair. Calls without results are dropped by ``render_tool_call``.
+    followed by their separate ``role='tool'`` rows. A call without a result stays in the
+    assistant row as evidence, with no tool row; replay drops it through
+    `drop_unreplayable_tool_records`.
     """
-    rendered_tool_calls = [
-        rendered
-        for item in response.tool_calls
-        if (rendered := render_tool_call(item, warn=logger.warning)) is not None
-    ]
+    rendered_tool_calls = [render_tool_call(item) for item in response.tool_calls]
     tool_calls = [tool_call for tool_call, _ in rendered_tool_calls]
     text = response.text
     if not text and tool_calls:
@@ -200,7 +199,7 @@ def build_assistant_message(response: AgentResponse) -> list[Message]:
         )
     return [
         Message(role='assistant', content=text, tool_calls=tool_calls or None),
-        *(tool_message for _, tool_message in rendered_tool_calls),
+        *(tool_message for _, tool_message in rendered_tool_calls if tool_message is not None),
     ]
 
 

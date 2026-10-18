@@ -599,7 +599,7 @@ def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
                 )
             role = 'developer' if (step.extra or {}).get('original_role') == 'developer' else step.source
             content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
-            items.extend(messages_to_responses_input([Message(role=role, content=content)]))
+            items.extend(messages_to_responses_input([Message(role=role, content=content)], wire=False))
     if unmapped:
         logger.warning('Responses usage has no slot for step metrics {} (steps per metric); dropping them.', unmapped)
     for item in items:
@@ -686,7 +686,7 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
                 content=result_content or '',
             )
         )
-    items.extend(messages_to_responses_input(messages))
+    items.extend(messages_to_responses_input(messages, wire=False))
     outputs: list[dict[str, Any]] = []
     unmapped = (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
     if isinstance(unmapped, list):
