@@ -490,6 +490,17 @@ def test_review_client_escapes_saved_ids_and_labels_partial_cost(minimal_run: In
     assert run_data['stages_without_model_calls'] == ['priority', 'write']
     snapshot = build_review_payload(saved.model_copy(update={'population': {'mode': 'snapshot'}}))
     assert cast(dict[str, Any], snapshot['run'])['stages_without_model_calls'] == ['population', 'priority', 'write']
+    unlabeled = saved.model_copy(update={
+        'population': {'mode': 'snapshot'},
+        'config': saved.config.model_copy(update={'labels': [], 'coding_labels': [], 'coding_analysis': False}),
+    })
+    assert cast(dict[str, Any], build_review_payload(unlabeled)['run'])['stages_without_model_calls'] == [
+        'population', 'label', 'priority', 'write'
+    ]
+    queried = unlabeled.model_copy(update={'population': {'mode': 'query'}})
+    assert cast(dict[str, Any], build_review_payload(queried)['run'])['stages_without_model_calls'] == [
+        'priority', 'write'
+    ]
     assert "stages_without_model_calls?.includes(name) ? 'No model calls'" in script
     assert 'data-t="${esc(t.id)}"' in script
     assert 'data-t="${esc(id)}"' in script

@@ -35,10 +35,15 @@ def build_signal_detail_payload(run: InsightsRun, trace_id: str, span_id: str | 
     }
 
 
-def _stages_without_model_calls(population: dict[str, object]) -> list[str]:
+def _stages_without_model_calls(run: InsightsRun) -> list[str]:
     """Stages that never call a model, so a missing cost there means none was spent."""
+    source = population_source(run.population)
     stages = ['priority', 'write']
-    if population_source(population) in ('snapshot', 'export'):
+    # The label stage asks nothing when no label, coding label or query match question was requested.
+    config = run.config
+    if not (config.labels or config.coding_labels or config.coding_analysis or source == 'query'):
+        stages.insert(0, 'label')
+    if source in ('snapshot', 'export'):
         stages.insert(0, 'population')
     return stages
 
@@ -176,7 +181,7 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
             'cost_by_stage': {
                 name: usage.total_cost if usage is not None else None for name, usage in run.cost_by_stage.items()
             },
-            'stages_without_model_calls': _stages_without_model_calls(population),
+            'stages_without_model_calls': _stages_without_model_calls(run),
             'cost_by_stage_details': {
                 name: {
                     'cost': usage.total_cost,
