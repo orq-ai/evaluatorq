@@ -34,7 +34,7 @@ from evaluatorq.insights.models import (
     TraceInsight,
     TraceSummary,
 )
-from evaluatorq.insights.presets import SENTIMENT
+from evaluatorq.insights.presets import MADE_ERRORS, SENTIMENT
 from evaluatorq.insights.usage import UsageLedger
 
 
@@ -63,6 +63,34 @@ def test_insights_review_dimensionless_run_and_safe_tooltips() -> None:
         pytest.skip('Node.js is unavailable')
     script = Path(__file__).with_name('insights_review_dimensionless.cjs')
     subprocess.run(['node', str(script)], check=True, cwd=Path(__file__).parents[2])
+
+
+def test_insights_review_reads_noul_answers_from_the_payload(minimal_run, tmp_path) -> None:
+    if shutil.which('node') is None:
+        pytest.skip('Node.js is unavailable')
+    from evaluatorq.dashboard.insights_review_data import build_review_payload
+
+    answers = [True, False]
+    run = minimal_run.model_copy(update={
+        'config': minimal_run.config.model_copy(update={'labels': [SENTIMENT, MADE_ERRORS]}),
+        'traces': [
+            trace.model_copy(update={'labels': {
+                **trace.labels,
+                'made_errors': LabelAnswer(value=value, confidence=0.9, probabilities=None, error=None),
+            }})
+            for trace, value in zip(minimal_run.traces, answers)
+        ],
+        'labels': {
+            **minimal_run.labels,
+            'made_errors': LabelResult(
+                spec=MADE_ERRORS, counts={'yes': 1, 'no': 1}, mean_confidence=0.9, n_low_confidence=0, n_failed=0
+            ),
+        },
+    })
+    payload_path = tmp_path / 'payload.json'
+    payload_path.write_text(json.dumps(build_review_payload(run), default=str), encoding='utf-8')
+    script = Path(__file__).with_name('insights_review_noul.cjs')
+    subprocess.run(['node', str(script), str(payload_path)], check=True, cwd=Path(__file__).parents[2])
 
 
 def test_insights_header_marks_priced_and_missing_usage_calls_partial(minimal_run) -> None:

@@ -86,7 +86,7 @@ function lvals(l) { return l.kind === 'noul' ? ['yes', 'no'] : l.kind === 'score
 function lval(t, name) {
   const a = t.l[name], l = LBY[name];
   if (!a || a[0] == null) return null;
-  if (l.kind === 'noul') return a[0] === true ? 'yes' : 'no';
+  if (l.kind === 'noul') return a[0] === 'yes' || a[0] === true ? 'yes' : 'no';
   if (l.kind === 'score') {
     const key = String(a[0]);
     return lvals(l).includes(key) ? key : null;
