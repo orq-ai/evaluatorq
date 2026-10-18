@@ -13,8 +13,7 @@ from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from typing_extensions import TypedDict
 
-from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, tool_result_to_text
-from evaluatorq.common.thread_context import conversation_warned_keys
+from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, tool_result_to_text, wire_arguments
 from evaluatorq.openresponses.convert_models import (
     InputFileContent,
     InputImageContent,
@@ -112,7 +111,7 @@ class ConversationHistoryMode(StrEnum):
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
 
     from openai import AsyncOpenAI
 
@@ -437,7 +436,8 @@ class Message(BaseModel):
         Preserves tool-call structure that a naive ``{"role", "content"}`` flatten
         would drop: an assistant message's ``tool_calls`` and a ``tool`` row's
         ``tool_call_id``/``name``. Used by stateless targets to replay a transcript
-        (built by ``turns_to_messages``) without losing multi-turn tool context.
+        (built by ``turns_to_messages``) without losing multi-turn tool context. Arguments go out
+        through `common.messages.wire_arguments`, so unknown ones are ``'{}'`` on the wire.
         """
         if self.role == 'tool':
             # A tool message carries a result keyed to tool_call_id; tool_calls belong
@@ -459,7 +459,7 @@ class Message(BaseModel):
                     {
                         'id': tc.id,
                         'type': 'function',
-                        'function': {'name': tc.function.name, 'arguments': tc.function.arguments},
+                        'function': {'name': tc.function.name, 'arguments': wire_arguments(tc.function.arguments)},
                     }
                     for tc in self.tool_calls
                 ],
@@ -467,19 +467,12 @@ class Message(BaseModel):
         return {'role': self.role, 'content': _render_chat_content(self.content)}
 
 
-def render_tool_call(
-    item: ToolCallOutputItem,
-    *,
-    warn: Callable[[str], None] | None = None,
-) -> tuple[StrategyToolCall, Message | None]:
+def render_tool_call(item: ToolCallOutputItem) -> tuple[StrategyToolCall, Message | None]:
     """Render one tool call as its transcript messages.
 
     A call without a result keeps its place: it is returned with ``incomplete=True`` and no tool
-    message, and logged once per call per conversation (later rebuilds log at debug).
-
-    Signature change: this used to return ``None`` for a call without a result and took no
-    ``keep_incomplete``; it now always returns a pair whose message may be ``None``. The recorded transcript is evidence. Provider replay removes such a call
-    through `common.messages.drop_unreplayable_tool_records`. An empty string is a valid result.
+    message. The replay filter (`common.messages.drop_unreplayable_tool_records`) owns the warning
+    about it, so this logs at debug. An empty string is a valid result.
     """
     tool_call = StrategyToolCall(
         id=item.call_id,
@@ -488,14 +481,7 @@ def render_tool_call(
         incomplete=item.result is None,
     )
     if item.result is None:
-        warned = conversation_warned_keys()
-        key = f'incomplete|{item.call_id}|{item.name}|{item.arguments}'
-        message = f'Tool call {item.call_id!r} ({item.name!r}) has no result (None); kept without a tool message.'
-        if key in warned:
-            logger.debug(message)
-        else:
-            warned.add(key)
-            (warn or logger.warning)(message)
+        logger.debug(f'Tool call {item.call_id!r} ({item.name!r}) has no result (None); kept without a tool message.')
         return tool_call, None
     tool_message = Message(
         role='tool',

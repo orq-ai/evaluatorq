@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.messages import coerce_content_text, messages_to_text
+from evaluatorq.common.messages import coerce_content_text, messages_to_text, pair_tool_rows
 from evaluatorq.contracts import (
     AgentResponse,
     FunctionCall,
@@ -280,6 +280,13 @@ RESPONSES_ASSISTANT_TURN_ORDER_KEY = 'assistant_turn_order'
 """``metadata`` key recording the source message index for each assistant output item."""
 
 
+def _clear_incomplete_when_answered(messages: list[Message]) -> None:
+    """A tool row that answers a call wins over an ``incomplete`` status on its ``function_call``."""
+    for index, answered in pair_tool_rows(messages).row_of.items():
+        for position in answered:
+            (messages[index].tool_calls or [])[position].incomplete = False
+
+
 def responses_transcript(output: Any) -> list[Message] | None:
     """Rebuild the ordered chat transcript from a simulation OpenResponses dict.
 
@@ -370,4 +377,5 @@ def responses_transcript(output: Any) -> list[Message] | None:
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         logger.warning(f'ignoring malformed OpenResponses transcript item: {exc}')
         return None
+    _clear_incomplete_when_answered(messages)
     return messages

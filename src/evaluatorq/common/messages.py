@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.thread_context import conversation_warned_keys
+from evaluatorq.common.thread_context import warn_once
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -169,13 +169,14 @@ def coerce_content_text(content: Any) -> str:
 UNKNOWN_ARGUMENTS = ''
 UNKNOWN_ARGUMENTS_TEXT = 'arguments unavailable'
 NO_RESULT_TEXT = 'no result recorded'
+EMPTY_ASSISTANT_TEXT = '[The agent sent no reply]'
 
 
-def tool_call_text(call: Any, *, incomplete: bool = False, result: str | None = None) -> str:
+def tool_call_text(call: Any, *, incomplete: bool | None = None, result: str | None = None) -> str:
     """Render one tool call as a marker a judge can read.
 
-    The ``-> no result recorded`` suffix comes from the recorded fact, an ``incomplete`` flag on
-    the call or the argument, never from which neighbours happen to be in the same slice.
+    ``incomplete`` decides the ``-> no result recorded`` suffix; ``None`` reads the recorded
+    ``incomplete`` flag on the call. A ``result`` renders inside the brackets instead.
     """
     function = call.get('function') if isinstance(call, dict) else getattr(call, 'function', None)
     source = function if function is not None else call
@@ -189,7 +190,8 @@ def tool_call_text(call: Any, *, incomplete: bool = False, result: str | None = 
     if result is not None:
         suffix = f' -> {result}'
     else:
-        suffix = f' -> {NO_RESULT_TEXT}' if incomplete or _field(call, 'incomplete') is True else ''
+        flagged = _field(call, 'incomplete') is True if incomplete is None else incomplete
+        suffix = f' -> {NO_RESULT_TEXT}' if flagged else ''
     return f'[tool_call: {name or "unknown"}({rendered or ""}){suffix}]'
 
 
@@ -221,11 +223,18 @@ def messages_to_text(messages: Iterable[Any]) -> str:
     had. The legacy ``function_call`` / ``function_call_output`` fields render
     alongside ``tool_calls``: `has_meaningful_output` counts them, so skipping
     them here would hand a judge an empty string for an agent that acted. A tool call
-    flagged ``incomplete`` (its result was never recorded) renders with ``-> no result recorded``,
-    so the judge reads an attempt that never returned instead of a call whose result was lost.
+    without a result renders with ``-> no result recorded`` (`call_is_incomplete`), so the judge
+    reads an attempt that never returned instead of a call whose result was lost. Over a list of
+    `Message` the result is looked up by position; pass the whole transcript, because a slice that
+    cuts a call from its result row marks the call. Anything else falls back to the recorded
+    ``incomplete`` flag.
     """
+    from evaluatorq.contracts import Message
+
+    messages = list(messages)
+    pairing = pair_tool_rows(messages) if messages and all(isinstance(m, Message) for m in messages) else None
     lines: list[str] = []
-    for message in messages:
+    for index, message in enumerate(messages):
         if isinstance(message, dict):
             role, content, tool_calls = message.get('role'), message.get('content'), message.get('tool_calls')
             legacy_call, legacy_result = message.get('function_call'), message.get('function_call_output')
@@ -238,7 +247,14 @@ def messages_to_text(messages: Iterable[Any]) -> str:
         text = coerce_content_text(content)
         parts = [text] if text.strip() else []
         calls = [*(tool_calls or []), *([legacy_call] if legacy_call is not None else [])]
-        parts.extend(tool_call_text(call) for call in calls)
+        answered = pairing.results_for(index) if pairing is not None else {}
+        parts.extend(
+            tool_call_text(
+                call,
+                incomplete=call_is_incomplete(call, paired=position in answered if pairing is not None else None),
+            )
+            for position, call in enumerate(calls)
+        )
         if legacy_result is not None:
             parts.append(f'[tool_result: {_legacy_result_text(legacy_result)}]')
         if not parts:
@@ -293,13 +309,16 @@ def tool_result_to_text(result: object) -> str:
     return json.dumps(result, default=str)
 
 
-@dataclass(frozen=True)
 class ToolPairing:
-    """Which tool calls and tool rows of a transcript answer each other, by position."""
+    """Which tool row answers which call of a transcript, by position."""
 
-    paired: dict[int, set[str]]
-    rows: set[int]
-    row_of: dict[tuple[int, str], int]
+    def __init__(self, row_of: dict[int, dict[int, int]]) -> None:
+        self.row_of = row_of
+        self.rows = {row for answers in row_of.values() for row in answers.values()}
+
+    def results_for(self, index: int) -> dict[int, int]:
+        """Map each answered call position of the assistant row ``index`` to its tool row index."""
+        return self.row_of.get(index, {})
 
 
 def pair_tool_rows(messages: list[Message]) -> ToolPairing:
@@ -308,78 +327,91 @@ def pair_tool_rows(messages: list[Message]) -> ToolPairing:
     A block is the consecutive assistant turns that carry tool calls (parallel calls may be split
     across rows) plus the tool rows that directly follow them; system rows between the pieces are
     skipped. A tool row answers the first call in its block with that id, and the first row per id
-    wins. A reused id, a result after a later user turn, a result before its call and a duplicate
-    result do not pair.
+    wins. A repeated id (in the same row, another row of the block, a later turn), a result after a
+    later user turn, a result before its call and a duplicate result do not pair.
 
-    Position is authoritative for replay only. What the judge reads as "no result recorded" is the
-    recorded fact, `StrategyToolCall.incomplete`; the display pairing in
-    `common.model_input.pair_tool_call_results` is a different job (FIFO within a call group for
-    rendering) and stays separate.
+    Position is authoritative for replay and for `call_is_incomplete` over a full transcript. The
+    recorded `StrategyToolCall.incomplete` flag only stands in where no position is available (a
+    loose dict, an export). The display pairing in `common.model_input.pair_tool_call_results` is
+    a different job: FIFO within a call group, tolerant of out-of-order logs, where replay must be
+    strict.
     """
-    paired: dict[int, set[str]] = {}
-    rows: set[int] = set()
-    row_of: dict[tuple[int, str], int] = {}
+    row_of: dict[int, dict[int, int]] = {}
     index = 0
     while index < len(messages):
-        message = messages[index]
-        if message.role != 'assistant' or not message.tool_calls:
+        if messages[index].role != 'assistant' or not messages[index].tool_calls:
             index += 1
             continue
-        owner: dict[str, int] = {}
+        owner: dict[str, tuple[int, int]] = {}
         cursor = index
         while cursor < len(messages) and messages[cursor].role in ('assistant', 'system'):
             if messages[cursor].role == 'assistant':
                 if not messages[cursor].tool_calls:
                     break
-                paired.setdefault(cursor, set())
-                for tc in messages[cursor].tool_calls or []:
-                    owner.setdefault(tc.id, cursor)
+                for position, tc in enumerate(messages[cursor].tool_calls or []):
+                    owner.setdefault(tc.id, (cursor, position))
             cursor += 1
+        answered: set[str] = set()
         while cursor < len(messages) and messages[cursor].role in ('tool', 'system'):
             call_id = messages[cursor].tool_call_id
-            if messages[cursor].role == 'tool' and call_id in owner and call_id not in paired[owner[call_id]]:
-                paired[owner[call_id]].add(call_id)
-                rows.add(cursor)
-                row_of[owner[call_id], call_id] = cursor
+            if messages[cursor].role == 'tool' and call_id in owner and call_id not in answered:
+                answered.add(call_id)
+                row, position = owner[call_id]
+                row_of.setdefault(row, {})[position] = cursor
             cursor += 1
         index = cursor
-    return ToolPairing(paired=paired, rows=rows, row_of=row_of)
+    return ToolPairing(row_of)
 
 
-WIRE_EMPTY_ARGUMENTS = '{}'
+def call_is_incomplete(call: Any, *, paired: bool | None) -> bool:
+    """Whether ``call`` has no result: the one answer every reader of a transcript uses.
 
-
-def _wire_call(call: Any) -> Any:
-    """Return ``call`` as it goes on the wire: unknown arguments become ``'{}'`` on a copy.
-
-    Anthropic behind the Orq router rejects ``''`` (``tool_use.input: Input should be an object``);
-    the recorded call keeps ``''`` so evidence still reads "arguments unavailable".
+    ``paired`` is whether a tool row answers it by position, or ``None`` when no transcript
+    position is available, in which case the recorded ``incomplete`` flag decides. A real tool
+    row always wins over the flag.
     """
-    if call.function.arguments != UNKNOWN_ARGUMENTS:
-        return call
-    return call.model_copy(update={'function': call.function.model_copy(update={'arguments': WIRE_EMPTY_ARGUMENTS})})
+    if paired is not None:
+        return not paired
+    return _field(call, 'incomplete') is True
+
+
+def wire_arguments(arguments: str) -> str:
+    """Return ``arguments`` as a provider accepts it: a JSON object, else ``'{}'``.
+
+    Unknown (``''``), truncated or non-object arguments become ``'{}'``. Anthropic behind the Orq
+    router rejects anything else (``tool_use.input: Input should be an object``). Only the
+    serializers call this; the recorded call keeps what it had.
+    """
+    try:
+        parsed = json.loads(arguments)
+    except (TypeError, ValueError):
+        return '{}'
+    return arguments if isinstance(parsed, dict) else '{}'
 
 
 def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_text: bool = False) -> list[Message]:
-    """Return a copy of ``messages`` without the tool records a provider would reject.
+    """Return a shallow copy of ``messages`` without the tool records a provider would reject.
 
-    The recorded transcript is evidence and keeps an incomplete tool call; this builds the copy
-    that is sent. An assistant tool call needs a tool row after it with the same ``tool_call_id``
-    (see `pair_tool_rows`), and a tool row needs the call it answers. Every other call and row is
-    removed. A turn left with no text and no calls stays as an empty assistant row, so the
-    user/assistant alternation survives. A paired call with unknown arguments is kept, and the copy
-    sends ``'{}'`` for it (a provider-required object); the recorded call keeps ``''``.
-    Run this on the whole transcript, never on a slice.
+    Rows that need no change are the same objects; a changed row is a `model_copy`, so the
+    recorded transcript is never mutated and keeps its incomplete calls. An assistant tool call
+    needs a tool row after it (see `pair_tool_rows`) and a tool row needs the call it answers;
+    every other call and row is removed, and a repeated call id in one row keeps only its first
+    call. A turn left with no text and no calls (and any other empty assistant turn) gets
+    `EMPTY_ASSISTANT_TEXT`, which keeps the user/assistant alternation and satisfies providers
+    that reject an empty assistant message. Arguments are not touched here; the serializers send
+    `wire_arguments`, so a target still sees an unknown call as unknown.
 
-    With ``incomplete_as_text`` a call without a result is not lost: it is appended to its turn's
-    text as ``[tool_call: name(args) -> no result recorded]``, for a reader (the judge) that must
-    still see the attempt, and only an orphan result warns.
+    With ``incomplete_as_text`` (the judge's copy) nothing is lost silently: a removed call is
+    appended to its turn's text as ``[tool_call: name(args) -> no result recorded]`` and a kept
+    call with unknown arguments as ``[tool_call: name(arguments unavailable)]``. Only an orphan
+    result warns then.
 
-    One warning per record per conversation: keys already in `conversation_warned_keys` log at
-    debug. A call is keyed by id, name and arguments, a result by id.
+    One warning per record per conversation (`warn_once`); repeats log at debug.
     """
+    from evaluatorq.contracts import InputTextContent
+
     pairing = pair_tool_rows(messages)
-    dropped_calls: list[tuple[str, str]] = []
+    dropped_calls: list[tuple[str, str, str, str]] = []
     dropped_results: list[tuple[str, str]] = []
     out: list[Message] = []
     for index, m in enumerate(messages):
@@ -387,51 +419,51 @@ def drop_unreplayable_tool_records(messages: list[Message], *, incomplete_as_tex
             if index in pairing.rows:
                 out.append(m)
             else:
-                call_id = m.tool_call_id or '<no id>'
-                dropped_results.append((call_id, f'result|{call_id}'))
+                dropped_results.append(('result', m.tool_call_id or '<no id>'))
             continue
-        if m.role == 'assistant' and m.tool_calls:
-            kept = [tc for tc in m.tool_calls if tc.id in pairing.paired[index]]
-            lost = [tc for tc in m.tool_calls if tc.id not in pairing.paired[index]]
-            wire_kept = [_wire_call(tc) for tc in kept]
-            if lost or any(a is not b for a, b in zip(wire_kept, kept, strict=True)):
-                content = m.content
-                if incomplete_as_text and lost:
-                    from evaluatorq.contracts import InputTextContent
-
-                    marker = '\n'.join(tool_call_text(tc, incomplete=True) for tc in lost)
-                    if isinstance(content, list):
-                        content = [*content, InputTextContent(type='input_text', text=marker)]
-                    else:
-                        content = f'{content}\n{marker}' if content and content.strip() else marker
+        if m.role != 'assistant':
+            out.append(m)
+            continue
+        answered = pairing.results_for(index)
+        calls = m.tool_calls or []
+        kept = [tc for position, tc in enumerate(calls) if position in answered]
+        lost = [tc for position, tc in enumerate(calls) if position not in answered]
+        unknown = [tc for tc in kept if tc.function.arguments == UNKNOWN_ARGUMENTS]
+        silent = not coerce_content_text(m.content).strip()
+        if not lost and not (incomplete_as_text and unknown) and (calls or not silent):
+            out.append(m)
+            continue
+        content = m.content
+        if incomplete_as_text:
+            notes = [
+                *(tool_call_text(tc, incomplete=True) for tc in lost),
+                *(tool_call_text(tc, incomplete=False) for tc in unknown),
+            ]
+            if notes:
+                marker = '\n'.join(notes)
+                if isinstance(content, list):
+                    content = [*content, InputTextContent(type='input_text', text=marker)]
                 else:
-                    dropped_calls.extend(
-                        (tc.id, f'call|{tc.id}|{tc.function.name}|{tc.function.arguments}') for tc in lost
-                    )
-                    if not kept and not coerce_content_text(content).strip():
-                        content = ''
-                m = m.model_copy(update={'content': content, 'tool_calls': wire_kept or None})
-        out.append(m)
+                    content = f'{content}\n{marker}' if content and content.strip() else marker
+        else:
+            dropped_calls.extend(('call', tc.id, tc.function.name, tc.function.arguments) for tc in lost)
+        if not kept and not coerce_content_text(content).strip():
+            content = EMPTY_ASSISTANT_TEXT
+        out.append(m.model_copy(update={'content': content, 'tool_calls': kept or None}))
     _warn_dropped(dropped_calls, dropped_results)
     return out
 
 
-def _warn_dropped(calls: list[tuple[str, str]], results: list[tuple[str, str]]) -> None:
+def _warn_dropped(calls: list[tuple[str, str, str, str]], results: list[tuple[str, str]]) -> None:
     if not calls and not results:
         return
-    seen = conversation_warned_keys()
-    fresh = [(i, k) for i, k in [*calls, *results] if k not in seen]
-    seen.update(k for _, k in [*calls, *results])
-    shown = fresh or [*calls, *results]
-    fresh_calls = sorted({i for i, k in shown if k.startswith('call|')})
-    fresh_results = sorted({i for i, k in shown if k.startswith('result|')})
     parts = []
-    if fresh_calls:
-        parts.append(f'tool call(s) {fresh_calls} (no result follows them)')
-    if fresh_results:
-        parts.append(f'tool result(s) {fresh_results} (no call precedes them)')
-    report = logger.warning if fresh else logger.debug
-    report(
+    if calls:
+        parts.append(f'tool call(s) {sorted({c[1] for c in calls})} (no result follows them)')
+    if results:
+        parts.append(f'tool result(s) {sorted({r[1] for r in results})} (no call precedes them)')
+    warn_once(
+        [*calls, *results],
         'Not replaying {} to the target. They stay in the recorded transcript.',
         ' and '.join(parts),
     )

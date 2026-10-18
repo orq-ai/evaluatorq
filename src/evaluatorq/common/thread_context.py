@@ -23,8 +23,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Hashable, Iterator, Sequence
 
     from opentelemetry.trace import Span
 
@@ -48,17 +50,20 @@ _THREAD_ID_SEP = ':'
 
 # Keys of the warnings already shown for the active conversation, so a transcript rebuilt or
 # replayed every turn warns about a tool record once instead of once per turn.
-_warned_keys: ContextVar[set[str] | None] = ContextVar('evaluatorq_warned_keys', default=None)
+_warned_keys: ContextVar[set[Hashable] | None] = ContextVar('evaluatorq_warned_keys', default=None)
 
 
-def conversation_warned_keys() -> set[str]:
-    """Return the set of warning keys already shown in this conversation.
+def warn_once(keys: Sequence[Hashable], message: str, *args: object) -> None:
+    """Log ``message`` at WARNING the first time in this conversation, at DEBUG after that.
 
-    Outside a `conversation_thread` there is no conversation to dedupe within, so a throwaway set
-    comes back and every call warns.
+    ``keys`` identify the records the message is about; the message warns when any key is new and
+    marks all of them. Outside a `conversation_thread` nothing is remembered, so every call warns.
     """
-    keys = _warned_keys.get()
-    return keys if keys is not None else set()
+    seen = _warned_keys.get()
+    fresh = seen is None or any(key not in seen for key in keys)
+    if seen is not None:
+        seen.update(keys)
+    (logger.warning if fresh else logger.debug)(message, *args)
 
 
 def build_thread_id(run_id: str | None, *parts: object) -> str | None:
@@ -185,7 +190,7 @@ def conversation_thread(thread_id: str | None = None) -> Iterator[str]:
     """Bind a thread id for the duration of one conversation.
 
     Generates a uuid when none is given. Also opens the conversation's set of already-shown
-    warning keys (`conversation_warned_keys`). Restores the previous values on exit so
+    warning keys (`warn_once`). Restores the previous values on exit so
     nested/sequential conversations don't bleed into each other.
 
     Yields:
@@ -205,11 +210,11 @@ __all__ = [
     'build_static_thread_id',
     'build_thread_id',
     'conversation_thread',
-    'conversation_warned_keys',
     'current_thread_id',
     'evaluatorq_pipeline',
     'evaluatorq_run_id',
     'pipeline_metadata',
     'pipeline_metadata_param',
     'thread_body_param',
+    'warn_once',
 ]

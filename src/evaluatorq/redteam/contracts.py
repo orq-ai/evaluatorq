@@ -24,6 +24,7 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, TypedDict
 
+from evaluatorq.common.messages import EMPTY_ASSISTANT_TEXT
 from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import RunSummary, StrEnum
@@ -1280,7 +1281,7 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
         # output (empty output, or all-reasoning since reasoning items are dropped).
         # A trailing 'tool' row is fine — an assistant tool_calls row preceded it.
         if out[-1].role == 'user':
-            out.append(Message(role='assistant', content=''))
+            out.append(Message(role='assistant', content=EMPTY_ASSISTANT_TEXT))
     return out
 
 

@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from evaluatorq.common.messages import EMPTY_ASSISTANT_TEXT
 from evaluatorq.contracts import (
     AgentResponse,
     ReasoningOutputItem,
@@ -471,7 +472,7 @@ class TestChatCompletionsOrdering:
         )
         msgs = result.chat_completions
         assert [m.role for m in msgs] == ['user', 'assistant']
-        assert msgs[1].content == ''
+        assert msgs[1].content == EMPTY_ASSISTANT_TEXT
 
 
 # ===========================================================================

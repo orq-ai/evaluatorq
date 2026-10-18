@@ -168,9 +168,8 @@ def _invert_roles_for_simulator(
         elif m.role == 'assistant':
             blank_with_tools = not content_to_text(m.content) and m.tool_calls
             tool_results = {
-                call_id: content_to_text(messages[row].content)
-                for (owner, call_id), row in pairing.row_of.items()
-                if owner == index
+                (m.tool_calls or [])[position].id: content_to_text(messages[row].content)
+                for position, row in pairing.results_for(index).items()
             }
             content = _tool_traffic_text(m, tool_results, max_tool_result_chars) if blank_with_tools else m.content
             inverted.append(m.model_copy(update={'role': 'user', 'content': content, 'tool_calls': None}))

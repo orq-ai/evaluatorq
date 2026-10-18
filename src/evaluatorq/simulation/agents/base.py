@@ -435,6 +435,7 @@ class BaseAgent(UsageTracking, ABC):
         `apply_cache_breakpoints` on the chat path, `mark_responses_input` on the
         Responses path (which is the judge's default).
         """
+        messages = drop_unreplayable_tool_records(messages, incomplete_as_text=True)
         if self.config.api == 'responses':
             return await self._call_responses(
                 messages,
@@ -482,7 +483,6 @@ class BaseAgent(UsageTracking, ABC):
         timeout_s = self._resolved_timeout_s(timeout)
         reasoning_effort = self._resolved_reasoning_effort()
 
-        messages = drop_unreplayable_tool_records(messages, incomplete_as_text=True)
         full_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': self.system_prompt},
             *[m.to_chat_completion() for m in messages],
@@ -597,7 +597,6 @@ class BaseAgent(UsageTracking, ABC):
         # Canonical renderer: an assistant turn must arrive as output_text parts or
         # the Orq router silently drops it, leaving the judge blind to the agent's
         # replies (RES-1308). Never hand-build this list.
-        messages = drop_unreplayable_tool_records(messages, incomplete_as_text=True)
         input_messages = messages_to_responses_input(messages)
         # A per-item breakpoint, not the top-level switch: the latter marks the end
         # of the whole input, so a caller that rebuilds its trailing item (the

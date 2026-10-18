@@ -3,7 +3,12 @@ import logging
 import pytest
 
 from evaluatorq.common.thread_context import conversation_thread
-from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, drop_unreplayable_tool_records, messages_to_text
+from evaluatorq.common.messages import (
+    EMPTY_ASSISTANT_TEXT,
+    UNKNOWN_ARGUMENTS,
+    drop_unreplayable_tool_records,
+    messages_to_text,
+)
 from evaluatorq.contracts import AgentResponse, FunctionCall, StrategyToolCall, TextOutputItem, ToolCallOutputItem
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.simulation.contracts import Message
@@ -67,7 +72,7 @@ def _incomplete_response():
     )
 
 
-def test_tool_call_without_result_stays_in_the_transcript_and_warns(caplog):
+def test_tool_call_without_result_stays_in_the_transcript_and_does_not_warn_at_render(caplog):
     with caplog.at_level(logging.WARNING, logger='evaluatorq.simulation.runner.simulation'):
         messages = build_assistant_message(_incomplete_response())
 
@@ -75,7 +80,8 @@ def test_tool_call_without_result_stays_in_the_transcript_and_warns(caplog):
     assert assistant.tool_calls is not None
     assert [tc.id for tc in assistant.tool_calls] == ['call_refund_1', 'call_2']
     assert [m.tool_call_id for m in tool_messages] == ['call_2']
-    assert any('call_refund_1' in r.message and 'no result' in r.message.lower() for r in caplog.records)
+    assert assistant.tool_calls[0].incomplete and not assistant.tool_calls[1].incomplete
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING and 'call_refund_1' in r.message]
 
 
 def test_judge_text_marks_the_incomplete_call():
@@ -165,7 +171,7 @@ def test_emptied_assistant_row_keeps_the_alternation_placeholder():
     replay = drop_unreplayable_tool_records(messages)
 
     assert [m.role for m in replay] == ['user', 'assistant', 'user', 'assistant']
-    assert (replay[1].content, replay[1].tool_calls) == ('', None)
+    assert (replay[1].content, replay[1].tool_calls) == (EMPTY_ASSISTANT_TEXT, None)
 
 
 def test_whitespace_only_assistant_turn_with_only_dropped_calls_becomes_empty():
@@ -173,7 +179,10 @@ def test_whitespace_only_assistant_turn_with_only_dropped_calls_becomes_empty():
 
     replay = drop_unreplayable_tool_records([_user(), message])
 
-    assert [(m.role, m.content, m.tool_calls) for m in replay] == [('user', 'u', None), ('assistant', '', None)]
+    assert [(m.role, m.content, m.tool_calls) for m in replay] == [
+        ('user', 'u', None),
+        ('assistant', EMPTY_ASSISTANT_TEXT, None),
+    ]
 
 
 def test_replay_warns_once_per_call_across_turns(caplog):
@@ -209,7 +218,7 @@ def test_rebuilding_the_red_team_transcript_every_turn_warns_once_per_call(caplo
         for _ in range(3):
             drop_unreplayable_tool_records(turns_to_messages(turns))
 
-    assert sum('c1' in r.message for r in caplog.records if r.levelno == logging.WARNING) == 2
+    assert sum('c1' in r.message for r in caplog.records if r.levelno == logging.WARNING) == 1
 
 
 def test_simulation_warns_once_per_call_across_turns(caplog):
@@ -218,7 +227,7 @@ def test_simulation_warns_once_per_call_across_turns(caplog):
             messages = build_assistant_message(_incomplete_response())
             drop_unreplayable_tool_records(messages)
 
-    assert sum('call_refund_1' in r.message for r in caplog.records if r.levelno == logging.WARNING) == 2
+    assert sum('call_refund_1' in r.message for r in caplog.records if r.levelno == logging.WARNING) == 1
 
 
 def test_tool_traffic_text_shares_the_marker_grammar():
@@ -270,12 +279,42 @@ def test_incomplete_calls_become_text_for_the_judge_but_not_for_targets():
     assert [tc.id for tc in for_target[0].tool_calls or []] == ['call_2']
 
 
-def test_marker_comes_from_the_recorded_fact_not_the_slice():
+def test_judge_copy_and_messages_to_text_agree_on_a_full_transcript():
     messages = build_assistant_message(_incomplete_response())
+    judge_copy = drop_unreplayable_tool_records(messages, incomplete_as_text=True)
 
-    assert messages_to_text(messages[:1]).count('no result recorded') == 1
-    assert 'lookup({})]' in messages_to_text(messages[:1])
-    assert 'lookup({}) ->' not in messages_to_text(messages[:1])
+    def marked(text):
+        return [line for line in text.splitlines() if 'no result recorded' in line]
+
+    assert marked(messages_to_text(messages)) == ['[tool_call: refund({}) -> no result recorded]']
+    assert marked(judge_copy[0].content) == marked(messages_to_text(messages))
+
+
+def test_an_unflagged_call_without_a_tool_row_reads_incomplete_over_a_full_transcript():
+    messages = [_user(), _assistant('c1')]
+
+    assert 'no result recorded' in messages_to_text(messages)
+
+
+def test_a_real_tool_row_wins_over_the_incomplete_flag():
+    flagged = Message(role='assistant', tool_calls=[_call('c1').model_copy(update={'incomplete': True})])
+
+    assert 'no result recorded' not in messages_to_text([flagged, _tool('c1')])
+    assert 'no result recorded' in messages_to_text([{'role': 'assistant', 'tool_calls': [(flagged.tool_calls or [])[0]]}])
+
+
+def test_duplicate_call_id_in_one_row_keeps_the_first_and_warns_once(caplog):
+    messages = [
+        _user(),
+        Message(role='assistant', tool_calls=[_call('a', '{"x":1}'), _call('a', '{"x":2}')]),
+        _tool('a'),
+    ]
+
+    with conversation_thread(), caplog.at_level(logging.WARNING):
+        replay = drop_unreplayable_tool_records(messages)
+
+    assert [tc.function.arguments for tc in replay[1].tool_calls or []] == ['{"x":1}']
+    assert len([r for r in caplog.records if 'Not replaying' in r.message]) == 1
 
 
 def test_replay_drops_unpaired_call_and_orphan_result_with_one_warning(caplog):
@@ -432,16 +471,38 @@ def test_max_tool_result_chars_is_configurable():
 
 
 @pytest.mark.parametrize('incomplete_as_text', [False, True])
-def test_wire_copy_sends_empty_object_for_unknown_arguments_and_evidence_keeps_it(incomplete_as_text):
+def test_unknown_arguments_stay_unknown_on_the_copy_and_go_out_as_an_empty_object(incomplete_as_text):
     messages = [_user(), Message(role='assistant', tool_calls=[_call('c1', UNKNOWN_ARGUMENTS)]), _tool('c1')]
     snapshot = [m.model_copy(deep=True) for m in messages]
 
     replay = drop_unreplayable_tool_records(messages, incomplete_as_text=incomplete_as_text)
     items = messages_to_responses_input(replay)
 
-    assert [tc.function.arguments for tc in replay[1].tool_calls or []] == ['{}']
+    assert [tc.function.arguments for tc in replay[1].tool_calls or []] == [UNKNOWN_ARGUMENTS]
     assert replay[1].to_chat_completion()['tool_calls'][0]['function']['arguments'] == '{}'
     assert [i['arguments'] for i in items if i.get('type') == 'function_call'] == ['{}']
     assert messages == snapshot
-    assert [tc.function.arguments for tc in messages[1].tool_calls or []] == [UNKNOWN_ARGUMENTS]
     assert 'arguments unavailable' in messages_to_text(messages)
+    assert ('arguments unavailable' in str(replay[1].content)) == incomplete_as_text
+
+
+@pytest.mark.parametrize(
+    ('given', 'sent'), [('', '{}'), ('{"a":1}', '{"a":1}'), ('{"a":', '{}'), ('"x"', '{}'), ('[1]', '{}')]
+)
+def test_serializers_send_an_object(given, sent):
+    message = Message(role='assistant', tool_calls=[_call('c1', given)])
+
+    assert message.to_chat_completion()['tool_calls'][0]['function']['arguments'] == sent
+    assert messages_to_responses_input([message, _tool('c1')])[0]['arguments'] == sent
+    assert messages_to_responses_input([message], wire=False)[0]['arguments'] == given
+
+
+def test_no_serialized_payload_has_an_empty_assistant_message():
+    messages = [_user(), Message(role='assistant', content=''), _user(), _assistant('gone'), _user()]
+
+    replay = drop_unreplayable_tool_records(messages)
+    chat = [m.to_chat_completion() for m in replay]
+    items = messages_to_responses_input(replay)
+
+    assert all(m['content'] for m in chat if m['role'] == 'assistant')
+    assert all(i['content'][0]['text'] for i in items if i.get('role') == 'assistant')
