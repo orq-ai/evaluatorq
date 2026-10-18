@@ -509,8 +509,12 @@ def test_review_client_escapes_saved_ids_and_labels_partial_cost(minimal_run: In
     assert 'data-backto="${esc(S.sel.prev.id)}"' in script
     assert 'data-t="${t.id}"' not in script
     assert 'data-c="${c.id}"' not in script
-    assert 'run.cost_is_partial ? `Partial cost: $${run.cost.toFixed(3)}`' in script
-    assert "stageCost.is_partial ? 'Partial cost: ' : ''" in script
+    assert 'run.cost_is_partial ? `Partial cost: $${run.cost.toFixed(4)}`' in script
+    assert "stageCost.is_partial ? '≥ ' : ''" in script
+    assert 'Partial cost: some calls had no price, so this is a lower bound' in script
+    assert 'Cost unavailable: the provider reported no usage for these calls' in script
+    assert 'class="calls nocalls" style="grid-column:3 / 5">No model calls' in script
+    assert '<span class="total stage-label">Total</span>' in script
     assert "stageCost?.cost != null" in script
     assert "'Model calls made; cache hits are not counted'" in script
     assert "const statusText = status === 'completed' ? '' : ` · ${status}`" in script

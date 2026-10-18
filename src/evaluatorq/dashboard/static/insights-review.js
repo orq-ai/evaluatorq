@@ -67,7 +67,7 @@ const fmtTime = value => {
     ? date.toLocaleString('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'})
     : 'Time unavailable';
 };
-const costLabel = run => run.cost == null ? 'Cost unavailable' : run.cost_is_partial ? `Partial cost: $${run.cost.toFixed(3)}` : `$${run.cost.toFixed(3)}`;
+const costLabel = run => run.cost == null ? 'Cost unavailable' : run.cost_is_partial ? `Partial cost: $${run.cost.toFixed(4)}` : `$${run.cost.toFixed(4)}`;
 const $ = id => document.getElementById(id);
 const FRAMP = ['#1f8f82', '#6aae9f', '#c9a13f', '#e0682f', '#c23a1c'];   // teal (calm) to red (angry)
 const framp = k => FRAMP[Math.max(0, Math.min(4, Math.round(k * 4)))];
@@ -315,7 +315,11 @@ function renderHeader() {
     <button class="linkbtn" id="detBtn">Run details ▾</button>`;
   const cbs = r.cost_by_stage || {};
   const stageNames = progress ? [...new Set([...(progress.planned_stages || []), ...stageRows.map(stage => stage.name)])] : [];
-  const stageHtml = stageNames.length ? stageNames.map(name => {
+  const pricedCosts = stageNames.map(name => r.cost_by_stage_details?.[name]?.cost).filter(cost => cost != null);
+  const topCost = pricedCosts.length > 1 ? Math.max(...pricedCosts) : null;
+  const detailRows = stageNames.map(name => r.cost_by_stage_details?.[name]).filter(Boolean);
+  const totalCalls = detailRows.reduce((sum, item) => sum + (item.calls || 0), 0);
+  const stageRowsHtml = stageNames.length ? stageNames.map(name => {
     const stage = stageRows.find(item => item.name === name);
     const status = stage?.status || (progress?.status === 'running' ? 'pending' : progress?.status === 'error' && name === progress?.stage ? 'error' : 'skipped');
     const label = progress?.stage_labels?.[name] || name.replace(/_/g, ' ');
@@ -324,16 +328,30 @@ function renderHeader() {
     const stageCost = r.cost_by_stage_details?.[name];
     const noModelCalls = r.stages_without_model_calls?.includes(name);
     const callCount = stageCost?.calls;
+    const statusText = status === 'completed' ? '' : ` · ${status}`;
+    const head = `<span class="${status === 'completed' ? 'ok' : 'na'}">${mark}</span><span class="stage-label">${esc(label)}${esc(statusText)}</span>`;
+    if (noModelCalls && !stageCost && status !== 'running') {
+      return `${head}<span class="calls nocalls" style="grid-column:3 / 5">No model calls</span>`;
+    }
     const callsText = status === 'running' ? progressCount
       : callCount != null ? `${callCount} ${callCount === 1 ? 'call' : 'calls'}`
       : noModelCalls ? 'No model calls' : '—';
     const callsTitle = status === 'running' ? 'Traces processed so far' : 'Model calls made; cache hits are not counted';
-    const costText = stageCost?.cost != null
-      ? `${stageCost.is_partial ? 'Partial cost: ' : ''}$${stageCost.cost.toFixed(4)}`
-      : noModelCalls ? '—' : 'Cost unavailable';
-    const statusText = status === 'completed' ? '' : ` · ${status}`;
-    return `<span class="${status === 'completed' ? 'ok' : 'na'}">${mark}</span><span>${esc(label)}${esc(statusText)}</span><span class="num" style="color:var(--text-muted)" title="${esc(callsTitle)}">${esc(callsText)}</span><span class="num">${esc(costText)}</span>`;
+    let costText = noModelCalls ? '—' : 'n/a';
+    let costTitle = noModelCalls ? '' : 'Cost unavailable: the provider reported no usage for these calls';
+    let costClass = 'num cost';
+    if (stageCost?.cost != null) {
+      costText = `${stageCost.is_partial ? '≥ ' : ''}$${stageCost.cost.toFixed(4)}`;
+      costTitle = stageCost.is_partial ? 'Partial cost: some calls had no price, so this is a lower bound' : '';
+      if (stageCost.is_partial) costClass += ' partial';
+      if (topCost != null && stageCost.cost === topCost) costClass += ' priciest';
+    }
+    return `${head}<span class="num calls" title="${esc(callsTitle)}">${esc(callsText)}</span><span class="${costClass}"${costTitle ? ` title="${esc(costTitle)}"` : ''}>${esc(costText)}</span>`;
   }).join('') : '<span class="na">Stage history unavailable</span>';
+  const totalHtml = detailRows.length
+    ? `<span class="total-rule"></span><span class="total"></span><span class="total stage-label">Total</span><span class="num calls total">${totalCalls} ${totalCalls === 1 ? 'call' : 'calls'}</span><span class="num cost total">${esc(costLabel(r))}</span>`
+    : '';
+  const stageHtml = stageRowsHtml + totalHtml;
   const projectionKnown = p.classifier_state_chars != null && p.source_chars != null;
   const sourceChars = projectionKnown ? p.source_chars : 0;
   const classifierChars = projectionKnown ? p.classifier_state_chars : 0;
