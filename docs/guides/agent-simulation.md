@@ -503,53 +503,59 @@ You do not have to invent every test case from scratch. If you already have reco
 
 A `SimulationDatapoint` bundles one persona, one scenario, and the opening message. Every case simulation runs is one of these, and you can persist them for reuse. `eq sim generate` writes the cases it builds to a JSONL file with `--datapoints PATH` (one datapoint per line); `eq sim run` does the same alongside a live run with `--datapoints PATH`:
 
-```bash
-# Generate cases once and keep them
-eq sim generate --agent-description "e-commerce support agent" \
-  --num-personas 3 --num-scenarios 4 \
-  --datapoints cases.jsonl
+=== "CLI"
 
-# Re-run the exact same cases against any target, as often as you like
-eq sim simulate --input cases.jsonl --target agent:my-support-agent
-```
-
-Because the file pins the personas, scenarios, and first messages, the run is reproducible. That makes it the natural way to compare two agent versions, or the same agent under a new set of evaluators, on an identical bank of cases. From the SDK, `generate()` builds the cases, `export_datapoints_to_jsonl()` saves them, and `load_datapoints_from_jsonl()` reads them back:
-
-```python
-import asyncio
-from pathlib import Path
-
-from evaluatorq.simulation import generate, simulate
-from evaluatorq.simulation.utils import export_datapoints_to_jsonl, load_datapoints_from_jsonl
-
-
-async def main():
+    ```bash
     # Generate cases once and keep them
-    if not Path("cases.jsonl").exists():
-        generated = await generate(
-            agent_description="e-commerce support agent",
-            num_personas=3,
-            num_scenarios=4,
+    eq sim generate --agent-description "e-commerce support agent" \
+      --num-personas 3 --num-scenarios 4 \
+      --datapoints cases.jsonl
+
+    # Re-run the exact same cases against any target, as often as you like
+    eq sim simulate --input cases.jsonl --target agent:my-support-agent
+    ```
+
+=== "Python"
+
+    From the SDK, `generate()` builds the cases, `export_datapoints_to_jsonl()` saves them, and `load_datapoints_from_jsonl()` reads them back:
+
+    ```python
+    import asyncio
+    from pathlib import Path
+
+    from evaluatorq.simulation import generate, simulate
+    from evaluatorq.simulation.utils import export_datapoints_to_jsonl, load_datapoints_from_jsonl
+
+
+    async def main():
+        # Generate cases once and keep them
+        if not Path("cases.jsonl").exists():
+            generated = await generate(
+                agent_description="e-commerce support agent",
+                num_personas=3,
+                num_scenarios=4,
+            )
+            export_datapoints_to_jsonl(generated, "cases.jsonl")
+
+        # Re-load the exact same cases on every later run
+        datapoints = load_datapoints_from_jsonl("cases.jsonl")
+
+        results = await simulate(
+            run_name="replay-v2",
+            target="agent:my-support-agent-v2",   # new version, same cases
+            datapoints=datapoints,
+            max_turns=6,
+            evaluator_names=["goal_achieved", "criteria_met"],
         )
-        export_datapoints_to_jsonl(generated, "cases.jsonl")
-
-    # Re-load the exact same cases on every later run
-    datapoints = load_datapoints_from_jsonl("cases.jsonl")
-
-    results = await simulate(
-        run_name="replay-v2",
-        target="agent:my-support-agent-v2",   # new version, same cases
-        datapoints=datapoints,
-        max_turns=6,
-        evaluator_names=["goal_achieved", "criteria_met"],
-    )
-    passed = sum(r.goal_achieved for r in results)
-    print(f"Pass rate: {passed}/{len(results)}")
+        passed = sum(r.goal_achieved for r in results)
+        print(f"Pass rate: {passed}/{len(results)}")
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
-```
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
+
+Because the file pins the personas, scenarios, and first messages, the run is reproducible. That makes it the natural way to compare two agent versions, or the same agent under a new set of evaluators, on an identical bank of cases.
 
 `load_datapoints_from_jsonl()` reads datapoint files, such as the ones `generate` and `--datapoints` write. To replay a saved run instead, see [Replay a previous run](#replay-a-previous-run).
 
@@ -606,38 +612,42 @@ A saved run already holds the personas, scenarios, and first messages it used, s
 
 Replay the most recent run, or pick a specific one:
 
-```bash
-# Most recent saved run
-eq sim simulate --from-run latest --target agent:my-support-agent-v2
+=== "CLI"
 
-# A specific run: file name (the .json is optional), run id, or path
-eq sim simulate --from-run refund-bot_20261015-093012 --target agent:my-support-agent-v2
-eq sim simulate --from-run 3f9a1c2e --target agent:my-support-agent-v2
-eq sim simulate --from-run ./archive/refund-bot_20261015-093012.json --target agent:my-support-agent-v2
-```
-
-```python
-import asyncio
-
-from evaluatorq.simulation import simulate
-
-
-async def main():
+    ```bash
     # Most recent saved run
-    latest = await simulate(previous_run="latest", target="agent:my-support-agent-v2")
+    eq sim simulate --from-run latest --target agent:my-support-agent-v2
 
-    # A specific run, by file name, run name, run id, or path
-    pinned = await simulate(
-        previous_run="refund-bot_20261015-093012",
-        target="agent:my-support-agent-v2",
-        evaluator_names=["goal_achieved", "criteria_met"],
-    )
-    print(len(latest), len(pinned))
+    # A specific run: file name (the .json is optional), run id, or path
+    eq sim simulate --from-run refund-bot_20261015-093012 --target agent:my-support-agent-v2
+    eq sim simulate --from-run 3f9a1c2e --target agent:my-support-agent-v2
+    eq sim simulate --from-run ./archive/refund-bot_20261015-093012.json --target agent:my-support-agent-v2
+    ```
+
+=== "Python"
+
+    ```python
+    import asyncio
+
+    from evaluatorq.simulation import simulate
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
-```
+    async def main():
+        # Most recent saved run
+        latest = await simulate(previous_run="latest", target="agent:my-support-agent-v2")
+
+        # A specific run, by file name, run name, run id, or path
+        pinned = await simulate(
+            previous_run="refund-bot_20261015-093012",
+            target="agent:my-support-agent-v2",
+            evaluator_names=["goal_achieved", "criteria_met"],
+        )
+        print(len(latest), len(pinned))
+
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
 
 `previous_run` and `--from-run` take the same reference forms:
 
