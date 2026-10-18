@@ -1307,6 +1307,63 @@ async def test_cluster_merges_cannot_cross_top_level_groups(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
+async def test_dimension_stage_costs_land_under_the_dimension_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import numpy as np
+    from openai import AsyncOpenAI
+
+    from evaluatorq.insights import cluster, merge, reduce
+    from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.describe import ClusterName
+    from evaluatorq.insights.models import TraceInsight
+    from evaluatorq.insights.usage import UsageLedger
+
+    traces = [
+        TraceInsight(trace_id=f't{i}', span_id=f's{i}', timestamp=datetime.now(timezone.utc), summary=_summary())
+        for i in range(5)
+    ]
+    tree = cluster.ClusterTree(base_labels=np.asarray([0, 0, 1, 1, 1]), top_of_base={0: 0, 1: 1}, n_base=2, n_top=2)
+    monkeypatch.setattr(cluster, 'cluster_two_level', lambda *args, **kwargs: tree)
+    monkeypatch.setattr(cluster, 'nearest_neighbours', lambda _cents: {0: [1], 1: [0]})
+    monkeypatch.setattr(reduce, 'reduce_3d', lambda _vectors: None)
+    cost = Usage(input_tokens=1, output_tokens=1, total_tokens=2, total_cost=0.01, calls=1, priced_calls=1)
+
+    async def embeddings(texts, *, usage, **kwargs):
+        usage.add('embed', cost)
+        return {text: [float(index + 1), 1.0] for index, text in enumerate(texts)}
+
+    async def descriptions(members, *, usage, **kwargs):
+        usage.add('describe', cost)
+        return {key: ClusterName(name=f'base {key}', description='details') for key in members}
+
+    async def top_descriptions(children, *, usage, **kwargs):
+        usage.add('describe', cost)
+        return {key: ClusterName(name=f'top {key}', description='details') for key in children}
+
+    async def no_merge(names, examples, neighbours, *, usage, **kwargs):
+        usage.add('merge', cost)
+        return SimpleNamespace(representatives={key: key for key in names}, n_pairs=0, n_failed=0)
+
+    monkeypatch.setattr(pipeline, 'embed_texts', embeddings)
+    monkeypatch.setattr(pipeline, 'describe_clusters', descriptions)
+    monkeypatch.setattr(pipeline, 'describe_top_level', top_descriptions)
+    monkeypatch.setattr(merge, 'merge_similar', no_merge)
+    ledger = UsageLedger()
+    cache = InsightsCache(enabled=False)
+    try:
+        await pipeline._build_dimension(
+            'intent', traces, client=cast('AsyncOpenAI', object()), cache=cache,
+            embedding_model='unused', summary_model='unused', max_clusters=15, max_subclusters=15,
+            outlier_zscore=None, parallelism=10, classifier_model='typesafe/jev-latest', usage=ledger,
+        )
+    finally:
+        cache.close()
+
+    totals = ledger.totals()
+    assert set(totals) == {'dimension:intent'}
+    assert totals['dimension:intent'] is not None and totals['dimension:intent'].calls == 4
+
+
+@pytest.mark.asyncio
 async def test_base_cluster_examples_are_nearest_to_centroid(monkeypatch: pytest.MonkeyPatch) -> None:
     import numpy as np
     from openai import AsyncOpenAI
