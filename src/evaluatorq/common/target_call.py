@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
+from evaluatorq.common.messages import drop_unreplayable_tool_records
 from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, TextOutputItem
 
 if TYPE_CHECKING:
@@ -207,12 +208,15 @@ async def call_target_with_retry(
     propagates cleanly. ``on_attempt(i)`` wraps each attempt in a
     caller-supplied span (0-based index). ``on_attempt_response`` receives the
     caller-supplied context value and each returned response while that context
-    is still open, so callers can annotate per-attempt spans. Returns a uniform
+    is still open, so callers can annotate per-attempt spans. The target receives a copy of
+    ``messages`` from `drop_unreplayable_tool_records`; the caller's list stays the evidence
+    transcript. Returns a uniform
     `TargetCallResult`. A target with ``manages_own_timeout`` set gets no per-call
     timeout here; it bounds itself. Such a target raises
     ``NonRetryableTargetError`` when its own deadline expires. A plain
     ``TimeoutError`` can come from a downstream call and remains retryable.
     """
+    messages = drop_unreplayable_tool_records(messages)
     timeout_s = target_agent_timeout_ms / 1000.0
     manages_own_timeout = getattr(target, 'manages_own_timeout', False) is True
     own_timeout_ms = getattr(target, 'timeout_ms', None)

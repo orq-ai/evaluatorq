@@ -193,16 +193,17 @@ async def test_responses_volatile_tail_counts_messages_not_items() -> None:
             content='calling a tool',
             tool_calls=[StrategyToolCall(id='call_1', function=FunctionCall(name='lookup', arguments='{}'))],
         ),
+        Message(role='tool', tool_call_id='call_1', content='found'),
         Message(role='user', content='rebuilt'),
     ]
     client = _responses_client()
 
-    # The last two messages render to three items (assistant text + function_call
-    # + the rebuilt user turn), so the breakpoint must land on the first item.
-    await _agent(client, api='responses')._call_llm(messages, volatile_tail=2)
+    # The last three messages render to four items (assistant text + function_call
+    # + function_call_output + the rebuilt user turn), so the breakpoint must land on the first item.
+    await _agent(client, api='responses')._call_llm(messages, volatile_tail=3)
 
     sent = client.responses.create.call_args.kwargs
-    assert len(sent['input']) == 4
+    assert len(sent['input']) == 5
     assert sent['input'][0]['content'][-1]['cache_control'] == _EPHEMERAL
     assert not any('cache_control' in str(item) for item in sent['input'][1:])
 

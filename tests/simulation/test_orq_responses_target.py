@@ -311,6 +311,7 @@ class TestOrqResponsesTargetRespond:
             [
                 Message(role="user", content="hi"),
                 Message(role="assistant", content="let me check", tool_calls=[tool_call]),
+                Message(role="tool", tool_call_id="c1", content="ok"),
             ]
         )
 

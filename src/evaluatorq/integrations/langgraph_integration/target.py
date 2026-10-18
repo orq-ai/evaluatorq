@@ -322,15 +322,14 @@ class LangGraphTarget(AgentTarget):
         ``finally:`` block so partial spend on error paths is preserved.
 
         Each tool call is paired with its ``ToolMessage`` result within the same
-        turn. Two shapes still drop the call from the rendered transcript, both
-        because ``render_tool_call`` cannot emit a call whose ``result`` is
-        ``None``, and both announced by a ``LangGraphTarget:`` warning naming the
-        call:
+        turn. Two shapes leave a call without a ``result``, so the simulation
+        transcript keeps it with no tool row and replay leaves it out, and both
+        are announced by a ``LangGraphTarget:`` warning naming the call:
 
         - A result that arrives in a *later* ``ainvoke`` — the ``interrupt()`` /
           resume shape, where a human approves between the call and its execution.
-          The call is dropped in the turn that emitted it, and the result is
-          discarded in the turn that carried it, so neither reaches the judge.
+          The call is kept without a result in the turn that emitted it, and the
+          result is discarded in the turn that carried it.
         - A tool call the graph emits without an ``id``, which nothing can pair.
         """
         if not messages or messages[-1].role != 'user':

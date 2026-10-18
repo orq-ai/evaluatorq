@@ -359,6 +359,19 @@ def test_orq_prefix_detector_actually_fires() -> None:
     assert _orq_prefix_lines("# x.startswith('orq:')") == []
 
 
+def test_targets_are_called_only_through_call_target_with_retry() -> None:
+    extra = _hits(
+        lambda name: _tail(name) == 'respond',
+        allow={'common/target_call.py'},
+    )
+    assert not extra, (
+        'Target respond() called outside common/target_call.py: '
+        + ', '.join(extra)
+        + '. Use call_target_with_retry() — it hands the target a copy of the transcript without unpaired '
+        'tool calls and orphan results, which providers reject.'
+    )
+
+
 def test_openai_clients_come_from_llm_client() -> None:
     extra = _hits(lambda name: _tail(name) in OPENAI_CLIENT_NAMES, allow={'common/llm_client.py'})
     assert not extra, (

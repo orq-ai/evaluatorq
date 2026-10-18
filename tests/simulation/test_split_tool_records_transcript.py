@@ -45,7 +45,7 @@ def test_lone_result_renders_a_tool_call_with_unavailable_arguments(caplog):
     assert assistant.tool_calls is not None and len(assistant.tool_calls) == 1
     assert assistant.tool_calls[0].function.arguments == ''
     assert [m.tool_call_id for m in tool_messages] == ['c1']
-    assert messages_to_text([assistant]) == '[tool_call: refund(arguments unavailable)]'
+    assert messages_to_text([assistant, *tool_messages]).splitlines()[0] == '[tool_call: refund(arguments unavailable)]'
     assert sum('has no matching call record' in r.getMessage() for r in caplog.records) == 1
 
 

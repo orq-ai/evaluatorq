@@ -24,6 +24,7 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, TypedDict
 
+from evaluatorq.common.messages import EMPTY_ASSISTANT_TEXT
 from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import RunSummary, StrEnum
@@ -1240,10 +1241,10 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
 
     Each turn becomes a ``user`` message (the attacker prompt) followed by the
     target's output rows: consecutive text runs collapse into one ``assistant``
-    message; each completed tool call becomes an ``assistant`` message with one
-    ``tool_calls`` entry plus its following ``tool`` row; calls without a result
-    are dropped because they cannot form a valid pair. Reasoning items are
-    dropped. An empty target output still emits an empty ``assistant`` row so
+    message; each tool call becomes an ``assistant`` message with one
+    ``tool_calls`` entry plus its following ``tool`` row; a call without a result
+    is kept, flagged ``incomplete``, with no ``tool`` row (the replay filter removes it
+    before a target sees it). Reasoning items are dropped. An empty target output still emits an empty ``assistant`` row so
     consumers can rely on a user/assistant pair per turn.
 
     When ``skip_errors`` is True, turns whose target carries an
@@ -1269,18 +1270,10 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
                 text_buffer.append(item.text)
             elif isinstance(item, ToolCallOutputItem):
                 _flush_text()
-                rendered = render_tool_call(item)
-                if rendered is None:
-                    continue
-                tool_call, tool_message = rendered
-                out.extend([
-                    Message(
-                        role='assistant',
-                        content=None,
-                        tool_calls=[tool_call],
-                    ),
-                    tool_message,
-                ])
+                tool_call, tool_message = render_tool_call(item)
+                out.append(Message(role='assistant', content=None, tool_calls=[tool_call]))
+                if tool_message is not None:
+                    out.append(tool_message)
             # ReasoningOutputItem intentionally dropped.
         _flush_text()
         # Alternation invariant: every user row must be followed by an assistant row.
@@ -1288,7 +1281,7 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
         # output (empty output, or all-reasoning since reasoning items are dropped).
         # A trailing 'tool' row is fine — an assistant tool_calls row preceded it.
         if out[-1].role == 'user':
-            out.append(Message(role='assistant', content=''))
+            out.append(Message(role='assistant', content=EMPTY_ASSISTANT_TEXT))
     return out
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
 
-from evaluatorq.common.messages import messages_to_text
+from evaluatorq.common.messages import drop_unreplayable_tool_records, messages_to_text
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_to_text, responses_transcript
 from evaluatorq.contracts import Message, content_to_text
@@ -189,7 +189,10 @@ def orq_evaluator(
             'output': output_text,
             'reference': None if data.expected_output is None else output_to_text(data.expected_output),
             'retrievals': retrievals,
-            'messages': [message.to_chat_completion() for message in history],
+            'messages': [
+                message.to_chat_completion()
+                for message in drop_unreplayable_tool_records(history, incomplete_as_text=True)
+            ],
         }
         if model is not None:
             invoke_params['model'] = model

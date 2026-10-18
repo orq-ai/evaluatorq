@@ -23,7 +23,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.common.jury import append_jury_summary, attach_jury_raw_output
-from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.messages import coerce_content_text, drop_unreplayable_tool_records
 from evaluatorq.common.target_call import call_target_with_retry, close_target
 from evaluatorq.common.thread_context import build_thread_id, conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
@@ -807,7 +807,7 @@ def create_dynamic_evaluator(
         # Turn 1 refers back into the imported conversation, and an unresolvable reference defaults to RESISTANT.
         # to_chat_completion, not a {role, content} flatten: that drops tool_calls and empties a tool-using turn.
         seed_context_messages: list[dict[str, Any]] = []
-        for message in output.seed_context:
+        for message in drop_unreplayable_tool_records(output.seed_context, incomplete_as_text=True):
             rendered = message.to_chat_completion()
             rendered['content'] = f'[imported trace context] {coerce_content_text(message.content)}'
             seed_context_messages.append(rendered)
