@@ -43,7 +43,7 @@ def _stages_without_model_calls(run: InsightsRun) -> list[str]:
     config = run.config
     if not (config.labels or config.coding_labels or config.coding_analysis or source == 'query'):
         stages.insert(0, 'label')
-    if source in ('snapshot', 'export'):
+    if source in ('snapshot', 'export', 'filter'):
         stages.insert(0, 'population')
     return stages
 

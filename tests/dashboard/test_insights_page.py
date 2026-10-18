@@ -525,6 +525,10 @@ def test_review_client_escapes_saved_ids_and_labels_partial_cost(minimal_run: In
     assert cast(dict[str, Any], build_review_payload(unlabeled)['run'])['stages_without_model_calls'] == [
         'population', 'label', 'priority', 'write'
     ]
+    filtered = unlabeled.model_copy(update={'population': {'mode': 'filter'}})
+    assert cast(dict[str, Any], build_review_payload(filtered)['run'])['stages_without_model_calls'] == [
+        'population', 'label', 'priority', 'write'
+    ]
     queried = unlabeled.model_copy(update={'population': {'mode': 'query'}})
     assert cast(dict[str, Any], build_review_payload(queried)['run'])['stages_without_model_calls'] == [
         'priority', 'write'
