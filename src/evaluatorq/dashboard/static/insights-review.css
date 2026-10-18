@@ -284,7 +284,7 @@ main{min-width:0;padding:0 28px 48px}
 .rlist button:hover{background:var(--app-gray-50)}.rlist button.on{background:var(--teal-50);box-shadow:inset 0 0 0 1.5px var(--teal-600)}
 .rlist i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:7px}.rlist b{font-family:var(--mono);font-weight:600;color:var(--text-strong)}
 .tr.trh{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-faint);font-weight:600;padding:8px 16px}.tr.trh:hover{background:none}
-.tr.trh>span{white-space:nowrap}.tr .ctr{justify-self:center;text-align:center}
+.tr.trh>span{white-space:nowrap}.tr.trh>span.lbl{overflow:hidden;text-overflow:ellipsis}.tr .ctr{justify-self:center;text-align:center}
 .oc{justify-self:start;text-align:left}
 .riskkey{font-size:11px;color:var(--text-faint);margin-top:6px}
 .lab{margin-bottom:14px}

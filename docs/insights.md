@@ -485,6 +485,8 @@ The four views use one shared set of filters. Selecting a theme, label value, ma
 
 The page validates restored values against the saved run and ignores selections the run does not contain. Search narrows the trace list without changing the shared population filters.
 
+The trace list has one column for every question the run asked on at least one trace: the built-in Task, Outcome, Frustration and flag columns, then a generic column for each remaining question, including your own. Hover a column header to see the full question name.
+
 **Themes** groups traces by the selected discovered dimension and shows label distributions for the visible cohort. The Frustration score uses the saved 1–5 `user_frustration` answers: theme averages show one decimal place, trace answers show whole numbers, and `—` means there is no measured answer. Its tooltip gives the number of measured traces. A missing answer is not a score of zero.
 
 **Activity** summarizes saved tool, shell-command, and skill counts for the current filtered cohort. A trace is eligible for an Activity count only when it has recorded `tool_stats`; a missing record is unknown, while a recorded empty set means no use was recorded. Each category reports distinct items and traces with recorded use.
