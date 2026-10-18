@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.common.messages import tool_call_text
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
@@ -74,6 +75,7 @@ class RunSinks:
     turn_metrics: list[TurnMetrics] = field(default_factory=list)
     token_usage: TokenUsage = field(default_factory=TokenUsage)
     target_token_usage: TokenUsage = field(default_factory=TokenUsage)
+    warned_tool_ids: set[str] = field(default_factory=set)
     token_usage_known: bool = True
     criteria_verified: bool | None = None
     criteria_results: dict[str, bool] | None = None
@@ -129,7 +131,7 @@ def _tool_traffic_text(message: Message, results: Mapping[str, str], max_chars: 
     """
     lines: list[str] = []
     for call in message.tool_calls or []:
-        line = f'{call.function.name}({call.function.arguments})'
+        line = tool_call_text(call)
         result = results.get(call.id)
         if result is not None:
             if len(result) > max_chars:
@@ -187,11 +189,7 @@ def build_assistant_message(response: AgentResponse) -> list[Message]:
     assistant row as evidence, with no tool row; replay drops it through
     `drop_unreplayable_tool_records`.
     """
-    rendered_tool_calls = [
-        rendered
-        for item in response.tool_calls
-        if (rendered := render_tool_call(item, warn=logger.warning, keep_incomplete=True)) is not None
-    ]
+    rendered_tool_calls = [render_tool_call(item, warn=logger.warning) for item in response.tool_calls]
     tool_calls = [tool_call for tool_call, _ in rendered_tool_calls]
     text = response.text
     if not text and tool_calls:
@@ -995,7 +993,9 @@ class SimulationRunner:
                 target_span,
                 [{'role': m.role, 'content': span_message_text(m.content)} for m in sinks.messages],
             )
-            call = await self._get_target_response(sinks.messages, target=conversation_target)
+            call = await self._get_target_response(
+                sinks.messages, target=conversation_target, warned_tool_ids=sinks.warned_tool_ids
+            )
             agent_response_text = call.response.text
             # An errored response may still be a real, billed provider
             # response. Its usage belongs in the run just like a success.
@@ -1455,7 +1455,11 @@ class SimulationRunner:
         return clone
 
     async def _get_target_response(
-        self, messages: list[Message], *, target: AgentTarget | None = None
+        self,
+        messages: list[Message],
+        *,
+        target: AgentTarget | None = None,
+        warned_tool_ids: set[str] | None = None,
     ) -> TargetCallResult:
         """Call the target through the shared bounded-retry + timeout helper.
 
@@ -1480,6 +1484,7 @@ class SimulationRunner:
             target_agent_timeout_ms=self._target_agent_timeout_ms,
             max_target_retries=self._max_target_retries,
             map_error=effective.map_error,
+            warned_tool_ids=warned_tool_ids,
         )
 
     @staticmethod

@@ -9,7 +9,6 @@ from loguru import logger
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.messages import drop_unreplayable_tool_records
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.retry import without_client_retries
@@ -134,7 +133,7 @@ class OpenAIModelTarget(AgentTarget):
         chat params via `to_chat_completion`), so
         multi-turn tool-using transcripts replay faithfully.
         """
-        user_visible = drop_unreplayable_tool_records([m for m in messages if m.role != 'system'])
+        user_visible = [m for m in messages if m.role != 'system']
         raw_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': self.system_prompt},
             *[m.to_chat_completion() for m in user_visible],

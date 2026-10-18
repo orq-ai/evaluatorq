@@ -1,7 +1,9 @@
 import logging
 
+import pytest
+
 from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, drop_unreplayable_tool_records, messages_to_text
-from evaluatorq.contracts import AgentResponse, TextOutputItem, ToolCallOutputItem
+from evaluatorq.contracts import AgentResponse, FunctionCall, StrategyToolCall, TextOutputItem, ToolCallOutputItem
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.simulation.contracts import Message
 from evaluatorq.simulation.runner.simulation import _invert_roles_for_simulator, build_assistant_message
@@ -88,6 +90,78 @@ def test_judge_text_marks_incomplete_call_with_unknown_arguments():
     assert '[tool_call: refund(arguments unavailable) -> no result recorded]' in messages_to_text(
         build_assistant_message(response)
     )
+
+
+def _call(call_id: str, args: str = '{}') -> StrategyToolCall:
+    return StrategyToolCall(id=call_id, function=FunctionCall(name='f', arguments=args))
+
+
+def _assistant(*ids: str) -> Message:
+    return Message(role='assistant', tool_calls=[_call(i) for i in ids])
+
+
+def _tool(call_id: str) -> Message:
+    return Message(role='tool', tool_call_id=call_id, content='r')
+
+
+def _user() -> Message:
+    return Message(role='user', content='u')
+
+
+@pytest.mark.parametrize(
+    ('label', 'messages', 'expected_roles'),
+    [
+        ('orphan_result', [_user(), _tool('c1')], ['user']),
+        ('result_before_call', [_tool('c1'), _assistant('c1')], []),
+        ('result_after_later_user_turn', [_assistant('c1'), _user(), _tool('c1')], ['user']),
+        ('duplicate_result_keeps_first', [_assistant('c1'), _tool('c1'), _tool('c1')], ['assistant', 'tool']),
+        (
+            'id_reused_in_a_later_turn',
+            [_assistant('c1'), _tool('c1'), _user(), _assistant('c1')],
+            ['assistant', 'tool', 'user'],
+        ),
+        ('result_for_another_turns_call', [_assistant('c1'), _tool('c1'), _assistant('c2'), _tool('c1')], ['assistant', 'tool']),
+    ],
+)
+def test_pairing_is_positional(label, messages, expected_roles):
+    assert [m.role for m in drop_unreplayable_tool_records(messages)] == expected_roles
+
+
+def test_replay_warns_once_per_call_id_across_turns(caplog):
+    warned: set[str] = set()
+    messages = [_user(), _assistant('c1')]
+
+    with caplog.at_level(logging.DEBUG):
+        drop_unreplayable_tool_records(messages, warned=warned)
+        drop_unreplayable_tool_records(messages, warned=warned)
+
+    assert [r.levelname for r in caplog.records if 'Not replaying' in r.message] == ['WARNING', 'DEBUG']
+
+
+def test_whitespace_only_assistant_turn_with_only_dropped_calls_is_dropped():
+    message = Message(role='assistant', content='  \n', tool_calls=[_call('c1')])
+
+    assert drop_unreplayable_tool_records([_user(), message]) == [_user()]
+
+
+def test_incomplete_calls_become_text_for_the_judge_but_not_for_targets():
+    messages = build_assistant_message(_incomplete_response())
+
+    for_judge = drop_unreplayable_tool_records(messages, incomplete_as_text=True)
+    for_target = drop_unreplayable_tool_records(messages)
+
+    assert for_judge[0].content == 'Checking.\n[tool_call: refund({}) -> no result recorded]'
+    assert for_target[0].content == 'Checking.'
+    assert [tc.id for tc in for_judge[0].tool_calls or []] == ['call_2']
+    assert [tc.id for tc in for_target[0].tool_calls or []] == ['call_2']
+
+
+def test_marker_comes_from_the_recorded_fact_not_the_slice():
+    messages = build_assistant_message(_incomplete_response())
+
+    assert messages_to_text(messages[:1]).count('no result recorded') == 1
+    assert 'lookup({})]' in messages_to_text(messages[:1])
+    assert 'lookup({}) ->' not in messages_to_text(messages[:1])
 
 
 def test_replay_drops_unpaired_call_and_orphan_result_with_one_warning(caplog):

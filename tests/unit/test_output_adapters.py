@@ -203,7 +203,7 @@ def test_output_to_text_json_renders_a_list_of_structured_items():
 
 def test_output_to_text_renders_a_tool_call_only_agent_response():
     response = AgentResponse(
-        output=[ToolCallOutputItem(id='c1', call_id='c1', name='get_balance', arguments='{}')]
+        output=[ToolCallOutputItem(id='c1', call_id='c1', name='get_balance', arguments='{}', result='ok')]
     )
     assert has_meaningful_output(response) is True
     assert output_to_text(response) == '[tool_call: get_balance({})]'
@@ -214,7 +214,7 @@ def test_output_to_text_renders_text_and_tool_calls_together():
     response = AgentResponse(
         output=[
             TextOutputItem(text='checking that now', annotations=[]),
-            ToolCallOutputItem(id='c1', call_id='c1', name='get_balance', arguments='{}'),
+            ToolCallOutputItem(id='c1', call_id='c1', name='get_balance', arguments='{}', result='ok'),
         ]
     )
     rendered = output_to_text(response)
@@ -225,7 +225,7 @@ def test_output_to_text_renders_text_and_tool_calls_together():
 def test_output_to_text_renders_text_and_tool_calls_in_produced_order():
     response = AgentResponse(
         output=[
-            ToolCallOutputItem(id='c1', call_id='c1', name='lookup', arguments='{}'),
+            ToolCallOutputItem(id='c1', call_id='c1', name='lookup', arguments='{}', result='ok'),
             TextOutputItem(text='found it', annotations=[]),
         ]
     )
@@ -242,7 +242,7 @@ def test_output_to_text_reads_a_list_of_responses_output_items():
     rendered = output_to_text(items)
     assert 'answer' in rendered
     assert '[output_text]' not in rendered
-    assert '[tool_call: lookup({})]' in rendered
+    assert '[tool_call: lookup({}) -> no result recorded]' in rendered
 
 
 def test_output_to_text_reads_a_list_of_content_parts_as_text():

@@ -59,7 +59,10 @@ def _agent_response_text(response: AgentResponse) -> str:
         if isinstance(item, TextOutputItem):
             turns.append({'role': 'assistant', 'content': item.text})
         elif isinstance(item, ToolCallOutputItem):
-            turns.append({'role': 'assistant', 'tool_calls': [item]})
+            turns.append({
+                'role': 'assistant',
+                'tool_calls': [{'name': item.name, 'arguments': item.arguments, 'incomplete': item.result is None}],
+            })
     return messages_to_text(turns)
 
 

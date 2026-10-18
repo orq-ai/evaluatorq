@@ -138,7 +138,7 @@ def to_open_responses(
                     call_id=tc.id,
                     name=tc.function.name,
                     arguments=tc.function.arguments,
-                    status=FunctionCallStatus.completed,
+                    status=FunctionCallStatus.incomplete if tc.incomplete else FunctionCallStatus.completed,
                 )
                 output_items.append(function_call.model_dump(mode='json'))
                 assistant_turn_order.append(message_index)

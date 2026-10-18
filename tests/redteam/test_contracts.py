@@ -399,15 +399,16 @@ class TestChatCompletionsOrdering:
         assert msgs[1].content == 'Hello, world.'
         assert msgs[1].tool_calls is None
 
-    def test_tool_call_without_result_is_dropped(self) -> None:
+    def test_tool_call_without_result_is_kept_incomplete(self) -> None:
         result = self._build([
             ToolCallOutputItem(call_id='call_1', name='search', arguments='{"q": "x"}'),
         ])
         msgs = result.chat_completions
         assert [m.role for m in msgs] == ['user', 'assistant']
         assistant = msgs[1]
-        assert assistant.content == ''
-        assert assistant.tool_calls is None
+        assert assistant.tool_calls is not None
+        assert assistant.tool_calls[0].id == 'call_1'
+        assert assistant.tool_calls[0].incomplete
 
     def test_tool_call_with_result_emits_assistant_then_tool(self) -> None:
         result = self._build([
@@ -435,6 +436,7 @@ class TestChatCompletionsOrdering:
             'assistant',  # tool_call c1
             'tool',  # result for c1
             'assistant',  # "Now another:"
+            'assistant',  # tool_call c2, kept incomplete with no result row
             'assistant',  # "Done."
         ]
         assert msgs[1].content == 'Thinking...'
@@ -445,7 +447,8 @@ class TestChatCompletionsOrdering:
         assert msgs[3].tool_call_id == 'c1'
         assert msgs[3].content == 'r1'
         assert msgs[4].content == 'Now another:'
-        assert msgs[5].content == 'Done.'
+        assert msgs[5].tool_calls is not None and msgs[5].tool_calls[0].incomplete
+        assert msgs[6].content == 'Done.'
 
     def test_reasoning_items_are_dropped(self) -> None:
         result = self._build([

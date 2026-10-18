@@ -1269,18 +1269,10 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
                 text_buffer.append(item.text)
             elif isinstance(item, ToolCallOutputItem):
                 _flush_text()
-                rendered = render_tool_call(item)
-                if rendered is None:
-                    continue
-                tool_call, tool_message = rendered
-                out.extend([
-                    Message(
-                        role='assistant',
-                        content=None,
-                        tool_calls=[tool_call],
-                    ),
-                    tool_message,
-                ])
+                tool_call, tool_message = render_tool_call(item)
+                out.append(Message(role='assistant', content=None, tool_calls=[tool_call]))
+                if tool_message is not None:
+                    out.append(tool_message)
             # ReasoningOutputItem intentionally dropped.
         _flush_text()
         # Alternation invariant: every user row must be followed by an assistant row.
