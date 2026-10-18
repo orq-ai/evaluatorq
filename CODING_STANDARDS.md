@@ -39,6 +39,8 @@ Rules under **Hard rules** are violations when broken. Rules under **Judgement c
 
 ### Tests, UI, and docs
 
+- **Saved reports own their computed layouts.** Generate and persist Insights map layouts during analysis; dashboard startup and saved-report rendering must not import or fit UMAP. Legacy fallback reads recorded coordinates, while a failed new layout stays unavailable.
+- **Typer owns CLI runtime types.** Use Typer's public context and I/O helpers and its command/option classes in CLI tests. Typer vendors Click from 0.26 onward, so external Click class and enum identities do not match; compare parameter-source names when deciding whether a flag was supplied.
 - **Test the failure branch you documented.** If the docstring promises degradation to inconclusive, a test exercises it. All-success fakes prove nothing.
 - **Every filtered UI section renders an empty state.** A section that disappears on zero matches is indistinguishable from a bug.
 - **Docs ship in the same change.** A change to a public entry point, option, default, env var, or registry member updates the docs in the same PR, because docs deferred to a follow-up are docs that drift.

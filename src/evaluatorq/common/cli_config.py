@@ -6,7 +6,7 @@ pydantic model naming its keyword arguments and a table of `Flag` rows saying wh
 this module turns the two into one validated model with `resolve_config`.
 
 Precedence is the same everywhere: a flag passed on the command line beats inline JSON, a config file or stdin,
-and that source beats the model's default. "Passed on the command line" is read from click's parameter source,
+and that source beats the model's default. "Passed on the command line" is read from Typer's parameter source,
 never by comparing the value with a default, so ``--max-turns 5`` beats a config's ``"max_turns": 8`` even when 5
 is the default.
 Config-backed flags therefore declare no default of their own: the model's default is the only one.
@@ -20,9 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-import click
 import typer
-from click.core import ParameterSource
 from pydantic import BaseModel, ValidationError
 
 from evaluatorq.common.cli_json import echo_json
@@ -34,7 +32,8 @@ ModelT = TypeVar('ModelT', bound=BaseModel)
 
 STDIN_SOURCE = '-'
 
-_IMPLICIT_SOURCES = frozenset({ParameterSource.DEFAULT, ParameterSource.DEFAULT_MAP})
+# Typer 0.26+ vendors Click: compare enum names, not identities from a separate Click install.
+_IMPLICIT_SOURCES = frozenset({'DEFAULT', 'DEFAULT_MAP'})
 
 
 def config_option_help(function: str, schema_command: str) -> str:
@@ -51,10 +50,10 @@ JSON_OUTPUT_HELP = (
 )
 
 
-def explicitly_set(ctx: click.Context, param: str) -> bool:
+def explicitly_set(ctx: typer.Context, param: str) -> bool:
     """Whether ``param`` came from the command line or its env var rather than from its default."""
     source = ctx.get_parameter_source(param)
-    return source is not None and source not in _IMPLICIT_SOURCES
+    return source is not None and source.name not in _IMPLICIT_SOURCES
 
 
 # Marks ``Flag.path`` as omitted, so it defaults to ``param``. ``None`` is a real value ("no config field").
@@ -93,7 +92,7 @@ def json_flag(param: str, path: str, model: type[BaseModel], *, flag: str) -> Fl
 
 
 def resolve_config(
-    ctx: click.Context,
+    ctx: typer.Context,
     model: type[ModelT],
     flags: Iterable[Flag],
     cli_args: dict[str, Any],
@@ -104,7 +103,7 @@ def resolve_config(
 
     Flags apply in ``flags`` order and deep-merge into their own path, so ``--attack-model`` keeps the rest of
     a configured ``llm_config``, and a narrow flag listed after ``--llm-config`` wins over it for its field.
-    ``cli_args`` holds the command's converted arguments: click's ``ctx.params`` still has raw strings. A
+    ``cli_args`` holds the command's converted arguments: Typer's ``ctx.params`` still has raw strings. A
     field nothing sets takes ``model``'s default. ``null`` is accepted only where the field allows ``None``,
     which every SDK keyword whose default is ``None`` does, so there it reads as "unset".
     """
@@ -135,7 +134,7 @@ def model_kwargs(config: BaseModel) -> dict[str, Any]:
 
 def _read_source(source: str, *, flag: str) -> tuple[str, str]:
     if source == STDIN_SOURCE:
-        return click.get_text_stream('stdin').read(), 'stdin'
+        return typer.get_text_stream('stdin').read(), 'stdin'
     try:
         return Path(source).read_text(encoding='utf-8'), source
     except OSError as exc:
@@ -179,7 +178,7 @@ def _set_path(target: dict[str, Any], path: str, value: Any) -> None:
     target[leaf] = value
 
 
-def reserve_stdout_for_json(ctx: click.Context) -> Callable[[BaseModel], None]:
+def reserve_stdout_for_json(ctx: typer.Context) -> Callable[[BaseModel], None]:
     """Send everything printed to stdout during this command to stderr; return the one writer for stdout.
 
     The swap is undone when the command's context closes. Rich consoles and ``typer.echo`` look up
@@ -194,7 +193,7 @@ def reserve_stdout_for_json(ctx: click.Context) -> Callable[[BaseModel], None]:
     ctx.call_on_close(restore)
 
     def emit(result: BaseModel) -> None:
-        click.echo(result.model_dump_json(indent=2), file=real_stdout)
+        typer.echo(result.model_dump_json(indent=2), file=real_stdout)
 
     return emit
 

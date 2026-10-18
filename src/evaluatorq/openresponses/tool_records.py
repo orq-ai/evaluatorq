@@ -187,11 +187,18 @@ def _warn_unmatched(records: list[_ToolRecord], call: PairedToolCall, *, scope_o
         if any(r.explicit_name in scope_orq_names for r in records if r.is_function_call and r.explicit_name):
             logger.warning('Tool call {!r} has no result record', call.call_id)
     elif has_result and call.arguments is None:
-        logger.warning(
-            'Tool result for {!r} (call_id {!r}) has no matching call record; its arguments are unavailable',
-            call.name,
-            call.call_id,
-        )
+        if any(r.is_function_call for r in records):
+            logger.warning(
+                'Tool result for {!r} (call_id {!r}): its call record carried no arguments; its arguments are unavailable',
+                call.name,
+                call.call_id,
+            )
+        else:
+            logger.warning(
+                'Tool result for {!r} (call_id {!r}) has no matching call record; its arguments are unavailable',
+                call.name,
+                call.call_id,
+            )
 
 
 def _starts_turn(item: Any) -> bool:

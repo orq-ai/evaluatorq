@@ -1,35 +1,28 @@
-"""Projection behavior for the Insights review map."""
-
-# Assertions are the test framework's reporting contract.
-# ruff: noqa: S101
+"""Persisted coordinate behavior for the Insights review map."""
 
 from __future__ import annotations
 
+import subprocess
 import sys
-import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from threading import Lock
-from types import ModuleType
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-import numpy as np
-
 from evaluatorq.dashboard import insights_review_projection as projection
-from evaluatorq.dashboard.insights_review_data import build_review_payload
 from evaluatorq.insights.models import DimensionResult, InsightsConfig, InsightsRun, TraceInsight
 
 if TYPE_CHECKING:
     import pytest
 
 
-def _run(*, count: int = 7) -> InsightsRun:
+def _run(*, count: int = 7, saved: bool = True) -> InsightsRun:
     traces = [
         TraceInsight(
             trace_id='same' if index < 2 else f'trace-{index}',
             span_id=f'span-{index}',
             timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc),
             coords={'intent': (float(index), float(index + 1), float(index + 2))},
+            coords_2d={'intent': (float(index + 10), float(index + 20))} if saved else None,
         )
         for index in range(count)
     ]
@@ -51,57 +44,45 @@ def _run(*, count: int = 7) -> InsightsRun:
     )
 
 
-def _fake_umap(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
-    calls: list[dict[str, object]] = []
-    module = ModuleType('umap')
+def test_review_xy_uses_saved_points_by_full_trace_key_without_mutating_run():
+    run = _run()
+    original = [trace.model_dump() for trace in run.traces]
 
-    class Reducer:
-        def __init__(self, **kwargs: object) -> None:
-            calls.append(kwargs)
+    points = projection.review_xy(run, 'intent')
 
-        def fit_transform(self, values: np.ndarray) -> np.ndarray:
-            return np.asarray([[row[0], row[1]] for row in values])
-
-    module.UMAP = Reducer
-    monkeypatch.setitem(sys.modules, 'umap', module)
-    return calls
+    assert points['same:span-0'] == (10.0, 20.0)
+    assert points['same:span-1'] == (11.0, 21.0)
+    assert points['trace-6:span-6'] == (16.0, 26.0)
+    assert [trace.model_dump() for trace in run.traces] == original
 
 
-def test_review_xy_maps_saved_points_by_full_trace_key_and_uses_fixed_umap(monkeypatch: pytest.MonkeyPatch):
-    projection._clear_review_xy_cache()  # noqa: SLF001
-    calls = _fake_umap(monkeypatch)
+def test_review_xy_uses_3d_xy_only_for_legacy_missing_field(caplog: pytest.LogCaptureFixture):
+    run = _run(saved=False)
 
-    points = projection.review_xy(_run(), 'intent')
+    points = projection.review_xy(run, 'intent')
 
     assert points['same:span-0'] == (0.0, 1.0)
-    assert points['same:span-1'] == (1.0, 2.0)
-    assert points['trace-6:span-6'] == (6.0, 7.0)
-    assert calls == [{'n_components': 2, 'n_neighbors': 6, 'metric': 'euclidean', 'random_state': 7}]
+    assert len(points) == 7
+    assert 'legacy report' in caplog.text
+    assert 'fallback' in caplog.text
 
 
-def test_review_xy_returns_explicit_no_map_state_below_five_points(monkeypatch: pytest.MonkeyPatch):
-    projection._clear_review_xy_cache()  # noqa: SLF001
-    calls = _fake_umap(monkeypatch)
-    run = _run(count=4)
+def test_new_report_missing_dimension_does_not_fallback():
+    run = _run()
+    for trace in run.traces:
+        trace.coords_2d = {}
 
     assert projection.review_xy(run, 'intent') == {}
-    state = projection.review_xy_state(run, 'intent')
-    assert state == {
-        'available': False,
-        'reason': 'Only 4 valid points are available; at least 5 are needed.',
-        'n_points': 4,
-    }
-    assert calls == []
+    assert (
+        projection.review_xy_state(run, 'intent')['reason']
+        == 'Saved 2D coordinates are unavailable for this dimension.'
+    )
 
 
-def test_review_xy_skips_invalid_coordinates_with_warning(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-):
-    projection._clear_review_xy_cache()  # noqa: SLF001
-    _fake_umap(monkeypatch)
-    run = _run(count=7)
-    run.traces[0].coords['intent'] = (float('nan'), 1.0, 2.0)
-    run.traces[1].coords['intent'] = cast('tuple[float, float, float]', (1.0, 2.0))
+def test_review_xy_skips_invalid_saved_coordinates(caplog: pytest.LogCaptureFixture):
+    run = _run()
+    run.traces[0].coords_2d = {'intent': (float('nan'), 2.0)}
+    run.traces[1].coords_2d = {'intent': cast('tuple[float, float]', (1.0,))}
 
     points = projection.review_xy(run, 'intent')
 
@@ -111,63 +92,55 @@ def test_review_xy_skips_invalid_coordinates_with_warning(
     assert 'skipped invalid coordinates' in caplog.text
 
 
-def test_review_xy_cache_hits_and_coordinate_changes_miss(monkeypatch: pytest.MonkeyPatch):
-    projection._clear_review_xy_cache()  # noqa: SLF001
-    calls = _fake_umap(monkeypatch)
-    run = _run()
+def test_review_xy_returns_explicit_no_map_state_below_five_points():
+    run = _run(count=4)
 
-    first = projection.review_xy(run, 'intent')
-    second = projection.review_xy(run, 'intent')
-    run.traces[0].coords['intent'] = (99.0, 100.0, 101.0)
-    changed = projection.review_xy(run, 'intent')
-
-    assert first == second
-    assert len(calls) == 2
-    assert changed['same:span-0'] == (99.0, 100.0)
+    assert projection.review_xy(run, 'intent') == {}
+    assert projection.review_xy_state(run, 'intent') == {
+        'available': False,
+        'reason': 'Only 4 valid points are available; at least 5 are needed.',
+        'n_points': 4,
+    }
 
 
-def test_review_xy_serializes_concurrent_umap_fits(monkeypatch: pytest.MonkeyPatch):
-    projection._clear_review_xy_cache()  # noqa: SLF001
-    state_lock = Lock()
-    active = 0
-    maximum_active = 0
-    module = ModuleType('umap')
+def test_dashboard_payload_and_startup_do_not_import_heavy_reducers(tmp_path: Path):
+    script = r"""import importlib.abc
+import sys
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
-    class ConcurrentProbeReducer:
-        def __init__(self, **kwargs: object) -> None:
-            pass
+forbidden = {'umap', 'numpy', 'sklearn', 'numba'}
+class BlockHeavy(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in forbidden or fullname == 'evaluatorq.insights.reduce':
+            raise AssertionError(f'unexpected heavy import: {fullname}')
+        return None
+sys.meta_path.insert(0, BlockHeavy())
 
-        def fit_transform(self, values: np.ndarray) -> np.ndarray:
-            nonlocal active, maximum_active
-            with state_lock:
-                active += 1
-                maximum_active = max(maximum_active, active)
-            try:
-                time.sleep(0.03)
-                return np.asarray([[row[0], row[1]] for row in values])
-            finally:
-                with state_lock:
-                    active -= 1
+from evaluatorq.dashboard.insights_review_projection import review_xy
+traces = [SimpleNamespace(trace_id=f't-{i}', span_id=f's-{i}', coords_2d={'intent': (float(i), float(i + 1))}) for i in range(5)]
+assert review_xy(SimpleNamespace(traces=traces), 'intent')['t-0:s-0'] == (0.0, 1.0)
 
-    module.UMAP = ConcurrentProbeReducer
-    monkeypatch.setitem(sys.modules, 'umap', module)
-    runs = [_run().model_copy(update={'run_id': f'projection-test-{index}'}) for index in range(4)]
+# FastHTML's supported dependency stack may import NumPy; the saved-coordinate
+# reader above must not, and the full app must still avoid the analysis reducer.
+forbidden.remove('numpy')
+from evaluatorq.insights.models import DimensionResult, InsightsConfig, InsightsRun, TraceInsight
+from evaluatorq.dashboard.insights_review_data import build_review_payload
+traces = [TraceInsight(trace_id=f't-{i}', span_id=f's-{i}', coords_2d={'intent': (float(i), float(i + 1))}) for i in range(5)]
+run = InsightsRun(run_id='fresh-process', run_name='Fresh', created_at=datetime.now(timezone.utc), status='completed', stage_failures=[], population={}, config=InsightsConfig(labels=[], dimensions=['intent']), traces=traces, dimensions={'intent': DimensionResult(name='intent', source_field='request', clusters=[])}, labels={}, priority=None, priority_reason=None, counts={'n_traces': 5}, warnings=[])
+payload = build_review_payload(run)
+assert payload['traces'][0]['xy'] == {'intent': [0.0, 1.0]}
+from evaluatorq.dashboard.launch import build_app_from_env
+build_app_from_env()
+print('dashboard payload and startup stayed free of heavy reducers')
+"""
+    result = subprocess.run(
+        [sys.executable, '-c', script],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        check=False,
+    )
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(lambda run: projection.review_xy(run, 'intent'), runs))
-
-    assert all(len(result) == 7 for result in results)
-    assert maximum_active == 1
-
-
-def test_review_payload_exposes_xy_without_mutating_saved_xyz(monkeypatch: pytest.MonkeyPatch):
-    projection._clear_review_xy_cache()  # noqa: SLF001
-    _fake_umap(monkeypatch)
-    run = _run()
-
-    trace = cast(dict[str, object], cast(list[object], build_review_payload(run)['traces'])[0])
-
-    assert cast(dict[str, object], trace['xy']) == {'intent': [0.0, 1.0]}
-    assert 'xyz' not in trace
-    assert run.traces[0].coords == {'intent': (0.0, 1.0, 2.0)}
-    assert trace['id'] == 'same:span-0'
+    assert result.returncode == 0, result.stderr
+    assert 'dashboard payload and startup stayed free of heavy reducers' in result.stdout

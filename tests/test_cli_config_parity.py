@@ -5,8 +5,8 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any
 
-import click
 import pytest
+import typer.core
 import typer.main
 
 from evaluatorq.common.cli_config import Flag
@@ -122,7 +122,7 @@ _FLAG_TABLES: list[tuple[typer.Typer, str, tuple[Flag, ...]]] = [
 )
 def test_config_backed_flags_declare_no_default(app: typer.Typer, command: str, flags: tuple[Flag, ...]) -> None:
     group = typer.main.get_command(app)
-    assert isinstance(group, click.Group)
+    assert isinstance(group, typer.core.TyperGroup)
     params = {param.name: param for param in group.commands[command].params}
 
     with_defaults = {
@@ -177,15 +177,21 @@ def test_conflicting_simulation_alias_names_fail_validation(
         model.model_validate({alias: old, canonical: new})
 
 
+def _explicit_context(param: str, value: str) -> typer.Context:
+    option = typer.core.TyperOption(param_decls=[f'--{param.replace("_", "-")}'])
+    command = typer.core.TyperCommand('test', params=[option])
+    ctx = typer.Context(command)
+    command.parse_args(ctx, [option.opts[0], value])
+    return ctx
+
+
 @pytest.mark.parametrize('model', [SimulateCliConfig, GenerateAndSimulateCliConfig])
 def test_explicit_cli_name_overrides_config_alias(
     model: type[SimulateCliConfig | GenerateAndSimulateCliConfig]
 ) -> None:
-    from click.core import ParameterSource
     from evaluatorq.common.cli_config import resolve_config
 
-    ctx = click.Context(click.Command('test'))
-    ctx.set_parameter_source('name', ParameterSource.COMMANDLINE)
+    ctx = _explicit_context('name', 'cli-run')
     config = resolve_config(
         ctx, model, sim_cli._SHARED_FLAGS, {'name': 'cli-run'},
         config_source='{"evaluation_name":"configured-run"}',
@@ -205,11 +211,9 @@ def test_canonical_parallelism_wins_over_alias(
 
 @pytest.mark.parametrize('model', [RedTeamCliConfig, SimulateCliConfig, GenerateAndSimulateCliConfig])
 def test_explicit_cli_parallelism_overrides_config_alias(model: type[BaseModel]) -> None:
-    from click.core import ParameterSource
     from evaluatorq.common.cli_config import resolve_config
 
-    ctx = click.Context(click.Command('test'))
-    ctx.set_parameter_source('datapoint_parallelism', ParameterSource.COMMANDLINE)
+    ctx = _explicit_context('datapoint_parallelism', '4')
     flags = redteam_cli._RUN_FLAGS if model is RedTeamCliConfig else sim_cli._SHARED_FLAGS
     config = resolve_config(
         ctx, model, flags, {'datapoint_parallelism': 4},
@@ -222,12 +226,10 @@ def test_explicit_cli_parallelism_overrides_config_alias(model: type[BaseModel])
 def test_explicit_cli_report_overrides_config_alias(
     model: type[SimulateCliConfig | GenerateAndSimulateCliConfig], tmp_path: Path,
 ) -> None:
-    from click.core import ParameterSource
     from evaluatorq.common.cli_config import resolve_config
 
     output = tmp_path / 'cli.json'
-    ctx = click.Context(click.Command('test'))
-    ctx.set_parameter_source('report_path', ParameterSource.COMMANDLINE)
+    ctx = _explicit_context('report_path', str(output))
     config = resolve_config(
         ctx, model, sim_cli._SHARED_FLAGS, {'report_path': output},
         config_source='{"report":"configured.json"}',

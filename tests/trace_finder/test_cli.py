@@ -9,9 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-import click
 import pytest
 import typer
+import typer.core
 from rich.console import Console
 from typer.main import get_command
 from typer.testing import CliRunner
@@ -48,9 +48,9 @@ def test_find_help_describes_profile_option() -> None:
 
     assert result.exit_code == 0, result.output
     command = get_command(_app())
-    assert isinstance(command, click.Group)
+    assert isinstance(command, typer.core.TyperGroup)
     option = next((param for param in command.commands['find'].params if '--profile' in param.opts), None)
-    assert isinstance(option, click.Option)
+    assert isinstance(option, typer.core.TyperOption)
     assert option.help is not None
     assert 'ORQ_API_KEY and ORQ_BASE_URL' in option.help
 
