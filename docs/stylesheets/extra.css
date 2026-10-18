@@ -439,3 +439,48 @@ html { font-size: 100%; }
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
   margin: 1em 0;
 }
+
+/* Content tabs (CLI / Python, ...): a framed card with a tinted tab bar and a
+   teal active marker, so the switcher reads as a control rather than text. */
+.md-typeset .tabbed-set {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+.md-typeset .tabbed-labels {
+  background: color-mix(in srgb, var(--orq-teal) 7%, var(--md-default-bg-color));
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+  box-shadow: none;
+  padding: 0 0.4rem;
+}
+.md-typeset .tabbed-labels > label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 0.7em 1.1em 0.6em;
+  color: var(--md-default-fg-color--light);
+}
+.md-typeset .tabbed-labels > label:hover {
+  color: var(--orq-teal);
+}
+.md-typeset .tabbed-set > input:nth-child(n):checked ~ .tabbed-labels > :nth-child(n) {
+  color: var(--orq-teal);
+}
+.md-typeset .tabbed-labels::before {
+  height: 3px;
+  background: var(--orq-teal);
+}
+[data-md-color-scheme="slate"] .md-typeset .tabbed-labels {
+  background: color-mix(in srgb, var(--orq-teal-light) 12%, var(--md-default-bg-color));
+}
+[data-md-color-scheme="slate"] .md-typeset .tabbed-labels > label:hover,
+[data-md-color-scheme="slate"] .md-typeset .tabbed-set > input:nth-child(n):checked ~ .tabbed-labels > :nth-child(n) {
+  color: var(--orq-teal-light);
+}
+[data-md-color-scheme="slate"] .md-typeset .tabbed-labels::before {
+  background: var(--orq-teal-light);
+}
+.md-typeset .tabbed-content .highlight,
+.md-typeset .tabbed-content pre > code {
+  margin: 0;
+}
