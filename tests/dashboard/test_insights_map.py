@@ -8,12 +8,11 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import sys
 from datetime import datetime, timezone
 from html import unescape
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
-from typing import Any, cast
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from starlette.testclient import TestClient
@@ -197,50 +196,14 @@ def test_review_projection_payload_uses_full_trace_keys_and_keeps_3d_endpoint(tm
     assert {'x', 'y', 'z'} <= set(legacy['points'][0])
 
 
-def test_review_projection_payload_matches_keys_for_dataset_rows(monkeypatch):
+def test_review_projection_payload_matches_keys_for_dataset_rows():
     from evaluatorq.dashboard import insights_review_data
-
-    class _Array:
-        def __init__(self, values: Any) -> None:
-            self.values = values
-
-        @property
-        def shape(self) -> tuple[int, int]:
-            return (len(self.values), len(self.values[0]) if self.values else 0)
-
-        def __iter__(self):
-            return iter(self.values)
-
-        def __len__(self) -> int:
-            return len(self.values)
-
-    numpy = ModuleType('numpy')
-
-    def _asarray(values: Any, **_kwargs: Any) -> _Array:
-        return _Array(values)
-
-    def _isfinite(_values: _Array) -> SimpleNamespace:
-        return SimpleNamespace(all=lambda: True)
-
-    setattr(numpy, 'asarray', _asarray)
-    setattr(numpy, 'isfinite', _isfinite)
-
-    class _Umap:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def fit_transform(self, rows: _Array) -> list[tuple[float, float]]:
-            return [(float(index), float(index + 1)) for index in range(len(rows))]
-
-    umap = ModuleType('umap')
-    setattr(umap, 'UMAP', _Umap)
-    monkeypatch.setitem(sys.modules, 'numpy', numpy)
-    monkeypatch.setitem(sys.modules, 'umap', umap)
 
     run = _map_run()
     run.run_id = 'dataset-map-run'
-    for trace in run.traces:
+    for index, trace in enumerate(run.traces):
         trace.span_id = None
+        trace.coords_2d = {'intent': (float(index), float(index + 1))}
 
     payload = insights_review_data.build_review_payload(run)
     traces = cast('list[dict[str, object]]', payload['traces'])

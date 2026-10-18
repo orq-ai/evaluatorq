@@ -289,7 +289,7 @@ class ClusterAssignment(BaseModel):
 
 
 class TraceInsight(BaseModel):
-    """One trace's full result: labels, summary, cluster assignments and 3D coordinates per dimension, and any per-stage errors."""
+    """One trace's labels, summary, clusters, saved map layouts and per-stage errors."""
 
     trace_id: str
     span_id: str | None = None
@@ -305,6 +305,8 @@ class TraceInsight(BaseModel):
     source_coverage: dict[str, Any] = Field(default_factory=dict)
     assignments: dict[str, ClusterAssignment] = {}
     coords: dict[str, tuple[FiniteFloat, FiniteFloat, FiniteFloat]] = {}
+    # None identifies legacy files; an empty dict means no 2D layout was produced for a new run.
+    coords_2d: dict[str, tuple[FiniteFloat, FiniteFloat]] | None = None
     errors: dict[str, str] = {}
 
 
