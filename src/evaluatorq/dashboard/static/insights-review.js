@@ -338,7 +338,7 @@ function renderHeader() {
       : callCount != null ? `${callCount} ${callCount === 1 ? 'call' : 'calls'}`
       : noModelCalls ? 'No model calls' : '—';
     const callsTitle = status === 'running' ? 'Traces processed so far' : 'Model calls made; cache hits are not counted';
-    const notRun = !stageCost && ['pending', 'skipped', 'running'].includes(status);
+    const notRun = !stageCost && status !== 'completed';
     let costText = noModelCalls || notRun ? '—' : 'n/a';
     let costTitle = noModelCalls || notRun ? '' : 'Cost unavailable: the provider reported no usage for these calls';
     let costClass = 'num cost' + (notRun ? ' na' : '');
@@ -354,7 +354,7 @@ function renderHeader() {
     ? '<span class="num cost total" title="Cost unavailable">n/a</span>'
     : r.cost_is_partial
       ? `<span class="num cost total partial" title="Partial cost: some calls had no price, so this is a lower bound">≥ $${r.cost.toFixed(4)}</span>`
-      : `<span class="num cost total">$${r.cost.toFixed(4)}</span>`;
+      : `<span class="num cost total" title="Exact run total; stage costs are rounded to 4 decimals">$${r.cost.toFixed(4)}</span>`;
   const totalHtml = detailRows.length
     ? `<span class="total-rule"></span><span class="total"></span><span class="total stage-label">Total</span><span class="num calls total">${totalCalls} ${totalCalls === 1 ? 'call' : 'calls'}</span>${totalCostCell}`
     : '';
@@ -393,8 +393,9 @@ function renderHeader() {
     e.stopPropagation();
     const b = e.target.getBoundingClientRect(), pop = $('details');
     pop.style.left = Math.max(16, Math.min(b.left - 60, innerWidth - Math.min(460, innerWidth - 32) - 16)) + 'px';
-    pop.style.top = (b.bottom + 8) + 'px';
-    pop.style.maxHeight = (innerHeight - b.bottom - 24) + 'px';
+    const room = innerHeight - b.bottom - 24;
+    if (room < 240) { pop.style.top = '16px'; pop.style.maxHeight = (innerHeight - 32) + 'px'; }
+    else { pop.style.top = (b.bottom + 8) + 'px'; pop.style.maxHeight = room + 'px'; }
     pop.classList.toggle('open');
   };
 }

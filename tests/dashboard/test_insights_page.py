@@ -518,7 +518,7 @@ def test_review_client_escapes_saved_ids_and_labels_partial_cost(minimal_run: In
     assert "stageCost?.cost != null" in script
     assert "'Model calls made; cache hits are not counted'" in script
     assert "const statusText = status === 'completed' ? '' : status === 'error' ? ' · <span class=\"err\">error</span>' : ` · ${esc(status)}`" in script
-    assert "['pending', 'skipped', 'running'].includes(status)" in script
+    assert "const notRun = !stageCost && status !== 'completed'" in script
     assert "let costText = noModelCalls || notRun ? '—' : 'n/a'" in script
     assert "'num cost' + (notRun ? ' na' : '')" in script
     assert 'title="Cost unavailable">n/a</span>' in script

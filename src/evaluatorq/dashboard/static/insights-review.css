@@ -46,6 +46,7 @@ main{min-width:0;padding:0 28px 48px}
 .stages .partial{color:var(--orange-700)}.stages .priciest{font-weight:600;color:var(--text-strong)}
 .stages .nocalls{font-family:var(--sans);font-size:12px;color:var(--text-faint);text-align:right;line-height:inherit;align-self:baseline}
 .stages .total{font-weight:600}.stages .total-rule{grid-column:1 / -1;height:0;border-top:1px solid var(--border-subtle);margin-top:2px}.stages .calls.total{color:var(--text-strong)}
+.stages .na{color:var(--border-strong);cursor:default}
 .kv{display:grid;grid-template-columns:110px 1fr;gap:4px 10px}.kv dt{color:var(--text-muted)}.kv dd{margin:0}
 .proj{height:8px;border-radius:4px;background:var(--chart-track);overflow:hidden;margin:6px 0}.proj i{display:block;height:100%;background:var(--teal-600)}
 
