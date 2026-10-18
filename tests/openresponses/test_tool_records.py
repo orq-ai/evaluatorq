@@ -89,6 +89,14 @@ def test_call_with_real_arguments_and_orq_result_does_not_warn(caplog) -> None:
     assert not _warnings(caplog)
 
 
+def test_call_record_without_arguments_warns_about_arguments_not_a_missing_call(caplog) -> None:
+    (call,) = pair_tool_records([{**CALL, 'arguments': ''}, RESULT])
+    assert call.arguments is None
+    warnings = _warnings(caplog)
+    assert 'no matching call record' not in warnings
+    assert warnings.count('call record carried no arguments') == 1
+
+
 def test_explicit_empty_call_arguments_stay_empty_object() -> None:
     (call,) = pair_tool_records([{**CALL, 'arguments': '{}'}, RESULT])
     assert call.arguments == '{}'
