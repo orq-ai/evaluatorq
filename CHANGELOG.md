@@ -6,6 +6,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ## [Unreleased]
 
+- **Fixed: Insights review now reads yes/no answers correctly.** The page treated every yes/no answer as `no`, so headline numbers for yes/no questions were wrong on existing runs: the **Fix first** card never fired, unfixed-error shares were always 0, and yes/no filters, panel rows, `scope_creep` and custom yes/no questions all showed `no`. Reopening a run now shows the real counts.
 - **Insights saves both map layouts during analysis.** The dashboard reads saved 2D coordinates and no longer imports, warms up, or runs UMAP when viewing a report. Older reports use their saved 3D X/Y coordinates as a lightweight fallback; failed new layouts remain visibly unavailable.
 - **Fixed: seeded Insights maps no longer emit UMAP's worker-count warning.** Reduction explicitly selects the single worker that UMAP already used with a random seed, preserving reproducible coordinates.
 - **Fixed: run commands work with Typer 0.26 and newer.** Omitted options keep their configured values and defaults instead of being treated as explicit overrides, which caused red-team runs to fail with a `NoneType` JSON error. Simulation commands use the same corrected flag-source check.
