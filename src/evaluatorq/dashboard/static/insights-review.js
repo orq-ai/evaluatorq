@@ -121,19 +121,62 @@ const notVerified = t => ['claimed_without_check', 'unverified'].includes(lval(t
 const corr3 = t => lval(t, 'user_corrections') === '3';
 const chip = (name, t) => { const v = lval(t, name); return v == null ? NA : `<span class="chip" style="background:${hexA(lcolor(name, v), .16)}" title="${esc(human(name))}: ${esc(v)}">${esc(ldisp(name, v))}</span>`; };
 const outcomeHtml = t => { const v = lval(t, 'outcome'); return v == null ? NA : `<span class="sdot" style="color:var(--text-strong)"><i style="background:${lcolor('outcome', v)}"></i>${esc(human(v))}</span>`; };
-const FLAG_DEFS = [
-  ['unfixed', 'Unfixed error: a failure the agent never corrected', t => isYes(t, 'unfixed_error'),
-    '<path d="M12 8v5M12 16.5v.01"/><circle cx="12" cy="12" r="9"/>'],
-  ['risky', 'Risky action the user did not ask for', t => isRiskyT(t),
-    '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.01"/>'],
-  ['unver', 'Not verified: no check run, or claimed to work without one', notVerified,
-    '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><path d="M4 4l16 16"/>'],
-  ['corr', 'Corrected three or more times by the user', corr3,
-    '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/>'],
-];
+/* ---------- trace columns ---------- */
+const FAILED = '<span class="na failed" title="The question failed for this trace">failed</span>';
+const answerState = (t, name) => { const v = lval(t, name); return v != null ? {state: 'answer', v} : t.label_errors?.[name] ? {state: 'failed'} : {state: 'missing'}; };
+const asked = name => { const l = LBY[name]; return !!l && Object.values(l.counts || {}).reduce((a, b) => a + b, 0) + (l.n_failed || 0) > 0; };
+const answerCell = (t, name, render) => { const a = answerState(t, name); return a.state === 'answer' ? render(a.v) : a.state === 'failed' ? FAILED : NA; };
 const flagSvg = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
-const flagsText = t => FLAG_DEFS.filter(f => f[2](t)).map(f => `<span class="flagtxt"><span class="fl ${f[0]}">${flagSvg(f[3])}</span>${f[0] === 'risky' ? 'Risky action · ' + esc(riskyText(t)) : f[1]}</span>`).join('');
-const flagCell = (t, flag) => { const yes = flag[2](t); return `<span class="bool ${yes ? 'yes' : 'no'}" title="${esc(yes ? (flag[0] === 'risky' ? riskyText(t) : flag[1]) : 'No ' + flag[0] + ' flag')}">${yes ? 'Yes' : '—'}</span>`; };
+const FLAG_COLS = [
+  {key: 'unfixed', label: 'unfixed_error', head: 'Unfixed', tip: 'Unfixed error: a failure the agent never corrected', track: '70px', noTip: 'No unfixed error', test: t => isYes(t, 'unfixed_error'),
+    svg: '<path d="M12 8v5M12 16.5v.01"/><circle cx="12" cy="12" r="9"/>'},
+  {key: 'risky', label: 'risky_action', head: 'Risky', tip: 'Risky action the user did not ask for', track: '70px', noTip: 'No risky action', test: isRiskyT, yesTip: riskyText,
+    svg: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.01"/>'},
+  {key: 'unver', label: 'verified', head: 'No check', tip: 'No check run, or claimed working without one', track: '70px', noTip: 'Verified: the agent ran a check', naTip: 'Nothing to verify: the agent changed no code', test: notVerified, na: t => lval(t, 'verified') === 'not_applicable',
+    svg: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><path d="M4 4l16 16"/>'},
+  {key: 'corr', label: 'user_corrections', head: '3+ corrections', tip: 'Corrected three or more times by the user', track: '112px', noTip: 'Corrected fewer than three times', test: corr3,
+    svg: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/>'},
+];
+const flagVerdict = (t, f) => { const a = answerState(t, f.label); return a.state !== 'answer' ? a.state : f.na?.(t) ? 'na' : f.test(t) ? 'yes' : 'no'; };
+const flagCell = (t, f) => {
+  const v = flagVerdict(t, f);
+  if (v === 'failed') return FAILED;
+  if (v === 'missing') return NA;
+  const tip = v === 'yes' ? (f.yesTip ? f.yesTip(t) : f.tip) : v === 'na' ? f.naTip : f.noTip;
+  return `<span class="bool ${v === 'yes' ? 'yes' : 'no'}" title="${esc(tip)}">${v === 'yes' ? 'Yes' : v === 'na' ? 'n/a' : 'No'}</span>`;
+};
+const TRACE_COLS = [
+  {key: 'when', head: 'Date', tip: 'When the trace ran', track: '52px', cls: 'when', cell: t => fmtDate(t.ts)},
+  {key: 'req', head: 'Request', tip: 'What the user asked', track: 'minmax(220px,1fr)', cls: 'req', title: t => t.request, cell: t => esc(t.request || '(no summary)')},
+  {key: 'theme', head: 'Theme', tip: 'Theme the trace belongs to', track: '160px', cls: 'cl', needs: () => DIMS.length > 0,
+    cell: t => { const c = S.dim ? clusterOf(t, S.dim) : null; return c ? `<i style="background:${c.color}"></i><span>${esc(c.name)}</span>` : '<span>Not grouped</span>'; }},
+  {key: 'task', head: 'Task', tip: 'Kind of task', track: '104px', cls: '', needs: () => asked('task_type'), cell: t => answerCell(t, 'task_type', () => chip('task_type', t))},
+  {key: 'outcome', head: 'Outcome', tip: 'How the task ended', track: '94px', cls: 'oc', needs: () => asked('outcome'), cell: t => answerCell(t, 'outcome', () => outcomeHtml(t))},
+  {key: 'frus', head: 'Frust.', tip: 'User frustration, 1 to 5', track: '52px', cls: 'ctr', needs: () => asked('user_frustration'), cell: t => answerCell(t, 'user_frustration', () => frusHtml(frus(t)))},
+  ...FLAG_COLS.map(f => ({...f, cls: 'ctr', needs: () => asked(f.label), cell: t => flagCell(t, f)})),
+  {key: 'errors', head: 'Errors', tip: 'Number of assistant mistakes in the summary', track: '52px', cls: '', needs: () => T.some(t => t.has_summary),
+    cell: t => !t.has_summary ? NA : hasErr(t) ? `<span class="errb" title="Assistant errors">${t.errors.length}</span>` : '<span class="errb zero" title="No assistant errors in the summary">0</span>'},
+];
+const visibleCols = () => TRACE_COLS.filter(c => !c.needs || c.needs());
+const flagsText = t => FLAG_COLS.filter(f => flagVerdict(t, f) === 'yes').map(f => `<span class="flagtxt"><span class="fl ${f.key}">${flagSvg(f.svg)}</span>${f.key === 'risky' ? 'Risky action · ' + esc(riskyText(t)) : f.tip}</span>`).join('');
+const TREE_COLS = [
+  {key: 'n', head: 'Traces', tip: '', track: '128px', cell: ({s, count, inView}) => `<span class="n">${count}<div class="bar"><i style="width:${pct(s.n, N)}%"></i><b style="width:${pct(inView, N)}%"></b></div></span>`},
+  {key: 'err', head: 'Errors', tip: 'from summary: share of summarised traces where the assistant made a mistake', track: '64px',
+    cell: ({s, c}) => `<span class="e ${s.errShare > .6 ? 'bad' : ''}" title="${s.errShare == null ? 'No summaries' : `${s.errN} of ${s.summN} summarised traces`}">${c.dim === 'failure' && !c.none ? '<span class="na" title="Every trace here is a failure">·</span>' : fmtShare(s.errShare)}</span>`},
+  {key: 'done', head: 'Done %', tip: 'Share of traces where the outcome is done', track: '64px', needs: () => asked('outcome'), cell: ({s}) => `<span class="e">${fmtShare(s.doneShare)}</span>`},
+  {key: 'risky', head: 'Risky %', tip: 'Share of traces where the agent took a risky action nobody asked for', track: '64px', needs: () => asked('risky_action'), cell: ({s}) => `<span class="e">${fmtShare(s.riskyShare)}</span>`},
+  {key: 'frus', head: 'Frustration', tip: 'Mean user frustration, 1 (calm) to 5 (angry)', track: '96px', needs: () => asked('user_frustration'),
+    cell: ({s}) => `<span class="e">${frusHtml(s.frusMean, `Mean of ${s.frusMeasured} measured traces; ${s.frusN} at level ${FRUS_HI} or 5`)}</span>`},
+];
+const treeCols = () => TREE_COLS.filter(c => !c.needs || c.needs());
+const DRAWER_TILES = [
+  {label: 'task_type', head: 'Task', small: true, cell: t => chip('task_type', t)},
+  {label: 'outcome', head: 'Outcome', small: true, cell: t => outcomeHtml(t)},
+  {label: 'verified', head: 'Verified', small: true, cell: t => chip('verified', t)},
+  {label: 'user_frustration', head: 'Frustration', cell: t => frusHtml(frus(t))},
+  {label: 'user_corrections', head: 'User corrections', cell: t => lnum('user_corrections', lval(t, 'user_corrections')) + (corr3(t) ? '+' : '')},
+];
+const drawerTiles = () => DRAWER_TILES.filter(d => asked(d.label));
 /* ---------- clusters ---------- */
 const C = Object.create(null);
 for (const dim of DIMS) {
@@ -427,20 +470,15 @@ function renderFilterbar() {
 }
 
 /* ---------- theme tree ---------- */
-function treeRow(c, kind, vis) {
+function treeRow(c, kind, vis, cols) {
   const s = stats(c.members, c.id), inView = [...c.members].filter(id => vis.has(id)).length;
   const on = S.sel && S.sel.id === c.id || isOn({t: 'c', id: c.id});
   const grp = kind.startsWith('grp'), open = !S.shut.has(c.id);
   const ic = c.none ? '<span class="ic"></span>' : !grp ? '<span class="ic" aria-hidden="true">↳</span>' : `<button class="chev ${open ? '' : 'shut'}" data-tog="${esc(c.id)}" aria-expanded="${open}" title="Show or hide its subthemes"><svg width="14" height="14" viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
   const count = S.filters.length ? `${inView}<small>/ ${s.n}</small>` : `${s.n}<small>· ${pct(s.n, N)}%</small>`;
-  const errCell = c.dim === 'failure' && !c.none ? '<span class="na" title="Every trace here is a failure">·</span>' : fmtShare(s.errShare);
   return `<div class="row ${kind} ${on ? 'on' : ''} ${S.filters.length && !inView ? 'dim' : ''} ${c.none ? 'none' : ''}" data-c="${esc(c.id)}" style="--bc:${c.color}" role="button" tabindex="0" aria-pressed="${on}">
     ${ic}<span class="nm"><span class="t">${grp ? '' : `<i style="background:${c.color}"></i>`}<span title="${esc(c.name)}">${esc(c.name)}</span></span></span>
-    <span class="n">${count}<div class="bar"><i style="width:${pct(s.n, N)}%"></i><b style="width:${pct(inView, N)}%"></b></div></span>
-    <span class="e ${s.errShare > .6 ? 'bad' : ''}" title="${s.errShare == null ? 'No summaries' : `${s.errN} of ${s.summN} summarised traces`}">${errCell}</span>
-    <span class="e">${fmtShare(s.doneShare)}</span>
-    <span class="e">${fmtShare(s.riskyShare)}</span>
-    <span class="e">${frusHtml(s.frusMean, `Mean of ${s.frusMeasured} measured traces; ${s.frusN} at level ${FRUS_HI} or 5`)}</span></div>`;
+    ${cols.map(col => col.cell({s, c, count, inView})).join('')}</div>`;
 }
 function renderThemes() {
   if (!S.dim) {
@@ -448,15 +486,16 @@ function renderThemes() {
     return;
   }
   const vis = new Set(visible().map(t => t.id));
-  let html = `<div class="tree"><div class="cols"><span></span><span>Theme</span><span>Traces</span><span title="from summary: share of summarised traces where the assistant made a mistake">Errors</span><span title="Share of traces where the outcome is done">Done %</span><span title="Share of traces where the agent took a risky action nobody asked for">Risky %</span><span title="Mean user frustration, 1 (calm) to 5 (angry)">Frustration</span></div>`;
+  const cols = treeCols();
+  let html = `<div class="tree" style="--tree-tail:${cols.map(c => c.track).join(' ')}"><div class="cols"><span></span><span>Theme</span>${cols.map(c => `<span data-col="${c.key}"${c.tip ? ` title="${esc(c.tip)}"` : ''}>${c.head}</span>`).join('')}</div>`;
   const ts = tops(S.dim);
   if (ts.length) for (const top of ts) {
     const ks = kids(top);
-    html += treeRow(top, 'grp', vis);
-    if (!S.shut.has(top.id)) html += ks.map(k => treeRow(k, 'kid', vis)).join('');
-  } else html += bases(S.dim).map(c => treeRow(c, 'kid', vis)).join('');
+    html += treeRow(top, 'grp', vis, cols);
+    if (!S.shut.has(top.id)) html += ks.map(k => treeRow(k, 'kid', vis, cols)).join('');
+  } else html += bases(S.dim).map(c => treeRow(c, 'kid', vis, cols)).join('');
   const none = C['none:' + S.dim];
-  if (none.members.size) html += treeRow(none, 'grp none', vis);
+  if (none.members.size) html += treeRow(none, 'grp none', vis, cols);
   html += `</div>`;
   const cv = $('canvas');
   cv.innerHTML = html;
@@ -818,17 +857,11 @@ function renderCompare() {
 
 /* ---------- trace list ---------- */
 function renderTraces() {
-  const vis = visible(), sel = S.sel && S.sel.kind === 'trace' ? S.sel.id : null;
-  const rows = vis.slice(0, S.more).map(t => {
-    const c = S.dim ? clusterOf(t, S.dim) : null;
-    return `<button class="tr ${t.id === sel ? 'on' : ''}" data-t="${esc(t.id)}">
-      <span class="when">${fmtDate(t.ts)}</span><span class="req" title="${esc(t.request)}">${esc(t.request || '(no summary)')}</span>
-      <span class="cl">${c ? `<i style="background:${c.color}"></i><span>${esc(c.name)}</span>` : '<span>Not grouped</span>'}</span>
-      <span>${chip('task_type', t)}</span><span class="oc">${outcomeHtml(t)}</span><span>${frusHtml(frus(t))}</span>${FLAG_DEFS.map(flag => flagCell(t, flag)).join('')}
-      ${hasErr(t) ? `<span class="errb" title="Assistant errors">${t.errors.length}</span>` : '<span></span>'}</button>`;
-  }).join('');
+  const vis = visible(), sel = S.sel && S.sel.kind === 'trace' ? S.sel.id : null, cols = visibleCols();
+  $('tlist').style.setProperty('--tr-cols', cols.map(c => c.track).join(' '));
+  const rows = vis.slice(0, S.more).map(t => `<button class="tr ${t.id === sel ? 'on' : ''}" data-t="${esc(t.id)}">${cols.map(c => `<span data-col="${c.key}" class="${c.cls}"${c.title ? ` title="${esc(c.title(t))}"` : ''}>${c.cell(t)}</span>`).join('')}</button>`).join('');
   $('tlist').innerHTML = `<div class="th"><h3>Traces</h3><span class="c num">${vis.length}</span><input id="q" placeholder="Search requests and summaries" value="${esc(S.q)}"></div>
-    ${vis.length ? `<div class="tr trh"><span>Date</span><span>Request</span><span>Theme</span><span>Task</span><span class="oc">Outcome</span><span title="User frustration, 1 to 5">Frust.</span><span title="Unfixed error: a failure the agent never corrected">Unfixed</span><span title="Risky action the user did not ask for">Risky</span><span title="No check run, or claimed working without one">No check</span><span title="Corrected three or more times by the user">3+ corrections</span><span title="Number of assistant mistakes in the summary">Errors</span></div>` + rows : `<div class="empty"><b>No traces match</b>Remove a filter above or clear the search.</div>`}
+    ${vis.length ? `<div class="tr trh">${cols.map(c => `<span data-col="${c.key}" class="${c.cls === 'oc' || c.cls === 'ctr' ? c.cls : ''}" title="${esc(c.tip)}">${c.head}</span>`).join('')}</div>` + rows : `<div class="empty"><b>No traces match</b>Remove a filter above or clear the search.</div>`}
     ${vis.length > S.more ? `<div class="tmore"><button class="btn" id="more">Show ${Math.min(20, vis.length - S.more)} more</button></div>` : ''}`;
   $('tlist').querySelectorAll('[data-t]').forEach(r => r.onclick = () => select('trace', r.dataset.t));
   $('q').oninput = e => {
@@ -961,8 +994,8 @@ function clusterPanel(c) {
     <div class="stats">
       <div class="stat"><div class="l">Traces</div><div class="v">${s.n} <span style="font-size:12px;color:var(--text-faint)">${pct(s.n, N)}%</span></div></div>
       <div class="stat"><div class="l">Assistant errors</div><div class="v ${s.errShare > .6 ? 'bad' : ''}">${fmtShare(s.errShare)}</div></div>
-      <div class="stat"><div class="l">Done</div><div class="v">${fmtShare(s.doneShare)}</div></div>
-      <div class="stat"><div class="l">Frustration</div><div class="v">${s.frusMean == null ? NA : s.frusMean.toFixed(1) + '<span style="font-size:12px;color:var(--text-faint)"> / 5</span>'}</div></div>
+      ${asked('outcome') ? `<div class="stat"><div class="l">Done</div><div class="v">${fmtShare(s.doneShare)}</div></div>` : ''}
+      ${asked('user_frustration') ? `<div class="stat"><div class="l">Frustration</div><div class="v">${s.frusMean == null ? NA : s.frusMean.toFixed(1) + '<span style="font-size:12px;color:var(--text-faint)"> / 5</span>'}</div></div>` : ''}
     </div>
     ${ks.length ? `<h5>Themes in this group</h5>${ks.map(k => { const ksd = stats(k.members, k.id); return `<button class="lrow" style="width:100%" data-go="${esc(k.id)}"><span class="sdot" style="color:var(--text-strong)"><i style="background:${k.color}"></i>${esc(k.name)}</span><span class="num">${ksd.n} · ${fmtShare(ksd.errShare)} err</span></button>`; }).join('')}` : ''}
     ${errorBreakdown(ts)}
@@ -1074,13 +1107,11 @@ function tracePanel(t) {
     ${t.request ? `<h5>What the user asked</h5><div class="quote">${esc(t.request)}</div>` : ''}
     ${hasErr(t) ? `<h5>Assistant mistakes · ${t.errors.length}</h5><ul class="errs">${t.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}
     ${signalsPanel(t)}
-    <h5>Coding work</h5>
-    <div class="stats" style="margin-top:0"><div class="stat"><div class="l">Task</div><div class="v" style="font-size:13px">${chip('task_type', t)}</div></div><div class="stat"><div class="l">Outcome</div><div class="v" style="font-size:13px">${outcomeHtml(t)}</div></div>
-      <div class="stat"><div class="l">Verified</div><div class="v" style="font-size:13px">${chip('verified', t)}</div></div><div class="stat"><div class="l">Frustration</div><div class="v">${frusHtml(frus(t))}</div></div>
-      <div class="stat"><div class="l">User corrections</div><div class="v">${lval(t, 'user_corrections') == null ? NA : lnum('user_corrections', lval(t, 'user_corrections')) + (corr3(t) ? '+' : '')}</div></div></div>
+    ${drawerTiles().length ? `<h5>${drawerTiles().some(d => d.label !== 'user_frustration') ? 'Coding work' : 'Conversation'}</h5>
+    <div class="stats" style="margin-top:0">${drawerTiles().map(d => `<div class="stat"><div class="l">${d.head}</div><div class="v"${d.small ? ' style="font-size:13px"' : ''}>${answerCell(t, d.label, () => d.cell(t))}</div></div>`).join('')}</div>` : ''}
     ${flagsText(t) ? `<h5>Flags</h5><div>${flagsText(t)}</div>` : ''}
     <h5>All answers</h5>${LABELS.map(l => { const v = lval(t, l.name);
-      return `<div class="lrow"><span>${esc(human(l.name))}</span><span>${v == null ? '<span class="na">failed</span>' : `<span class="sdot" style="color:var(--text-strong)"><i style="background:${lcolor(l.name, v)}"></i>${l.name === 'user_frustration' ? lnum(l.name, v) : esc(ldisp(l.name, v))}</span>`}</span></div>`; }).join('')}
+      return `<div class="lrow"><span>${esc(human(l.name))}</span><span>${answerCell(t, l.name, () => `<span class="sdot" style="color:var(--text-strong)"><i style="background:${lcolor(l.name, v)}"></i>${l.name === 'user_frustration' ? lnum(l.name, v) : esc(ldisp(l.name, v))}</span>`)}</span></div>`; }).join('')}
     <h5>Themes</h5><div class="tags">${DIMS.map(d => { const c = clusterOf(t, d); return `<button data-go="${esc(c.id)}"><i style="background:${c.color}"></i>${cap(d)}: ${esc(c.name.length > 40 ? c.name.slice(0, 39) + '…' : c.name)}</button>`; }).join('')}</div>
     <h5>Tools <span>calls</span></h5>${tagCounts(t.tools, 'no tool calls')}
     <h5>Shell commands <span>calls</span></h5>${tagCounts(t.commands, 'no shell commands', true)}
