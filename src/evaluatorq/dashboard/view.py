@@ -21,27 +21,32 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import starmap
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
+from evaluatorq.common.model_roles import BUILTIN, ROLE_ENV, TASKS, role_model, role_source, task_override
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.simulation.metrics import TURN_METRICS
+from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from evaluatorq.common.cli_oauth import OAuthSession
+    from evaluatorq.common.model_roles import Role
     from evaluatorq.dashboard.library import ReportCard
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
-    from evaluatorq.dashboard.orq_scope import OrqScope
+    from evaluatorq.dashboard.orq_scope import OAuthScopes
 
 # Surface key → display label, used for run-list titles + kind badges.
 SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pairwise': 'Pairwise'}
@@ -68,21 +73,25 @@ def _dashboard_js_version() -> str:
         return '0'
 
 
-def head_assets() -> tuple[Script, ...]:
+VEGA_SCRIPTS = ('/static/vega.min.js', '/static/vega-lite.min.js', '/static/vega-embed.min.js')
+
+
+def head_assets(*, charts: bool = False) -> tuple[Script, ...]:
     """Return FastHTML header elements for vendored JS assets.
 
     The ``/static/`` files are vendored under ``dashboard/static/`` and served
-    by the app; these Script tags wire them into every report page.
+    by the app; these Script tags wire them into every report page. The ~800KB
+    vega trio only ships with ``charts``: a chart that arrives later in an htmx
+    swap makes dashboard.js load it on demand.
     """
+    vega = tuple(Script(src=src) for src in VEGA_SCRIPTS) if charts else ()
     return (
         Script(src='/static/htmx.min.js'),
-        Script(src='/static/vega.min.js'),
-        Script(src='/static/vega-lite.min.js'),
-        Script(src='/static/vega-embed.min.js'),
+        # vega stays non-deferred: inline body scripts call vegaEmbed during parse.
+        *vega,
         # defer: dashboard.js runs at document.body-level (event delegation) — without
         # defer it executes during <head> parse when document.body is still null and
-        # throws, aborting all its handlers (incl. the sim-entity modal). vega stays
-        # non-deferred: inline body scripts call vegaEmbed during parse.
+        # throws, aborting all its handlers (incl. the sim-entity modal).
         Script(src=f'/static/dashboard.js?v={_dashboard_js_version()}', defer=True),
     )
 
@@ -127,7 +136,7 @@ def _fmt_score(score: float | None) -> str:
 _SCORE_TITLES: dict[str, str] = {
     'redteam': 'Resistance rate: attacks the target withstood',
     'sim': 'Mean scorer average across this run',
-    'pairwise': 'Decided rate: comparisons the judge panel could call',
+    'pairwise': 'Called rate: comparisons ending in a win or tie (not inconclusive)',
 }
 
 
@@ -247,12 +256,10 @@ def _stat_tile(label: str, value: str, unit: str = '', sub: str = '') -> str:
     )
 
 
-def _panel(title: str, sub: str, inner: str, *, cls: str = '') -> str:
+def _panel(title: str, sub: str, inner: str, *, cls: str = '', title_tag: str = 'div') -> str:
     cls_attr = f' {cls}' if cls else ''
-    return (
-        f'<div class="panel{cls_attr}"><div class="panel-title">{esc(title)}</div>'
-        f'<div class="panel-sub">{esc(sub)}</div>{inner}</div>'
-    )
+    sub_html = f'<div class="panel-sub">{esc(sub)}</div>' if sub else ''
+    return f'<div class="panel{cls_attr}"><{title_tag} class="panel-title">{esc(title)}</{title_tag}>{sub_html}{inner}</div>'
 
 
 def _bars(
@@ -447,7 +454,7 @@ _CHEVRON = (
 )
 
 
-def _target_pill(label: str, kind: str) -> str:
+def _target_pill(label: str, kind: str, *, ellipsis: bool = False) -> str:
     """Target cell rendered exclusively from the saved run's target kind.
 
     Older JSON and extensions may carry raw storage kinds rather than the
@@ -462,7 +469,8 @@ def _target_pill(label: str, kind: str) -> str:
         'callback': 'external',
         'other': 'external',
     }.get(kind, kind if kind in _TARGET_ICONS else 'external')
-    return f'<span class="target-pill" data-kind="{esc(display_kind)}">{_TARGET_ICONS[display_kind]}{esc(label)}</span>'
+    text = f'<span class="target-label">{esc(label)}</span>' if ellipsis else esc(label)
+    return f'<span class="target-pill" data-kind="{esc(display_kind)}">{_TARGET_ICONS[display_kind]}{text}</span>'
 
 
 # Run lifecycle → label for the solid status pill (mirrors the platform's
@@ -476,36 +484,140 @@ def _run_status_pill(status: str) -> str:
     return f'<span class="run-status {esc(status)}">{esc(_STATUS_LABEL.get(status, status))}</span>'
 
 
-def _run_grid(rows: list[Any]) -> str:
+_RECENT_DAYS = 7
+
+
+def _when_label(when: datetime) -> tuple[str, str]:
+    """Red team row date: relative inside a week, else an absolute 'Apr 1' (with the year when it is not this one).
+
+    Returns ``(text, title)``; the title carries the relative text for old runs.
+    """
+    relative = _ago(when)
+    now = datetime.now(tz=when.tzinfo) if when.tzinfo else datetime.now()  # noqa: DTZ005
+    if (now - when).days < _RECENT_DAYS:
+        return relative, ''
+    text = f'{when:%b} {when.day}' + ('' if when.year == now.year else f', {when.year}')
+    return text, relative
+
+
+# ASR bands, single-sourced: at or below ``_ASR_FLAG`` is fine, above it is flagged, above ``_ASR_HIGH`` is high.
+_ASR_FLAG = 0.10
+_ASR_HIGH = 0.25
+_ASR_NOTE = (
+    'Attack success rate: share of evaluated attacks that broke the agent; '
+    f'above {_ASR_FLAG:.0%} is flagged, above {_ASR_HIGH:.0%} is high'
+)
+_ASR_HINT = {'mid': f'above {_ASR_FLAG:.0%}, flagged', 'high': f'above {_ASR_HIGH:.0%}, high'}
+_ASR_SUB = {
+    'good': f'At or below {_ASR_FLAG:.0%}',
+    'mid': f'Flagged above {_ASR_FLAG:.0%}',
+    'high': f'High: above {_ASR_HIGH:.0%}',
+}
+_ASR_KPI_STATUS = {'good': 'pass', 'mid': 'warn', 'high': 'fail'}
+
+
+def _asr(row: Any) -> float | None:
+    """Attack success rate of a red team row, ``None`` when nothing was evaluated."""
+    return row.vulnerable / row.evaluated if row.evaluated else None
+
+
+def _asr_cls(asr: float | None) -> str:
+    """Band of an ASR: ``good`` (at or below the flag), ``mid`` (up to the high mark), ``high`` (above), ``none`` when unmeasured."""
+    if asr is None:
+        return 'none'
+    if asr <= _ASR_FLAG:
+        return 'good'
+    return 'mid' if asr <= _ASR_HIGH else 'high'
+
+
+def _sim_row(r: Any) -> str:
+    """One Agent Sim run row of the run grid."""
+    err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
+    status_label = _STATUS_LABEL.get(r.status, r.status)
+    label = f'{r.name}, {_ago(r.when)}, {status_label}, score {_fmt_score(r.score)}, {r.cases} cases'
+    targets = ''.join(starmap(_target_pill, r.targets))
+    return (
+        f'<a class="runs-grid-row" href="/r/{esc(r.rid)}" aria-label="{esc(label)}">'
+        f'<span class="rg-job"><span class="rg-name">{esc(r.name)}{err}</span>'
+        f'<span class="rg-sub">{esc(_ago(r.when))}</span></span>'
+        f'<span class="rg-targets">{targets}</span>'
+        f'<span class="rg-status">{_run_status_pill(r.status)}</span>'
+        f'<span class="run-score rg-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
+        f'<span class="rg-num rg-cases">{r.cases:,}</span>'
+        f'<span class="rg-num rg-cost">{esc(_fmt_cost(r.cost))}</span>'
+        f'{_CHEVRON}'
+        f'</a>'
+    )
+
+
+def _redteam_row(r: Any) -> str:
+    """One red team run row: Broke as x/y, the ASR chip, and a one-chip target summary."""
+    err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
+    when_text, when_title = _when_label(r.when)
+    when_attrs = f' title="{esc(when_title)}"' if when_title else ''
+    cost_text = _fmt_spend(r.cost)
+    asr = _asr(r)
+    asr_text = '—' if asr is None else pct(asr)
+    broke_text = '—' if asr is None else f'{r.vulnerable:,}/{r.evaluated:,}'
+    # An errored run already says so in its pill; a dash beside it adds nothing.
+    broke = f'<span class="rg-broke-n{"" if asr is not None else " is-none"}">{broke_text}</span>'
+    if asr is None and r.status != 'finished':
+        broke = ''
+    status_label = 'completed' if r.status == 'finished' else _STATUS_LABEL.get(r.status, r.status)
+    status_cell = broke if r.status == 'finished' else _run_status_pill(r.status) + broke
+    all_targets = ', '.join(t[0] for t in r.targets) or 'no target'
+    asr_cls = _asr_cls(asr)
+    asr_flag = f' ({_ASR_HINT[asr_cls]})' if asr_cls in _ASR_HINT else ''
+    broke_label = 'none evaluated' if asr is None else f'{broke_text} broke'
+    label = (
+        f'{r.name}, {when_text}, {status_label}, target {all_targets}, '
+        f'ASR {asr_text}{asr_flag}, {broke_label}, {r.cases} cases, cost {cost_text}'
+    )
+    targets_attrs = ''
+    if len(r.targets) > 1:
+        targets = _target_pill(*r.targets[0], ellipsis=True) + f'<span class="target-more">+{len(r.targets) - 1}</span>'
+        targets_attrs = f' title="{esc(all_targets)}"'
+    else:
+        targets = ''.join(_target_pill(*t, ellipsis=True) for t in r.targets)
+        if r.targets:
+            targets_attrs = f' title="{esc(r.targets[0][0])}"'
+    score_hint = f'<span class="sr-only">{esc(asr_flag)}</span>' if asr_flag else ''
+    return (
+        f'<a class="runs-grid-row" href="/r/{esc(r.rid)}" aria-label="{esc(label)}">'
+        f'<span class="rg-job"><span class="rg-name" title="{esc(r.name)}">{esc(r.name)}{err}</span>'
+        f'<span class="rg-sub"{when_attrs}>{esc(when_text)}</span></span>'
+        f'<span class="rg-targets"{targets_attrs}>{targets}</span>'
+        f'<span class="rg-status">{status_cell}</span>'
+        f'<span class="run-score rg-score {asr_cls}" title="{esc(_ASR_NOTE)}">{asr_text}{score_hint}</span>'
+        f'<span class="rg-num rg-cases">{r.cases:,}</span>'
+        f'<span class="rg-num rg-cost">{esc(cost_text)}</span>'
+        f'{_CHEVRON}'
+        f'</a>'
+    )
+
+
+def _run_grid(rows: list[Any], *, redteam: bool = False) -> str:
     """Run-level table as a clickable anchor-grid — the WHOLE row links to the
     run's report. Borderless (no boxed table chrome), aligned columns.
-    Shared by the Red Team + Agent Sim surfaces (identical row shape)."""
+    Shared by the Red Team + Agent Sim surfaces (identical row shape).
+
+    ``redteam`` swaps Status/Score for Broke/ASR (attack success rate, lower is
+    better) and adds the one-chip target summary; the Agent Sim grid keeps its original cells.
+    """
+    status_head, score_head = ('Broke', 'ASR') if redteam else ('Status', 'Score')
     head = (
-        '<div class="runs-grid-head"><span>Job</span><span>Target</span><span>Status</span>'
-        '<span>Score</span><span>Cases</span><span>Cost</span><span></span></div>'
+        '<div class="runs-grid-head" aria-hidden="true"><span>Job</span><span>Target</span>'
+        f'<span>{status_head}</span><span>{score_head}</span><span>Cases</span><span>Cost</span><span></span></div>'
     )
-    parts: list[str] = [head]
-    for r in rows:
-        err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
-        parts.append(
-            f'<a class="runs-grid-row" href="/r/{esc(r.rid)}">'
-            f'<span class="rg-job"><span class="rg-name">{esc(r.name)}{err}</span>'
-            f'<span class="rg-sub">{esc(_ago(r.when))}</span></span>'
-            f'<span class="rg-targets">{"".join(starmap(_target_pill, r.targets))}</span>'
-            f'<span>{_run_status_pill(r.status)}</span>'
-            f'<span class="run-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
-            f'<span class="rg-num">{esc(str(r.cases))}</span>'
-            f'<span class="rg-num">{esc(_fmt_cost(r.cost))}</span>'
-            f'{_CHEVRON}'
-            f'</a>'
-        )
-    return f'<div class="runs-grid">{"".join(parts)}</div>'
+    row = _redteam_row if redteam else _sim_row
+    return f'<div class="runs-grid">{head}{"".join(map(row, rows))}</div>'
 
 
 def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
     """Prev/Next page nav + page-size picker for the run overview. Full-page GET
     links (no JS), shared by both surfaces. Renders just the size picker when
-    everything fits on one page."""
+    everything fits on one page, and nothing at all on the red team overview when
+    even the smallest page holds every run."""
     last = max(1, -(-total // per_page))  # ceil division
     page = min(page, last)
 
@@ -514,15 +626,24 @@ def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
         if active:
             cls += ' is-active'
         if disabled:
-            return f'<span class="{cls} is-disabled">{label}</span>'
-        return f'<a class="{cls}" href="/?surface={esc(surface)}&page={pg}&per_page={pp}">{label}</a>'
+            return f'<span class="{cls} is-disabled" aria-disabled="true">{label}</span>'
+        current = ' aria-current="true"' if active else ''
+        return f'<a class="{cls}" href="/?surface={esc(surface)}&page={pg}&per_page={pp}"{current}>{label}</a>'
 
     sizes = ''.join(link(str(sz), pg=1, pp=sz, active=(sz == per_page)) for sz in RUN_PAGE_SIZES)
-    left = f'<span class="runs-pager-sizes">Per page: {sizes}</span>'
+    # A picker that cannot change anything is noise on the red team overview.
+    fits_smallest = surface == 'redteam' and total <= min(RUN_PAGE_SIZES)
+    left = '' if fits_smallest else f'<span class="runs-pager-sizes">Per page: {sizes}</span>'
 
     if total <= per_page:
-        count = f'<span class="runs-pager-count">Total {total} runs</span>'
-        return f'<div class="runs-pager">{left}<span class="runs-pager-right">{count}</span></div>'
+        if surface == 'redteam' and fits_smallest:
+            # The caption above the strip already says "All N runs"; nothing is left to show.
+            return ''
+        noun = 'run' if total == 1 else 'runs'
+        count = '' if surface == 'redteam' else f'<span class="runs-pager-count">Total {total} {noun}</span>'
+        return (
+            f'<nav class="runs-pager" aria-label="Pagination">{left}<span class="runs-pager-right">{count}</span></nav>'
+        )
 
     lo = (page - 1) * per_page + 1
     hi = min(page * per_page, total)
@@ -531,8 +652,8 @@ def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
         'Next &rsaquo;', pg=page + 1, pp=per_page, disabled=page >= last
     )
     return (
-        f'<div class="runs-pager">{left}'
-        f'<span class="runs-pager-right">{count}<span class="runs-pager-nav">{nav}</span></span></div>'
+        f'<nav class="runs-pager" aria-label="Pagination">{left}'
+        f'<span class="runs-pager-right">{count}<span class="runs-pager-nav">{nav}</span></span></nav>'
     )
 
 
@@ -584,15 +705,16 @@ def _sim_compare_bar(choices: list[tuple[str, str]]) -> str:
     )
 
 
-def sim_run_compare_control(rid: str, choices: list[tuple[str, str]]) -> str:
+def run_compare_control(rid: str, choices: list[tuple[str, str]], action: str) -> str:
     """Render the on-report compare control: this run is A, pick B from the
-    other sim runs. Empty when there is no other run to compare against."""
+    other runs of its surface. ``action`` is that surface's compare URL. Empty
+    when there is no other run to compare against."""
     others = [(r, name) for r, name in choices if r != rid]
     if not others:
         return ''
     opts = ''.join(f'<option value="{esc(r)}">{esc(name)}</option>' for r, name in others)
     return (
-        '<form class="cmp-bar" action="/compare/sim" method="get">'
+        f'<form class="cmp-bar" action="{esc(action)}" method="get">'
         f'<input type="hidden" name="a" value="{esc(rid)}">'
         '<span class="cmp-bar-label">Compare with</span>'
         f'<select name="b" aria-label="Run B">{opts}</select>'
@@ -608,7 +730,7 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
     ``compare_choices`` is the (rid, name) list of all sim runs used to populate
     the side-by-side compare picker; ``None`` hides the picker.
     """
-    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+    from evaluatorq.common.reports.html_helpers import kpi_cards
 
     if data.simulations_run == 0:
         return runs_screen_body([], 'sim')
@@ -669,39 +791,58 @@ def search_results(cards: list[ReportCard], query: str) -> str:
 def redteam_overview_body(data: RedTeamOverview) -> str:
     """Render the Red Team surface as the design's rich overview: 4 KPI cards
     plus an item-level 'Recent attacks' table (RES-1021)."""
-    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+    from evaluatorq.common.reports.html_helpers import kpi_cards
 
-    if data.attacks_run == 0:
+    if data.total_runs == 0:
         return runs_screen_body([], 'redteam')
 
     asr = '—' if data.break_rate is None else pct(data.break_rate)
-    asr_status = (
-        'neutral'
-        if data.break_rate is None
-        else ('fail' if data.break_rate >= 0.25 else 'warn' if data.break_rate > 0 else 'pass')
+    spend_card = {'label': 'Total spend', 'value': _fmt_spend(data.total_cost)}
+    if data.total_cost is not None and (sub := _spend_coverage(data)):
+        spend_card['sub'] = sub
+    band = kpi_cards(
+        [
+            {
+                'label': 'ASR',
+                'value': asr,
+                'status': _ASR_KPI_STATUS.get(_asr_cls(data.break_rate), 'neutral'),
+                **({'sub': _ASR_SUB[_asr_cls(data.break_rate)]} if data.break_rate is not None else {}),
+            },
+            {
+                'label': 'Critical findings',
+                'value': f'{data.critical_findings:,}',
+                'status': 'fail' if data.critical_findings else 'pass',
+            },
+            {'label': 'Attacks run', 'value': f'{data.attacks_run:,}'},
+            spend_card,
+        ],
+        modifier='strip',
     )
-    spend_value = _fmt_cost(data.total_cost)
-    if data.total_input_cost is not None or data.total_output_cost is not None:
-        spend_value += f' (in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)})'
-    if data.total_cost is not None:
-        spend_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls)
-    band = kpi_cards([
-        {'label': 'Attacks run', 'value': str(data.attacks_run)},
-        {'label': 'ASR', 'value': asr, 'status': asr_status},
-        {
-            'label': 'Critical findings',
-            'value': str(data.critical_findings),
-            'status': 'fail' if data.critical_findings else 'pass',
-        },
-        {'label': 'Total spend', 'value': spend_value},
-    ])
 
+    pager = _run_pager('redteam', data.page, data.total_runs, data.per_page)
     panel = _panel(
         'Recent runs',
-        'Latest red team runs',
-        _run_grid(data.recent) + _run_pager('redteam', data.page, data.total_runs, data.per_page),
+        '',
+        _run_grid(data.recent, redteam=True) + pager,
+        cls='' if pager else 'panel--flush',
+        title_tag='h2',
     )
-    return f'<section class="dash-wrap">{band}{panel}</section>'
+    scope = f'All {data.total_runs} runs' if data.total_runs != 1 else '1 run'
+    return f'<section class="dash-wrap rt-overview"><p class="rt-scope">{scope}</p>{band}{panel}</section>'
+
+
+def _fmt_spend(cost: float | None) -> str:
+    """KPI spend: cents once it is dollars, the shared 4dp precision below that."""
+    return f'${cost:,.2f}' if cost is not None and cost >= 1 else _fmt_cost(cost)
+
+
+def _spend_coverage(data: RedTeamOverview) -> str:
+    """Sub-line for a spend total that only some calls priced, e.g. '3 of 10 calls priced'."""
+    text = _coverage(data.priced_calls, data.cost_calls, data.unknown_calls).strip().removeprefix('(').removesuffix(')')
+    head, sep, tail = text.partition(', ')
+    if head.endswith(' calls'):
+        head += ' priced'
+    return head + sep + tail
 
 
 def runs_screen_body(rows: list[RunRow], surface: str) -> str:
@@ -746,53 +887,257 @@ def report_actions(rid: str) -> str:
     return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
 
 
-def _scope_settings_rows(scope: OrqScope, *, workspace: str, chosen_project: str, errors: Mapping[str, str]) -> str:
-    """Render the workspace and project choices for one credential."""
-    workspace_error = (
-        f'<span class="settings-error">{esc(errors["orq_workspace"])}</span>' if 'orq_workspace' in errors else ''
+# Settings field -> (label, what the role runs). The role is the field name without ``_model``.
+MODEL_FIELDS = {
+    'fast_model': ('Fast model', 'Trace search, simulated users'),
+    'smart_model': ('Smart model', 'Attack generation, judges, Insights summaries, apply-recommendations'),
+    'classifier_model': ('Classifier model', 'Ask AI, Insights labels, signals'),
+    'embedding_model': ('Embedding model', 'Insights maps'),
+}
+
+
+def model_field_role(name: str) -> Role:
+    """The model role a settings field configures."""
+    return cast('Role', name.removesuffix('_model'))
+
+
+def model_field_source(name: str) -> tuple[str, str]:
+    """The model and note for a field whose value a flag or env var sets, else ``('', '')``."""
+    role = model_field_role(name)
+    source = role_source(role)
+    if source == 'flag':
+        return role_model(role), f'Set by --{role}-model'
+    if source == 'env':
+        return role_model(role), f'Set by {ROLE_ENV[role]}'
+    return '', ''
+
+
+def model_control(
+    name: str, value: str, groups: Mapping[str, Sequence[str]], *, label: str, note: str = '', default: str = ''
+) -> str:
+    """A two-level model menu (provider, then model) with a Custom free-text entry.
+
+    Reuses the Trace search filter menu's markup, so its hover, search and styling apply.
+    Without a catalogue the field stays a plain text box. ``note`` (why, or where the value came from)
+    follows either form. With ``default`` (a role's built-in model) an empty value means that default,
+    which the field names, and the menu offers "Use default"; without it a value is required.
+    """
+    default = f'{default} (default)' if default else ''
+    note_html = f'<span class="settings-auth-hint">{esc(note)}</span>' if note else ''
+    if not groups:
+        hint = f'placeholder="{esc(default)}"' if default else 'required'
+        box = f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" {hint}>'
+        return f'{box}{note_html}'
+    known = not value or any(value in ids for ids in groups.values())
+    use_default = (
+        f'<button type="button" class="model-option{" is-selected" if not value else ""}" data-model=""'
+        f' aria-pressed="{"false" if value else "true"}">Use default</button>'
     )
-    if scope.workspace_key:
-        workspace_control = (
-            f'<select id="orq_workspace" name="orq_workspace">'
-            f'<option value="{esc(scope.workspace_key)}" selected>{esc(scope.workspace_key)}</option></select>'
+    items: list[str] = [use_default] if default else []
+    subs: list[str] = []
+    for index, (provider, ids) in enumerate((*groups.items(), ('Custom…', ()))):
+        key = f'{name}-{index}'
+        chosen = value in ids if ids else bool(value) and not known
+        items.append(
+            f'<button type="button" class="facet-item" data-facet="{esc(key)}" aria-haspopup="true" aria-expanded="false">'
+            f'<span>{esc(provider)}</span>{"<span class=count>✓</span>" if chosen else ""}'
+            '<span class="chev" aria-hidden="true">&rsaquo;</span></button>'
         )
-    else:
-        workspace_control = (
-            f'<input id="orq_workspace" name="orq_workspace" type="text" value="{esc(workspace)}" '
-            'placeholder="Workspace slug from the Orq URL">'
+        if ids:
+            options = ''.join(
+                f'<button type="button" class="model-option{" is-selected" if model == value else ""}" data-model="{esc(model)}"'
+                f' aria-pressed="{"true" if model == value else "false"}">{esc(model.removeprefix(provider + "/"))}</button>'
+                for model in ids
+            )
+            body = (
+                f'<input class="facet-search" type="search" placeholder="Search models" aria-label="Search {esc(provider)} models" autocomplete="off">'
+                f'<div class="facet-values">{options}</div>'
+                '<p class="facet-no-results" hidden>No matching models.</p>'
+            )
+        else:
+            body = (
+                f'<input class="model-custom" type="text" value="{"" if known else esc(value)}" '
+                f'placeholder="provider/model" aria-label="{esc(label)} (custom)">'
+            )
+        subs.append(
+            f'<div class="facet-sub" data-facet-sub="{esc(key)}" hidden><div class="hd">{esc(provider)}</div>{body}</div>'
         )
-    rows = [
-        (
-            '<div class="config-row settings-field"><label class="config-key" for="orq_workspace">Orq workspace</label>'
-            f'<span class="config-val">{workspace_control}{workspace_error}</span></div>'
+    return (
+        f'<span class="model-pick"><input type="hidden" name="{esc(name)}" value="{esc(value)}">'
+        f'<button type="button" id="{esc(name)}" class="model-pick-btn" data-default="{esc(default)}" aria-haspopup="true" aria-expanded="false">{esc(value or default or "Choose a model")}</button>'
+        f'<div class="finder-facets"><div class="facet-list">{"".join(items)}</div>{"".join(subs)}</div></span>{note_html}'
+    )
+
+
+def settings_model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *, note: str = '') -> str:
+    """``model_control`` for a Settings role field: its label, and its role's built-in as the default."""
+    return model_control(
+        name, value, groups, label=MODEL_FIELDS[name][0], note=note, default=BUILTIN[model_field_role(name)]
+    )
+
+
+_OAUTH_BADGES = {
+    'valid': ('passed', 'Valid'),
+    'signed-out': ('failed', 'Signed out'),
+    'unknown': ('cancelled', "Couldn't check"),
+    'unreadable': ('failed', 'Unreadable'),
+}
+
+
+def _pick_row(title: str, note: str = '', badge: tuple[str, str] | None = None) -> str:
+    """One rich picker row: a bold title, a muted note, and an optional ``status-badge`` (class, text)."""
+    note_html = f'<span class="config-note">{esc(note)}</span>' if note else ''
+    badge_html = (
+        f'<span class="status-badge {badge[0]}"><span class="dot"></span>{esc(badge[1])}</span>' if badge else ''
+    )
+    return f'<span class="rich-pick-id"><strong>{esc(title)}</strong>{note_html}</span>{badge_html}'
+
+
+def _rich_pick(
+    name: str,
+    value: str,
+    options: Sequence[tuple[str, str]],
+    *,
+    disabled: Sequence[str] = (),
+    current: str = '',
+    describedby: str = '',
+    compact: bool = False,
+    filterable: bool = False,
+) -> str:
+    """A menu of rich rows that submits *value* through a hidden input.
+
+    Reuses the model picker's markup and script; ``data-rich`` makes the trigger
+    copy the chosen row, so the closed control keeps its note and badge.
+    *disabled* rows are listed but cannot be chosen. The trigger shows the row
+    matching *value*, else *current*. *compact* puts each row's note on the
+    title's line, for long lists.
+    """
+    selected = next((row for option, row in options if value and option.rstrip('/') == value.rstrip('/')), current)
+    buttons = ''.join(
+        f'<button type="button" class="model-option{" is-selected" if row == selected else ""}" data-model="{esc(option)}"'
+        f' data-rich aria-pressed="{"true" if row == selected else "false"}">{row}</button>'
+        for option, row in options
+    )
+    rows_off = ''.join(f'<div class="rich-pick-disabled" aria-disabled="true">{row}</div>' for row in disabled)
+    described = f' aria-describedby="{esc(describedby)}"' if describedby else ''
+    search_html = (
+        f'<input class="facet-search" type="search" placeholder="Search" aria-label="Search {esc(name.replace("_", " "))} options" autocomplete="off">'
+        '<div class="facet-values">'
+        if filterable
+        else ''
+    )
+    empty_html = '</div><p class="facet-no-results" hidden>No matches.</p>' if filterable else ''
+    return (
+        f'<span class="model-pick rich-pick{" rich-pick--compact" if compact else ""}{" rich-pick--filter" if filterable else ""}">'
+        f'<input type="hidden" name="{esc(name)}" value="{esc(value)}">'
+        f'<button type="button" id="{esc(name)}" class="model-pick-btn" aria-haspopup="true" aria-expanded="false"{described}>'
+        f'{selected}</button>'
+        f'<div class="finder-facets"><div class="facet-list">'
+        f'{search_html}{buttons}{rows_off}{empty_html}'
+        f'</div></div></span>'
+    )
+
+
+def oauth_session_field(value: str, sessions: Sequence[OAuthSession]) -> str:
+    """The CLI OAuth server field: each saved CLI login with its checked token status.
+
+    Without any saved login it is a plain server URL box.
+    """
+    if not sessions:
+        return (
+            '<label class="settings-auth-detail-label" for="orq_oauth_server">Orq server</label>'
+            f'<input id="orq_oauth_server" name="orq_oauth_server" type="url" value="{esc(value)}">'
         )
+    options: list[tuple[str, str]] = []
+    if all(session.server.rstrip('/') != value.rstrip('/') for session in sessions):
+        options.append((value, _pick_row(value, 'No saved login on this server', ('failed', 'No login'))))
+    # An unreadable login has no server to submit, so it is listed but not selectable.
+    disabled = [
+        _pick_row(session.host, f'Run orq auth login for {session.host}', _OAUTH_BADGES['unreadable'])
+        for session in sessions
+        if session.status == 'unreadable'
     ]
-    if scope.workspace_id and not scope.workspace_key:
-        rows.append(
-            '<p class="settings-error" role="status">The CLI could not verify this workspace slug. '
-            "Enter it from this profile's Orq URL; it controls trace links only.</p>"
-        )
-    project_options = ['<option value="">All accessible projects</option>']
-    if chosen_project and all(project.id != chosen_project for project in scope.projects):
-        project_options.append(
-            f'<option value="{esc(chosen_project)}" selected disabled>Saved project unavailable</option>'
-        )
-    for project in scope.projects:
-        selected = ' selected' if project.id == chosen_project else ''
-        project_options.append(
-            f'<option value="{esc(project.id)}"{selected}>{esc(project.name)} ({esc(project.id[-8:])})</option>'
-        )
-    project_error = (
-        f'<span class="settings-error">{esc(errors["orq_project_id"])}</span>' if 'orq_project_id' in errors else ''
+    for session in sessions:
+        if session.status != 'unreadable':
+            account = ' · '.join(part for part in (session.user, session.workspace) if part)
+            options.append((session.server, _pick_row(session.host, account, _OAUTH_BADGES[session.status])))
+    return '<label class="settings-auth-detail-label" for="orq_oauth_server">CLI session</label>' + _rich_pick(
+        'orq_oauth_server', value, options, disabled=disabled
     )
-    rows.append(
-        '<div class="config-row settings-field"><label class="config-key" for="orq_project_id">Orq project</label>'
-        f'<span class="config-val"><select id="orq_project_id" name="orq_project_id">'
-        f'{"".join(project_options)}</select>{project_error}</span></div>'
+
+
+def oauth_scope_field(scope: OAuthScopes, workspace: str, project_id: str) -> str:
+    """Render CLI OAuth workspace and project choices from the selected server."""
+    if scope.error and not scope.workspaces:
+        return (
+            f'<p class="settings-error">{esc(scope.error)}</p>'
+            f'<input type="hidden" name="orq_workspace" value="{esc(workspace)}">'
+            f'<input type="hidden" name="orq_project_id" value="{esc(project_id)}">'
+        )
+    if not scope.workspaces:
+        return '<p class="settings-auth-hint">No workspaces available for this CLI session.</p>'
+    workspace_ids = {item.key: item.id for item in scope.workspaces}
+    if workspace not in workspace_ids:
+        workspace = ''
+    selected_id = workspace_ids.get(workspace)
+    workspaces = [(item.key, _pick_row(item.key)) for item in scope.workspaces]
+    projects = [('', _pick_row('All projects'))]
+    projects.extend(
+        (item.id, _pick_row(item.name, item.id)) for item in scope.projects if item.workspace_id == selected_id
     )
-    if scope.error:
-        rows.append(f'<p class="settings-error" role="status">{esc(scope.error)}</p>')
-    return ''.join(rows)
+    if not scope.error and not any(option == project_id for option, _ in projects):
+        project_id = ''
+    project_current = _pick_row(project_id) if scope.error and project_id else projects[0][1]
+    error_html = f'<span class="settings-error" role="alert">{esc(scope.error)}</span>' if scope.error else ''
+    placeholder = '<span class="rich-pick-placeholder">Choose a workspace</span>'
+    return (
+        '<label class="settings-auth-detail-label" for="orq_workspace">Workspace</label>'
+        f'{_rich_pick("orq_workspace", workspace, workspaces, current=placeholder, filterable=True)}'
+        '<label class="settings-auth-detail-label" for="orq_project_id">Project</label>'
+        f'{_rich_pick("orq_project_id", project_id, projects, current=project_current, filterable=True)}{error_html}'
+    )
+
+
+def profile_field(chosen: str, profiles: Sequence[Any], *, describedby: str = '') -> str:
+    """The CLI API-key profile field: each local CLI profile with its server.
+
+    Profiles whose key the CLI masks, and a saved profile the CLI no longer
+    has, are listed but cannot be chosen. The hidden input keeps the saved name,
+    so saving without choosing again reports it as unavailable.
+    """
+    options: list[tuple[str, str]] = []
+    disabled: list[str] = []
+    current = '<span class="rich-pick-placeholder">Choose a profile</span>'
+    if chosen and all(profile.name != chosen for profile in profiles):
+        current = _pick_row(chosen, 'Not in the Orq CLI any more', ('failed', 'Unavailable'))
+        disabled.append(current)
+    for profile in profiles:
+        server = profile.server or 'Default Orq server'
+        if '*' in profile.api_key:
+            row = _pick_row(profile.name, server, ('failed', 'Key hidden'))
+            disabled.append(row)
+            if profile.name == chosen:
+                current = row
+        else:
+            options.append((profile.name, _pick_row(profile.name, server)))
+    return _rich_pick(
+        'orq_profile', chosen, options, disabled=disabled, current=current, describedby=describedby, compact=True
+    )
+
+
+# The auth controls whose change re-fetches each model list; the model inputs themselves are left out so a pick never loops.
+MODEL_FIELD_TRIGGER = (
+    "load, change[['orq_auth_method','orq_profile','orq_oauth_server'].includes(target.name)] "
+    'from:closest form delay:10ms'
+)
+
+
+def _model_field_include(name: str) -> str:
+    """Selectors for the inputs a model-list fetch needs; never the whole form, which holds the CSRF token."""
+    return (
+        f'#{name}-field input[name={name}], input[name=orq_auth_method]:checked, '
+        'input[name=orq_profile], input[name=orq_oauth_server]'
+    )
 
 
 def settings_body(
@@ -803,13 +1148,8 @@ def settings_body(
     saved: bool = False,
     preview: bool = False,
     profiles: Sequence[Any] = (),
-    scope: OrqScope | None = None,
 ) -> str:
-    """Render editable finder settings above the read-only runtime configuration.
-
-    ``profiles`` are the orq CLI's credential profiles; when there are any, an
-    Advanced block offers them as the credentials the dashboard uses.
-    """
+    """Render model and authentication settings above the runtime configuration."""
     if settings is None:
         from evaluatorq.trace_finder.settings import effective_settings
 
@@ -820,75 +1160,211 @@ def settings_body(
         value = settings.get(name, '') if isinstance(settings, Mapping) else getattr(settings, name, '')
         return '' if value is None else str(value)
 
-    fields = (
-        ('compiler_model', 'Compiler model', 'text'),
-        ('classifier_model', 'Classifier model', 'text'),
-        ('apply_model', 'Apply-recommendations model', 'text'),
-    )
     field_rows: list[str] = []
-    for name, label, input_type in fields:
+    for name, (label, hint) in MODEL_FIELDS.items():
         error = errors.get(name)
         error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
+        pinned, note = model_field_source(name)
+        control = (
+            f'<span class="settings-model-field" id="{esc(name)}-field" hx-get="/settings/models?field={esc(name)}" '
+            f'hx-trigger="{esc(MODEL_FIELD_TRIGGER)}" hx-include="{esc(_model_field_include(name))}" '
+            f'hx-swap="innerHTML">{settings_model_control(name, pinned or setting_value(name), {}, note=note)}</span>'
+        )
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
-            f'<span class="config-val"><input id="{esc(name)}" name="{esc(name)}" type="{input_type}" '
-            f'value="{esc(setting_value(name))}" required>{error_html}</span></div>'
+            f'<span class="config-val">{control}{error_html}<span class="settings-auth-hint">{esc(hint)}</span></span></div>'
         )
-    saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
-    if preview:
-        saved_html += (
-            '<p class="settings-saved" role="status">Profile preview. Choose a project, then Save to apply.</p>'
+    trace_input_error = errors.get('trace_input_chars')
+    trace_input_error_html = (
+        f'<span class="settings-error" role="alert">{esc(trace_input_error)}</span>' if trace_input_error else ''
+    )
+    field_rows.append(
+        '<div class="config-row settings-field"><label class="config-key" for="trace_input_chars">'
+        'Model input cap</label><span class="config-val">'
+        f'<input id="trace_input_chars" name="trace_input_chars" type="number" min="{MIN_TRACE_INPUT_CHARS}" '
+        f'max="{MAX_TRACE_INPUT_CHARS}" step="1" '
+        f'value="{esc(setting_value("trace_input_chars") or str(DEFAULT_TRACE_INPUT_CHARS))}">'
+        f'{trace_input_error_html}<span class="settings-auth-hint">Maximum characters sent to model requests, '
+        'after scrubbing and before model-specific compression. Stored trace data is unchanged.</span>'
+        '</span></div>'
+    )
+    # The effective per-task pins (flag, legacy env, settings file), not just the file's, so a shadowed
+    # file value never shows and an active flag or env var does.
+    pinned_tasks = [(task, found) for task in TASKS if (found := task_override(task))]
+    if pinned_tasks:
+        lines = ''.join(
+            f'<span class="config-val-item">{esc(task)} → {esc(model)} ({esc(label)})</span>'
+            for task, (model, label) in pinned_tasks
         )
+        field_rows.append(
+            '<div class="config-row"><span class="config-key">Task overrides</span>'
+            f'<span class="config-val">{lines}<span class="settings-auth-hint">Set with --model-override or in the settings file.</span></span></div>'
+        )
+    mode = setting_value('ask_ai_mode') or 'immediate'
+    mode_options = ''.join(
+        f'<option value="{value}"{" selected" if value == mode else ""}>{label}</option>'
+        for value, label in (('immediate', 'Just proceed'), ('review', 'Review first'))
+    )
+    field_rows.append(
+        '<div class="config-row settings-field"><label class="config-key" for="ask_ai_mode">Ask AI on traces</label>'
+        f'<span class="config-val"><span class="settings-select"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></span></div>'
+    )
+    filter_mode = setting_value('filter_selection') or 'llm+jev'
+    filter_options = ''.join(
+        f'<option value="{value}"{" selected" if value == filter_mode else ""}>{label}</option>'
+        for value, label in (('llm+jev', 'LLM + Jev'), ('llm', 'LLM only'))
+    )
+    field_rows.append(
+        '<div class="config-row settings-field"><label class="config-key" for="filter_selection">Trace filters</label>'
+        f'<span class="config-val"><span class="settings-select"><select id="filter_selection" name="filter_selection">{filter_options}</select></span>'
+        '<span class="settings-auth-hint">Choose how natural-language trace metadata filters are selected.</span></span></div>'
+    )
+    toast_text = 'Profile preview. Change a setting to save it.' if preview else 'Settings saved' if saved else ''
+    toast_html = (
+        f'<div id="settings-toast" class="settings-toast{" show" if toast_text else ""}" role="status" aria-live="polite">'
+        f'{toast_text}</div>'
+    )
     form_error = f'<p class="settings-error" role="alert">{esc(errors["form"])}</p>' if 'form' in errors else ''
-    advanced = ''
-    scope_rows: list[str] = []
+    auth_rows: list[str] = []
     chosen = setting_value('orq_profile')
-    if profiles or chosen:
-        options = ['<option value="">Environment (ORQ_API_KEY)</option>']
-        if chosen and all(profile.name != chosen for profile in profiles):
-            options.append(f'<option value="{esc(chosen)}" selected disabled>{esc(chosen)} (unavailable)</option>')
-        for profile in profiles:
-            label = profile.name + (f' ({profile.server})' if profile.server else '')
-            selected = ' selected' if profile.name == chosen else ''
-            if '*' in profile.api_key:
-                label += ' (CLI key masked)'
-                options.append(f'<option value="{esc(profile.name)}"{selected} disabled>{esc(label)}</option>')
-            else:
-                options.append(f'<option value="{esc(profile.name)}"{selected}>{esc(label)}</option>')
-        profile_error = errors.get('orq_profile')
-        profile_error_html = f'<span class="settings-error">{esc(profile_error)}</span>' if profile_error else ''
-        scope_rows.append(
-            '<div class="config-row settings-field">'
-            '<label class="config-key" for="orq_profile">Orq profile</label>'
-            f'<span class="config-val"><select id="orq_profile" name="orq_profile" '
-            f'onchange="location.assign(\'/settings?profile=\'+encodeURIComponent(this.value))">{"".join(options)}</select>'
-            f'{profile_error_html}</span></div>'
+    method = setting_value('orq_auth_method') or ('cli_profile' if chosen else 'environment')
+    profile_error = errors.get('orq_profile')
+    profile_error_html = (
+        f'<span id="orq_profile_error" class="settings-error">{esc(profile_error)}</span>' if profile_error else ''
+    )
+    key_error = errors.get('orq_api_key_entry')
+    key_error_html = f'<span class="settings-error" role="alert">{esc(key_error)}</span>' if key_error else ''
+    saved_key_hint = (
+        '<span class="settings-auth-hint">Leave blank to keep the saved API key.</span>'
+        if setting_value('orq_api_key_ciphertext')
+        else ''
+    )
+    oauth_server = setting_value('orq_oauth_server') or 'https://my.orq.ai'
+    # Checking an expired login calls Orq, so the field loads after the page and never delays it.
+    # The hidden input keeps the saved server in the form if Save is pressed before it arrives.
+    oauth_control = (
+        f'<span class="settings-oauth-field" hx-get="/settings/oauth-sessions?{esc(urlencode({"value": oauth_server}))}" '
+        'hx-trigger="load" hx-swap="outerHTML">'
+        '<span class="settings-auth-detail-label">CLI session</span>'
+        f'<input type="hidden" name="orq_oauth_server" value="{esc(oauth_server)}">'
+        '<span class="settings-auth-hint">Checking CLI sessions…</span></span>'
+    )
+    oauth_scope = (
+        '<span class="settings-auth-scope" id="oauth-scope" hx-get="/settings/oauth-scope" '
+        "hx-trigger=\"load, change[['orq_oauth_server','orq_workspace'].includes(target.name)] "
+        'from:closest form delay:10ms" '
+        'hx-include="input[name=orq_oauth_server], #oauth-scope [name=orq_workspace], '
+        '#oauth-scope [name=orq_project_id]" hx-swap="innerHTML">'
+        f'<input type="hidden" name="orq_workspace" value="{esc(setting_value("orq_workspace"))}">'
+        f'<input type="hidden" name="orq_project_id" value="{esc(setting_value("orq_project_id"))}">'
+        '<span class="settings-auth-hint">Loading workspaces and projects…</span></span>'
+    )
+    scope_error = errors.get('orq_workspace') or errors.get('orq_project_id')
+    scope_error_html = f'<span class="settings-error" role="alert">{esc(scope_error)}</span>' if scope_error else ''
+    cards = (
+        ('environment', 'Environment', 'Use ORQ_API_KEY from the dashboard process.', ''),
+        (
+            'cli_profile',
+            'CLI API-key profile',
+            'Reuse an API-key profile saved by the Orq CLI.',
+            (
+                '<label class="settings-auth-detail-label" for="orq_profile">CLI profile</label>'
+                f'{profile_field(chosen, profiles, describedby="orq_profile_error" if profile_error else "")}'
+                f'{profile_error_html}'
+            ),
+        ),
+        (
+            'cli_oauth',
+            'CLI OAuth',
+            'Use the current Orq CLI sign-in and let the CLI refresh its session.',
+            (
+                f'{oauth_control}'
+                f'{oauth_scope}{scope_error_html}'
+                '<span class="settings-auth-hint">Sign a session back in with '
+                '<code>orq auth login --server &lt;url&gt;</code>.</span>'
+            ),
+        ),
+        (
+            'stored_api_key',
+            'Enter API key',
+            "Keep an encrypted copy in this dashboard's config file.",
+            (
+                '<label class="settings-auth-detail-label" for="orq_api_key_entry">API key</label>'
+                '<input id="orq_api_key_entry" name="orq_api_key_entry" type="password" autocomplete="new-password" '
+                'placeholder="Paste API key">'
+                f'{saved_key_hint}{key_error_html}'
+                '<label class="settings-auth-detail-label" for="orq_stored_key_host">Orq server</label>'
+                f'<input id="orq_stored_key_host" name="orq_stored_key_host" type="url" '
+                f'value="{esc(setting_value("orq_profile_host") or "https://my.orq.ai")}">'
+            ),
+        ),
+    )
+    auth_rows.extend((
+        '<p class="settings-auth-step">1 · Choose a method</p>',
+        '<div class="settings-auth-choices" role="radiogroup" aria-label="Authentication method">',
+    ))
+    for value, title, description, _detail in cards:
+        checked = ' checked' if method == value else ''
+        auth_rows.append(
+            '<div class="settings-auth-choice">'
+            f'<label class="settings-auth-card"><input type="radio" name="orq_auth_method" value="{value}"{checked}>'
+            f'<span class="settings-auth-card-copy"><strong>{esc(title)}</strong><small>{esc(description)}</small></span>'
+            '<span class="settings-auth-card-check" aria-hidden="true"></span></label></div>'
         )
-    if scope is not None:
-        workspace = setting_value('orq_workspace')
-        if not chosen:
-            workspace = (
-                workspace
-                or os.environ.get('ORQ_WORKSPACE', '').strip()
-                or os.environ.get('ORQ_WORKSPACE_SLUG', '').strip()
-            )
-        chosen_project = setting_value('orq_project_id') or (scope.projects[0].id if len(scope.projects) == 1 else '')
-        scope_rows.append(
-            _scope_settings_rows(scope, workspace=workspace, chosen_project=chosen_project, errors=errors)
+    auth_rows.append('</div>')
+    selected_profile = next((profile for profile in profiles if profile.name == chosen), None)
+    if chosen and selected_profile is None:
+        profile_note = f'The saved Orq CLI profile “{chosen}” is unavailable. Choose another credential source.'
+    elif chosen and selected_profile is not None and '*' in selected_profile.api_key:
+        profile_note = f'The saved Orq CLI profile “{chosen}” does not expose its API key. Choose another source.'
+    elif chosen:
+        profile_note = (
+            'Uses the API key and host from this local Orq CLI profile. Settings saves its name, not its key.'
         )
-    if scope_rows:
-        advanced = (
-            f'<details class="settings-advanced"{" open" if chosen or any(key.startswith("orq_") for key in errors) else ""}>'
-            f'<summary>Advanced</summary><div class="config-list">{"".join(scope_rows)}</div></details>'
-        )
+    else:
+        profile_note = 'Choose a local Orq CLI API-key profile.'
+    auth_rows.extend((
+        '<div class="settings-auth-config"><p class="settings-auth-step">2 · Configure the method</p>',
+        '<div class="settings-auth-details">',
+    ))
+    for value, _title, _description, detail in cards:
+        if value == 'environment':
+            detail = '<p class="settings-auth-note">Uses ORQ_API_KEY and ORQ_BASE_URL from this dashboard process.</p>'
+        elif value == 'cli_profile':
+            detail += f'<p class="settings-auth-note">{esc(profile_note)}</p>'
+        auth_rows.append(f'<div class="settings-auth-detail" data-auth-method="{value}">{detail}</div>')
+    auth_rows.extend(('</div>', '</div>'))
+    models_panel = _panel(
+        'Models',
+        'Window, limit and parallelism are set per run on the Trace search page',
+        f'<div class="config-list">{"".join(field_rows)}</div>'
+        '<p id="models-warning" class="settings-error settings-model-warning" role="alert"></p>',
+    )
+    auth_panel = _panel(
+        'Authentication',
+        'Choose the credential used for traces and Insights runs',
+        f'<div class="config-list">{"".join(auth_rows)}</div>',
+        cls='settings-auth-panel',
+    )
+    inspector_checked = ' checked' if setting_value('compression_inspector_enabled').lower() == 'true' else ''
+    advanced_panel = (
+        '<details class="settings-advanced"><summary>Advanced</summary>'
+        '<div class="settings-auth-choices settings-advanced-choices"><div class="settings-auth-choice">'
+        '<label class="settings-auth-card settings-switch-card"><input id="compression_inspector_enabled" '
+        f'name="compression_inspector_enabled" type="checkbox" role="switch" value="true"{inspector_checked}>'
+        '<span class="settings-auth-card-copy"><strong>Compression inspector</strong>'
+        '<small>Adds a sidebar page that shows a trace next to the compressed text a model would read. '
+        'Local previews may expose sensitive original content. Previews do not call models.</small></span>'
+        '<span class="settings-switch" aria-hidden="true"></span></label></div></div></details>'
+    )
+
     form = (
         '<form class="settings-form" method="post" action="/settings">'
-        f'{csrf_field()}{form_error}<div class="config-list">{"".join(field_rows)}</div>{advanced}'
-        '<button type="submit" class="rt-apply-btn">Save</button>'
+        f'{csrf_field()}<input type="hidden" name="settings_changed_fields" '
+        f'value="{esc(setting_value("settings_changed_fields"))}">'
+        f'{form_error}{models_panel}{auth_panel}{advanced_panel}'
         '</form>'
-    )
-    settings_panel = _panel(
-        'Models', 'Window, limit and parallelism are set per run on the Trace search page', f'{saved_html}{form}'
+        f'{toast_html}'
     )
 
     def val_html(v: str | list[str]) -> str:
@@ -902,7 +1378,70 @@ def settings_body(
         for k, v in config
     )
     config_panel = _panel('Configuration', 'What this dashboard is reading', f'<div class="config-list">{rows}</div>')
-    return f'<section class="dash-wrap">{settings_panel}{config_panel}</section>'
+    auth_fields_script = (
+        '<script>document.addEventListener("DOMContentLoaded",function(){'
+        'const form=document.querySelector(".settings-form");if(!form)return;'
+        'const changed=form.querySelector("[name=settings_changed_fields]");'
+        'const dirtyRevision=new Map();let revision=0;'
+        'function markChanged(event){const field=event.target;if(!field.name||field.name.startsWith("settings_")||field.name==="csrf")return;'
+        'const names=new Set(changed.value.split(",").filter(Boolean));const changedAt=++revision;'
+        'function add(name){names.add(name);dirtyRevision.set(name,changedAt);}add(field.name);'
+        'if(field.name==="orq_oauth_server"){add("orq_workspace");add("orq_project_id");}'
+        'if(field.name==="orq_workspace")add("orq_project_id");'
+        'changed.value=Array.from(names).join(",");}'
+        'form.addEventListener("input",markChanged);form.addEventListener("change",markChanged);'
+        'function syncAuthFields(){'
+        'const selected=form.querySelector("input[name=orq_auth_method]:checked");'
+        'if(!selected)return;'
+        'form.querySelectorAll(".settings-auth-detail[data-auth-method]").forEach(function(panel){'
+        'const inactive=panel.dataset.authMethod!==selected.value;'
+        'panel.querySelectorAll("input,select,textarea").forEach(function(field){field.disabled=inactive;});'
+        '});'
+        '}'
+        'const toast=document.getElementById("settings-toast");let hideTimer=null;'
+        'function showToast(text,isError){'
+        'toast.textContent=text;toast.classList.toggle("is-error",!!isError);toast.classList.add("show");'
+        'clearTimeout(hideTimer);hideTimer=setTimeout(function(){toast.classList.remove("show");},isError?6000:2200);'
+        '}'
+        'if(toast.textContent)showToast(toast.textContent,false);'
+        'let saving=false,again=false,timer=null,scopeChanged=false;'
+        'function save(){'
+        'if(saving){again=true;return;}'
+        'saving=true;'
+        'const submitted=new FormData(form);const sentNames=new Set((submitted.get("settings_changed_fields")||"").split(",").filter(Boolean));'
+        'const sentRevision=new Map();sentNames.forEach(function(name){sentRevision.set(name,dirtyRevision.get(name)||0);});'
+        'fetch("/settings",{method:"POST",body:submitted,headers:{"X-Autosave":"1"}})'
+        '.then(function(response){return response.json().then(function(data){return {ok:response.ok,data:data};});})'
+        '.then(function(result){'
+        'if(result.ok){'
+        'document.querySelector(".app-sidebar").outerHTML=result.data.sidebar;'
+        'const key=form.querySelector("[name=orq_api_key_entry]");'
+        'if(key&&sentNames.has("orq_api_key_entry")&&(dirtyRevision.get("orq_api_key_entry")||0)===sentRevision.get("orq_api_key_entry")&&key.value===submitted.get("orq_api_key_entry"))key.value="";'
+        'const names=new Set(changed.value.split(",").filter(Boolean));'
+        'sentNames.forEach(function(name){if((dirtyRevision.get(name)||0)===sentRevision.get(name))names.delete(name);});'
+        'changed.value=Array.from(names).join(",");'
+        'showToast("Settings saved",false);'
+        '}else{showToast(Object.values(result.data.errors||{}).join(" ")||"Could not save settings",true);}'
+        '})'
+        '.catch(function(){showToast("Could not save settings",true);})'
+        '.finally(function(){saving=false;if(again){again=false;save();}});'
+        '}'
+        'function scheduleSave(){clearTimeout(timer);timer=setTimeout(save,250);}'
+        'form.addEventListener("submit",function(event){event.preventDefault();scheduleSave();});'
+        'form.addEventListener("change",function(event){'
+        'const name=event.target.name;'
+        'if(name==="orq_auth_method")syncAuthFields();'
+        'if(name==="orq_oauth_server"||name==="orq_workspace"){scopeChanged=true;return;}'
+        'scheduleSave();'
+        '});'
+        'document.body.addEventListener("htmx:afterSettle",function(event){'
+        'if(scopeChanged&&event.target.id==="oauth-scope"){scopeChanged=false;scheduleSave();}'
+        '});'
+        'form.addEventListener("htmx:load",syncAuthFields);'
+        'syncAuthFields();'
+        '});</script>'
+    )
+    return f'<section class="dash-wrap">{form}{config_panel}</section>{auth_fields_script}'
 
 
 def report_not_found(rid: str) -> str:
@@ -989,16 +1528,26 @@ _FILTER_CHEVRON = (
 _GOAL_OUTCOME_DOT_CLASS: dict[str, str] = {'Achieved': 'chip-dot-green', 'Not achieved': 'chip-dot-red'}
 
 
-def _chip(name: str, value: str, *, checked: bool, dot_cls: str) -> str:
-    """One chip toggle: a <label>-wrapped visually-hidden checkbox."""
+def _filter_input_id(name: str, value: str) -> str:
+    """Stable per (name, value) input id so htmx restores focus to the same control after a swap."""
+    return f'fc-{name}-{hashlib.sha1(value.encode(), usedforsecurity=False).hexdigest()[:8]}'
+
+
+def _chip(name: str, value: str, *, checked: bool, dot_cls: str, label: str | None = None) -> str:
+    """One chip toggle: a <label>-wrapped visually-hidden checkbox.
+
+    *label* is the visible text; it defaults to *value* (the submitted value).
+    """
     checked_attr = ' checked' if checked else ''
     active_cls = ' is-active' if checked else ''
+    chip_id = _filter_input_id(name, value)
     return (
         f'<label class="filter-chip{active_cls}">'
-        f'<input type="checkbox" class="filter-chip-input" name="{esc(name)}" value="{esc(value)}"{checked_attr}>'
-        f'<span class="filter-chip-dot {dot_cls}"></span>'
-        f'<span class="filter-chip-check {dot_cls}">✓</span>'
-        f'<span class="filter-chip-label">{esc(value)}</span>'
+        f'<input type="checkbox" id="{esc(chip_id)}" class="filter-chip-input" name="{esc(name)}"'
+        f' value="{esc(value)}"{checked_attr}>'
+        f'<span class="filter-chip-dot {dot_cls}" aria-hidden="true"></span>'
+        f'<span class="filter-chip-check {dot_cls}" aria-hidden="true">✓</span>'
+        f'<span class="filter-chip-label">{esc(value if label is None else label)}</span>'
         f'</label>'
     )
 
@@ -1021,7 +1570,7 @@ def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
 
     rows = ''.join(
         f'<label class="filter-dd-row">'
-        f'<input type="checkbox" name="{esc(dim)}" value="{esc(opt)}"'
+        f'<input type="checkbox" id="{esc(_filter_input_id(dim, opt))}" name="{esc(dim)}" value="{esc(opt)}"'
         f'{" checked" if opt in selected_set else ""}>'
         f'<span>{esc(opt)}</span>'
         f'</label>'
@@ -1396,6 +1945,68 @@ def _render_redteam_filter_rail(
     )
 
 
+def _render_pairwise_filter_rail(
+    rid: str,
+    opts: dict[str, list[str]],
+    selections: dict[str, list[str]],
+    *,
+    shown: int | None,
+    total: int | None,
+) -> str:
+    """Render the pairwise filter rail: winner chips, panel chips, judge dropdown, counter.
+
+    ``opts['winner']`` is ``[label_a, label_b, 'tie', 'inconclusive']`` in that
+    order, so the dot colour is picked by position (the side labels are free
+    text and may collide with the outcome words). Like the sim rail's
+    "Terminated by" chips, no selection renders every winner chip checked.
+    """
+    winner_dots = ('chip-dot-pw-a', 'chip-dot-pw-b', 'chip-dot-pw-tie', 'chip-dot-pw-none')
+    winner_opts = opts.get('winner', [])
+    winner_sel = set(selections.get('winner', [])) or set(winner_opts)
+    winner_chips = ''.join(
+        _chip('winner', opt, checked=(opt in winner_sel), dot_cls=dot)
+        for opt, dot in zip(winner_opts, winner_dots, strict=False)
+    )
+
+    panel_chips = ''.join(
+        _chip(dim, 'yes', checked=('yes' in selections.get(dim, [])), dot_cls=dot, label=label)
+        for dim, label, dot in (
+            ('split', 'Judges split', 'chip-dot-amber'),
+            ('thrown_out', 'Vote thrown out', 'chip-dot-red'),
+            ('judge_failed', 'Judge failed', 'chip-dot-red'),
+        )
+    )
+
+    judge_dd = _dropdown('judge', 'Judge', opts.get('judge', []), selections.get('judge', []))
+
+    filtered = shown is not None and total is not None and shown < total
+    counter = f'{shown} of {total} comparisons' if filtered else 'Showing all comparisons'
+    footer_cls = 'filter-rail-footer is-filtered' if filtered else 'filter-rail-footer'
+
+    inner = (
+        f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        f'<div class="filter-group" data-dim="winner">'
+        f'<label class="filter-label">Winner</label>'
+        f'<div class="filter-chip-row">{winner_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="panel">'
+        f'<label class="filter-label">Panel</label>'
+        f'<div class="filter-chip-row">{panel_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="judge">{judge_dd}</div>'
+        f'<div class="{footer_cls}">{esc(counter)}</div>'
+    )
+    return (
+        f'<form id="filter-form" class="filter-form filter-form--sim filter-form--pairwise"'
+        f' hx-post="/r/{esc(rid)}/filter"'
+        f' hx-trigger="change"'
+        f' hx-target="#filter-swap"'
+        f' hx-swap="outerHTML">'
+        f'{inner}'
+        f'</form>'
+    )
+
+
 def render_filter_form(
     rid: str,
     surface: str,
@@ -1413,7 +2024,7 @@ def render_filter_form(
 
     Args:
         rid:        Report ID (used to construct the POST URL).
-        surface:    Surface key (``'redteam'`` | ``'sim'``).
+        surface:    Surface key (``'redteam'`` | ``'sim'`` | ``'pairwise'``).
         opts:       Option lists per dimension (from ``FilterDef.options``).
         selections: Currently active selections per dimension.
         shown:      Count of currently-shown results (sim rail footer counter).
@@ -1427,13 +2038,15 @@ def render_filter_form(
         return _render_sim_filter_rail(rid, opts, selections, shown=shown, total=total)
     if surface == 'redteam':
         return _render_redteam_filter_rail(rid, opts, selections, shown=shown, total=total)
+    if surface == 'pairwise':
+        return _render_pairwise_filter_rail(rid, opts, selections, shown=shown, total=total)
 
     from evaluatorq.dashboard.filters import FILTERS
 
     filter_def = FILTERS.get(surface)
     if filter_def is None or not filter_def.dimensions:
-        # A surface with no dimensions (pairwise) would otherwise render an
-        # empty rail titled "Filters" with nothing under it.
+        # A surface with no dimensions would otherwise render an empty rail
+        # titled "Filters" with nothing under it.
         return ''
 
     parts: list[str] = []

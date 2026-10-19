@@ -89,7 +89,8 @@ async def _generate(count: int, config: LLMConfig | None) -> list[str]:
         await generate_objectives_for_vulnerability(
             vuln=Vulnerability.GOAL_HIJACKING,
             agent_context=AgentContext(key='test_agent'),
-            llm_client=_recording_client(prompts),  # pyright: ignore[reportArgumentType]
+
+            llm_client=_recording_client(prompts),
             model='test-model',
             count=count,
             pipeline_config=config,

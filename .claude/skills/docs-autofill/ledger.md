@@ -11,3 +11,6 @@ Outcomes: `prepared` (work committed, PR not yet created) · `opened` · `blocke
 | 2026-08-31 | `entry point (wrap_simulation_agent()) × surface (Python API)` | docs/autofill-wrap-simulation-agent | opened |
 | 2026-09-07 | `entry point (red_team()) × target kind (CallableTarget)` | docs/autofill-callable-target | opened |
 | 2026-09-14 | `tier 1: env var contract (empty/invalid/out-of-range handling shared by ORQ_DISABLE_TRACING, the four ORQ_OTEL_*, EVALUATORQ_CAPTURE_MESSAGE_CONTENT, EVALUATORQ_PROPAGATE_TRACE_CONTEXT, EVALUATORQ_CATALOGUE_TIMEOUT_S, EVALUATORQ_LLM_TIMEOUT_S, EVALUATORQ_LLM_MAX_TOKENS)` | docs/autofill-env-var-contract | opened |
+| 2026-09-28 | `entry point (simulate() / red_team()) × target kind (VercelAISdkTarget)` | docs/autofill-vercel-ai-sdk-target | opened |
+| 2026-10-05 | `entry point (fetch_traces()) × surface (Python API)` | docs/autofill-fetch-traces | opened |
+| 2026-10-12 | `entry point (run_classify()) × surface (Python API)` | docs/autofill-run-classify | opened |

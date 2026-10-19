@@ -28,7 +28,7 @@ async def test_forwards_base_url_to_upload() -> None:
         patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
         patch.object(_EQ_MOD, "send_results_to_orq", spy),
     ):
-        await evaluatorq(
+        await evaluatorq(  # ty: ignore[call-non-callable]
             "run",
             data=[DataPoint(inputs={"x": 1})],
             jobs=[_job],
@@ -47,7 +47,7 @@ async def test_base_url_defaults_to_none() -> None:
         patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
         patch.object(_EQ_MOD, "send_results_to_orq", spy),
     ):
-        await evaluatorq(
+        await evaluatorq(  # ty: ignore[call-non-callable]
             "run",
             data=[DataPoint(inputs={"x": 1})],
             jobs=[_job],

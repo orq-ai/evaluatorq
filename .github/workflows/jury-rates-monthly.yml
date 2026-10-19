@@ -44,9 +44,7 @@ jobs:
           {
             echo 'Monthly re-capture of `src/evaluatorq/common/data/jury_judge_rates.json` from the live Orq catalogue.'
             echo
-            echo 'Each line below is a decision for a human, not something this job applied. A repricing means the `estimated_cost_per_1k` published for every panel seating that judge is now stale; a model missing from the catalogue means a preset names a seat that can no longer be called, and its reserve has to be promoted deliberately.'
-            echo
-            echo 'The `seated_effort` and `priced_at_ceiling` fields were carried over untouched. They come from the intelligence/price frontier derivation, which lives in the research repo — nothing here re-derives them.'
+            echo 'Each line below is a decision for a human, not something this job applied. A repricing means the `estimated_cost_per_1k` published for every panel seating that judge is now stale; a changed default effort means those panels now judge at a different operating point; a model missing from the catalogue means a preset names a seat that can no longer be called, and its reserve has to be promoted deliberately.'
             echo
             echo '### Capture'
             echo '```'

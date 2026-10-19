@@ -6,6 +6,8 @@ the sole response method; callers own the conversation transcript.
 
 from __future__ import annotations
 
+import typing
+
 import pytest
 
 from evaluatorq.contracts import AgentTarget
@@ -18,9 +20,10 @@ def test_agent_target_has_no_send_prompt():
 def test_respond_is_abstract_subclass_without_it_cannot_instantiate():
     """respond is abstract: a subclass that implements only ``new`` is incomplete."""
 
-    class _Bare(AgentTarget):  # pyright: ignore[reportImplicitAbstractClass]
+
+    class _Bare(typing.cast(typing.Any, AgentTarget)):
         def new(self) -> _Bare:
-            return _Bare()  # pyright: ignore[reportAbstractUsage]
+            return typing.cast(typing.Any, _Bare)()
 
     with pytest.raises(TypeError, match="abstract"):
-        _Bare()  # type: ignore[abstract]  # pyright: ignore[reportAbstractUsage]
+        typing.cast(typing.Any, _Bare)()

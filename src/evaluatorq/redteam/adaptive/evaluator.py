@@ -17,13 +17,13 @@ from evaluatorq.common.jury import provider_family as provider_family
 from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     AttackEvaluationResult,
     EvaluatorConfig,
     LLMCallConfig,
     OutputMessage,
     Vulnerability,
+    evaluator_model_for,
 )
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
 from evaluatorq.redteam.vulnerability_registry import resolve_category_safe
@@ -46,7 +46,7 @@ class OWASPEvaluator:
 
     def __init__(
         self,
-        evaluator_model: str = DEFAULT_PIPELINE_MODEL,
+        evaluator_model: str | None = None,
         llm_client: AsyncOpenAI | None = None,
         llm_kwargs: dict[str, Any] | None = None,
         cfg: LLMCallConfig | EvaluatorConfig | None = None,
@@ -70,6 +70,7 @@ class OWASPEvaluator:
         family — same-family self-judging biases verdicts toward RESISTANT and
         under-counts vulnerabilities. Pass it only when the target model is known.
         """
+        evaluator_model = evaluator_model_for(evaluator_model, cfg)
         base_cfg = cfg or PIPELINE_CONFIG.evaluator
         # Fold constructor-level llm_kwargs into the cfg's extra_kwargs so they reach
         # run_judge (which forwards cfg.extra_kwargs). Without this, llm_kwargs threaded
@@ -352,7 +353,7 @@ async def evaluate_attack(
     category: str,
     messages: list[dict[str, Any]] | list[Message],
     output_messages: Sequence[OutputMessage],
-    evaluator_model: str = DEFAULT_PIPELINE_MODEL,
+    evaluator_model: str | None = None,
     *,
     vulnerability: Vulnerability | None = None,
 ) -> AttackEvaluationResult:

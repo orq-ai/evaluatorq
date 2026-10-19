@@ -155,9 +155,33 @@ def test_scan_lists_the_run_with_a_comparison_headline(saved: tuple[Path, Path])
     cards = [c for c in scan([runs_dir]) if c.surface == 'pairwise']
     assert len(cards) == 1
     assert cards[0].name == 'v2 vs v3'
-    assert cards[0].headline == '4 comparisons'
+    assert cards[0].headline == '4 comparisons · even'
     assert cards[0].error is None
     assert cards[0].id == report_id(path)
+
+
+def _headline(tmp_path: Path, winners: list[str]) -> str:
+    r = new_run(run_name='h', label_a='prompt-v2', label_b='prompt-v3', judges=JUDGES, criteria='x')
+    for i, w in enumerate(winners):
+        r.add(_comparison(['A', 'A', 'A'], w), question=f'q{i}', response_a='a', response_b='b')
+    r.save(tmp_path / 'h.json')
+    return next(c for c in scan([tmp_path]) if c.surface == 'pairwise').headline
+
+
+def test_headline_names_the_leading_side(tmp_path: Path) -> None:
+    assert _headline(tmp_path, ['A', 'B', 'B', 'B']) == '4 comparisons · prompt-v3 leads 75% · too close'
+
+
+def test_headline_drops_too_close_for_a_clear_lead(tmp_path: Path) -> None:
+    assert _headline(tmp_path, ['B'] * 12) == '12 comparisons · prompt-v3 leads 100%'
+
+
+def test_headline_even_and_undecided(tmp_path: Path) -> None:
+    assert _headline(tmp_path, ['A', 'B']) == '2 comparisons · even'
+
+
+def test_headline_without_decided_comparison(tmp_path: Path) -> None:
+    assert _headline(tmp_path, ['tie']) == '1 comparison'
 
 
 def test_scan_flags_a_run_missing_its_entries(tmp_path: Path) -> None:
@@ -618,16 +642,6 @@ def test_landing_omits_a_kind_with_no_runs(saved: tuple[Path, Path]) -> None:
     assert landing.by_kind == [('Pairwise', 1)]
 
 
-def test_no_filter_rail_is_rendered_for_pairwise(client: tuple[TestClient, str]) -> None:
-    """Pairwise has no dimensions, so an empty 'Filters' panel must not appear."""
-    c, rid = client
-    r = c.get(f'/r/{rid}')
-    # 'filter-rail' also appears in the always-inlined stylesheet, so assert on
-    # the rail's markup and its POST wiring rather than the bare class name.
-    assert 'class="filter-rail"' not in r.text
-    assert 'hx-post' not in r.text
-
-
 def test_csv_export_neutralises_formula_injection(tmp_path: Path) -> None:
     """A question starting with '=' must not execute when the CSV opens in Excel."""
     r = new_run(run_name='injection', judges=JUDGES)
@@ -759,10 +773,10 @@ def test_score_column_names_its_metric_per_surface(client: tuple[TestClient, str
             status='finished', error=False,
         )
 
-    assert 'Decided rate' in _score_title(_row('pairwise'))
+    assert 'Called rate' in _score_title(_row('pairwise'))
     assert 'Resistance rate' in _score_title(_row('redteam'))
     assert _score_title(_row('unknown')) == ''
-    assert 'Decided rate' in c.get('/?surface=pairwise').text
+    assert 'Called rate' in c.get('/?surface=pairwise').text
 
 
 def test_kind_colours_are_stable_when_kinds_are_absent() -> None:
@@ -825,7 +839,7 @@ def test_filtered_view_rolls_up_once(saved: tuple[Path, Path], monkeypatch: pyte
     def counting(comparisons: list[PairwiseComparison], **kwargs: object) -> object:
         nonlocal calls
         calls += 1
-        return real(comparisons, **kwargs)  # type: ignore[arg-type]
+        return real(comparisons, **kwargs)
 
     monkeypatch.setattr(pw_run_mod, 'build_report', counting)
     body = ADAPTERS['pairwise'].body_from_results(run, list(run.entries[:2]))

@@ -108,6 +108,7 @@ Because classify verdicts are deterministic, `repetitions > 1` warns. Swapping s
 ```python
 comparison.winner        # "A" | "B" | "tie" | "inconclusive"
 comparison.token_usage   # summed across both orderings and any replacements
+comparison.trace_id      # 32-char hex OTel trace id of the judging span; None when tracing is off
 
 for vote in comparison.votes:
     vote.model        # judge model ID
@@ -240,15 +241,93 @@ eq dashboard
 
 With no path, this scans all three default stores: `.evaluatorq/runs` (red team), `.evaluatorq/sim-runs` (simulation), and `.evaluatorq/pairwise-runs` (pairwise). Open the local URL printed by the command.
 
+The dashboard opens a pairwise run on a verdict (clear winner, too close to call, or no decided comparisons) with a 95% range and a table of signals for how far to trust it. It adds a per-judge table, a filterable list of every comparison where each row expands to the two responses side by side with every judge's vote and rationale, and a page that compares two runs. When tracing is on, each comparison records the `trace_id` of its judging span, and its row links to that trace in Orq. See [Pairwise comparison view](dashboard.md#pairwise-comparison-view).
+
 `label_a` and `label_b` name the two systems being compared. They default to `"A"` and `"B"`, but nothing in the judging data records what was in each slot, so a reader of the dashboard cannot tell what "A won" means. Set them.
 
 A run also records `swap`. Position bias is only meaningful when both orderings ran, so a run saved with `swap=False` shows that column as unavailable rather than as a flattering `0.00`.
 
-The dashboard renders the run as three sections: the consensus win rates for each side, a per-judge table (win rates, tie rate, position bias, and consistency when measurable), and the comparison list, where each row expands to show the two responses side by side with every judge's vote and rationale.
-
 For classify votes, open **Classifier details** inside an expanded comparison in the dashboard or standalone HTML report. Each ordering and repetition shows its choice, confidence and probability distribution when reported. The display converts swapped A/B choices and probability keys back to the run's original A/B frame and uses `label_a` / `label_b`; `tie` is unchanged. Missing confidence or probabilities are omitted, never rendered as zero. Percentages near 50% retain enough precision to show which side they fall on and distinguish close values.
 
 Saved `PairwiseRun` JSON preserves each observation's provider-order `raw_output`; display conversion does not rewrite it. This is local report data. `send_results_to_orq()` strips evaluator `raw_output`, so the hosted Orq experiment view does not receive these classifier details.
+
+### Recording generation cost and latency
+
+The dashboard's **Performance** tab separates the cost and latency of generating responses A and B from the overhead of judging them. Pass `PairwiseResponseMetrics` through `metrics_a` and `metrics_b` when adding each comparison. Its `usage` is the shared `Usage` object from the generation call; `latency_ms` is measured end-to-end generation wall time.
+
+This runnable example generates three A/B pairs through Orq, captures their usage and latency, judges them, and saves a dashboard run. Set `ORQ_API_KEY` first. It compares two prompts on the same model rather than two different models:
+
+```python
+import asyncio
+from time import perf_counter
+
+from evaluatorq import llm_jury_pairwise
+from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.tracing import with_llm_span
+from evaluatorq.pairwise_run import PairwiseResponseMetrics, new_run
+from evaluatorq.tracing import flush_tracing, init_tracing_if_needed
+
+MODEL = "openai/gpt-6-luna"
+QUESTIONS = [
+    "How do I reset a forgotten password without sharing it with support?",
+    "What does Python range(3) produce?",
+    "Does HTTPS alone prove that a website is trustworthy?",
+]
+
+
+async def main() -> None:
+    await init_tracing_if_needed()
+    client = resolve_llm_client(require_orq=True, max_retries=0).client
+    comparator = llm_jury_pairwise(
+        judges=[MODEL], client=client,
+        criteria="Prefer the accurate, useful answer that directly addresses the question.",
+    )
+    run = new_run(
+        run_name="Measured pairwise preview: concise vs detailed",
+        label_a="Concise prompt", label_b="Detailed prompt", judges=[MODEL],
+        criteria="Prefer the accurate, useful answer that directly addresses the question.",
+    )
+
+    async def generate(question: str, instruction: str):
+        messages = [{"role": "system", "content": instruction}, {"role": "user", "content": question}]
+        started = perf_counter()
+        async with with_llm_span(model=MODEL, input_messages=messages) as span:
+            response, usage = await execute_chat_completion(
+                client=client, model=MODEL, messages=messages, span=span,
+                timeout_s=60, max_completion_tokens=384, reasoning_effort="none",
+            )
+        text = response.choices[0].message.content
+        if not text:
+            raise RuntimeError("The model returned no answer; do not save it as a successful response.")
+        return text, PairwiseResponseMetrics(usage=usage, latency_ms=(perf_counter() - started) * 1000)
+
+    try:
+        for question in QUESTIONS:
+            (a, metrics_a), (b, metrics_b) = await asyncio.gather(
+                generate(question=question, instruction="Answer accurately in one concise sentence."),
+                generate(
+                    question=question,
+                    instruction="Answer accurately with a short explanation and practical details, under 100 words.",
+                ),
+            )
+            comparison = await comparator.compare(question=question, response_a=a, response_b=b)
+            run.add(
+                comparison=comparison, question=question, response_a=a, response_b=b,
+                metrics_a=metrics_a, metrics_b=metrics_b,
+            )
+        print(run.save(), flush=True)
+    finally:
+        await flush_tracing()
+        await client.close()
+
+
+asyncio.run(main())
+```
+
+New comparisons record `judge_latency_ms` automatically around the complete judging phase, including swapped orderings and replacement judges. Its mean in the dashboard is time per comparison, not summed provider latency or total run duration.
+
+Missing measurements stay `None` and read **Not recorded**; passing zero means you actually measured zero. A recorded cost with missing response prices, partial pricing or an unknown priced-call count is a subtotal, never a complete run cost. Capture each side's measurements independently, and preserve `Usage.calls` and `Usage.priced_calls` when combining multiple generation calls. The Performance tab reports fully priced A/B pairs and paired latency measurements, including zero coverage, and marks values from different or incompletely priced samples as not like-for-like. Filters aggregate only the matching entries. Older text-only runs remain readable, but their generation cost and latency cannot be reconstructed from their answer strings.
 
 ## The lower-level core
 

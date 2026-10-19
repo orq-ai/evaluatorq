@@ -15,7 +15,7 @@ uv sync --all-extras --all-groups
 
 # Verify the setup
 uv run pytest -m 'not integration' --co  # list tests without running
-uv run basedpyright                       # type check
+uv run ty check                           # check configured source, test, root, and docs files
 uv run ruff check src                     # lint
 ```
 
@@ -24,11 +24,17 @@ uv run ruff check src                     # lint
 ### Running Tests
 
 ```bash
-# Unit tests only (fast, no external services)
+# Quick local profile (no external services; excludes deliberately slow tests)
+uv run pytest
+
+# Complete non-integration profile (run before pushing; matches CI selection)
 uv run pytest -m 'not integration'
 
 # Specific test file
 uv run pytest tests/redteam/test_vulnerability_first.py -v
+
+# The default marker still applies; opt a targeted slow test back in explicitly
+uv run pytest -m 'not integration' path/to/test.py::test_name
 
 # With coverage
 uv run pytest -m 'not integration' --cov=src/evaluatorq
@@ -50,7 +56,7 @@ uv run ruff check src --fix
 uv run ruff format src
 
 # Type check
-uv run basedpyright
+uv run ty check
 ```
 
 ## Project Structure
@@ -109,6 +115,7 @@ Add integration modules under `src/evaluatorq/integrations/`. Add the dependency
 ## Pull Requests
 
 - Branch from `main`
-- Run `uv run pytest -m 'not integration'` and `uv run basedpyright` before pushing
+- Run the complete `uv run pytest -m 'not integration'` profile and `uv run ty check` before pushing; the bare local pytest command also excludes deliberately slow tests, while CI runs the complete non-integration profile and runs the configured source, test, root, and docs ty check once on Ubuntu with Python 3.10
+- When changing the exact ty pin, update `scripts/data/ty_migration_audit.json` and the expected classifications in `scripts/audit_ty_migration.py` from that pinned release, then run `uv run python scripts/audit_ty_migration.py --refresh` and `uv run python scripts/audit_ty_migration.py`
 - Use conventional commit format for commit messages (e.g., `feat(redteam): ...`, `fix(evaluatorq): ...`)
 - Keep PRs focused — one feature or fix per PR when possible

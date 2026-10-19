@@ -17,14 +17,14 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.apply import ApplyRecommendationsResult
 from evaluatorq.common.apply import apply_recommendations as _apply_common
-from evaluatorq.redteam.contracts import PIPELINE_CONFIG
+from evaluatorq.redteam.contracts import LLMConfig
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from openai import AsyncOpenAI
 
-    from evaluatorq.redteam.contracts import FocusAreaRecommendation, LLMConfig
+    from evaluatorq.redteam.contracts import FocusAreaRecommendation
 
 __all__ = ['ApplyRecommendationsResult', 'apply_recommendations']
 
@@ -62,7 +62,7 @@ async def apply_recommendations(
         apply=apply,
         max_recommendations=max_recommendations,
         already_applied=already_applied,
-        cfg=cfg or PIPELINE_CONFIG,
+        cfg=cfg or LLMConfig(),
         intro=_INTRO,
         context=_CONTEXT,
     )

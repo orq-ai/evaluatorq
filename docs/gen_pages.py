@@ -43,9 +43,12 @@ API_PACKAGES = [
     "evaluatorq",
     "evaluatorq.redteam",
     "evaluatorq.simulation",
+    "evaluatorq.insights",
     "evaluatorq.openresponses",
     "evaluatorq.tracing",
     "evaluatorq.integrations",
+    "evaluatorq.formats",
+    "evaluatorq.signals",
 ]
 
 
@@ -102,6 +105,10 @@ def ingest_markdown() -> None:
 
 def _canonical_owner(module_name: str) -> str | None:
     """Return the longest API package that owns where a symbol is defined."""
+    # Shared trace models are implemented in common but publicly exported by
+    # Insights; the root package does not export or render them.
+    if module_name == "evaluatorq.common.trace_document":
+        return "evaluatorq.insights"
     cands = [p for p in API_PACKAGES if module_name == p or module_name.startswith(p + ".")]
     return max(cands, key=len) if cands else None
 
@@ -148,7 +155,7 @@ def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
     """
     import sys
 
-    obj = vars(mod).get(name)  # type: ignore[arg-type]
+    obj = vars(mod).get(name)
     if obj is not None:
         return obj
     full = f"{parent_dotted}.{name}"
@@ -180,6 +187,7 @@ _PACKAGE_DESC = {
     "evaluatorq": "Core evaluation API — `evaluatorq()`, `DataPoint`, `job`, built-in evaluators.",
     "evaluatorq.redteam": "Adversarial red teaming — `red_team()`, targets, OWASP frameworks.",
     "evaluatorq.simulation": "Multi-turn agent simulation — `simulate()`, user-simulator + judge.",
+    "evaluatorq.insights": "Trace intelligence — `insights()`, fixed labels, and discovered dimensions.",
     "evaluatorq.openresponses": "OpenAI Responses API integration.",
     "evaluatorq.tracing": "OpenTelemetry tracing helpers.",
     "evaluatorq.integrations": "Third-party agent integrations (LangChain, LangGraph, …).",
@@ -199,7 +207,7 @@ def _submodule_shadowed(mod: object, dotted: str, name: str) -> str | None:
     Only griffe is confused: at runtime the function wins permanently (the import
     machinery binds the sub-module on the package first, then the ``from`` import
     rebinds the name over it, and a later ``import_module`` hits ``sys.modules``
-    without re-binding), and basedpyright resolves all three to functions too. So
+    without re-binding), and static type analysis resolves all three to functions too. So
     the fix belongs here rather than in a rename of the three modules.
 
     Detect it by asking where the runtime object is actually defined: a hit means

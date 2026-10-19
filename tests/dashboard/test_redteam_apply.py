@@ -16,7 +16,7 @@ import pytest
 
 import evaluatorq.dashboard.apply_ui as apply_mod
 from evaluatorq.common.orq_client import OrqProfile
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
+from evaluatorq.contracts import DEFAULT_SMART_MODEL
 from evaluatorq.dashboard.apply_ui import record_applied_on_report, render_preview_drawer
 from evaluatorq.redteam.reports.apply import ApplyRecommendationsResult
 
@@ -98,7 +98,7 @@ class TestPreview:
 
     def test_preview_renders_diff_and_confirm(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, path = apply_client
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (object(), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: (object(), object(), 'm'))
 
         async def fake_apply(*args, **kwargs):
             return ApplyRecommendationsResult(
@@ -133,7 +133,7 @@ class TestPreview:
 
     def test_preview_error_becomes_drawer_not_500(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, path = apply_client
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (object(), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: (object(), object(), 'm'))
 
         async def boom(*args, **kwargs):
             raise RuntimeError('agent not found')
@@ -190,7 +190,7 @@ class TestConfirm:
     def test_confirm_updates_agent_and_records_on_report(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: (self._fake_orq(calls), object(), 'm'))
 
         r = self._post(client, rid, self._seed(rid))
         assert r.status_code == 200
@@ -214,11 +214,22 @@ class TestConfirm:
         original = OrqProfile('first', 'key-first', None, False)
         replacement = OrqProfile('second', 'key-second', None, False)
         app.state.finder_profile = original
-        app.state.finder_settings = app.state.finder_settings.model_copy(update={'orq_profile': 'first'})
-        token = self._seed(rid, credential_identity=apply_mod._credential_identity(original))
+        app.state.finder_settings = app.state.finder_settings.model_copy(
+            update={'orq_auth_method': 'cli_profile', 'orq_profile': 'first'}
+        )
+        from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
+
+        token = self._seed(
+            rid,
+            credential_identity=apply_mod._credential_identity(
+                selected_dashboard_auth(app), app.state.finder_settings
+            ),
+        )
         app.state.finder_profile = replacement
-        app.state.finder_settings = app.state.finder_settings.model_copy(update={'orq_profile': 'second'})
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: pytest.fail('confirm used a different profile'))
+        app.state.finder_settings = app.state.finder_settings.model_copy(
+            update={'orq_auth_method': 'cli_profile', 'orq_profile': 'second'}
+        )
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: pytest.fail('confirm used a different profile'))
 
         response = self._post(client, rid, token)
 
@@ -232,7 +243,7 @@ class TestConfirm:
         monkeypatch.setattr(
             apply_mod,
             '_build_clients',
-            lambda _profile: (self._fake_orq([], update_error=RuntimeError('403 from platform')), object(), 'm'),
+            lambda _auth, _settings=None: (self._fake_orq([], update_error=RuntimeError('403 from platform')), object(), 'm'),
         )
         r = self._post(client, rid, self._seed(rid))
         assert 'rt-drawer-error' in r.text
@@ -246,7 +257,7 @@ class TestConfirm:
         server-stored preview must not reach the platform write."""
         client, rid, path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: (self._fake_orq(calls), object(), 'm'))
         r = client.post(
             f'/r/{rid}/redteam/apply/confirm',
             data={
@@ -265,7 +276,7 @@ class TestConfirm:
     def test_confirm_token_is_single_use(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: (self._fake_orq(calls), object(), 'm'))
         token = self._seed(rid)
         assert 'Applied 1 recommendation(s)' in self._post(client, rid, token).text
         replay = self._post(client, rid, token)
@@ -275,7 +286,7 @@ class TestConfirm:
     def test_confirm_missing_csrf_is_rejected(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, _path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: (self._fake_orq(calls), object(), 'm'))
         token = self._seed(rid)
         r = client.post(f'/r/{rid}/redteam/apply/confirm', data={'confirm_token': token})
         assert 'rt-drawer-error' in r.text
@@ -284,7 +295,7 @@ class TestConfirm:
     def test_confirm_cross_site_request_is_rejected(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, _path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: (self._fake_orq(calls), object(), 'm'))
         token = self._seed(rid)
         r = client.post(
             f'/r/{rid}/redteam/apply/confirm',
@@ -303,7 +314,7 @@ class TestConfirm:
         monkeypatch.setattr(
             apply_mod,
             '_build_clients',
-            lambda _profile: (self._fake_orq(calls, instructions='Someone edited these meanwhile.'), object(), 'm'),
+            lambda _auth, _settings=None: (self._fake_orq(calls, instructions='Someone edited these meanwhile.'), object(), 'm'),
         )
         r = self._post(client, rid, self._seed(rid))
         assert 'changed after this preview' in r.text
@@ -315,7 +326,7 @@ class TestConfirm:
         trusts the reloaded report, not the stored entry."""
         client, rid, path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: (self._fake_orq(calls), object(), 'm'))
         r = self._post(client, rid, self._seed(rid, agent_key='some-other-agent'))
         assert 'rt-drawer-error' in r.text
         assert calls == []
@@ -329,7 +340,7 @@ class TestConfirm:
         raw['applied_recommendations'] = ['Add stricter goal-boundary checks']
         path.write_text(json.dumps(raw))
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: (self._fake_orq(calls), object(), 'm'))
         r = self._post(client, rid, self._seed(rid))
         assert 'rt-drawer-error' in r.text
         assert 'already applied' in r.text
@@ -396,7 +407,7 @@ class TestPerRecommendationApply:
         self, apply_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         client, rid, _path = apply_client
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (object(), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _auth, _settings=None: (object(), object(), 'm'))
         seen_areas = []
 
         async def fake_apply(areas, agent_key, *args, **kwargs):
@@ -512,24 +523,21 @@ class TestApplyModelSetting:
         monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'dashboard-settings.json'))
 
     def test_default_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv(apply_mod.APPLY_MODEL_ENV, raising=False)
-        assert apply_mod.apply_model() == apply_mod.DEFAULT_APPLY_MODEL == DEFAULT_PIPELINE_MODEL
+        monkeypatch.delenv('EVALUATORQ_SMART_MODEL', raising=False)
+        monkeypatch.delenv('EVALUATORQ_APPLY_MODEL', raising=False)
+        assert apply_mod.apply_model() == apply_mod.DEFAULT_APPLY_MODEL == DEFAULT_SMART_MODEL
 
     def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, 'openai/gpt-6')
+        monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'openai/gpt-6')
         assert apply_mod.apply_model() == 'openai/gpt-6'
-        monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, '   ')
-        assert apply_mod.apply_model() == apply_mod.DEFAULT_APPLY_MODEL == DEFAULT_PIPELINE_MODEL
+        monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', '   ')
+        monkeypatch.delenv('EVALUATORQ_SMART_MODEL', raising=False)
+        assert apply_mod.apply_model() == apply_mod.DEFAULT_APPLY_MODEL == DEFAULT_SMART_MODEL
 
-    def test_settings_page_shows_the_model(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_settings_page_has_no_apply_model_row(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, _rid, _path = apply_client
-        monkeypatch.delenv(apply_mod.APPLY_MODEL_ENV, raising=False)
+        monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'openai/gpt-6')
         html = client.get('/settings').text
-        assert 'Apply-recommendations model' in html
-        assert f'{DEFAULT_PIPELINE_MODEL} (default)' in html
-
-    def test_settings_page_shows_the_override_source(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
-        client, _rid, _path = apply_client
-        monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, 'openai/gpt-6')
-        html = client.get('/settings').text
-        assert 'openai/gpt-6 (EVALUATORQ_APPLY_MODEL)' in html
+        assert 'Apply-recommendations model' not in html
+        # No dedicated row, but the legacy variable is listed as an active task override.
+        assert 'apply → openai/gpt-6 (EVALUATORQ_APPLY_MODEL)' in html

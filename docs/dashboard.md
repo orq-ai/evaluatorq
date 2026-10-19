@@ -1,9 +1,11 @@
 # Dashboard
 
 !!! note "The UI — FastHTML `eq dashboard`"
-    The combined `eq dashboard` documented here is the only way to browse saved runs interactively. Its canonical invocation scans a run directory and opens the multi-run FastHTML UI — `eq dashboard` (no path) browses the default red-team, simulation and pairwise stores, and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link to that report.
+    The combined `eq dashboard` documented here opens the report index for red-team, simulation and pairwise runs. Its canonical invocation scans a run directory and opens the multi-run FastHTML UI — `eq dashboard` (no path) browses the default stores, and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link to that report.
 
 evaluatorq ships a built-in web dashboard for browsing red-team, simulation and pairwise reports.  It is powered by **FastHTML** (a lightweight Python web framework) and served locally via **uvicorn**.  There is no external service dependency — everything runs on your machine.
+
+The separate **Insights** sidebar page at `/insights` reads `.evaluatorq/insights-runs`, outside this report index. See the [Trace Insights guide](insights.md) for how to create and review those runs.
 
 ![The evaluatorq combined dashboard — stat band, runs by type, attack-resistance, findings by severity, token usage, and recent runs.](assets/dashboard-index.png){ .dashboard-shot }
 
@@ -36,7 +38,7 @@ eq dashboard /path/to/my/reports
 # Optional direct deep-link — open a single report file
 eq dashboard .evaluatorq/runs/red-team_20260626_143024.json
 
-# Bind a custom host / port (default 127.0.0.1:8080)
+# Bind a custom host / port (default 127.0.0.1:8080); -p is short for --port
 eq dashboard --host 0.0.0.0 --port 8888
 
 # Enable “View Traces” links in reports. Use the workspace slug from the
@@ -54,13 +56,62 @@ The dashboard opens in your browser when the server starts; pass `--no-browser` 
 
 ### Orq trace links
 
-Save an **Orq workspace** on the dashboard Settings page, or set `ORQ_WORKSPACE` when launching the dashboard, to show **View Traces** links for conversations and runs. Its value is the workspace slug in the Orq UI URL; for example, `https://my.orq.ai/orq-research/traces` uses `orq-research`. When the `orq` CLI can identify the workspace for the active key, Settings offers that slug. A saved choice wins over `ORQ_WORKSPACE`; when neither is available, trace-link buttons are hidden.
+Set `ORQ_WORKSPACE` when launching the dashboard to show **View Traces** links for conversations and runs that have no experiment URL. Its value is the workspace slug in the Orq UI URL; for example, `https://my.orq.ai/orq-research/traces` uses `orq-research`. A workspace selected under **CLI OAuth** in Settings takes precedence for those fallback links. When neither is available, trace-link buttons are hidden for runs without their own experiment URL.
 
-`ORQ_WORKSPACE_SLUG` remains supported as an alias. For an Orq UI on a host different from the selected profile's API host, set `ORQ_UI_BASE_URL`. Otherwise the dashboard uses the saved profile host, then `ORQ_BASE_URL`, then `https://my.orq.ai`.
+`ORQ_WORKSPACE_SLUG` remains supported as an alias. For an Orq UI on a host different from the API host used by the selected credential, set `ORQ_UI_BASE_URL`. Otherwise the dashboard uses the selected credential host when available, then `ORQ_BASE_URL`, then `https://my.orq.ai`.
 
 ### Settings and the trace finder
 
-The **Settings** item opens `/settings`, where you can edit the trace-finder compiler model, classifier model, and apply-recommendations model. The search window, trace limit, and parallelism are set per run on the Trace search page. **Advanced** saves the Orq profile, workspace slug, and project alongside the models in `.evaluatorq/dashboard-settings.json`. Changing profiles reloads the workspace and projects available to that profile; choose a project and press **Save** to apply the bundle. A project key usually offers one project, while a broader key can offer several. Choosing a project limits dashboard Trace search to that project by ID. The page also shows read-only runtime configuration such as scanned run stores, API-key presence, Orq host, workspace, and saved project. The CLI masks keys in its profile list, so evaluatorq reads usable keys from the CLI's private local credential file; a profile without an accessible key remains disabled. See the [Trace finder guide](trace-finder.md) for the precedence rules and the `eq find` CLI.
+The dashboard has separate **Traces** (`/traces`) and **Trace search** (`/find`) pages. Traces browses recent traces; Trace search starts from a natural-language question. The **Settings** item opens `/settings`, where **Models** has one field per model role: **Fast model**, **Smart model**, **Classifier model** and **Embedding model**. Each field shows its built-in default, offers **Use default** to clear a saved choice, and says which environment variable or CLI flag is overriding it, if any; a value that came from an environment variable or a CLI flag is never written to the settings file. A read-only **Task overrides** row lists any `model_overrides` in the file. Each field opens a two-level provider and model menu; **Custom…** accepts any `provider/model` id. When credentials are missing or rejected, model fields stay editable and Settings shows one warning below Models with guidance for the selected authentication method. If Orq is unavailable, the same warning area asks you to retry; you can still type a model id. CLI OAuth loads the catalogue through the signed-in CLI session. The Insights run form's summary, classifier, embedding and question-compiler pickers load their menus the same way and start on the smart, classifier, embedding and fast roles. The search window, trace limit, and parallelism are set per run on Trace search. **Authentication** offers four sources for dashboard trace access and Insights runs: the dashboard process's `ORQ_API_KEY`, an Orq CLI API-key profile, CLI OAuth, or an API key you enter. Settings saves the selected method in `.evaluatorq/dashboard-settings.json`. The manually entered key is encrypted there with a key kept in macOS Keychain; on other platforms, set `EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY` to a Fernet key. The CLI owns OAuth storage and refreshes its session. A startup toast reports when the selected credential needs attention or could not be checked; a valid credential produces no toast. If CLI OAuth needs a new sign-in, run `orq auth login`. Environment authentication reads `ORQ_API_KEY` and `ORQ_BASE_URL` from the dashboard process. Every method uses all projects accessible to its credential; choose a project facet in Trace search or the Insights run form to narrow a run. The page also shows read-only runtime configuration such as scanned run stores, API-key presence, Orq host, and workspace for trace links. The CLI masks keys in its profile list, so evaluatorq reads usable keys from its private local credential file; a profile without an accessible key remains disabled. See the [Trace finder guide](trace-finder.md) for explorer behavior, authentication details, and the `eq find` CLI.
+
+#### Compression inspector
+
+The **Compression inspector** compares a trace's complete readable conversation with the structured Jev state derived from its canonical ATIF document. Use it to understand what the existing compression reducer keeps or omits; it does not answer a question, run inference, or change the source document.
+
+The preview reports plaintext and Jev percentage reductions against the complete trace document serialized as compact JSON, including metadata and null fields. The baseline is uncapped and independent of the selected Original view. Jev uses compact serialization rather than the pretty-printed display; plaintext counts the rendered text. A negative percentage means expansion. These character reductions are not token savings.
+
+The setting is off by default. Turn on **Compression inspector** under **Settings → Advanced**; every Settings change saves as soon as you make it, a small notice in the corner confirms it, and the navigation link appears without a page reload. Then open it from the dashboard navigation. Start the dashboard with:
+
+```bash
+eq dashboard
+```
+
+Choose **Orq trace ID** to fetch one trace using the dashboard's selected Orq account. The default search window is the last seven days; set both optional dates to search an older trace, with the end date including that full day. Trace IDs and dates are submitted by POST rather than placed in the URL.
+
+Choose **Local sessions** to search the configured Claude Code, Claude desktop, and Codex session folders. The list is limited to 50 sessions. Selecting one revalidates its `SessionRef` against the configured session roots before reading the session into the same canonical ATIF `TraceDocument` used by the Orq source.
+
+The left pane is the **Original**, and **Original shows** picks what it is. **ATIF trajectory** (the default) is the canonical ATIF trajectory and trace metadata held for the trace, as pretty JSON with empty fields left out. **Raw source file** is the session file itself, as read from disk (Claude Code, Claude desktop or Codex JSONL); it is offered for local sessions only. **Readable text** is the Insights `full_conversation_view` rendering with the inspector's selected layout and de-noising options. It omits harness reminders and keeps every part whole by default. Every original is scrubbed of known sensitive values and escaped before display, cut to 2,000,000 characters with a visible note, and a raw session file is read up to 5,000,000 bytes with a note saying how much was shown. The source `TraceDocument` remains unchanged. The right pane is the **Output**, the structured state from the Jev reducer, rendered as escaped JSON. The inspector fetches no image or other media URLs and makes no paid model call.
+
+The preview reports the characters of the shown original, the readable-source characters (the uncapped transcript), readable-view characters, source message count, serialized Jev-state characters, omitted message count, and the active global cap. The global cap defaults to 500,000 characters and follows the saved model-input setting. Jev has a 112,000-character state cap and question-aware state-plus-question ceilings of 128,000 or 256,000 characters; this preview includes no question, so those question-aware ceilings are context, not a claim about a question payload that was never supplied. The readable JSON adds whitespace that is excluded from the compact serialized-state character count.
+
+Once a trace is loaded, a form above the two panes exposes every compression knob in groups, each field showing its default. **Original shows** and **Wrap long lines** (off by default, applied to both panes instantly) sit above them. **Readable text** options apply only when the Original shows Readable text; they control the overall view limit, which message kinds are included (system, user, assistant, reasoning, tool inputs, tool results), the tool display mode (one line per call, or one line per run of calls without results), and the per-part limits, where `-1` keeps a part whole and a tool result limit of `0` leaves results out. **Jev state** controls the global character cap, the Jev state limit, a keep-whole length and an edge length for assistant, user, system and developer messages, tool call input and tool results, and which roles, tool calls and tool results are included. Each edge may be at most half its keep-whole length. Excluding tool calls drops their results too, and excluding tool results keeps the calls without them; excluded messages count in the omitted-message total. Scrubbing of known secrets is always on and cannot be turned off.
+
+The layout and de-noising switches below start **on in the inspector**. Outside it, `ReadableStyle()` and `JevOptions()` keep all these switches off: existing Insights and classifier production inputs remain unchanged. These switches change the preview, not the stored trace.
+
+| Readable text switch | Effect |
+|---|---|
+| Message blocks with source indexes | Separates messages into blocks carrying their original source indexes. |
+| Pair tool results with calls | Places results with their matching calls. Requires message blocks; with blocks off, pairing is inactive but its selected checkbox is preserved. |
+| Show tool input as plain text | Shows decoded tool arguments as readable text rather than escaped JSON strings. |
+| Label cuts with the part and exact omitted count | Names the part being cut and counts the absent source characters. The marker counts against the part and whole-view caps. |
+| Remove terminal control codes and progress redraws | Removes terminal formatting and transient redraw noise from tool output. |
+| Shorten the session working directory to `<cwd>` | Replaces the known session working-directory prefix with `<cwd>`. |
+| Collapse consecutive repeated tool output | Replaces repeated adjacent output with a counted repeat marker. |
+| Collapse long hex and base64 blobs | Replaces long encoded blobs with a marker rather than filling the preview with their bytes. |
+
+| Jev format switch | Effect |
+|---|---|
+| Mark omitted messages at each source gap | Adds in-place omission entries with neighbouring source indexes and a unique source-message count. Beginning and end neighbours are null. Grouped retained tool results are never counted as absent. |
+| Identifiers and status before text | Orders identifiers and result status before text, input and grouped results, including within each result. |
+| Leave out empty fields | Removes empty result arrays, empty text and input on non-message entries, and redundant `call_index: 0` for a sole call. Keeps entry types and meaningful result metadata. |
+
+Omission entries and the coverage description count against the Jev cap. Caps too small for their metadata show an inline error rather than an oversized preview. Labelled readable cuts likewise need enough room for their exact marker. If your filters leave no readable body, the pane says so even when the coverage header is still present.
+
+**Describe what is present and absent at the start** (on by default) tells the reader of a compressed text what it holds. The readable text starts with one `[context: ...]` line listing included, excluded and absent message types, per-part limits, tool display and active layout settings, source message count and whether the view budget cut the messages. The Jev state starts with a `context` object listing included and excluded kinds, trimming rules and active format switches. Jev never carries reasoning. Both descriptions count against their renderer's cap and remain intact. The readable Original includes its header; ATIF and raw-source originals do not. Outside the inspector, `full_conversation_view(coverage_header=True)` and `JevOptions(coverage=True)` opt into coverage descriptions, while production Insights and classifier inputs leave them off.
+
+The panes update as you change a field, without reloading the page, and **Reset to defaults** restores every field. An invalid value, or limits too small for the Jev state, show a message under the form instead of a preview. The loaded trace is held only in the dashboard process's memory, never written to disk, and the last eight loaded traces are kept; if one has been dropped, load it again to adjust it.
+
+The dashboard process reads local session files and renders the selected preview in the browser; local content is not uploaded to Orq. The inspector does not put trace IDs or content in URLs, browser storage, or its own logs. Source failures use safe messages without echoing IDs, paths, credentials, or provider exceptions. If the setting is disabled, direct access to every inspector route returns 404. An older Orq trace outside the default window will appear missing until you supply its date range.
 
 ---
 
@@ -167,19 +218,37 @@ Simulation reports expose a conversation transcript panel: select any conversati
 
 ### Pairwise comparison view
 
-Pairwise runs render three sections: the consensus win rate for each side, a per-judge table (win rates, tie rate, position bias, and consistency when measurable), and the comparison list.
+A pairwise run opens on a verdict: which side won, and whether the run has enough decided comparisons to say so. The report has five tabs: Overview, Performance, Judges, Comparisons and Config. Open a pairwise run from the **Pairwise** run list when you want to know whether version B beat version A, how far to trust that answer, and what generating and judging the responses cost.
 
-![A pairwise run: consensus win rates per side, the per-judge table, and the comparison list.](assets/dashboard-pairwise.png){ .dashboard-shot }
+**Overview.** The verdict card names the leader and its win rate over decided comparisons, with a 95% range (a Wilson interval). It reads `✓ Clear winner` when that range stays above 50%, `⚠ Too close to call` when it crosses 50%, and `No decided comparisons` when every comparison ended in a tie or was inconclusive. Ties and inconclusive comparisons are left out of the win rate. Below it, count tiles and the **How much to trust this** table list signals about the run itself, such as how many comparisons were decided, how often judges split, and how many votes were thrown out; orange means read the verdict with care. The Length row warns only when the longer (or shorter) answer's share of wins has a 95% range that stays above 50%, since judges can favour longer answers; otherwise it notes the lean could be chance. The outcome donut follows the table.
 
-Each comparison row expands to the two responses side by side with every judge's vote and rationale.  Rows where the judges split, or where the panel could not decide, are marked; those are the ones worth opening.
+Judge agreement uses Fleiss’ κ only on comparisons with exactly one valid vote from each configured judge. Replacement judges do not expand the panel, and duplicate configured-judge records make a comparison ambiguous, so it is excluded. When every included judge chose the same outcome on every included comparison, κ is undefined rather than perfect agreement; the report shows it as unavailable.
 
-![Two expanded comparisons: a split panel and one the panel could not decide.](assets/dashboard-pairwise-comparison.png){ .dashboard-shot }
+**Reading the hero chart.** The solid marker shows the observed win rate of the named side; the shaded band shows its 95% uncertainty range. Both sit on the same 0–100% scale. The center reference, `50% · equal wins`, means neither side has an advantage. If the band crosses that reference, the observed lead is too uncertain to call a winner. For example, three wins out of four decided comparisons gives an observed rate of 75%, but its range is about 30–95%, so the report still reads **Too close to call**.
 
-The judge table flags a judge whose position bias reaches 0.15.  A judge that contradicts itself across the two orderings has no real preference, so its votes are noise.  The column reads `n/a` rather than `0.00` wherever nothing was flippable, since there was no measurement to make.
+![The Overview tab of a pairwise run: the centered verdict chart with its 95% range, count tiles, the full-width trust table, and the tab bar for Performance, Judges, Comparisons and Config.](assets/dashboard-pairwise.png){ .dashboard-shot }
 
-Whether swapping happened is read from the votes rather than from the saved `swap` flag.  A vote is only marked complete when both orderings landed, so the data settles it and a run saved with the default `swap=True` but executed single-ordering is labelled `on (never observed)` instead of a bare `on`.  The distinction carries into the `n/a` tooltips: when no judge in the run completed a pair that is a run-level fact, and the table says so rather than blaming each judge in turn.
+**Performance.** A side-by-side table compares the two systems' recorded total generation cost in USD and mean generation latency. A third column gives B relative to A, as a cost ratio and a latency difference, only when every comparison has a complete measurement for both sides; otherwise it reads `—`. Judging cost, judge tokens and mean judging time per comparison appear separately below it. Generation measurements must be captured when producing the responses and passed through `PairwiseRun.add(metrics_a=..., metrics_b=...)`; the dashboard cannot recover them from saved response text. Missing values read **Not recorded**, while incomplete costs read **recorded subtotal** with their coverage. Mean latency uses only measured entries and gives its measured count when some are missing; it is not total run duration. New comparisons record judging time automatically, including both orderings and replacements. Filters apply to these metrics too. See [Recording generation cost and latency](pairwise-judging.md#recording-generation-cost-and-latency).
 
-In the run lists, a pairwise run scores as its **decided rate** — the share of comparisons the panel could call, or `1 - inconclusive_rate`.  Mean inter-judge agreement reads like the more natural choice but is a modal vote share, so it is quantized by panel size: against the shared `≥ 0.80` threshold it silently means "unanimous" for three judges and "four of five" for five, and it is undefined for a single-judge run.  Every surface's Score column names its own metric on hover.
+![The Performance tab separates the two prompts' recorded generation cost and mean latency from judging cost, latency and tokens, with matched-pair measurement coverage.](assets/dashboard-pairwise-performance.png){ .dashboard-shot }
+
+**Judges.** One row per judge with its win rate for each side, tie rate, failed passes and position bias, plus consistency when repeated passes make it measurable. A judge whose position bias reaches 0.15 is flagged: it changed its pick when the sides were swapped, so its votes say more about ordering than quality. The column reads `n/a` rather than `0.00` wherever nothing was flippable, since there was no measurement to make. Whether swapping happened is read from the votes rather than from the saved `swap` flag, so a run saved with the default `swap=True` but executed single-ordering is labelled `on (never observed)`.
+
+**Comparisons.** A strip of dots, one per comparison and coloured by winner, sits above a paged list of 25 rows. A ringed dot marks a comparison where the judges split. Click a dot to open the report on the Comparisons tab with that comparison's page loaded and its row expanded, or sort the list by number or winner. Rows load their detail only when opened, so a large run stays fast: each row expands to the two responses side by side with every judge's vote, each ordering's pass, and the rationale. A vote thrown out because the judge changed its answer when the sides were swapped carries a `flipped` tag, and a replacement judge is marked `stand-in`. Row numbers stay the same under any filter or sort, so `#14` is always the same comparison.
+
+![The Comparisons tab: the strip of comparison dots above the paged list, with the first comparison expanded to show both responses side by side and each judge's vote in both orderings, one of them thrown out as flipped.](assets/dashboard-pairwise-comparison.png){ .dashboard-shot }
+
+When the run was judged with tracing on, each comparison records the `trace_id` of its judging span and its row links to that trace in Orq. The link needs an Orq workspace in Settings; without one the row shows no link, and a run saved with tracing off has no `trace_id` at all.
+
+**Config.** The sides, judges, criteria, swap setting, passes per ordering, aggregation and creation time, a short note on how the judging works, and the evaluatorq version and judge list the run was produced with.
+
+**Filters.** The filter rail narrows the report, not only the list. Choose a winner, comparisons where judges split, comparisons with thrown-out votes, comparisons with a failed judge pass, or a single judge; the counts, trust signals, judges, performance and the Comparisons tab then describe only the matching comparisons. The verdict card always uses every comparison and says so, because most filters select rows by their outcome and a range computed on those rows would be meaningless. For the same reason, a filtered view retitles the trust table **Signals in these comparisons** and turns off its warning colours: a filter on thrown-out votes or split judges raises those rates by construction. A **Filtered view** banner states how many comparisons the tabs cover and offers **Show all**. Changing a filter keeps the open tab. A filter that matches nothing shows an empty state with the same reset.
+
+**Comparing two runs.** When a second pairwise run exists, the report header shows a compare control that treats the current run as A and lets you pick B. The compare page pairs comparisons by question text, shows both verdicts side by side with the agreement between judges, and lists every matched comparison with those whose winner changed first. Both verdict charts plot side B's win rate and its 95% range on the same axis, so a lead that reversed between runs shows on opposite sides of 50%. Each comparison links to the same row in that run's report. Questions that appear in only one run are counted, not listed. A run that cannot be loaded returns an error instead of an empty page.
+
+The changed tag compares the outcome slot (`A`, `B`, `tie` or `inconclusive`), not the side's display name. Renaming a side alone does not count as a changed winner. Keep the same systems assigned to A and B across runs when interpreting this tag; swapping their slots changes its meaning. Labels that collide with each other or with `tie` or `inconclusive` are qualified with their slot in the comparison table.
+
+In the run lists, a pairwise run's headline names the leader and its share of decided comparisons, for example `40 comparisons · prompt-v3 leads 62%`, or `even` when the sides won equally. When the lead's 95% range still includes 50%, the headline adds `· too close`, matching the report's verdict. Its Score column is the **called rate**, the share of comparisons ending in a win or tie rather than inconclusive, or `1 - inconclusive_rate`. Mean inter-judge agreement reads like the more natural choice but is a modal vote share, so it is quantized by panel size: against the shared `≥ 0.80` threshold it silently means "unanimous" for three judges and "four of five" for five, and it is undefined for a single-judge run. Every surface's Score column names its own metric on hover.
 
 ### Additional red team charts
 
@@ -217,11 +286,13 @@ An empty landing page — zeros across the stat band, no runs in either rail —
 
 ### 2. Red Team — pick a run { #rt-run-list }
 
-**Red Team** lists every red-team job, newest first, with the target or targets it attacked and how many attack cases it ran. The `SCORE` column is the resistance rate (higher is better), not the attack success rate — the stat band above totals attacks, ASR and critical findings across those runs, so the two directions sit on the same screen.
+**Red Team** opens on a card of four numbers across every stored run (ASR, critical findings, attacks run and total spend), then lists every red-team job, newest first, with the target or targets it attacked. Each row shows how many attacks broke the agent out of how many were evaluated (`BROKE`, as `x/y`), the attack success rate for that run (`ASR`), the case count and the cost. ASR is lower-is-better: a chip is teal at 10% or below, amber above 10% and red above 25%, and the same bands colour the ASR number in the card.
 
-`STATUS` is the run's lifecycle, not a verdict: **success** for a finished run, **running** for one still in flight (the dashboard reads the run manifest, so a long run appears here before it has a report), and **error** for one that died part-way. Open an **error** run anyway — the attacks that completed before the failure are still in it, and the numbers are computed over those alone, so treat its resistance rate as a partial sample.
+The total spend is the sum of the costs the runs recorded. When only some calls were priced, the line under it says how many (for example "1,140 of 1,236 calls priced"), so the figure counts only what could be priced.
 
-![The Red Team run list: target, status, score and case count per job.](assets/dashboard/redteam-02-run-list.png){ .dashboard-shot }
+A row for a run that died part-way carries an **error** pill, and one still in flight carries **running** (the dashboard reads the run manifest, so a long run appears here before it has a report). Open an **error** run anyway — the attacks that completed before the failure are still in it, and the numbers are computed over those alone, so treat its rates as a partial sample.
+
+![The Red Team overview: a card of ASR, critical findings, attacks run and total spend, then a run list with broke, ASR, cases and cost per job.](assets/dashboard/redteam-02-run-list.png){ .dashboard-shot }
 
 ### 3. Overview — the headline { #rt-overview }
 

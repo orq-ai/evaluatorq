@@ -8,7 +8,7 @@ from __future__ import annotations
 
 # ruff: noqa: S101
 from evaluatorq.simulation.api import _build_simulation_job_and_cache
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 
 
 async def _stub_target(messages: list[Message]) -> str:

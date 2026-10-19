@@ -89,7 +89,7 @@ def _redteam_adapter() -> SurfaceAdapter:
     def _rt_load(p: _Path) -> RedTeamReport:
         from evaluatorq.dashboard.library import load_model_cached
 
-        return load_model_cached(p, RedTeamReport.model_validate)  # type: ignore[return-value]
+        return load_model_cached(p, RedTeamReport.model_validate)
 
     return SurfaceAdapter(
         load=_rt_load,
@@ -105,9 +105,9 @@ def _redteam_adapter() -> SurfaceAdapter:
 
 def _sim_adapter() -> SurfaceAdapter:
 
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun
     from evaluatorq.simulation.reports.export_html import export_html, render_report_body
     from evaluatorq.simulation.reports.export_md import export_markdown as _sim_export_md
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun
 
     def _sim_rows(run: SimulationRun, filtered: list[SimulationResult]) -> list[dict[str, Any]]:
         """Build JSON row dicts from filtered SimulationResult objects.
@@ -124,7 +124,7 @@ def _sim_adapter() -> SurfaceAdapter:
     def _sim_load(p: _Path) -> SimulationRun:
         from evaluatorq.dashboard.library import load_model_cached
 
-        return load_model_cached(p, SimulationRun.model_validate)  # type: ignore[return-value]
+        return load_model_cached(p, SimulationRun.model_validate)
 
     return SurfaceAdapter(
         load=_sim_load,
@@ -167,6 +167,7 @@ def _sim_adapter() -> SurfaceAdapter:
 
 def _pairwise_adapter() -> SurfaceAdapter:
     """Adapter for saved pairwise runs (``<store>/pairwise-runs``)."""
+    from evaluatorq.dashboard.pairwise_tabs import with_entries
     from evaluatorq.pairwise_reports.export_html import export_html, render_report_body
     from evaluatorq.pairwise_run import PairwiseEntry, PairwiseRun
 
@@ -201,20 +202,7 @@ def _pairwise_adapter() -> SurfaceAdapter:
     def _pw_load(p: _Path) -> PairwiseRun:
         from evaluatorq.dashboard.library import load_model_cached
 
-        return load_model_cached(p, PairwiseRun.model_validate)  # type: ignore[return-value]
-
-    def _with_entries(run: PairwiseRun, filtered: list[PairwiseEntry]) -> PairwiseRun:
-        """A copy carrying only *filtered* entries, with the rollup recomputed.
-
-        The stored report describes the full run, so it would misreport a
-        filtered view. Recomputed once here rather than nulled: ``rollup()`` is
-        called by the header and by two section builders, so leaving the field
-        empty rolls the same entries up three times per render.
-        """
-        aggregation = 'bt-sigma' if run.report is not None and run.report.bt_sigma is not None else 'plurality'
-        filtered_run = run.model_copy(update={'entries': list(filtered), 'report': None})
-        rolled = filtered_run.rollup(aggregation=aggregation)
-        return filtered_run.model_copy(update={'report': rolled})
+        return load_model_cached(p, PairwiseRun.model_validate)
 
     return SurfaceAdapter(
         load=_pw_load,
@@ -222,7 +210,7 @@ def _pairwise_adapter() -> SurfaceAdapter:
         export=export_html,
         name=lambda run: run.run_name,
         created_at=lambda run: run.created_at,
-        body_from_results=lambda run, filtered: render_report_body(_with_entries(run, filtered)),
+        body_from_results=lambda run, filtered: render_report_body(with_entries(run, filtered)),
         rows=_pw_rows,
     )
 

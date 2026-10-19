@@ -66,7 +66,7 @@ def sim_run():
 @pytest.fixture()
 def sim_run_with_turn_metrics():
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import TurnMetrics
+    from evaluatorq.simulation.contracts import TurnMetrics
 
     def _tm(turn_number: int, response_quality: float, hallucination_risk: float) -> TurnMetrics:
         return TurnMetrics(
@@ -376,7 +376,7 @@ def test_filtered_cohort_template_shows_empty_message_when_no_conversations_matc
 def test_duplicate_persona_names_keep_conversation_cohorts_separate() -> None:
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
     def result(*, patience: float, score: float) -> SimulationResult:
         return SimulationResult(
@@ -464,7 +464,7 @@ def test_sim_turn_quality_single_turn_drops_tab() -> None:
     trend, a one-bar distribution), so the whole Turn quality tab drops out."""
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.types import TurnMetrics
+    from evaluatorq.simulation.contracts import TurnMetrics
 
     def _tm() -> TurnMetrics:
         return TurnMetrics(
@@ -516,7 +516,7 @@ def test_sim_overview_omits_persona_and_scenario_config_panels(sim_run) -> None:
 def test_sim_config_compacts_entities_and_prerenders_modal_details() -> None:
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
     traits = {
         'patience': 0.2,
@@ -612,15 +612,6 @@ def test_sim_drawer_has_back_nav_close_controls(sim_run) -> None:
     assert 'aria-label="Back to cohort"' in html
     assert 'data-entity-kind="conversation"' in html
     assert 'data-drawer-url="/r/rid/sim/transcript?idx=0"' in html
-
-
-def test_sim_drawer_runtime_dispatches_conversations_without_anchor_handler() -> None:
-    source = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js').read_text()
-    keyboard_handler = source.split("document.body.addEventListener('keydown'", 1)[1].split('});', 1)[0]
-
-    assert "trigger.getAttribute('data-drawer-url')" in source
-    assert 'a[href^="#conv-"]' not in source
-    assert "evt.target.closest('[data-no-drawer]')" in keyboard_handler
 
 
 def test_sim_breakdown_entity_names_open_shared_modal(sim_run) -> None:

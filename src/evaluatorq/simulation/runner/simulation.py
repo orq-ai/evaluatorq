@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.common.messages import pair_tool_rows, tool_call_text
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
@@ -24,9 +25,7 @@ from evaluatorq.contracts import (
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
-from evaluatorq.simulation.tracing import span_message_text, with_simulation_span
-from evaluatorq.simulation.types import (
-    DEFAULT_MODEL,
+from evaluatorq.simulation.contracts import (
     CriteriaMeta,
     CriterionVerdict,
     Judgment,
@@ -39,6 +38,7 @@ from evaluatorq.simulation.types import (
     TurnMetrics,
     criterion_id_for,
 )
+from evaluatorq.simulation.tracing import span_message_text, with_simulation_span
 from evaluatorq.simulation.utils.prompt_builders import (
     build_datapoint_system_prompt,
     build_persona_system_prompt,
@@ -130,13 +130,10 @@ def _tool_traffic_text(message: Message, results: Mapping[str, str], max_chars: 
     """
     lines: list[str] = []
     for call in message.tool_calls or []:
-        line = f'{call.function.name}({call.function.arguments})'
         result = results.get(call.id)
-        if result is not None:
-            if len(result) > max_chars:
-                result = f'{result[:max_chars]}… (truncated)'
-            line = f'{line} -> {result}'
-        lines.append(line)
+        if result is not None and len(result) > max_chars:
+            result = f'{result[:max_chars]}… (truncated)'
+        lines.append(tool_call_text(call, incomplete=result is None, result=result))
     return '[The agent used tools instead of replying]\n' + '\n'.join(lines)
 
 
@@ -161,15 +158,19 @@ def _invert_roles_for_simulator(
     `_tool_traffic_text`); defaults to the module constant, overridden by
     `SimulationRunner.__init__`'s ``max_tool_result_chars``.
     """
-    tool_results = {m.tool_call_id: content_to_text(m.content) for m in messages if m.role == 'tool' and m.tool_call_id}
+    pairing = pair_tool_rows(messages)
     inverted: list[Message] = []
-    for m in messages:
+    for index, m in enumerate(messages):
         if m.role == 'tool':
             continue
         if m.role == 'user':
             inverted.append(m.model_copy(update={'role': 'assistant'}))
         elif m.role == 'assistant':
             blank_with_tools = not content_to_text(m.content) and m.tool_calls
+            tool_results = {
+                (m.tool_calls or [])[position].id: content_to_text(messages[row].content)
+                for position, row in pairing.results_for(index).items()
+            }
             content = _tool_traffic_text(m, tool_results, max_tool_result_chars) if blank_with_tools else m.content
             inverted.append(m.model_copy(update={'role': 'user', 'content': content, 'tool_calls': None}))
         else:
@@ -184,14 +185,11 @@ def build_assistant_message(response: AgentResponse) -> list[Message]:
     the target actually did, not just any text it produced alongside it — a
     target that resolves a request purely through tool calls (no text) previously
     left the judge looking at an empty assistant turn. Completed tool calls are
-    followed by their separate ``role='tool'`` rows so both provider serializers
-    receive a valid pair. Calls without results are dropped by ``render_tool_call``.
+    followed by their separate ``role='tool'`` rows. A call without a result stays in the
+    assistant row as evidence, with no tool row; replay drops it through
+    `drop_unreplayable_tool_records`.
     """
-    rendered_tool_calls = [
-        rendered
-        for item in response.tool_calls
-        if (rendered := render_tool_call(item, warn=logger.warning)) is not None
-    ]
+    rendered_tool_calls = [render_tool_call(item) for item in response.tool_calls]
     tool_calls = [tool_call for tool_call, _ in rendered_tool_calls]
     text = response.text
     if not text and tool_calls:
@@ -201,7 +199,7 @@ def build_assistant_message(response: AgentResponse) -> list[Message]:
         )
     return [
         Message(role='assistant', content=text, tool_calls=tool_calls or None),
-        *(tool_message for _, tool_message in rendered_tool_calls),
+        *(tool_message for _, tool_message in rendered_tool_calls if tool_message is not None),
     ]
 
 
@@ -651,7 +649,7 @@ class SimulationRunner:
         *,
         target_agent: AgentTarget | None = None,
         target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None = None,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         max_turns: int = 10,
         target_agent_timeout_ms: int = DEFAULT_TARGET_TIMEOUT_MS,
         max_target_retries: int = 2,
@@ -670,7 +668,7 @@ class SimulationRunner:
             raise ValueError(f'max_target_retries must be >= 0, got {max_target_retries}')
         if max_tool_result_chars < 1:
             raise ValueError(f'max_tool_result_chars must be >= 1, got {max_tool_result_chars}')
-        if not model.strip():
+        if model is not None and not model.strip():
             raise ValueError('model must be a non-empty string')
 
         # Validate injected agents early to fail fast
@@ -716,24 +714,23 @@ class SimulationRunner:
         self._max_target_retries = max_target_retries
         self._max_tool_result_chars = max_tool_result_chars
         # Never the target under test: that one is configured where it is constructed.
-        from evaluatorq.simulation._config import resolve_sim_llm_config
+        from evaluatorq.simulation._config import resolve_sim_llm_config, sim_role_config
 
+        # A non-None `model` is folded in as explicit, so it reaches the judge too.
         self._llm_config = resolve_sim_llm_config(model=model, llm_config=llm_config, caller='SimulationRunner')
-        self._model = self._llm_config.model
+        self._model = sim_role_config(self._llm_config, 'sim.user').model
         self.model = self._model
-        """Resolved user-simulator / judge model. NEVER the target's — see `_new_conversation_target`."""
+        """Resolved user-simulator model. NEVER the target's — see `_new_conversation_target`."""
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = llm_client
         self._client_owned: bool = False
         # Injected agents (may be None; resolved lazily in run() when None)
-        self._injected_user_simulator: BaseAgent | None = user_simulator
-        self._injected_judge: BaseAgent | None = judge
+        self._injected_user_simulator = cast('UserSimulatorAgent | None', user_simulator)
+        self._injected_judge = cast('JudgeAgent | None', judge)
         # Warned once here, not per datapoint: an injected agent arrives built and llm_config cannot reach it.
         injected = [name for name, agent in (('user_simulator', user_simulator), ('judge', judge)) if agent is not None]
-        # From the caller's own arguments, not the resolved config: `resolve_sim_llm_config`
-        # always sets `model`, so reading it back cannot tell a chosen model from the default.
         carried = (llm_config.model_fields_set if llm_config is not None else set()) - {'client'}
-        if model != DEFAULT_MODEL:
+        if model is not None:
             carried = carried | {'model'}
         if injected and carried:
             logger.warning(
@@ -809,7 +806,6 @@ class SimulationRunner:
                 persona,
                 scenario,
             )
-
         datapoint_id = datapoint.id if datapoint else ''
 
         effective_max_turns = max_turns or self._max_turns
@@ -883,8 +879,8 @@ class SimulationRunner:
     def _resolve_simulator_and_judge(
         self,
         *,
-        persona: Persona | None,
-        scenario: Scenario | None,
+        persona: Persona,
+        scenario: Scenario,
         system_prompt: str,
     ) -> tuple[UserSimulatorAgent, JudgeAgent]:
         """Return this run's user simulator and judge.
@@ -901,17 +897,13 @@ class SimulationRunner:
             # Shallow-copy isolates _custom_system_prompt mutations from concurrent
             # run_batch tasks. Reset _usage to a fresh TokenUsage — shallow copy
             # keeps the same reference, which would cross-contaminate per-sim counts.
-            user_simulator: UserSimulatorAgent = copy.copy(self._injected_user_simulator)  # pyright: ignore[reportAssignmentType]
+            user_simulator = copy.copy(self._injected_user_simulator)
             user_simulator.reset_usage()
             if _implements(user_simulator, _USER_SIMULATOR_METHODS):
                 try:
                     user_simulator.update_context(
-                        persona_context=build_persona_system_prompt(persona)  # type: ignore[arg-type]
-                        if persona
-                        else None,
-                        scenario_context=build_scenario_user_context(scenario)  # type: ignore[arg-type]
-                        if scenario
-                        else None,
+                        persona_context=build_persona_system_prompt(persona) if persona else None,
+                        scenario_context=build_scenario_user_context(scenario) if scenario else None,
                     )
                 except Exception as ctx_err:
                     raise RuntimeError(
@@ -930,7 +922,7 @@ class SimulationRunner:
             import copy
 
             # Isolate per-sim state — see user_simulator comment above.
-            judge: JudgeAgent = copy.copy(self._injected_judge)  # pyright: ignore[reportAssignmentType]
+            judge = copy.copy(self._injected_judge)
             judge.reset_usage()
             # Without this the judge sees "No specific criteria defined" and scores 0.0.
             if _implements(judge, _CONTEXTUAL_JUDGE_METHODS):
@@ -965,8 +957,8 @@ class SimulationRunner:
         judge: JudgeAgent,
         sinks: RunSinks,
         conversation_target: AgentTarget | None,
-        persona: Persona | None,
-        scenario: Scenario | None,
+        persona: Persona,
+        scenario: Scenario,
         run_span: Span | None,
         criteria_tracker: _CriteriaTracker,
         usage_before: TokenUsage,
@@ -1124,16 +1116,16 @@ class SimulationRunner:
             turn_metrics=sinks.turn_metrics,
             token_usage=sinks.token_usage,
             token_usage_known=sinks.token_usage_known,
-            criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,  # type: ignore[arg-type]
+            criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,
             criteria_verified=criteria_tracker.verified,
-            metadata=judge_metadata,  # type: ignore[union-attr]
+            metadata=judge_metadata,
         )
 
     async def _run_inner(
         self,
         *,
-        persona: Persona | None,
-        scenario: Scenario | None,
+        persona: Persona,
+        scenario: Scenario,
         datapoint_id: str,
         first_message: str | None,
         effective_max_turns: int,
@@ -1142,7 +1134,7 @@ class SimulationRunner:
         conversation_target: AgentTarget | None = None,
     ) -> SimulationResult:
         """Inner simulation body (runs inside the orq.simulation.run span)."""
-        system_prompt = build_datapoint_system_prompt(persona, scenario)  # pyright: ignore[reportArgumentType]
+        system_prompt = build_datapoint_system_prompt(persona, scenario)
         user_simulator, judge = self._resolve_simulator_and_judge(
             persona=persona,
             scenario=scenario,

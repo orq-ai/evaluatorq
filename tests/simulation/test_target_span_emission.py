@@ -11,6 +11,7 @@ reaching the network.
 from __future__ import annotations
 
 import importlib
+import typing
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,7 +23,7 @@ from evaluatorq.openresponses.target import OrqResponsesTarget
 from evaluatorq.simulation.adapters import from_orq_deployment
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.tracing import with_llm_span as simulation_llm_span
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 from tests.simulation.conftest import find_span as _find
 from tests.simulation.conftest import new_collector as _provider
 from tests.simulation.conftest import span_attrs as _attrs
@@ -133,7 +134,7 @@ class _RecordingTarget(AgentTarget):
 def test_agent_target_passed_as_target_routes_to_target_agent() -> None:
     """Passing an AgentTarget as target= must not wrap it in CallableTarget."""
     agent = _RecordingTarget()
-    runner = SimulationRunner(target=agent)  # pyright: ignore[reportArgumentType]
+    runner = SimulationRunner(target=typing.cast(typing.Any, agent))
 
     assert runner._effective_target is agent  # noqa: SLF001
     assert runner._target is None  # noqa: SLF001

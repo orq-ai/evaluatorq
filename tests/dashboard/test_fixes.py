@@ -261,7 +261,7 @@ class TestFix3ParseCache:
             nonlocal call_count
             if self == report_file:
                 call_count += 1
-            return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+            return original_read_text(self, *args, **kwargs)
 
         with patch.object(Path, 'read_text', _counting_read_text):
             read_json(str(report_file.resolve()), mtime_ns)
@@ -324,7 +324,7 @@ class TestFix4SingleFilterApply:
 
         def _counting_apply(report: object, selections: object) -> object:
             apply_calls.append(1)
-            return original_apply(report, selections)  # type: ignore[arg-type]
+            return original_apply(report, selections)
 
         with patch.object(_filters_mod, '_rt_apply', _counting_apply):
             # Rebuild FILTERS with the patched apply so the route picks it up.

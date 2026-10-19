@@ -448,7 +448,7 @@ async def test_seeded_generation_emits_its_generation_span(
     await helper(
         seeds,
         agent_description='support bot',
-        generation_client=_FakeClient({}, build_parsed),  # type: ignore[arg-type]
+        generation_client=_FakeClient({}, build_parsed),
     )
 
     assert _find(span_collector, span_name).name == span_name

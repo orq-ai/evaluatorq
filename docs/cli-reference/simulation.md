@@ -30,10 +30,10 @@ Targets — provide **exactly one**:
 | Flag | Type / Default | Description |
 |---|---|---|
 | `--agent-description` | `str \| None` / `None` | Free-text description of the agent. May be omitted when `--target` is an Orq agent (fetched automatically). |
-| `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for the user-simulator, the judge, persona/scenario/first-message generation, the recommendations pass and the executive summary. |
-| `--max-turns` | `int` / `10` | Maximum conversation turns. |
-| `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
+| `--name` / `-n` | `str \| None` / unset | Run name. Unset unless passed: the SDK then saves the run as `sim` and names an uploaded experiment `simulation-<timestamp>-<id>`. |
+| `--sim-model` | `str \| None` / unset | Model for the user-simulator, the judge, persona/scenario/first-message generation, the recommendations pass and the executive summary. Unset, the simulated user, recommendations, executive summary and persona/scenario/first-message generation run on the `fast` role (`openai/gpt-6-luna` by default) and the judge runs on the `smart` role (`openai/gpt-6-sol` by default); a value here applies to all of them. Sets `llm_config.model`. |
+| `--max-turns` | `int` / `10` | Maximum conversation turns. Unset unless passed; the SDK default is `10`. |
+| `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. Unset unless passed; the SDK default is `10`. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |
 | `--num-personas` | `int` / `5` | Number of personas to generate. |
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
@@ -42,17 +42,20 @@ Targets — provide **exactly one**:
 | `--generation-instructions` | `str` / `''` | Free-text steer applied to every generated persona AND scenario, e.g. `"enterprise B2B buyers, replying in German"`. Stacks on top of any seeds and `--edge-case-percentage`. Empty leaves the built-in prompts unchanged. |
 | `--target-reasoning-effort` | `str \| None` / `None` | Reasoning effort pinned on the target agent under test (`agent:<key>` targets only). Distinct from the user-simulator's and judge's own reasoning effort, which comes from `EVALUATORQ_REASONING_EFFORT` — see [Tuning](../tuning.md). |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
-| `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
+| `--save` / `--no-save` | `bool` / `True` | Write the run to `.evaluatorq/sim-runs/`, with a run manifest. The SDK saves it after the recommendations and executive summary are attached. `--no-save` skips it. |
 | `--recommendations` / `--no-recommendations` | `bool` / `True` | Generate LLM remediation suggestions for failures, tied to their concrete cause. On by default; `--no-recommendations` skips the extra LLM call. Uses `--sim-model`. |
 | `--datapoints` / `-d` | `Path \| None` / `None` | Write generated datapoints to JSONL for reproducible re-runs. |
-| `--results` / `-r` | `Path \| None` / `None` | Path to write results JSONL (results + scorer averages + metadata). |
-| `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
+| `--results` / `-r` | `Path \| None` / `None` | Path to write results JSONL, one `SimulationResult` per line. |
+| `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. The [output reference](../guides/agent-simulation-output.md) describes this file and the `--results` rows. |
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
 | `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
-| `--executive-summary` / `--no-executive-summary` | `bool` / `True` | Generate an LLM narrative executive summary in the report. |
+| `--executive-summary` / `--no-executive-summary` | `bool` / `True` | Generate an LLM narrative executive summary in the report. The SDK generates it before it saves the run. |
 | `--yes` / `-y` | `bool` / `False` | Skip interactive confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` info; `-vv` debug. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
+| `--config` | `JSON \| PATH \| -` / `None` | JSON object (shell-quote it), file path, or `-` to read JSON from stdin. See [Driving the CLI from a config file or inline JSON](#driving-the-cli-from-a-config-file-or-inline-json); `eq sim schema --command run` prints the accepted shape. |
+| `--llm-config` | JSON / `None` | `LLMCallConfig` for every simulation-side LLM call as a JSON object. Merged field by field into `"llm_config"` from `--config`. `--sim-model` wins over its `"model"` when passed. |
+| `--json` | `bool` / `False` | Print the final `SimulationRun` as JSON on stdout. Progress and messages go to stderr; exit codes are unchanged. |
 
 ---
 
@@ -64,9 +67,9 @@ Run simulations from a pre-built datapoints JSONL file.
 eq sim simulate --input dp.jsonl --target agent:<key>
 ```
 
-Targets — same three flags as `eq sim run`. Provide exactly one of four input sources: `--input` (`-i`), `--dataset-id`, `--experiment-id` (optionally narrowed by `--experiment-run-id`), or `--from-run`.
+Targets — same three flags as `eq sim run`. Provide exactly one input source: `--input` (`-i`), `--dataset-id`, `--experiment-id` (optionally narrowed by `--experiment-run-id`), `--from-run`, or inline `datapoints` (or `personas` with `scenarios`) in `--config`.
 
-There is no `--target-reasoning-effort` here — it is a `eq sim run` flag only. To pin the target's reasoning effort on a pre-built datapoint set, call `simulate()` with `target_reasoning_effort=` from Python (see [Tuning](../tuning.md)).
+There is no `--target-reasoning-effort` flag here — it is a `eq sim run` flag only. To pin the target's reasoning effort on a pre-built datapoint set, set `"target_reasoning_effort"` in `--config`, or call `simulate()` with `target_reasoning_effort=` from Python (see [Tuning](../tuning.md)).
 
 | Flag | Type / Default | Description |
 |---|---|---|
@@ -76,22 +79,109 @@ There is no `--target-reasoning-effort` here — it is a `eq sim run` flag only.
 | `--experiment-run-id` | `str \| None` | Specific run of `--experiment-id` to load. Latest run if omitted. |
 | `--from-run` | `str \| None` | Replay a previous run from `.evaluatorq/sim-runs/`: pass its file name, run id, path, or `"latest"`. Re-runs the exact same personas, scenarios, and first messages; only the target/evaluators may differ. |
 | `--memory-entity` | `str \| None` / `None` | Memory `entity_id` sent with every `agent:<key>` (or bare `<key>`) target call, for agents with a memory store attached. Omit to mint a fresh id per conversation; pass one to reuse a specific (e.g. seeded) entity, shared across the run. |
-| `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for the user-simulator, the judge, the recommendations pass and the executive summary. |
-| `--max-turns` | `int` / `10` | Maximum conversation turns. Defaults to the replayed run's cap with `--from-run`. |
-| `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
+| `--name` / `-n` | `str \| None` / unset | Run name. Unset unless passed: the SDK then saves the run as `sim` and names an uploaded experiment `simulation-<timestamp>-<id>`. |
+| `--sim-model` | `str \| None` / unset | Model for the user-simulator, the judge, the recommendations pass and the executive summary. Unset, the simulated user, recommendations and executive summary run on the `fast` role (`openai/gpt-6-luna` by default) and the judge runs on the `smart` role (`openai/gpt-6-sol` by default); a value here applies to all of them. Sets `llm_config.model`. |
+| `--max-turns` | `int` / `10` | Maximum conversation turns. Unset unless passed; the SDK uses the replayed run's cap with `--from-run`, else `10`. |
+| `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. Unset unless passed; the SDK default is `10`. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
-| `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
+| `--save` / `--no-save` | `bool` / `True` | Write the run to `.evaluatorq/sim-runs/`, with a run manifest. The SDK saves it after the recommendations and executive summary are attached. `--no-save` skips it. |
 | `--recommendations` / `--no-recommendations` | `bool` / `True` | Generate LLM remediation suggestions for failures, tied to their concrete cause. On by default; `--no-recommendations` skips the extra LLM call. Uses `--sim-model`. |
 | `--results` / `-r` | `Path \| None` / `None` | Path to write results JSONL. |
-| `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
+| `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. The [output reference](../guides/agent-simulation-output.md) describes this file and the `--results` rows. |
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
 | `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
-| `--executive-summary` / `--no-executive-summary` | `bool` / `True` | Generate an LLM narrative executive summary in the report. |
+| `--executive-summary` / `--no-executive-summary` | `bool` / `True` | Generate an LLM narrative executive summary in the report. The SDK generates it before it saves the run. |
 | `--yes` / `-y` | `bool` / `False` | Skip interactive confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
+| `--config` | `JSON \| PATH \| -` / `None` | JSON object (shell-quote it), file path, or `-` to read JSON from stdin. See [Driving the CLI from a config file or inline JSON](#driving-the-cli-from-a-config-file-or-inline-json); `eq sim schema` prints the accepted shape. |
+| `--llm-config` | JSON / `None` | `LLMCallConfig` for every simulation-side LLM call as a JSON object. Merged field by field into `"llm_config"` from `--config`. `--sim-model` wins over its `"model"` when passed. |
+| `--json` | `bool` / `False` | Print the final `SimulationRun` as JSON on stdout. Progress and messages go to stderr; exit codes are unchanged. |
+
+### Driving the CLI from a config file or inline JSON
+
+`--config` on `eq sim simulate` and `eq sim run` takes the keyword arguments of the Python `simulate()` and `generate_and_simulate()` functions as one JSON object, under their public names (`run_name`, `experiment_description`, `raise_on_execution_failure`). That reaches every data-shaped parameter, including the ones without a flag: inline `personas` and `scenarios` or `datapoints`, `scoring`, `target_agent_timeout_ms`, `max_tool_result_chars`, `per_simulation_timeout_s`, `upload_results`, the full `llm_config`, and on `sim run` `edge_case_percentage`. Pass a JSON file path, a shell-quoted inline JSON object, or `-` to read JSON from stdin. YAML is not accepted. Inline JSON is recognized after leading whitespace is stripped; a filename beginning with `{` can be passed as `./{name}.json` to disambiguate it. Malformed inline JSON is reported as a JSON usage error and is not retried as a file path.
+For sensitive values, prefer a config file or stdin instead of placing them in shell history or process arguments.
+
+The Python aliases are accepted too: `evaluation_name` → `run_name`, `evaluation_description` → `experiment_description`, `orq_results_path` → `orq_folder_path`, `exit_on_failure` → `raise_on_execution_failure`, `report` → `report_path`, and `parallelism` → `datapoint_parallelism`. Conflicts are rejected using the same rules as the Python API; `datapoint_parallelism` wins over `parallelism`. An explicit `--name`, `--report` or `--datapoint-parallelism` replaces the corresponding config alias. Use `eq sim schema --command simulate` or `eq sim schema --command run` for the complete accepted shape.
+
+Inline `datapoints`, or `personas` with `scenarios`, count as the input source of `eq sim simulate`, so the file below needs no `--input`:
+
+```json
+{
+  "target": "agent:my-agent",
+  "personas": [
+    {
+      "name": "Impatient customer",
+      "patience": 0.2,
+      "assertiveness": 0.8,
+      "politeness": 0.4,
+      "technical_level": 0.3,
+      "communication_style": "terse",
+      "background": "Wants a refund today"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "Refund",
+      "goal": "Get a full refund",
+      "criteria": [{"description": "Agent asks for the order number", "type": "must_happen"}]
+    }
+  ],
+  "max_turns": 6,
+  "llm_config": {"model": "openai/gpt-5.6-luna", "temperature": 0.2},
+  "target_reasoning_effort": "low",
+  "per_simulation_timeout_s": 300
+}
+```
+
+```bash
+eq sim simulate --config sim.json --json > run.json
+eq sim simulate --input dp.jsonl --config '{"target":"agent:my-agent","max_turns":6,"save":false}' --json
+```
+
+`eq sim run` takes the generation keywords the same way:
+
+```json
+{
+  "target": "agent:my-agent",
+  "num_personas": 4,
+  "edge_case_percentage": 0.25,
+  "generation_instructions": "customers replying in German",
+  "llm_config": {"model": "openai/gpt-5.6-luna"}
+}
+```
+
+```bash
+eq sim run --config gen.json --num-scenarios 3 --json
+cat gen.json | eq sim run --config -
+eq sim run --config '{"target":"agent:my-agent","num_personas":4,"num_scenarios":3,"save":false}' --json
+```
+
+A flag passed on the command line beats the config, and the config beats the default. The command checks where a value came from, not what it is, so `--max-turns 10` wins over `"max_turns": 6` even though 10 is the default. A `null` in the config means "not set" and is accepted only on fields that allow `None`, such as `run_name`, `max_turns` or `datapoint_parallelism`; the SDK default then applies. A value nobody sets (no flag, no config entry) is never sent: `max_turns`, `datapoint_parallelism` and `run_name` reach the SDK only when you pass them, so `--from-run` can still restore the replayed cap. `"save": false` in the config has the effect of `--no-save`. `--llm-config` and the config's `"llm_config"` merge field by field, and `--sim-model` wins for `model`.
+
+The target and the input source are each one choice, so a command-line flag replaces the config's whole choice rather than adding a second one. `--target`, `--vercel-url` or `--openai-model` drops the config's `"target"`. On `eq sim simulate`, `--input`, `--dataset-id`, `--experiment-id` or `--from-run` drops the config's `"datapoints"`, `"personas"`, `"scenarios"`, `"dataset_id"`, `"experiment_id"`, `"experiment_run_id"` and `"previous_run"`. `--experiment-run-id` alone narrows the config's `"experiment_id"` instead. Two flags for the same choice on the command line are still rejected.
+
+Unknown keys fail the command before anything runs, at every depth, so `"num_personas"` in a `sim simulate` config or `"patiense"` inside a persona is rejected with the field path, regardless of whether the config came from inline JSON, a file, or stdin. `"target"` takes only the `agent:<key>` and `deployment:<key>` string forms; a callable or `AgentTarget`, `user_simulator`, `judge`, `hooks` and `generation_client` stay Python-only.
+
+
+With `--json`, stdout carries the `SimulationRun` and nothing else; the run-store save, the report files and every progress line still happen, on stderr.
+
+---
+
+## `eq sim schema`
+
+Print a JSON schema: what `--config` accepts, or what `--json` prints.
+
+```bash
+eq sim schema [--input | --output] [--command simulate|run]
+```
+
+| Flag | Type / Default | Description |
+|---|---|---|
+| `--input` / `--output` | `bool` / `--input` | `--input` prints the `--config` input schema. `--output` prints the `SimulationRun` schema, which both commands share. |
+| `--command` | `simulate \| run` / `simulate` | Which command's config `--input` describes: `SimulateCliConfig` for `eq sim simulate`, `GenerateAndSimulateCliConfig` for `eq sim run`. |
 
 ---
 
@@ -128,7 +218,7 @@ eq sim generate --datapoints dp.jsonl --agent-description "..."
 | `--datapoints` / `-d` | `Path` (required) | Path to write generated datapoints JSONL. |
 | `--agent-description` | `str \| None` / `None` | Free-text description of the agent. |
 | `--target` | `str \| None` / `None` | Agent target used to fetch the description when `--agent-description` is omitted. Accepts `agent:<key>`. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for persona/scenario/first-message generation. |
+| `--sim-model` | `str \| None` / `None` | Model for persona/scenario/first-message generation. Unset resolves the `fast` role (`openai/gpt-6-luna` by default). |
 | `--num-personas` | `int` / `5` | Number of personas to generate. |
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
 | `--persona-seed` | `str` (repeatable) / `None` | Archetype seed for a persona, e.g. `"angry retiree"` (repeatable). Each seed becomes one persona the LLM fleshes out — overrides `--num-personas`. Omit to auto-generate. |
@@ -159,7 +249,7 @@ Fetches recent traces from the Orq traces API (requires `ORQ_API_KEY`) and build
 | `--search` | `str \| None` | Free-text search applied to the trace list. |
 | `--extend` | `int` / `0` | Also generate N distribution-matched datapoints on top of the direct per-trace ones (extra LLM calls). `0` disables extension. |
 | `--agent-description` | `str \| None` | Agent description used for `--extend` generation. Optional; inferred from the traffic profile if omitted. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for persona/scenario inference and extension generation. |
+| `--sim-model` | `str \| None` / `None` | Model for persona/scenario inference and extension generation. Unset resolves the `fast` role (`openai/gpt-6-luna` by default). |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests while building datapoints. `-1` disables it. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
@@ -183,7 +273,7 @@ Markdown/HTML exports include remediation suggestions if the input run JSON alre
 | `--output` / `-o` | `Path` (required) | Path to write the exported file. |
 | `--format` | `str` / `openresponses` | Export format: `openresponses` (payload JSON), `md` (Markdown report), `html` (HTML report). |
 | `--recommendations` | `bool` / `False` | For `md`/`html`: generate LLM remediation suggestions at export time if none are stored. Extra LLM cost; uses `--sim-model`. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for `--recommendations` generation. |
+| `--sim-model` | `str \| None` / `None` | Model for `--recommendations` generation. Unset resolves the `fast` role (`openai/gpt-6-luna` by default). |
 | `--target-label` | `str` / `agent` | Target name shown in md/html report headers. |
 
 ---

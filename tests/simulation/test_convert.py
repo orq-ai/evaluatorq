@@ -16,7 +16,7 @@ from evaluatorq.openresponses.convert_models import (
     Usage as ORUsage,
 )
 from evaluatorq.simulation.convert import to_open_responses
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CriteriaMeta,
     Message,
     SimulationResult,
@@ -478,3 +478,102 @@ class TestToolCallConversion:
         assert out[0]["content"][0]["text"] == "Let me check."
         assert out[1]["type"] == "function_call"
         assert out[1]["call_id"] == "call_1"
+
+
+class TestTranscriptOrderRoundTrip:
+    @staticmethod
+    def _shape(messages):
+        return [
+            (
+                m.role,
+                m.content,
+                [tc.id for tc in m.tool_calls] if m.tool_calls else None,
+                m.tool_call_id,
+            )
+            for m in messages
+        ]
+
+    def test_round_trip_preserves_order(self):
+        from evaluatorq.common.output_adapters import responses_transcript
+        from evaluatorq.contracts import FunctionCall, StrategyToolCall
+
+        tc = StrategyToolCall(id="call_1", function=FunctionCall(name="refund", arguments='{"id": 1}'))
+        messages = [
+            Message(role="system", content="Be nice"),
+            Message(role="user", content="Hello"),
+            Message(role="assistant", content="Hi, how can I help?"),
+            Message(role="user", content="Refund please"),
+            Message(role="assistant", content="Let me check.", tool_calls=[tc]),
+            Message(role="tool", tool_call_id="call_1", content="ok"),
+            Message(role="assistant", content="Refund issued."),
+        ]
+        out = to_open_responses(_make_result(messages=messages))
+        decoded = responses_transcript(out)
+        assert decoded is not None
+        assert self._shape(decoded) == self._shape(messages)
+        tool_calls = decoded[4].tool_calls
+        assert tool_calls is not None
+        assert tool_calls[0].function.name == "refund"
+        assert tool_calls[0].function.arguments == '{"id": 1}'
+
+    def test_tool_only_turn_keeps_boundaries(self):
+        from evaluatorq.common.output_adapters import responses_transcript
+        from evaluatorq.contracts import FunctionCall, StrategyToolCall
+
+        tc = StrategyToolCall(id="call_9", function=FunctionCall(name="lookup", arguments="{}"))
+        messages = [
+            Message(role="user", content="Where is my order?"),
+            Message(role="assistant", tool_calls=[tc]),
+            Message(role="tool", tool_call_id="call_9", content="shipped"),
+            Message(role="assistant", content="It shipped."),
+            Message(role="user", content="Thanks"),
+            Message(role="assistant", content="Anytime."),
+        ]
+        decoded = responses_transcript(to_open_responses(_make_result(messages=messages)))
+        assert decoded is not None
+        expected = self._shape(messages)
+        expected[1] = ("assistant", "", ["call_9"], None)
+        assert self._shape(decoded) == expected
+
+    def test_distinct_adjacent_assistant_turns_and_combined_tool_turn_round_trip(self):
+        from evaluatorq.common.output_adapters import responses_transcript
+        from evaluatorq.contracts import FunctionCall, StrategyToolCall
+
+        messages = [
+            Message(role="assistant", content="first turn"),
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    StrategyToolCall(id="call_1", function=FunctionCall(name="first", arguments="{}")),
+                    StrategyToolCall(id="call_2", function=FunctionCall(name="second", arguments="{}")),
+                ],
+            ),
+        ]
+        response = to_open_responses(_make_result(messages=messages))
+        decoded = responses_transcript(response)
+        assert decoded is not None
+        assert self._shape(decoded) == self._shape(messages)
+
+    def test_silent_assistant_turn_round_trips_as_an_empty_reply(self):
+        from evaluatorq.common.output_adapters import responses_transcript
+
+        messages = [
+            Message(role="user", content="Are you there?"),
+            Message(role="assistant", content=None),
+            Message(role="user", content="Hello?"),
+            Message(role="assistant", content="Sorry, yes."),
+        ]
+        decoded = responses_transcript(to_open_responses(_make_result(messages=messages)))
+        assert decoded is not None
+        assert [(m.role, m.content) for m in decoded] == [
+            ("user", "Are you there?"),
+            ("assistant", ""),
+            ("user", "Hello?"),
+            ("assistant", "Sorry, yes."),
+        ]
+
+
+    def test_empty_transcript_emits_empty_order(self):
+        out = to_open_responses(_make_result(messages=[]))
+        assert out["metadata"]["item_order"] == []

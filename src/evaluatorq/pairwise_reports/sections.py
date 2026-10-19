@@ -46,7 +46,7 @@ def winner_label(winner: str, run: PairwiseRun) -> str:
     return vote_label(winner, run)
 
 
-def _is_split(entry: PairwiseEntry) -> bool:
+def is_split(entry: PairwiseEntry) -> bool:
     """True when the panel did not speak with one voice on this comparison.
 
     Either the judges landed on more than one decisive value, or the panel was
@@ -283,7 +283,7 @@ def _build_comparisons_section(run: PairwiseRun) -> ReportSection:
             'response_b': entry.response_b,
             'winner': entry.comparison.winner,
             'winner_label': winner_label(entry.comparison.winner, run),
-            'split': _is_split(entry),
+            'split': is_split(entry),
             'votes': [_vote_cell(votes.get(model), model, run) for model in order],
         })
 

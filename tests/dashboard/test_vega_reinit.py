@@ -16,14 +16,20 @@ only, not runtime JS execution.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
 
+from evaluatorq.common.reports import load_css
 from evaluatorq.dashboard.app import build_app
+from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.dashboard.library import report_id
+from evaluatorq.dashboard.shell import dashboard_css_href, page
+from evaluatorq.dashboard.styles import DASHBOARD_CSS
+from evaluatorq.dashboard.theme import EDITORIAL_CSS
 
 # Re-use the report factory from the filter test suite — no duplication.
 from tests.dashboard.test_filter import _write_rt_report
@@ -75,20 +81,24 @@ class TestShellScriptTags:
         assert r.status_code == 200
         assert '/static/htmx.min.js' in r.text
 
-    def test_report_page_includes_vega_embed(self, client: TestClient, roots: list[Path]) -> None:
-        """GET /r/{rid} must include /static/vega-embed.min.js."""
+    def test_page_without_charts_skips_vega(self, client: TestClient, roots: list[Path]) -> None:
+        """The redteam report renders server-side SVG, so the ~800KB vega trio stays off the page."""
         rid = report_id(_rt_path(roots))
         r = client.get(f'/r/{rid}')
         assert r.status_code == 200
-        assert '/static/vega-embed.min.js' in r.text
+        assert 'data-vega-for' not in r.text
+        assert 'vega' not in r.text.split('</head>', 1)[0]
 
-    def test_report_page_includes_vega_and_vega_lite(self, client: TestClient, roots: list[Path]) -> None:
-        """GET /r/{rid} must include /static/vega.min.js and /static/vega-lite.min.js."""
-        rid = report_id(_rt_path(roots))
-        r = client.get(f'/r/{rid}')
-        assert r.status_code == 200
-        assert '/static/vega.min.js' in r.text
-        assert '/static/vega-lite.min.js' in r.text
+    def test_page_with_chart_loads_vega_in_head_before_body(self) -> None:
+        """A client-side chart in the initial body needs vega loaded before its inline embed script runs."""
+        text = page('Chart', render_embed({'mark': 'bar'}, 'chart-1'))
+        head = text.split('</head>', 1)[0]
+        positions = [head.index(f'/static/{name}') for name in ('vega.min.js', 'vega-lite.min.js', 'vega-embed.min.js')]
+        assert positions == sorted(positions)
+        # defer/async would run vega after the body's inline embed script, which then skips the chart.
+        vega_tags = re.findall(r'<script[^>]*/static/vega[^>]*>', head)
+        assert len(vega_tags) == 3
+        assert not [tag for tag in vega_tags if re.search(r'\b(defer|async)\b', tag)]
 
     def test_index_page_includes_dashboard_js(self, client: TestClient) -> None:
         """GET / (index) must also include /static/dashboard.js."""
@@ -107,8 +117,28 @@ class TestShellScriptTags:
         head_section = text[:head_end]
         assert '/static/dashboard.js' in head_section
         assert '/static/htmx.min.js' in head_section
-        assert '/static/vega-embed.min.js' in head_section
+        assert '/static/dashboard.css?v=' in head_section
 
+
+class TestStylesheet:
+    """Every page links one stylesheet, so a broken route leaves the whole dashboard unstyled."""
+
+    def test_linked_stylesheet_serves_all_three_layers_in_cascade_order(self, client: TestClient) -> None:
+        page_html = client.get('/').text
+        assert dashboard_css_href() in page_html.split('</head>', 1)[0]
+        r = client.get(dashboard_css_href())
+        assert r.status_code == 200
+        assert r.headers['content-type'].startswith('text/css')
+        assert r.headers['cache-control'] == 'public, max-age=31536000, immutable'
+        css = r.text
+        assert css.index(load_css()) < css.index(EDITORIAL_CSS) < css.index(DASHBOARD_CSS)
+
+    @pytest.mark.parametrize('url', ['/static/dashboard.css', '/static/dashboard.css?v=000000000000'])
+    def test_stylesheet_without_the_current_hash_is_not_cached_forever(self, client: TestClient, url: str) -> None:
+        """A stale or missing hash must revalidate, or an upgrade would keep serving the old sheet for a year."""
+        r = client.get(url)
+        assert r.status_code == 200
+        assert r.headers['cache-control'] == 'no-cache'
 
 # ---------------------------------------------------------------------------
 # Filter fragment: Vega data contract (data-vega-for + vega-chart)

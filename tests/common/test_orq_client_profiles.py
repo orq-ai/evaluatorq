@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from evaluatorq.common import orq_client
 
@@ -25,6 +28,11 @@ def test_masked_cli_profile_uses_private_local_key(tmp_path: Path, monkeypatch) 
     assert [(profile.name, profile.api_key) for profile in profiles] == [('research', 'key-research')]
 
 
+@pytest.mark.skipif(
+    sys.platform == 'win32',
+    reason='Windows has no POSIX permission bits; _stored_profile_keys only checks '
+    'them when os.name != "nt", so chmod(0o644) is a no-op there by design.',
+)
 def test_loose_credential_permissions_never_expose_a_key(tmp_path: Path) -> None:
     credential_file = tmp_path / 'credentials.json'
     credential_file.write_text(json.dumps({'profiles': {'research': {'api_key': 'key-research'}}}))

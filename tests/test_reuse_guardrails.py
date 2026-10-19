@@ -13,7 +13,10 @@ not be a way around the rule by accident.
 from __future__ import annotations
 
 import ast
+import io
 import re
+import sys
+import tokenize
 from functools import cache
 from pathlib import Path
 from typing import TypeGuard
@@ -21,6 +24,7 @@ from typing import TypeGuard
 import pytest
 
 SRC = Path(__file__).resolve().parents[1] / 'src' / 'evaluatorq'
+REPO_ROOT = SRC.parents[1]
 
 # Attribute suffixes that mean "an LLM API call happened here".
 LLM_CALL_SUFFIXES = (
@@ -53,6 +57,132 @@ def _calls(source: str) -> list[tuple[int, str]]:
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.Call)
     ]
+
+
+_PYRIGHT_DIRECTIVE = re.compile(r'#\s*pyright\s*:')
+_TYPE_IGNORE = re.compile(r'#\s*type\s*:\s*ignore(?:\b|\[)')
+_TY_IGNORE = re.compile(r'#\s*ty:\s*ignore(?:\[([^]]*)\])?')
+_PROTECTED_TY_RULES = frozenset({'unused-ignore-comment', 'ignore-comment-unknown-rule'})
+
+
+def _config_array(config: str, table: str, key: str) -> list[str]:
+    """Read a string array from one TOML table without a TOML dependency."""
+    table_match = re.search(rf'(?ms)^\[{re.escape(table)}\]\n(.*?)(?=^\[|\Z)', config)
+    assert table_match is not None, f'missing [{table}] table'
+    array_match = re.search(rf'(?ms)^{re.escape(key)}\s*=\s*(\[.*?\])', table_match.group(1))
+    assert array_match is not None, f'missing {key} array'
+    value = ast.literal_eval(array_match.group(1))
+    assert isinstance(value, list) and all(isinstance(item, str) for item in value)
+    return value
+
+
+def _is_excluded(relative: Path, patterns: list[str]) -> bool:
+    """Return whether a repository-relative path matches a ty exclude."""
+    relative_text = relative.as_posix()
+    return any(
+        relative_text == pattern or relative_text.startswith(pattern.rstrip('/') + '/') or relative.match(pattern)
+        for pattern in patterns
+    )
+
+
+def _ty_checked_python_files() -> list[Path]:
+    """Return Python files covered by ``tool.ty.src.include``.
+
+    The guardrail follows the checker configuration instead of maintaining a
+    second list that can drift when the checked surface changes.
+    """
+    config = (REPO_ROOT / 'pyproject.toml').read_text(encoding='utf-8')
+    includes = _config_array(config, 'tool.ty.src', 'include')
+    excludes = _config_array(config, 'tool.ty.src', 'exclude')
+    files: set[Path] = set()
+    for pattern in includes:
+        candidate = REPO_ROOT / pattern
+        if candidate.is_dir():
+            files.update(candidate.rglob('*.py'))
+            files.update(candidate.rglob('*.pyi'))
+        else:
+            files.update(REPO_ROOT.glob(pattern))
+    return sorted(path for path in files if not _is_excluded(path.relative_to(REPO_ROOT), excludes))
+
+
+def _forbidden_type_suppressions(source: str) -> list[int]:
+    """Return lines containing Pyright directives or forbidden ty ignores."""
+    forbidden: list[int] = []
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type != tokenize.COMMENT:
+            continue
+        ty_match = _TY_IGNORE.search(token.string)
+        selectors = (
+            {selector.strip() for selector in ty_match.group(1).split(',')}
+            if ty_match is not None and ty_match.group(1) is not None
+            else set()
+        )
+        if (
+            _PYRIGHT_DIRECTIVE.search(token.string)
+            or _TYPE_IGNORE.search(token.string)
+            or (ty_match is not None and ty_match.group(1) is None)
+            or bool(selectors & _PROTECTED_TY_RULES)
+        ):
+            forbidden.append(token.start[0])
+    return forbidden
+
+
+def test_ty_suppression_detector_actually_fires() -> None:
+    pyright = '# py' + 'right: ignore'
+    assert _forbidden_type_suppressions(f'value = bad  {pyright}[reportArgumentType]') == [1]
+    assert _forbidden_type_suppressions(f'value = bad  {pyright}') == [1]
+    assert _forbidden_type_suppressions('# pyright: reportArgumentType=false') == [1]
+    assert _forbidden_type_suppressions('# pyright: strict') == [1]
+    assert _forbidden_type_suppressions('value = bad  # type: ignore') == [1]
+    assert _forbidden_type_suppressions('value = bad  # type: ignore[arg-type]') == [1]
+    assert _forbidden_type_suppressions('value = bad  # type: ignore[foreign-selector]') == [1]
+    assert _forbidden_type_suppressions('value = bad  # ty:' + ' ignore') == [1]
+    assert _forbidden_type_suppressions('value = bad  # ty: ignore[unused-ignore-comment]') == [1]
+    assert _forbidden_type_suppressions('value = bad  # ty: ignore[ignore-comment-unknown-rule]') == [1]
+    assert _forbidden_type_suppressions('value = bad  # ty: ignore[invalid-argument-type, unused-ignore-comment]') == [1]
+    assert _forbidden_type_suppressions('value = bad  # ty: ignore[invalid-argument-type]') == []
+    assert _forbidden_type_suppressions('value = "# pyright: ignore"') == []
+    assert _forbidden_type_suppressions('value = "# pyright: reportArgumentType=false"') == []
+    assert _forbidden_type_suppressions('value = "# ty: ignore"') == []
+    assert _forbidden_type_suppressions('value = "# type: ignore[arg-type]"') == []
+    assert _forbidden_type_suppressions('# prose mentions ty without an ignore directive') == []
+
+
+def test_ty_checked_files_honor_configured_excludes() -> None:
+    relative = {path.relative_to(REPO_ROOT).as_posix() for path in _ty_checked_python_files()}
+    assert not any(path.startswith(('examples/', 'scripts/', '.venv/')) for path in relative)
+
+
+def test_ty_checked_files_include_python_source_and_stub_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / 'package').mkdir()
+    (tmp_path / 'package' / 'runtime.py').write_text('value = 1\n')
+    (tmp_path / 'package' / 'surface.pyi').write_text('value: int\n')
+    (tmp_path / 'pyproject.toml').write_text(
+        '[tool.ty.src]\ninclude = ["package"]\nexclude = []\n'
+    )
+    monkeypatch.setattr(sys.modules[__name__], 'REPO_ROOT', tmp_path)
+
+    assert {path.name for path in _ty_checked_python_files()} == {'runtime.py', 'surface.pyi'}
+
+
+def test_guardrail_is_python_310_compatible() -> None:
+    source = Path(__file__).read_text(encoding='utf-8')
+    assert 'import toml' + 'lib' not in source
+
+
+def test_ty_checked_files_have_no_forbidden_suppressions() -> None:
+    hits = [
+        f'{path.relative_to(REPO_ROOT)}:{lineno}'
+        for path in _ty_checked_python_files()
+        for lineno in _forbidden_type_suppressions(path.read_text(encoding='utf-8'))
+    ]
+    assert not hits, (
+        'Forbidden type-checker directive in ty checked roots: '
+        + ', '.join(hits)
+        + '. Remove Pyright suppression comments and give every ty ignore an exact rule selector.'
+    )
 
 
 @cache
@@ -112,18 +242,19 @@ def test_llm_calls_go_through_the_shared_helper() -> None:
     )
 
 
-# The one module allowed to POST /classify. Every other call site goes through
-# `execute_classify`, which owns the bounded call, trace headers, span recording
-# and usage extraction the same way the chat and Responses executors do.
-_CLASSIFY_POST_OWNER = 'common/llm_call.py'
+# The one module allowed to POST /decisions (or the deprecated /classify alias). Every other
+# call site goes through `execute_classify`, which owns the bounded call, trace headers,
+# span recording and usage extraction the same way the chat and Responses executors do.
+_DECISIONS_POST_OWNER = 'common/llm_call.py'
+_DECISIONS_POST_PATHS = ('/decisions', '/classify')
 
 
-def _classify_post_lines(source: str) -> list[int]:
-    """Line numbers of ``<something>.post('/classify'...)`` calls.
+def _decisions_post_lines(source: str) -> list[int]:
+    """Line numbers of ``<something>.post(...)`` calls to the decisions route or its deprecated ``/classify`` alias.
 
     Narrow on purpose: the package POSTs to plenty of non-LLM endpoints
     (`send_results.py`, `fetch_data.py`, `simulation/traces.py`), so the
-    predicate is the endpoint literal, not the method name.
+    predicate is the endpoint, written as a literal or as ``DECISIONS_PATH``, not the method name.
     """
     return [
         node.lineno
@@ -132,37 +263,113 @@ def _classify_post_lines(source: str) -> list[int]:
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == 'post'
         and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and isinstance(node.args[0].value, str)
-        and node.args[0].value.startswith('/classify')
+        and (
+            isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and node.args[0].value.startswith(_DECISIONS_POST_PATHS)
+            or isinstance(node.args[0], ast.Name)
+            and node.args[0].id == 'DECISIONS_PATH'
+        )
     ]
 
 
-def test_classify_posts_go_through_execute_classify() -> None:
+def test_decisions_posts_go_through_execute_classify() -> None:
     hits = [
         f'{path.relative_to(SRC).as_posix()}:{lineno}'
         for path in sorted(SRC.rglob('*.py'))
-        if path.relative_to(SRC).as_posix() != _CLASSIFY_POST_OWNER
-        for lineno in _classify_post_lines(path.read_text(encoding='utf-8'))
+        if path.relative_to(SRC).as_posix() != _DECISIONS_POST_OWNER
+        for lineno in _decisions_post_lines(path.read_text(encoding='utf-8'))
     ]
     assert not hits, (
-        'Direct POST to /classify outside common/llm_call.py: '
+        'Direct POST to /decisions outside common/llm_call.py: '
         + ', '.join(hits)
         + '. Use evaluatorq.common.llm_call.execute_classify — it owns the bounded '
         'call, trace-header injection, span input/output recording and usage extraction.'
     )
 
 
-def test_classify_post_detector_actually_fires() -> None:
+def test_decisions_post_detector_actually_fires() -> None:
     """A guardrail nobody proved can fail is a guardrail that silently no-ops."""
-    assert _classify_post_lines("await client.post('/classify', body=b)") == [1]
-    assert _classify_post_lines('await client.post("/classify", body=b)') == [1]
+    assert _decisions_post_lines("await client.post('/decisions', body=b)") == [1]
+    assert _decisions_post_lines('await client.post("/decisions", body=b)') == [1]
+    assert _decisions_post_lines("await client.post('/classify', body=b)") == [1]
     # Other endpoints are other people's business.
-    assert _classify_post_lines("await client.post('/v2/traces', json=b)") == []
+    assert _decisions_post_lines("await client.post('/v2/traces', json=b)") == []
     # A mention is not a call.
-    assert _classify_post_lines('"""Docstring mentions client.post(\'/classify\')."""') == []
-    assert _classify_post_lines("# client.post('/classify')") == []
-    assert _classify_post_lines("path = '/classify'") == []
+    assert _decisions_post_lines('"""Docstring mentions client.post(\'/decisions\')."""') == []
+    assert _decisions_post_lines("# client.post('/decisions')") == []
+    assert _decisions_post_lines("path = '/decisions'") == []
+    assert _decisions_post_lines('await client.post(DECISIONS_PATH, body=b)') == [1]
+
+
+def _orq_prefix_lines(source: str) -> list[int]:
+    """Line numbers of ``x.startswith('orq:')`` / ``x.removeprefix('orq:')`` calls."""
+    def is_orq_prefix(arg: ast.expr) -> bool:
+        if isinstance(arg, ast.Tuple):
+            return any(is_orq_prefix(element) for element in arg.elts)
+        return isinstance(arg, ast.Constant) and arg.value == 'orq:'
+
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {'startswith', 'removeprefix'}
+        and node.args
+        and is_orq_prefix(node.args[0])
+    ]
+
+
+# Sites that predate normalize_tool_records. trace_finder/orq_source.py shrinks away with
+# RES-1756; the owasp bridge parses a dataset specifier ('orq:<dataset_id>'), not a tool record.
+ORQ_PREFIX_ALLOW = frozenset({
+    'openresponses/tool_records.py',  # canonical
+    'trace_finder/orq_source.py',  # RES-1756
+    'redteam/frameworks/owasp/evaluatorq_bridge.py',  # dataset specifier, unrelated
+})
+
+
+def test_orq_prefix_allowlist_does_not_grow() -> None:
+    assert len(ORQ_PREFIX_ALLOW) == 3, (
+        'ORQ_PREFIX_ALLOW changed size. Removing an entry (good) means lowering this number; '
+        'adding one means a new hand-rolled orq: tool-record reader slipped in.'
+    )
+
+
+def test_orq_tool_records_are_read_through_tool_records() -> None:
+    extra = [
+        f'{path.relative_to(SRC).as_posix()}:{lineno}'
+        for path in sorted(SRC.rglob('*.py'))
+        if path.relative_to(SRC).as_posix() not in ORQ_PREFIX_ALLOW
+        for lineno in _orq_prefix_lines(path.read_text(encoding='utf-8'))
+    ]
+    assert not extra, (
+        "'orq:' prefix test outside openresponses/tool_records.py: "
+        + ', '.join(extra)
+        + '. Read function_call / orq:<tool> records with normalize_tool_records — it pairs the '
+        'split records by call_id.'
+    )
+
+
+def test_orq_prefix_detector_actually_fires() -> None:
+    assert _orq_prefix_lines("x.startswith('orq:')") == [1]
+    assert _orq_prefix_lines("x.removeprefix('orq:')") == [1]
+    assert _orq_prefix_lines("x.startswith(('orq:', 'a'))") == [1]
+    assert _orq_prefix_lines("x.startswith('orq_')") == []
+    assert _orq_prefix_lines("# x.startswith('orq:')") == []
+
+
+def test_targets_are_called_only_through_call_target_with_retry() -> None:
+    extra = _hits(
+        lambda name: _tail(name) == 'respond',
+        allow={'common/target_call.py'},
+    )
+    assert not extra, (
+        'Target respond() called outside common/target_call.py: '
+        + ', '.join(extra)
+        + '. Use call_target_with_retry() — it hands the target a copy of the transcript without unpaired '
+        'tool calls and orphan results, which providers reject.'
+    )
 
 
 def test_openai_clients_come_from_llm_client() -> None:

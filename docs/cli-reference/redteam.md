@@ -14,7 +14,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 
 | Flag | Type / Default | Description |
 |---|---|---|
-| `--target` / `-t` | `str` (repeatable) | Target identifier(s). Use `agent:<key>` for Orq agents or `deployment:<key>`. Repeatable. |
+| `--target` / `-t` | `str` (repeatable) | Target identifier(s). Use `agent:<key>` for Orq agents or `deployment:<key>`. Repeatable. Required unless `--config` sets `"target"`. |
 | `--name` / `-n` | `str \| None` / `None` | Experiment name (defaults to `red-team`). |
 | `--mode` | `str` / `dynamic` | Execution mode: `dynamic`, `static`, or `hybrid`. |
 | `--category` / `-c` | `str` (repeatable) | OWASP categories to test (e.g. `ASI01`). Repeatable and/or comma-separated. Defaults to all. |
@@ -23,9 +23,9 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--delivery-method` / `-d` | `str` (repeatable) | Restrict to one or more delivery methods. Repeatable and/or comma-separated. |
 | `--max-turns` | `int` / `5` | Maximum conversation turns for multi-turn attacks. |
 | `--max-per-category` | `int \| None` / `None` | Cap strategies per category. |
-| `--attack-model` | `str` / `openai/gpt-5.6-luna` | Model for adversarial prompt generation. |
+| `--attack-model` | `str \| None` / `None` | Model for adversarial prompt generation. Unset resolves the `smart` role (`openai/gpt-6-sol` by default); see [Configuration › Models](../configuration.md#models). |
 | `--attacker-instructions` | `str \| None` / `None` | Domain-specific context to steer attack generation. |
-| `--evaluator-model` | `str` / `openai/gpt-5.6-luna` | Model for OWASP evaluation scoring. |
+| `--evaluator-model` | `str \| None` / `None` | Model for OWASP evaluation scoring. Unset resolves the `smart` role (`openai/gpt-6-sol` by default). |
 | `--min-evaluation-coverage` | `float` / `0.8` | Fraction of attacks that must produce a verdict, else exit non-zero. `0` warns instead of failing; a run where nothing could be scored still exits non-zero regardless. See **Exit codes** below. |
 | `--datapoint-parallelism` | `int` / `10` | Maximum concurrent datapoints/jobs. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |
@@ -35,10 +35,10 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--max-tool-continuations` | `int` / `5` | Maximum client-driven tool-result continuation rounds for Orq agents that emit `pending_tool_calls`. |
 | `--target-reasoning-effort` | `str \| None` / `None` | Reasoning effort pinned on the **target agent under test** (Responses-capable targets only). Accepted values differ per model; an unsupported one is rejected by the provider. Distinct from the attacker's and judge's own reasoning effort — see [Tuning](../tuning.md). |
 | `--generated-strategy-count` | `int` / `2` | Number of LLM-generated strategies per category. |
-| `--no-generate-strategies` | `bool` / `False` | Disable LLM-based strategy generation. |
+| `--generate-strategies` / `--no-generate-strategies` | `bool` / `--generate-strategies` | LLM-based strategy generation. Pass `--no-generate-strategies` to disable it. |
 | `--max-dynamic-datapoints` | `int \| None` / `None` | Cap dynamically generated datapoints. |
 | `--max-static-datapoints` | `int \| None` / `None` | Cap static (dataset) datapoints. |
-| `--no-cleanup-memory` | `bool` / `False` | Skip memory entity cleanup after dynamic runs. |
+| `--cleanup-memory` / `--no-cleanup-memory` | `bool` / `--cleanup-memory` | Memory entity cleanup after dynamic runs. Pass `--no-cleanup-memory` to skip it. |
 | `--dataset` | `str \| None` / `None` | Dataset source: local path, `hf:org/repo`, or `hf:org/repo/file.json`. |
 | `--from-run` | `str \| None` / `None` | Replay a previous run instead of generating data: pass its file name, run id, path, or `latest`. Re-runs the exact same attacks, so only the target and models may differ. Cannot be combined with `--mode`, `--dataset`, `--category`, `--vulnerability`, `--strategy`, `--delivery-method`, or the `--max-*-datapoints` caps. |
 | `--artifacts-dir` | `Path \| None` / `None` | Directory for saved JSON files. Required when `--save detail`. (`--output-dir` was removed; use `--artifacts-dir`.) |
@@ -52,10 +52,13 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--yes` / `-y` | `bool` / `False` | Skip confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` per-attack progress + info logs; `-vv` debug logs. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress progress bars and non-error output. |
+| `--config` | `JSON \| PATH \| -` / `None` | JSON object (shell-quote it), file path, or `-` to read JSON from stdin. See [Driving the CLI from a config file or inline JSON](#driving-the-cli-from-a-config-file-or-inline-json). |
+| `--llm-config` | JSON / `None` | `LLMConfig` as a JSON object. Merged field by field into `"llm_config"` from `--config`. Each of `--attack-model`, `--evaluator-model`, `--min-evaluation-coverage`, `--target-timeout-ms`, `--max-target-retries`, `--retry-count`, `--max-tool-continuations` and `--target-reasoning-effort` wins over it for its own field when passed. |
+| `--json` | `bool` / `False` | Print the final `RedTeamReport` as JSON on stdout. Progress and messages go to stderr; exit codes are unchanged. |
 
 **Delivery methods** (`--delivery-method`): `DAN`, `role-play`, `skeleton-key`, `base64`, `leetspeak`, `multilingual`, `character-spacing`, `crescendo`, `many-shot`, `authority-impersonation`, `refusal-suppression`, `direct-request`, `code-elicitation`, `code-assistance`, `tool-response`, `word-substitution`.
 
-**Saving results.** Persistence is controlled by two flags. `--save` accepts `none` (no files), `final` (summary JSON only), or `detail` (all per-stage artifacts). `--artifacts-dir DIR` sets where JSON is written and is **required** when `--save detail` (`--output-dir` was removed; use `--artifacts-dir`).
+**Saving results.** Persistence is controlled by two flags. `--save` accepts `none` (no files), `final` (summary JSON only), or `detail` (all per-stage artifacts). `--artifacts-dir DIR` sets where JSON is written and is **required** when `--save detail` (`--output-dir` was removed; use `--artifacts-dir`). What each file contains, and the fields of the report `--report` writes, are in the [output reference](../guides/red-teaming-output.md).
 
 **Exit codes.** `eq redteam run` exits `1` — after writing any requested report artifacts — in two cases, both read off `report.summary`:
 
@@ -63,6 +66,55 @@ eq redteam run --target agent:<key> [OPTIONS]
 - **Coverage below the floor** (`summary.coverage_below_minimum`): fewer than `--min-evaluation-coverage` (default **`0.8`**) of attacks got a verdict. **A run that finishes at 79% coverage now exits `1`**, not `0` with a warning — the same run used to pass. Pass `--min-evaluation-coverage 0` to warn instead of failing, or a higher value to be stricter. The Python equivalent is `EvaluatorConfig.min_evaluation_coverage` (`None` there also means warn-only) — see [Red Teaming › In CI](../guides/red-teaming.md#in-ci).
 
 Both cases print the dominant failure cause with a sample message before exiting: an `evaluation/<code>` (timeout / parse / api_connection / api_status / scorer_exception) when the judge failed, or an `execution/<code>` when the target failed and there was nothing to judge. Either way a systematically blocked run is diagnosable from the CLI output alone.
+
+### Driving the CLI from a config file or inline JSON
+
+`--config` takes the keyword arguments of the Python `red_team()` function as one JSON object, so every data-shaped parameter is reachable from the CLI, including the ones without a flag (`datapoints`, `attack_techniques`, `description`, the full `llm_config`, a tuned `recommendations` object). Pass a JSON file path, a shell-quoted inline JSON object, or `-` to read JSON from stdin. YAML is not accepted. Inline JSON is recognized after leading whitespace is stripped; a filename beginning with `{` can be passed as `./{name}.json` to disambiguate it. Malformed inline JSON is reported as a JSON usage error and is not retried as a file path.
+For sensitive values, prefer a config file or stdin instead of placing them in shell history or process arguments.
+
+The Python alias `parallelism` is accepted too. If both names are supplied in the config, `datapoint_parallelism` wins, as in the Python API. An explicit `--datapoint-parallelism` replaces either config spelling. Use `eq redteam schema` for the complete accepted shape.
+
+```json
+{
+  "target": "agent:my-agent",
+  "mode": "dynamic",
+  "vulnerabilities": ["goal_hijacking", "prompt_injection"],
+  "max_turns": 3,
+  "llm_config": {
+    "attacker": {"model": "openai/gpt-5.6-luna", "temperature": 0.9},
+    "evaluator": {"model": "openai/gpt-5.6-luna"}
+  },
+  "recommendations": {"max_areas": 2},
+  "save": "none"
+}
+```
+
+```bash
+eq redteam run --config run.json --json > report.json
+cat run.json | eq redteam run --config - --max-turns 5 --json
+eq redteam run --config '{"target":"agent:my-agent","max_turns":3,"save":"none"}' --json
+```
+
+A flag passed on the command line beats the config, and the config beats the default. The command checks where a value came from, not what it is, so `--max-turns 5` wins over `"max_turns": 3` even if 5 were the default. A `null` in the config means "not set" and falls back to the default. `--llm-config` and `--system-prompt` merge into the config's `llm_config` and `target_config` rather than replacing them.
+
+Unknown keys fail the run before anything executes, at every depth: `"max_turn"` at the top level and `"temprature"` inside `llm_config` are both rejected with the field path, whether the config came from inline JSON, a file, or stdin. `"target"` takes only the string forms; an `AgentTarget` object, `hooks` and `llm_client` stay Python-only.
+
+
+With `--json`, stdout carries the `RedTeamReport` and nothing else, so it pipes straight into `jq` or a file. The coverage gates above still apply: a run below the floor prints its report and then exits `1`.
+
+---
+
+## `eq redteam schema`
+
+Print a JSON schema: what `eq redteam run --config` accepts, or what `eq redteam run --json` prints.
+
+```bash
+eq redteam schema [--input | --output]
+```
+
+| Flag | Type / Default | Description |
+|---|---|---|
+| `--input` / `--output` | `bool` / `--input` | `--input` prints the config file schema (`RedTeamCliConfig`). `--output` prints the `RedTeamReport` schema. |
 
 ---
 

@@ -85,7 +85,7 @@ One container belongs to each target clone. Its workdir and container home are h
 
 On macOS, OrbStack works through Docker's context support. Select it with `DockerOptions(context='orbstack')` as described in the [OrbStack Docker documentation](https://docs.orbstack.dev/docker/); commercial use requires a paid OrbStack Pro licence ([pricing](https://orbstack.dev/pricing)). A remote Docker context can start the container, but host workdir bind mounts resolve on the remote machine and usually cannot see the local temporary directory. Embedded applications should call `await target.close()` when finished; SIGTERM cleanup is also registered, while SIGKILL cannot be handled and relies on the five-minute lease.
 
-On Windows, Docker Desktop works as is. A Windows host has no uid to pass through, so the container runs as the image's `agent` user (uid 1001); a custom image without that user still works, because the entrypoint adds a passwd entry for it. Cleanup relies on `close()`, `atexit` and the five-minute lease, since Windows delivers no SIGTERM or SIGHUP. Ending a timed-out host-mode turn is best effort: `taskkill /T` reaches the processes still attached to the agent CLI, not ones it left behind after exiting.
+On Windows, Docker Desktop works as is. A Windows host has no uid to pass through, so the container runs as the image's `agent` user (uid 1001); a custom image without that user still works, because the entrypoint adds a passwd entry for it. Cleanup relies on `close()`, `atexit` and the five-minute lease, since Windows delivers no SIGTERM or SIGHUP. Ending a timed-out host-mode turn is best effort: `taskkill /T` reaches the processes still attached to the agent CLI, not ones it left behind after exiting. The binary is looked up on the `PATH` from `env`, with the host's `PATHEXT`, so an npm-installed `claude.cmd` or `codex.cmd` is found.
 
 ```python
 from evaluatorq.backends import CodingAgentTarget, DockerOptions
@@ -175,11 +175,12 @@ Failures surface as `cli.*` error codes on the result, in this order of preceden
 
 | Code | Meaning | Retried by the runner |
 |---|---|---|
-| `cli.not_found` | The binary is not on `PATH` | No |
+| `cli.not_found` | The binary is not on the `PATH` in `env`, or on the host `PATH` when `env` sets none | No |
 | `cli.timeout` | The 300 s default idle limit or 2 h hard cap is reached; the process group is killed and a container is removed. `timeout_ms` controls the idle limit, which must exceed the longest single tool call. The runner timeout does not apply. | No |
 | `cli.image_missing` | The configured container image is not available locally; build it with `eq coding-agent build-image` or `docker build` | No |
 | `cli.container_start` | The container CLI cannot start the container, for example because the daemon, context or `run_args` is invalid | No |
 | `cli.agent_not_found` | The selected agent or `evq-entrypoint` is missing from the image `PATH` | No |
+| `cli.unsafe_shim` | Windows only: the binary resolves to a `.cmd` or `.bat` launcher, such as an npm-installed `claude.cmd`, and an argument carries a character `cmd.exe` would interpret (`" % & \| < > ^ !` or a line break). The system prompt is moved into the stdin transcript there, so this comes from `extra_args` or `model`. Install the native executable (for `orq`, `orq-win32-x64.exe` from the orq-cli releases page, saved as `orq.exe`) or drop the character | No |
 | `cli.prompt_too_long` | The OS refused the argv; under `launcher='orq'` codex and opencode take the rendered transcript as one argument, so a long conversation can exceed the limit | No |
 | `cli.exit.<code>` | Non-zero exit, even if a result was printed | Yes |
 | `cli.parse_error` | Stdout contained no JSON events | Yes |

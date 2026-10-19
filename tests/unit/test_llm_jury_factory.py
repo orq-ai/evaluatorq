@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import importlib
+import typing
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import create_model
 
-import importlib
-
 from evaluatorq.common import judge as judge_mod
-from evaluatorq.common.judge import JudgeOutcome, EvaluatorResponsePayload
+from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
 from evaluatorq.llm_jury import llm_jury
 from evaluatorq.types import DataPoint
 
@@ -104,7 +104,7 @@ def test_validation_aggregator_kind_mismatch():
     with pytest.raises(ValueError, match="numeric-only"):
         llm_jury(name="x", criteria="c", aggregator="median")
     with pytest.raises(ValueError, match="Unknown aggregator"):
-        llm_jury(name="x", criteria="c", aggregator="banana")  # pyright: ignore[reportArgumentType]
+        llm_jury(name="x", criteria="c", aggregator=typing.cast(typing.Any, "banana"))
 
 
 @pytest.mark.asyncio
@@ -253,7 +253,7 @@ async def test_scorer_inconclusive_when_all_judges_abstain():
 async def test_scorer_does_not_count_false_abstain_as_vulnerable():
     verdict_model = create_model('AbstainingVerdict', value=(bool, ...), explanation=(str, ...), abstain=(bool, ...))
     message = MagicMock(
-        parsed=verdict_model(value=False, explanation='uncertain', abstain=True),
+        parsed=verdict_model(value=False, explanation='uncertain', abstain=True),  # ty: ignore[pydantic-discarded-extra-argument]
         refusal=None,
     )
     completion = MagicMock(choices=[MagicMock(message=message, finish_reason='stop')], usage=None)

@@ -425,7 +425,7 @@ class TestBridgeDeliveryFilter:
 
     # Selections are passed positionally-by-keyword rather than via **kwargs
     # unpacking: a `**{name: value}` call erases every other parameter's type
-    # for basedpyright, which CI runs over tests as well as src.
+    # for static analysis, which CI runs over tests as well as src.
     @pytest.mark.parametrize(
         ('categories', 'delivery_methods'),
         [([], None), (None, [])],

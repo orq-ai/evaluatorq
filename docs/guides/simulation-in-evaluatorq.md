@@ -157,7 +157,7 @@ The user simulator and the judge are model calls, so `turn_count` and `goal_achi
 | `target` | — | The agent under test, as a callable taking `list[Message]`. |
 | `agent_key` | — | An Orq deployment key, used instead of `target`. Exactly one of the two is required; if both are given, `target` wins. |
 | `max_turns` | `10` | Turn budget per conversation. Hitting it stops the run with `terminated_by: max_turns`. |
-| `model` | `openai/gpt-5.6-luna` | The model for the **user simulator and the judge** — not for the agent under test, which is whatever `target` or `agent_key` resolves to. |
+| `model` | unset: the simulated user runs on the `fast` role (`openai/gpt-6-luna`), the judge on the `smart` role (`openai/gpt-6-sol`) | One model for the **user simulator and the judge**, when set — not for the agent under test, which is whatever `target` or `agent_key` resolves to. |
 | `user_simulator` | built-in | A custom `BaseAgent` to play the user. |
 | `judge` | built-in | A custom `BaseAgent` to score the conversation. |
 
@@ -174,7 +174,7 @@ Scoring both, as two separate evaluators, is usually what you want — criteria 
 
 ## What the job returns
 
-The job's output is an OpenResponses response dict. The transcript is in `input` and `output` — user turns as `input_text`, agent turns as `output_text` — and everything the judge concluded is under `metadata`:
+The job's output is an OpenResponses response dict. The transcript is in `input` and `output` — user turns as `input_text`, agent turns as `output_text` — and everything the judge concluded is under `metadata`. An agent turn with neither text nor tool calls is kept as an empty `output_text` message, so a silent reply stays in place in the conversation:
 
 | `metadata` key | Type | What it holds |
 |---|---|---|
@@ -192,6 +192,8 @@ The job's output is an OpenResponses response dict. The transcript is in `input`
 | `scorer_errors` | `dict \| None` | Scorer failures recorded after conversion. Always present; it is `None` on this job path because conversion happens before scoring. |
 | `datapoint_id` | `str \| None` | The simulation datapoint identifier. Always present; `None` when the result carries no datapoint id. |
 | `turn_metrics` | `list[dict]` | Per-turn latency and token detail. Present only when metrics were collected. |
+| `item_order` | `list[str]` | One entry per `input` and `output` item, each `"input"` or `"output"`, in transcript order. Walk it with one cursor per list to rebuild the conversation; `orq_evaluator` uses it to send the full conversation. |
+| `assistant_turn_order` | `list[int \| None]` | One entry per `output` item: the source message index for assistant text and tool calls, or `None` for a tool result. Equal indexes keep one assistant message together; different indexes preserve separate assistant turns. Older exports without this key retain adjacent-assistant grouping. |
 
 `criteria_results` and `turn_metrics` are optional, so read them with a default rather than by subscript. The audit and error keys listed as always present are different: their `None` value carries meaning, so preserve it instead of treating it as an empty collection.
 

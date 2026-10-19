@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import warnings
 
+DEFAULT_DATAPOINT_PARALLELISM = 10
+"""Datapoints run concurrently when the caller names no ``datapoint_parallelism``. Every entry point
+(``evaluatorq``, ``red_team``, ``simulate``, ``generate_and_simulate``) and the CLI share this one value."""
+
 
 def resolve_datapoint_parallelism(
     datapoint_parallelism: int | None,
     parallelism: int | None,
     *,
-    default: int,
+    default: int = DEFAULT_DATAPOINT_PARALLELISM,
     caller: str,
 ) -> int:
     """Return the effective datapoint concurrency, warning if the old name was used.

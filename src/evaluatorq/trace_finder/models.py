@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping  # noqa: TC003
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime  # noqa: TC003
 from types import MappingProxyType
@@ -21,6 +21,8 @@ from pydantic import (
 from typing_extensions import Self
 
 from evaluatorq.common.judge import ClassifyQuestion, ClassifyResponse  # noqa: TC001
+from evaluatorq.common.trace_document import TraceDocument  # noqa: TC001 - pydantic field type
+from evaluatorq.trace_finder.settings import MAX_TRACE_INPUT_CHARS
 
 FacetName = Literal['project', 'model', 'provider', 'status', 'product', 'trace_type', 'agent_name', 'tool_name']
 FACET_NAMES: tuple[FacetName, ...] = (
@@ -35,6 +37,10 @@ FACET_NAMES: tuple[FacetName, ...] = (
 )
 NumericFacetName = Literal['tokens', 'duration_ms']
 NUMERIC_FACET_NAMES: tuple[NumericFacetName, ...] = ('tokens', 'duration_ms')
+
+
+# Shared limit for the persisted classifier-input cap.
+MAX_INPUT_CHAR_BUDGET = MAX_TRACE_INPUT_CHARS
 
 
 class TraceRecord(BaseModel):
@@ -55,6 +61,8 @@ class TraceRecord(BaseModel):
     trace_type: str
     agent_name: str = ''
     tool_names: tuple[str, ...] = ()
+    tool_definition_count: int = Field(default=0, ge=0)
+    tool_definition_tokens: int = Field(default=0, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
     duration_ms: int | None = Field(default=None, ge=0)
     capture_metadata: dict[str, Any] = Field(default_factory=dict)
@@ -76,25 +84,39 @@ class TraceProjection(BaseModel):
 
     payload: dict[str, Any]
     serialized: str
-    estimated_tokens: int = Field(ge=0, le=25_000)
+    estimated_tokens: int = Field(ge=0, le=MAX_INPUT_CHAR_BUDGET, description='UTF-8 serialized input size estimate.')
     omitted_messages: int = Field(ge=0)
-    omitted_bytes: int = Field(ge=0, description='Bytes omitted to fit the token budget; excludes schema projection.')
+    omitted_bytes: int = Field(ge=0, description='Source bytes omitted or compressed from classifier input.')
 
 
-class TraceClassification(BaseModel):
-    """One terminal EvaluatorQ classification, including its source result."""
+class DimensionAnswer(BaseModel):
+    """The classifier's verdict for one dimension of one trace."""
 
     model_config = ConfigDict(frozen=True)
 
-    trace_id: str
-    span_id: str
     value: bool | float | str | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     probabilities: dict[str, float] | None = None
     matched: bool = False
     error: str | None = None
     summary: str | None = None
-    raw_result: dict[str, Any]
+
+
+class TraceClassification(BaseModel):
+    """One trace's terminal result: an answer per dimension, matched only when every dimension matched.
+
+    A run with no dimensions answers from its filters alone, so each of its traces is matched
+    with no answers.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    trace_id: str
+    span_id: str
+    answers: tuple[DimensionAnswer, ...] = ()
+    matched: bool = False
+    error: str | None = None
+    raw_result: dict[str, Any] = Field(default_factory=dict)
 
 
 class Snapshot(BaseModel):
@@ -103,7 +125,12 @@ class Snapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     traces: tuple[TraceRecord, ...]
+    documents: tuple[TraceDocument, ...] = ()
     capture_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.traces and not self.documents
 
 
 class FacetSelection(BaseModel):
@@ -123,7 +150,11 @@ class FacetSelection(BaseModel):
 
 
 class FacetCatalogue(BaseModel):
-    """Available trace facet values and fields whose returned values were truncated."""
+    """Available trace facet values, fields whose returned values were truncated, and per-value trace counts.
+
+    ``value_counts`` holds Orq's trace count per value for each facet that reported one for every value it
+    returned; a facet without counts is absent rather than zero.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -136,6 +167,7 @@ class FacetCatalogue(BaseModel):
     agent_name: tuple[str, ...] = ()
     tool_name: tuple[str, ...] = ()
     truncated_facets: frozenset[FacetName] = frozenset()
+    value_counts: dict[str, dict[str, int]] = {}
 
 
 class NumericFilters(BaseModel):
@@ -170,9 +202,23 @@ class PopulationRequest(BaseModel):
 
     start: datetime | None = None
     end: datetime | None = None
+    time_origin: Literal['default', 'explicit', 'within_results'] = 'default'
+    end_exclusive: bool = False
     facets: FacetSelection = FacetSelection()
     numeric: NumericFilters = NumericFilters()
     limit: int = Field(default=500, ge=1, le=5000)
+
+    @model_validator(mode='before')
+    @classmethod
+    def infer_time_origin_from_bounds(cls, values: Any) -> Any:
+        """Treat bounds as caller-explicit unless a request explicitly declares another origin."""
+        if (
+            isinstance(values, Mapping)
+            and 'time_origin' not in values
+            and (values.get('start') is not None or values.get('end') is not None)
+        ):
+            return {**values, 'time_origin': 'explicit'}
+        return values
 
     @field_validator('start', 'end')
     @classmethod
@@ -190,6 +236,15 @@ class PopulationRequest(BaseModel):
         if self.start is not None and self.end is not None and self.start > self.end:
             raise ValueError('start must not be after end')
         return self
+
+    def contains_time(self, timestamp: datetime) -> bool:
+        """Whether *timestamp* falls inside this window: the start is inclusive, and the end is exclusive only for a generated calendar-day end."""
+
+        if self.start is not None and timestamp < self.start:
+            return False
+        if self.end is None:
+            return True
+        return timestamp < self.end if self.end_exclusive else timestamp <= self.end
 
 
 class ValueSelection(BaseModel):
@@ -214,11 +269,28 @@ class ThresholdSelection(BaseModel):
 SelectionRule = Annotated[ValueSelection | ThresholdSelection, Field(discriminator='kind')]
 
 
+MAX_DIMENSIONS = 3
+
+# One rule, sent verbatim to both the filter selector and the compiler, so the two planners cannot
+# disagree about whether a phrase is a metadata filter or a judgment of the conversation.
+FILTER_OR_JUDGMENT_RULE = """Metadata filter or conversation judgment:
+- Use a metadata filter only for an exact value the user literally names (a project, model, provider, agent, tool, product or trace type) or for an explicit trace status request ("failed traces", "status error", "errored traces").
+- Anything that needs reading what happened in the conversation is a conversation judgment: a tool call failed or returned an error, the agent gave up, the user was frustrated, a hallucination, a refusal. Never also map it onto a status filter or any other metadata value.
+- When a word could be either ("errors", "issues"), make it a conversation judgment and add no status filter, unless the user says status, failed trace or errored trace.
+- Aggregate questions (totals, averages, counts, rankings) cannot be answered by finding traces: use no filter and no judgment.
+Examples:
+- "failed traces" -> status filter; no judgment.
+- "tool errors" -> judgment "a tool call returned an error"; no status filter.
+- "gpt-5 traces where the user is angry" -> model filter gpt-5 and judgment "the user is angry".
+- "which model costs the most?" -> nothing; it is an aggregate question."""
+
+
 class CompiledQuery(BaseModel):
-    """A semantic classifier task and its validated inclusion rule."""
+    """One classifier dimension: a short column name, a semantic task and its validated inclusion rule."""
 
     model_config = ConfigDict(frozen=True)
 
+    name: str = Field(default='AI match', min_length=1, max_length=40)
     task: ClassifyQuestion
     selection: SelectionRule
 
@@ -259,20 +331,25 @@ class RunSnapshot:
     """A frozen progress view; public reads detach nested mutable values from the owner."""
 
     generation: int = 0
+    explorer_generation: int | None = None
     state: RunState = 'idle'
     phase: RunPhase | None = None
     request: RunRequest | None = None
-    compiled: CompiledQuery | None = None
+    within_results: bool = False
+    dimensions: tuple[CompiledQuery, ...] | None = None
     explicit_filters: FacetSelection = field(default_factory=FacetSelection)
     explicit_numeric: NumericFilters = field(default_factory=NumericFilters)
     generated_filters: FacetSelection = field(default_factory=FacetSelection)
     generated_numeric: NumericFilters = field(default_factory=NumericFilters)
     filter_response: ClassifyResponse | None = None
     filter_selection_error: str | None = None
+    plan_warning: str | None = None
     trace_ids: tuple[str, ...] = ()
     traces: tuple[TraceRecord, ...] = ()
     results: Mapping[str, TraceClassification] = field(default_factory=lambda: MappingProxyType({}))
     projections: Mapping[str, TraceProjection] = field(default_factory=lambda: MappingProxyType({}))
+    loaded: int = 0
+    to_load: int = 0
     total: int = 0
     completed: int = 0
     failed: int = 0
@@ -286,10 +363,15 @@ class RunSnapshot:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error: str | None = None
+    classifier_model: str | None = None
+    """The model the store classifies with, fixed when the store was built."""
+    generated_time: tuple[datetime | None, datetime | None] | None = None
+    provenance: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'results', MappingProxyType(dict(self.results)))
         object.__setattr__(self, 'projections', MappingProxyType(dict(self.projections)))
+        object.__setattr__(self, 'provenance', MappingProxyType(dict(self.provenance)))
 
 
 @dataclass(frozen=True)
@@ -299,7 +381,17 @@ class TraceDetail:
     trace: TraceRecord
     projection: TraceProjection | None
     classification: TraceClassification | None
-    compiled: CompiledQuery | None = None
+    dimensions: tuple[CompiledQuery, ...] | None = None
+
+
+def selection_rule_text(compiled: CompiledQuery) -> tuple[str, str]:
+    """When a dimension includes a trace, in plain words as ``(lead, value)``, e.g. ``('Answer is', 'yes')``."""
+    selection = compiled.selection
+    if selection.kind == 'threshold':
+        return f'Score {"at least" if selection.operator == "gte" else "at most"}', f'{selection.value:g}'
+    if compiled.task.kind == 'noul':
+        return 'Answer is', ' or '.join('yes' if value else 'no' for value in selection.values)
+    return 'Verdict', ' or '.join(str(value) for value in selection.values)
 
 
 def validate_compiled_query(task: ClassifyQuestion, selection: SelectionRule) -> None:

@@ -17,7 +17,7 @@ from evaluatorq.simulation._seed_extension import require_orq_api_key
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import LLMCallConfig
-    from evaluatorq.simulation.types import SimulationDatapoint
+    from evaluatorq.simulation.contracts import SimulationDatapoint
 
 
 async def datapoints_from_dataset(
@@ -82,8 +82,8 @@ async def extend_from_dataset(
         dataset_id: The Orq dataset ID to seed from.
         num_personas: New personas to request from the generator.
         num_scenarios: New scenarios to request from the generator.
-        llm_config: Model and sampling settings for the generators. Defaults to the simulation
-            default model with every other field unset.
+        llm_config: Model and sampling settings for the generators. Defaults to the fast model
+            role with every other field unset.
         agent_description: Description of the agent under test for the generators. Derived from the
             seed scenarios' goals when omitted.
         api_key: Orq API key for dataset fetching and generation; falls back to ``ORQ_API_KEY``.

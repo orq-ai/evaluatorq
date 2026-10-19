@@ -3,27 +3,31 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path  # noqa: TC003 — Typer resolves this annotation at runtime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import typer
 from loguru import logger
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
 from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_errors import emit_error
+from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.model_roles import BUILTIN, add_cli_models
 from evaluatorq.common.orq_client import (
     DEFAULT_ORQ_BASE_URL,
+    OrqProfile,
     close_orq_client,
     list_orq_profiles,
     resolve_orq_client,
 )
+from evaluatorq.common.reports import confirm_run_plan
 
 from .compiler import CompileError
 from .debug import cli_debug
@@ -31,23 +35,44 @@ from .debug import enabled as debug_enabled
 from .export import export_json
 from .filter_selector import FilterSelectionError
 from .models import (
+    FACET_NAMES,
+    DimensionAnswer,
     FacetSelection,
     NumericFilters,
     PopulationRequest,
     RunRequest,
     RunSnapshot,
     TraceClassification,
+    selection_rule_text,
 )
 from .orq_source import OrqSourceError
 from .pipeline import build_run_store
 from .run_store import RunStore
-from .settings import credential_fingerprint, effective_settings
+from .settings import effective_settings
 
 MAX_FIND_WAIT_SECONDS = 2 * 60 * 60
+
+
+def resolve_cli_profile(name: str | None) -> OrqProfile | None:
+    """Use an explicitly named or saved Orq profile without falling back when it is unavailable."""
+    if name is None:
+        return None
+    selected = next((candidate for candidate in list_orq_profiles() if candidate.name == name), None)
+    if selected is None:
+        raise ValueError(f'Orq profile {name!r} is unavailable. Check `orq auth profile list`.')
+    if '*' in selected.api_key:
+        raise ValueError(
+            f'Orq profile {name!r} has a masked key that evaluatorq cannot read. '
+            'Run `orq doctor --fix` or use ORQ_API_KEY.'
+        )
+    return selected
+
 
 _FIND_EPILOG = examples(
     '# find traces whose conversations match a semantic question',
     'eq find "customers asking for a refund"',
+    '# skip the plan confirmation, for scripts',
+    'eq find "customers asking for a refund" --yes',
     '# scope the live population with repeatable metadata facets',
     'eq find "mentions a refund" --project support-agent --model gpt-5.6-luna',
     '# use credentials from an orq CLI profile',
@@ -92,6 +117,7 @@ def _request(
     *,
     query: str,
     settings: Any,
+    window_days_explicit: bool = False,
     project: list[str] | None,
     model: list[str] | None,
     provider: list[str] | None,
@@ -108,10 +134,11 @@ def _request(
     end = datetime.now(timezone.utc)
     return RunRequest(
         query=query,
-        mode='immediate',
+        mode='review',
         population=PopulationRequest(
             start=end - timedelta(days=settings.window_days),
             end=end,
+            time_origin='explicit' if window_days_explicit else 'default',
             facets=_facets(
                 project=project,
                 model=model,
@@ -149,7 +176,8 @@ def _progress_key(snapshot: RunSnapshot) -> tuple[str, int, int, int, int]:
 
 def _print_matches(console: Console, snapshot: RunSnapshot) -> None:
     table = Table(title='Matched traces')
-    for column in ('Trace ID', 'Verdict', 'Confidence', 'Project', 'Model', 'Time'):
+    names = tuple(dimension.name for dimension in snapshot.dimensions or ())
+    for column in ('Trace ID', *names, 'Project', 'Model', 'Time'):
         table.add_column(column)
     traces = {trace.trace_id: trace for trace in snapshot.traces}
     matches: list[tuple[Any, TraceClassification]] = [
@@ -158,12 +186,10 @@ def _print_matches(console: Console, snapshot: RunSnapshot) -> None:
         if result.matched and result.error is None and trace_id in traces
     ]
     for trace, result in sorted(matches, key=lambda item: item[0].timestamp, reverse=True):
-        confidence = '—' if result.confidence is None else f'{result.confidence:.2f}'
-        verdict = '—' if result.value is None else str(result.value)
+        verdicts = (_verdict(answer) for answer in result.answers)
         table.add_row(
             trace.trace_id,
-            verdict,
-            confidence,
+            *verdicts,
             trace.project,
             trace.model,
             trace.timestamp.isoformat(timespec='seconds'),
@@ -175,15 +201,61 @@ def _print_matches(console: Console, snapshot: RunSnapshot) -> None:
     console.print(f'Summary: {snapshot.matched:,} matched of {snapshot.total:,}; {snapshot.failed:,} failed.')
 
 
-async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot:
-    snapshot = await store.compile(request, wait=False)
+def _verdict(answer: DimensionAnswer) -> str:
+    value = '—' if answer.value is None else str(answer.value)
+    return value if answer.confidence is None else f'{value} ({answer.confidence:.2f})'
+
+
+def _filters_text(facets: FacetSelection, numeric: NumericFilters) -> str:
+    parts = [
+        f'{name.replace("_", " ")}: {", ".join(sorted(values))}'
+        for name in FACET_NAMES
+        if (values := getattr(facets, name))
+    ]
+    if facets.project_id:
+        parts.append(f'project id: {facets.project_id}')
+    parts.extend(
+        f'{name.replace("_", " ")}: {value:,}' for name, value in numeric.model_dump().items() if value is not None
+    )
+    return '; '.join(parts) or 'none'
+
+
+def _plan_rows(snapshot: RunSnapshot) -> list[tuple[str, str]]:
+    request = snapshot.request
+    rows: list[tuple[str, str]] = []
+    if request is not None:
+        rows.append(('Question', request.query))
+        start, end = request.population.start, request.population.end
+        if start is not None and end is not None:
+            rows.append(('Window', f'{start:%Y-%m-%d %H:%M} to {end:%Y-%m-%d %H:%M} UTC'))
+    rows.extend([
+        ('Your filters', _filters_text(snapshot.explicit_filters, snapshot.explicit_numeric)),
+        ('Filters from question', _filters_text(snapshot.generated_filters, snapshot.generated_numeric)),
+    ])
+    for dimension in snapshot.dimensions or ():
+        lead, value = selection_rule_text(dimension)
+        rows.append((f'Dimension: {dimension.name}', f'{dimension.task.instructions}\nIncluded when: {lead} {value}'))
+    traces = f'{snapshot.total:,}'
+    if request is not None and snapshot.total >= request.population.limit:
+        traces += ' (the trace limit; more traces may match)'
+    rows.append(('Traces', traces))
+    if snapshot.filter_selection_error:
+        rows.append(('Filter warning', f'No filters from the question: {snapshot.filter_selection_error}'))
+    if snapshot.plan_warning:
+        rows.append(('Plan warning', snapshot.plan_warning))
+    return [(escape(name), escape(value)) for name, value in rows]
+
+
+async def _poll(
+    store: Any, snapshot: RunSnapshot, console: Console, *, active: frozenset[str], timeout: float
+) -> RunSnapshot:
     last_progress = _progress_key(snapshot)
     if debug_enabled():
         _print_progress(console, snapshot)
 
     async def poll() -> RunSnapshot:
         nonlocal snapshot, last_progress
-        while snapshot.state not in {'completed', 'failed', 'cancelled'}:
+        while snapshot.state in active:
             await asyncio.sleep(0.5)
             snapshot = await store.snapshot_for_render() if isinstance(store, RunStore) else await store.snapshot()
             progress = _progress_key(snapshot)
@@ -193,18 +265,59 @@ async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot
         return await store.snapshot() if isinstance(store, RunStore) else snapshot
 
     try:
-        return await asyncio.wait_for(poll(), timeout=MAX_FIND_WAIT_SECONDS)
+        if debug_enabled():
+            return await asyncio.wait_for(poll(), timeout=timeout)
+        with console.status('Finding traces…'):
+            return await asyncio.wait_for(poll(), timeout=timeout)
     except asyncio.TimeoutError as error:
         try:
             await asyncio.wait_for(store.cancel(), timeout=10)
         except asyncio.TimeoutError:
             logger.warning('Trace finder cancellation did not complete within 10 seconds after the CLI wait limit')
-        raise TimeoutError(f'Find run exceeded the {MAX_FIND_WAIT_SECONDS}-second wait limit.') from error
+        raise TimeoutError(
+            f'Find run exceeded the combined planning and classification limit of {MAX_FIND_WAIT_SECONDS:,} seconds.'
+        ) from error
 
 
-async def _run_with_cleanup(store: Any, request: RunRequest, console: Console, resolved: Any, orq: Any) -> RunSnapshot:
+async def _run(store: Any, request: RunRequest, console: Console, *, yes: bool = False) -> RunSnapshot | None:
+    """Compile for review, confirm the plan, then classify; ``None`` when the user declines.
+
+    Planning and classification share one wait budget; time at the prompt does not count.
+    """
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    snapshot = await store.compile(request, wait=False)
+    snapshot = await _poll(store, snapshot, console, active=frozenset({'compiling'}), timeout=MAX_FIND_WAIT_SECONDS)
+    if snapshot.state != 'awaiting_review':
+        return snapshot
+    planning = loop.time() - began
+    dimensions = snapshot.dimensions or ()
+    noun = 'trace' if snapshot.total == 1 else 'traces'
+    confirmed = await confirm_run_plan(
+        console,
+        title='Find plan',
+        rows=_plan_rows(snapshot),
+        prompt=f'Classify {snapshot.total:,} {noun}?',
+        # A zero-dimension plan makes no classify calls, so there is nothing to approve.
+        skip_confirm=should_skip_confirm(yes) or not dimensions,
+    )
+    if not confirmed:
+        return None
+    snapshot = await store.start(snapshot.request, dimensions, wait=False)
+    return await _poll(
+        store,
+        snapshot,
+        console,
+        active=frozenset({'compiling', 'classifying'}),
+        timeout=max(MAX_FIND_WAIT_SECONDS - planning, 0),
+    )
+
+
+async def _run_with_cleanup(
+    store: Any, request: RunRequest, console: Console, resolved: Any, orq: Any, *, yes: bool
+) -> RunSnapshot | None:
     try:
-        return await _run(store, request, console)
+        return await _run(store, request, console, yes=yes)
     finally:
         try:
             await store.close()
@@ -226,6 +339,10 @@ def find(
         bool,
         typer.Option('--debug', help='Show progress and model requests and responses, including trace content.'),
     ] = False,
+    yes: Annotated[  # noqa: FBT002 (named CLI flag)
+        bool,
+        typer.Option('--yes', '-y', help='Skip the plan confirmation prompt.'),
+    ] = False,
     profile: Annotated[
         str | None,
         typer.Option(
@@ -236,6 +353,10 @@ def find(
         int | None,
         typer.Option('--window-days', min=1, max=90, help='How many recent days to search.'),
     ] = None,
+    filter_selection: Annotated[
+        Literal['llm', 'llm+jev'] | None,
+        typer.Option('--filter-selection', help='Natural-language metadata filter mode: llm or llm+jev.'),
+    ] = None,
     limit: Annotated[int | None, typer.Option('--limit', min=1, max=5000, help='Maximum traces to classify.')] = None,
     parallelism: Annotated[
         int | None,
@@ -245,14 +366,14 @@ def find(
         str | None,
         typer.Option(
             '--compiler-model',
-            help='Model that compiles the search question via the Orq router. Default: openai/gpt-5.6-luna. Requires Orq credentials.',
+            help=f'Model that compiles the search question via the Orq router. Default: {BUILTIN["fast"]}. Requires Orq credentials.',
         ),
     ] = None,
     classifier_model: Annotated[
         str | None,
         typer.Option(
             '--classifier-model',
-            help='Model that classifies each trace via the Orq router. Default: typesafe/jev-latest. Requires Orq credentials.',
+            help=f'Model that classifies each trace via the Orq router (sets the finder.classifier task only, not the classifier role). Default: {BUILTIN["classifier"]}. Requires Orq credentials.',
         ),
     ] = None,
     json_path: Annotated[Path | None, typer.Option('--json', help='Write the completed run export to PATH.')] = None,
@@ -284,31 +405,32 @@ def find(
     """Find recent Orq traces that satisfy a natural-language classifier task."""
     settings = effective_settings({
         'window_days': window_days,
+        'filter_selection': filter_selection,
         'limit': limit,
         'parallelism': parallelism,
-        'compiler_model': compiler_model,
-        'classifier_model': classifier_model,
     })
+    # The dashboard's OAuth scope must not constrain this CLI command, which resolves
+    # its own environment or API-key profile credential.
+    if settings.orq_auth_method == 'cli_oauth':
+        settings = settings.model_copy(update={'orq_workspace': None, 'orq_project_id': None, 'orq_project_name': None})
+    # Added on top of the root flags, which `set_cli_models` would discard.
+    add_cli_models(
+        overrides={
+            task: model
+            for task, model in (('finder.compiler', compiler_model), ('finder.classifier', classifier_model))
+            if model
+        }
+    )
     orq = None
     try:
-        selected = None
-        profile_name = profile if profile is not None else settings.orq_profile
-        if profile_name is not None:
-            selected = next((candidate for candidate in list_orq_profiles() if candidate.name == profile_name), None)
-            if selected is None:
-                raise ValueError(f'Orq profile {profile_name!r} is unavailable. Check `orq auth profile list`.')
-            if '*' in selected.api_key:
-                raise ValueError(
-                    f'Orq profile {profile_name!r} has a masked key that evaluatorq cannot read. '
-                    'Run `orq doctor --fix` or use ORQ_API_KEY.'
-                )
+        saved_profile = settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
+        profile_name = profile if profile is not None else saved_profile
+        selected = resolve_cli_profile(profile_name)
         if selected is None:
-            fingerprint = credential_fingerprint(os.environ.get('ORQ_API_KEY'), os.environ.get('ORQ_BASE_URL'))
             orq = resolve_orq_client()
             resolved = resolve_llm_client(require_orq=True, max_retries=0)
         else:
             host = selected.server or DEFAULT_ORQ_BASE_URL
-            fingerprint = credential_fingerprint(selected.api_key, host)
             orq = resolve_orq_client(selected.api_key, base_url=host)
             resolved = resolve_llm_client(
                 extra_api_key=selected.api_key, orq_host=host, require_orq=True, max_retries=0
@@ -319,15 +441,13 @@ def find(
         emit_error(exc)
         raise typer.Exit(code=2) from None
 
-    if profile_name != settings.orq_profile or fingerprint != settings.orq_credential_fingerprint:
-        settings = settings.model_copy(update={'orq_project_id': None, 'orq_project_name': None})
-
     client = resolved.client
     runner_entered = False
     try:
         request = _request(
             query=query,
             settings=settings,
+            window_days_explicit=window_days is not None,
             project=project,
             model=model,
             provider=provider,
@@ -345,23 +465,26 @@ def find(
         runner_entered = True
         console = Console()
         with cli_debug(active=debug):
-            if debug_enabled():
-                snapshot = asyncio.run(_run_with_cleanup(store, request, console, resolved, orq))
-            else:
-                with console.status('Finding traces…'):
-                    snapshot = asyncio.run(_run_with_cleanup(store, request, console, resolved, orq))
+            snapshot = asyncio.run(_run_with_cleanup(store, request, console, resolved, orq, yes=yes))
     except (CompileError, FilterSelectionError, OrqSourceError, TimeoutError, ValueError) as exc:
         emit_error(exc)
         raise typer.Exit(code=1) from None
+    except KeyboardInterrupt:
+        typer.echo('\nInterrupted.')
+        raise typer.Exit(code=130) from None
     finally:
         if not runner_entered:
             asyncio.run(_close_clients(resolved, orq))
 
+    if snapshot is None:
+        console.print('Cancelled; no traces were classified.')
+        return
     if snapshot.state != 'completed' or snapshot.failed:
-        detail = snapshot.error or (
-            f'Find run completed with {snapshot.failed} failed classifications.'
-            if snapshot.failed
-            else f'Find run ended in {snapshot.state}.'
+        detail = (
+            snapshot.error
+            or (f'Find run completed with {snapshot.failed} failed classifications.' if snapshot.failed else None)
+            or snapshot.plan_warning
+            or f'Find run ended in {snapshot.state}.'
         )
         emit_error(detail)
         raise typer.Exit(code=1)

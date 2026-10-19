@@ -576,8 +576,8 @@ details pre { background: var(--gray-100); padding: 1rem; border-radius: 4px; ov
     .kpi-band, .kpi-row { flex-wrap: wrap; }
     .kpi-card { flex: 1 1 100%; }
     .report-card, .card { padding: 1rem; }
-    table:not(.heatmap-table) thead { display: none; }
-    table:not(.heatmap-table) tr { display: block; margin-bottom: .75rem; border: var(--border); border-radius: var(--radius); }
-    table:not(.heatmap-table) td { display: flex; justify-content: space-between; border: none; padding: .35rem .6rem; }
-    table:not(.heatmap-table) td::before { content: attr(data-label); font-weight: 600; color: var(--gray-500); }
+    table:not(.heatmap-table, .no-stack) thead { display: none; }
+    table:not(.heatmap-table, .no-stack) tr { display: block; margin-bottom: .75rem; border: var(--border); border-radius: var(--radius); }
+    table:not(.heatmap-table, .no-stack) td { display: flex; justify-content: space-between; border: none; padding: .35rem .6rem; }
+    table:not(.heatmap-table, .no-stack) td::before { content: attr(data-label); font-weight: 600; color: var(--gray-500); }
 }

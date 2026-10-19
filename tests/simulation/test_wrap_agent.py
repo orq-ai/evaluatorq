@@ -6,7 +6,7 @@ import pytest
 
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation._datapoint_io import _validate_shape
-from evaluatorq.simulation.types import DEFAULT_MODEL, Message, SimulationResult, TerminatedBy
+from evaluatorq.simulation.contracts import DEFAULT_MODEL, Message, SimulationResult, TerminatedBy
 from evaluatorq.simulation.wrap_agent import wrap_simulation_agent
 from evaluatorq.types import DataPoint
 
@@ -180,7 +180,7 @@ async def test_wrap_simulation_agent_rejects_removed_evaluators_kwarg():
     with pytest.raises(TypeError, match="evaluators"):
         wrap_simulation_agent(
             target=lambda _msgs: "ok",
-            evaluators=["goal_achieved"],  # type: ignore[call-arg]
+            evaluators=["goal_achieved"],
         )
 
 

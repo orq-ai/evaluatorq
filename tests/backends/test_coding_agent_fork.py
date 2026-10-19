@@ -97,7 +97,7 @@ def test_child_resets_parent_container_registry_and_starts_its_own_heartbeat(
                 container_module.heartbeat_thread is not None and container_module.heartbeat_thread.is_alive()
             )
             removed: list[str] = []
-            container_module.remove_containers = lambda _binary, _context, names: removed.extend(names) or []
+            container_module.remove_containers = lambda _binary, _context, names: removed.extend(names) or []  # ty: ignore[invalid-assignment]
             container_module.remove_all('fork-test')
             result = f'{reset}|{heartbeat_started}|{child_beat.read_text()}|{",".join(removed)}'
             os.write(write_fd, result.encode())

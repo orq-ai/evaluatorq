@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from evaluatorq.simulation.reports.executive_summary import build_sim_facts
-from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TokenUsage
+from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy, TokenUsage
 
 
 def _result(*, goal: bool, rules: list[str]) -> SimulationResult:

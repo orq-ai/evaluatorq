@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import typing
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -124,7 +125,7 @@ class _Client:
 def _bad_request(message: str) -> BadRequestError:
     return BadRequestError(
         message,
-        response=SimpleNamespace(status_code=400, headers={}, request=None),  # pyright: ignore[reportArgumentType]
+        response=typing.cast(typing.Any, SimpleNamespace(status_code=400, headers={}, request=None)),
         body={'error': {'message': message}},
     )
 
@@ -139,10 +140,11 @@ async def _judge(
 ) -> Any:
     cfg = LLMCallConfig(
         model='gpt-5-mini',
-        api=api,  # pyright: ignore[reportArgumentType]
+        api=typing.cast(typing.Any, api),
         max_tokens=256,
         extra_kwargs=extra_kwargs or {},
-    )  # pyright: ignore[reportArgumentType]
+
+    )
     return await run_judge(
         client=client,
         model='gpt-5-mini',
@@ -350,7 +352,7 @@ async def test_a_retry_does_not_re_pay_the_rejected_endpoint():
         client.models.append(kwargs['model'])
         attempts['n'] += 1
         if attempts['n'] == 1:
-            raise APIConnectionError(request=None)  # pyright: ignore[reportArgumentType]
+            raise APIConnectionError(request=typing.cast(typing.Any, None))
         return _chat_reply()
 
     client.chat = SimpleNamespace(completions=SimpleNamespace(parse=chat_parse))

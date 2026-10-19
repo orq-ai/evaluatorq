@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Protocol, TypeVar
+from functools import partial
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from loguru import logger
 
+from .classifier import classifier_questions
 from .compiler import CompiledPlan
 from .filter_selector import FilterSelectionResult
 from .models import (
@@ -28,18 +31,37 @@ from .models import (
     TraceProjection,
     TraceRecord,
 )
+from .progress import set_load_reporter
 from .projection import project_trace as default_project_trace
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
+
+    from .explorer import ExplorerStore
+    from .planner import PlanningResult
 
 TReviewFilters = TypeVar('TReviewFilters', FacetSelection, NumericFilters)
+T = TypeVar('T')
 
 
 class PopulationLoader(Protocol):
     """Load the bounded trace population after planning has completed."""
 
     def __call__(self, request: PopulationRequest) -> Awaitable[Snapshot]: ...
+
+
+class TableLoader(Protocol):
+    """Load the records that the dashboard explorer should display."""
+
+    def __call__(self, request: PopulationRequest) -> Awaitable[tuple[TraceRecord, ...]]: ...
+
+
+class SharedPlanner(Protocol):
+    """Plan semantic dimensions, filters, and effective time as one result."""
+
+    def __call__(
+        self, query: str, population: PopulationRequest, *, within_results: bool
+    ) -> Awaitable[PlanningResult]: ...
 
 
 class ClassifierRunner(Protocol):
@@ -49,11 +71,18 @@ class ClassifierRunner(Protocol):
         self,
         traces: tuple[TraceRecord, ...],
         projections: dict[str, TraceProjection],
-        compiled: CompiledQuery,
+        dimensions: Sequence[CompiledQuery],
         *,
         parallelism: int,
         on_complete: Callable[[TraceClassification], Awaitable[None]],
+        question_payloads: Mapping[str, Any],
     ) -> Awaitable[list[TraceClassification]]: ...
+
+
+class TraceProjector(Protocol):
+    """Build the exact per-trace state for the selected classifier questions."""
+
+    def __call__(self, trace: TraceRecord, *, question_payloads: Mapping[str, Any]) -> TraceProjection: ...
 
 
 class RunStore:
@@ -70,21 +99,30 @@ class RunStore:
     def __init__(
         self,
         *,
-        compiler: Callable[[str], Awaitable[CompiledPlan]],
+        compiler: Callable[[str], Awaitable[CompiledPlan]] | None = None,
         population_loader: PopulationLoader,
         run_classifier: ClassifierRunner,
-        filter_selector: Callable[[str, PopulationRequest], Awaitable[FacetSelection | FilterSelectionResult]],
-        project_trace: Callable[[TraceRecord], TraceProjection] = default_project_trace,
+        filter_selector: Callable[[str, PopulationRequest], Awaitable[FacetSelection | FilterSelectionResult]]
+        | None = None,
+        planner: SharedPlanner | None = None,
+        project_trace: TraceProjector = default_project_trace,
         monotonic: Callable[[], float] = time.monotonic,
         now_utc: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         close: Callable[[], Awaitable[None] | None] | None = None,
+        explorer: ExplorerStore | None = None,
+        classifier_model: str | None = None,
     ) -> None:
+        if planner is None and (filter_selector is None or compiler is None):
+            raise ValueError('a shared planner or legacy compiler and filter selector are required')
         self._compiler = compiler
-        self._close = close
+        self.explorer = explorer
+        self._classifier_model = classifier_model
         self._closed = False
         self._population_loader = population_loader
         self._run_classifier = run_classifier
         self._filter_selector = filter_selector
+        self._planner = planner
+        self._close = close
         self._project_trace = project_trace
         self._monotonic = monotonic
         self._now_utc = now_utc
@@ -96,43 +134,89 @@ class RunStore:
         self._generation = 0
         self._started_monotonic: float | None = None
 
-    async def compile(self, request: RunRequest, *, wait: bool = True) -> RunSnapshot:
+    async def compile(
+        self,
+        request: RunRequest,
+        *,
+        wait: bool = True,
+        traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        traces_limited: Callable[[int], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        source_generation: Callable[[], int | None] | None = None,
+    ) -> RunSnapshot:
         """Compile, select the population, and stage or start the requested run.
 
         With ``wait=False`` the planning runs as an owned background task and the
         ``compiling`` snapshot is returned at once, so a caller that polls can show
-        progress while the compiler and facet selector are still working.
+        progress while the compiler and facet selector are still working. With
+        ``traces`` the run classifies those already-loaded traces: the population load is
+        skipped, and the generated facets and numeric bounds narrow the loaded rows locally.
         """
 
-        return await self._prepare(request, None, compile_query=True, wait=wait)
+        return await self._prepare(
+            request,
+            None,
+            compile_query=True,
+            wait=wait,
+            traces=traces,
+            traces_limited=traces_limited,
+            table=table,
+            source_generation=source_generation,
+        )
 
-    async def start(self, request: RunRequest, compiled: CompiledQuery, *, wait: bool = True) -> RunSnapshot:
-        """Start a reviewed task; return its working snapshot immediately when ``wait=False``."""
+    async def start(
+        self, request: RunRequest, dimensions: Sequence[CompiledQuery], *, wait: bool = True
+    ) -> RunSnapshot:
+        """Start reviewed dimensions; return the working snapshot immediately when ``wait=False``."""
 
-        return await self._prepare(request, compiled, compile_query=False, wait=wait)
+        return await self._prepare(request, tuple(dimensions), compile_query=False, wait=wait)
 
     async def _prepare(
         self,
         request: RunRequest,
-        compiled: CompiledQuery | None,
+        dimensions: tuple[CompiledQuery, ...] | None,
         *,
         compile_query: bool,
         wait: bool = True,
+        traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        traces_limited: Callable[[int], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        source_generation: Callable[[], int | None] | None = None,
     ) -> RunSnapshot:
-        generation, staged_traces = await self._begin(request, compile_query=compile_query)
-        work = self._plan_and_start(generation, staged_traces, request, compiled, compile_query=compile_query)
-        if wait:
-            return await work
+        generation, staged_traces = await self._begin(
+            request,
+            compile_query=compile_query,
+            within_results=traces is not None or traces_limited is not None or table is not None,
+        )
+        work = self._plan_and_start(
+            generation,
+            staged_traces,
+            request,
+            dimensions,
+            compile_query=compile_query,
+            traces=traces,
+            traces_limited=traces_limited,
+            table=table,
+            source_generation=source_generation,
+        )
         task = asyncio.create_task(work)
         async with self._lock:
-            if generation == self._generation and self._snapshot.state == 'compiling':
+            if generation != self._generation or self._snapshot.state != 'compiling':
+                stale = True
+            else:
                 self._task = task
-                return self._view()
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        return await self.snapshot()
+                stale = False
+                if not wait:
+                    return self._view()
+        if stale:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            return await self.snapshot()
+        return await task
 
-    async def _begin(self, request: RunRequest, *, compile_query: bool) -> tuple[int, tuple[TraceRecord, ...]]:
+    async def _begin(
+        self, request: RunRequest, *, compile_query: bool, within_results: bool
+    ) -> tuple[int, tuple[TraceRecord, ...]]:
         """Replace the current generation with a fresh ``compiling`` one."""
 
         staged_traces: tuple[TraceRecord, ...] = ()
@@ -168,88 +252,280 @@ class RunStore:
                 self._generation += 1
                 generation = self._generation
                 generated_filters = FacetSelection() if compile_query else self._snapshot.generated_filters
+                within_results = within_results if compile_query else self._snapshot.within_results
                 generated_numeric = NumericFilters() if compile_query else self._snapshot.generated_numeric
                 filter_response = None if compile_query else self._snapshot.filter_response
                 filter_selection_error = None if compile_query else self._snapshot.filter_selection_error
+                plan_warning = None if compile_query else self._snapshot.plan_warning
+                generated_time = None if compile_query else self._snapshot.generated_time
+                provenance = {} if compile_query else dict(self._snapshot.provenance)
                 self._snapshot = RunSnapshot(
                     generation=generation,
                     state='compiling',
                     phase='planning' if compile_query else 'starting_classification',
                     request=request.model_copy(deep=True),
+                    within_results=within_results,
                     explicit_filters=explicit_filters.model_copy(deep=True),
                     explicit_numeric=explicit_numeric.model_copy(deep=True),
                     generated_filters=generated_filters.model_copy(deep=True),
                     generated_numeric=generated_numeric.model_copy(deep=True),
                     filter_response=filter_response.model_copy(deep=True) if filter_response is not None else None,
                     filter_selection_error=filter_selection_error,
+                    plan_warning=plan_warning,
+                    generated_time=generated_time,
+                    provenance=provenance,
                     created_at=self._now_utc(),
                 )
                 self._started_monotonic = None
                 self._task = None
                 return generation, staged_traces
 
-    async def _plan_and_start(
+    async def _plan_and_start(  # noqa: C901
         self,
         generation: int,
         staged_traces: tuple[TraceRecord, ...],
         request: RunRequest,
-        compiled: CompiledQuery | None,
+        dimensions: tuple[CompiledQuery, ...] | None,
         *,
         compile_query: bool,
+        traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        traces_limited: Callable[[int], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        source_generation: Callable[[], int | None] | None = None,
     ) -> RunSnapshot:
+        # The table narrows with the run only while it still shows the rows this run was asked about.
+        explorer_generation = (
+            (await self.explorer.view()).generation
+            if (traces is not None or traces_limited is not None) and self.explorer is not None
+            else None
+        )
         try:
+            unsupported_reason: str | None = None
+            empty_match = False
+            planning: PlanningResult | None = None
             if compile_query:
-                plan_task = asyncio.create_task(self._plan(request.query, request.population))
-                async with self._lock:
-                    if generation != self._generation or self._snapshot.state != 'compiling':
-                        plan_task.cancel()
-                        await asyncio.gather(plan_task, return_exceptions=True)
-                        return self._view()
-                    self._task = plan_task
-                plan, filter_result = await plan_task
-                generated_filters = filter_result.selection
-                generated_numeric = plan.numeric.model_copy(deep=True)
-                compiled = CompiledQuery.model_validate(plan.compiled.model_dump())
-                population = request.population.model_copy(
-                    update={
-                        'facets': _merge_facets(request.population.facets, generated_filters),
-                        'numeric': _merge_numeric(request.population.numeric, plan.numeric),
-                    }
-                )
-                request = request.model_copy(update={'population': population})
+                if self._planner is not None:
+                    planning = await self._planner(
+                        request.query,
+                        request.population,
+                        within_results=traces is not None or traces_limited is not None or table is not None,
+                    )
+                    generated_filters = planning.generated_facets
+                    generated_numeric = planning.generated_numeric
+                    dimensions = _revalidated(planning.dimensions)
+                    filter_result = FilterSelectionResult(
+                        generated_filters, planning.selector_response, planning.selector_error
+                    )
+                    effective_population = planning.effective_population
+                    generated_time = planning.generated_time
+                    provenance = dict(planning.provenance)
+                    empty_match = planning.empty_match
+                    unsupported_reason = getattr(planning, 'unsupported_reason', None)
+                    plan_warning = _unsupported_warning(unsupported_reason) or _uncovered_words_warning(
+                        request.query, dimensions, generated_filters
+                    )
+                    request = request.model_copy(update={'population': planning.effective_population})
+                else:
+                    if self._filter_selector is None:  # pragma: no cover - constructor enforces this
+                        raise RuntimeError('a filter selector is required by the legacy planning seam')
+                    plan, filter_result = await self._plan(request.query, request.population)
+                    generated_filters = filter_result.selection
+                    generated_numeric = plan.numeric.model_copy(deep=True)
+                    dimensions = _revalidated(plan.dimensions)
+                    generated_time = None
+                    provenance = {}
+                    effective_population = request.population
+                    unsupported_reason = plan.unsupported_reason
+                    plan_warning = _unsupported_warning(plan.unsupported_reason) or _uncovered_words_warning(
+                        request.query, dimensions, generated_filters
+                    )
+                    # Legacy callback consumers still merge compiler outputs in this adapter.
+                    if traces is None and traces_limited is None:
+                        population = request.population.model_copy(
+                            update={
+                                'facets': merge_facets(request.population.facets, generated_filters),
+                                'numeric': merge_numeric(request.population.numeric, plan.numeric),
+                            }
+                        )
+                        request = request.model_copy(update={'population': population})
             else:
-                if compiled is None:
-                    raise ValueError('a compiled task is required to start a run')
-                compiled = CompiledQuery.model_validate(compiled.model_dump())
+                if dimensions is None:
+                    raise ValueError('reviewed classifier dimensions are required to start a run')
+                dimensions = _revalidated(dimensions)
                 generated_filters = self._snapshot.generated_filters
                 generated_numeric = self._snapshot.generated_numeric
                 filter_result = FilterSelectionResult(
                     generated_filters, self._snapshot.filter_response, self._snapshot.filter_selection_error
                 )
+                plan_warning = self._snapshot.plan_warning
+                generated_time = self._snapshot.generated_time
+                provenance = dict(self._snapshot.provenance)
+                effective_population = request.population
+            if table is not None:
+                population = request.population.model_copy(
+                    update={
+                        'facets': merge_facets(request.population.facets, generated_filters),
+                        'numeric': merge_numeric(request.population.numeric, generated_numeric),
+                    }
+                )
+                request = request.model_copy(update={'population': population})
 
+            if (
+                compile_query
+                and not empty_match
+                and unsupported_reason is not None
+                and not dimensions
+                and generated_filters == FacetSelection()
+                and generated_numeric == NumericFilters()
+            ):
+                # Nothing to search for: loading the population would only show every trace as a match.
+                async with self._lock:
+                    if generation != self._generation or self._snapshot.state != 'compiling':
+                        return self._view()
+                    self._snapshot = replace(
+                        self._snapshot,
+                        dimensions=dimensions,
+                        filter_response=filter_result.response.model_copy(deep=True)
+                        if filter_result.response
+                        else None,
+                        filter_selection_error=filter_result.error,
+                        plan_warning=plan_warning,
+                        generated_time=generated_time,
+                        provenance=provenance,
+                    )
+                    self._finish('cancelled')
+                    self._task = None
+                    return self._view()
+
+            if empty_match:
+                async with self._lock:
+                    if generation != self._generation or self._snapshot.state != 'compiling':
+                        return self._view()
+                    self._snapshot = replace(
+                        self._snapshot,
+                        dimensions=dimensions,
+                        generated_filters=generated_filters.model_copy(deep=True),
+                        generated_numeric=generated_numeric.model_copy(deep=True),
+                        filter_response=filter_result.response.model_copy(deep=True)
+                        if filter_result.response
+                        else None,
+                        filter_selection_error=filter_result.error,
+                        generated_time=generated_time,
+                        provenance=provenance,
+                        request=request.model_copy(deep=True),
+                        trace_ids=(),
+                        traces=(),
+                        total=0,
+                        completed=0,
+                        results={},
+                        plan_warning=(
+                            f'Trace filter selection failed; no traces were selected: {filter_result.error}'
+                            if filter_result.error
+                            else 'The query time window does not overlap the loaded results; no traces were selected.'
+                        ),
+                    )
+                    self._finish('completed')
+                    self._task = None
+                    return self._view()
             async with self._lock:
                 if generation != self._generation or self._snapshot.state != 'compiling':
                     return self._view()
                 self._snapshot = replace(
                     self._snapshot,
                     phase='loading_traces' if not staged_traces else 'starting_classification',
-                    compiled=compiled,
+                    dimensions=dimensions,
                     generated_filters=generated_filters.model_copy(deep=True),
                     generated_numeric=generated_numeric.model_copy(deep=True),
                     filter_response=filter_result.response.model_copy(deep=True) if filter_result.response else None,
                     filter_selection_error=filter_result.error,
+                    plan_warning=plan_warning,
+                    generated_time=generated_time,
+                    provenance=provenance,
                     request=request.model_copy(deep=True),
                 )
-
             if not staged_traces:
-                loaded = await self._load_population(generation, request.population)
-                staged_traces = tuple(loaded.traces[: request.population.limit])
+                if traces is not None or traces_limited is not None or table is not None:
+                    population = request.population
+                    # The limited loader takes the first usable rows of the whole view, so any
+                    # generated facet, numeric or time narrowing needs the full loader first.
+                    use_limited_loader = (
+                        traces_limited is not None
+                        and generated_filters == FacetSelection()
+                        and generated_numeric == NumericFilters()
+                        and generated_time is None
+                    )
+                    if use_limited_loader and traces_limited is not None:
+                        loader = partial(traces_limited, population.limit)
+                    elif traces is not None:
+                        loader = traces
+                    elif table is not None:
+                        loader = partial(table, population)
+                    else:  # pragma: no cover - guarded by the enclosing condition
+                        raise RuntimeError('a trace or table loader is required')
+                    loaded_traces = await self._load_owned(generation, loader)
+                    exact_source_generation = explorer_generation
+                    # A fresh table load records its exact ExplorerView generation in
+                    # the route callback; a within-results load uses the generation
+                    # captured before its trace IDs were selected.
+                    if source_generation is not None:
+                        exact_source_generation = source_generation()
+                    async with self._lock:
+                        if generation == self._generation and self._snapshot.state == 'compiling':
+                            self._snapshot = replace(self._snapshot, explorer_generation=exact_source_generation)
+                    self._report_loaded(generation, len(loaded_traces or ()), len(loaded_traces or ()))
+                    staged_traces = (
+                        _narrowed(
+                            loaded_traces or (),
+                            generated_filters,
+                            generated_numeric,
+                            effective_population if generated_time is not None else None,
+                        )
+                        if traces is not None and not use_limited_loader
+                        else tuple(loaded_traces or ())
+                    )
+                    if (
+                        traces is not None
+                        and not use_limited_loader
+                        and explorer_generation is not None
+                        and self.explorer is not None
+                        and staged_traces != loaded_traces
+                    ):
+                        await self.explorer.narrow(
+                            explorer_generation,
+                            {trace.trace_id for trace in staged_traces},
+                            facets=merge_facets(request.population.facets, generated_filters),
+                            numeric=_merge_numeric(request.population.numeric, generated_numeric),
+                        )
+                    staged_traces = staged_traces[: request.population.limit]
+                    if (
+                        (traces is not None or traces_limited is not None)
+                        and self.explorer is not None
+                        and explorer_generation is not None
+                    ):
+                        await self.explorer.retain_records(
+                            explorer_generation, [trace.trace_id for trace in staged_traces]
+                        )
+                    if loaded_traces and not staged_traces:
+                        async with self._lock:
+                            if generation == self._generation and self._snapshot.state == 'compiling':
+                                self._snapshot = replace(
+                                    self._snapshot,
+                                    plan_warning=_nothing_kept_message(
+                                        loaded_traces, generated_filters, generated_numeric
+                                    ),
+                                )
+                                self._finish('completed')
+                                self._task = None
+                            return self._view()
+                else:
+                    loaded = await self._load_population(generation, request.population)
+                    staged_traces = tuple(loaded.traces[: request.population.limit])
 
             async with self._lock:
                 if generation != self._generation or self._snapshot.state != 'compiling':
                     return self._view()
                 if not staged_traces:
-                    raise ValueError('No traces match the classifier-selected filters.')
+                    raise _empty_traces_error(loaded_rows=traces is not None or traces_limited is not None)
                 trace_ids = tuple(trace.trace_id for trace in staged_traces)
                 if len(set(trace_ids)) != len(trace_ids):
                     raise ValueError('The selected population contains duplicate trace IDs.')
@@ -263,7 +539,11 @@ class RunStore:
                     self._snapshot = replace(self._snapshot, state='awaiting_review', phase=None)
                     self._task = None
                     return self._view()
-                projections = {trace.trace_id: self._project_trace(trace) for trace in staged_traces}
+                question_payloads = classifier_questions(dimensions or ())
+                projections = {
+                    trace.trace_id: self._project_trace(trace, question_payloads=question_payloads)
+                    for trace in staged_traces
+                }
                 self._snapshot = replace(
                     self._snapshot,
                     projections=projections,
@@ -273,7 +553,14 @@ class RunStore:
                 )
                 self._started_monotonic = self._monotonic()
                 task = asyncio.create_task(
-                    self._execute(generation, staged_traces, projections, compiled, request.parallelism)
+                    self._execute(
+                        generation,
+                        staged_traces,
+                        projections,
+                        dimensions,
+                        request.parallelism,
+                        question_payloads=question_payloads,
+                    )
                 )
                 self._task = task
                 return self._view()
@@ -301,8 +588,15 @@ class RunStore:
     async def _load_population(self, generation: int, request: PopulationRequest) -> Snapshot:
         """Load one population and let replacement generations make it stale."""
 
-        async def load() -> Snapshot:
-            return await self._population_loader(request)
+        loaded = await self._load_owned(generation, lambda: self._population_loader(request))
+        return loaded if loaded is not None else Snapshot(traces=())
+
+    async def _load_owned(self, generation: int, factory: Callable[[], Awaitable[T]]) -> T | None:
+        """Run one load as cancellable generation-owned work."""
+
+        async def load() -> T:
+            set_load_reporter(lambda done, total: self._report_loaded(generation, done, total))
+            return await factory()
 
         task = asyncio.create_task(load())
         stale = False
@@ -313,22 +607,37 @@ class RunStore:
         if stale:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            return Snapshot(traces=())
+            return None
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             raise
+        except Exception:
+            async with self._lock:
+                if generation != self._generation or self._stopped_generation == generation:
+                    return None
+            raise
+
+    def _report_loaded(self, generation: int, done: int, total: int) -> None:
+        """Record loading progress; called synchronously on the loop, so no lock is needed."""
+        if generation == self._generation and self._snapshot.state == 'compiling':
+            self._snapshot = replace(self._snapshot, loaded=done, to_load=total)
 
     async def _plan(self, query: str, population: PopulationRequest) -> tuple[CompiledPlan, FilterSelectionResult]:
-        """Run semantic and facet planning concurrently and clean up both."""
+        """Run legacy compiler and facet-selector callbacks concurrently, cleaning up both."""
+
+        if self._filter_selector is None or self._compiler is None:  # pragma: no cover - constructor enforces this
+            raise RuntimeError('legacy compiler and filter selector are required')
+        compile_callback = self._compiler
+        selector_callback = self._filter_selector
 
         async def compile_plan() -> object:
-            return await self._compiler(query)
+            return await compile_callback(query)
 
         async def select_filters() -> object:
-            return await self._filter_selector(query, population)
+            return await selector_callback(query, population)
 
         compiler = asyncio.create_task(compile_plan())
         filters = asyncio.create_task(select_filters())
@@ -360,8 +669,10 @@ class RunStore:
         generation: int,
         traces: tuple[TraceRecord, ...],
         projections: dict[str, TraceProjection],
-        compiled: CompiledQuery,
+        dimensions: tuple[CompiledQuery, ...],
         parallelism: int,
+        *,
+        question_payloads: Mapping[str, Any],
     ) -> None:
         async def complete(classification: TraceClassification) -> None:
             await self.complete_one(generation, classification)
@@ -370,9 +681,10 @@ class RunStore:
             await self._run_classifier(
                 traces,
                 projections,
-                compiled,
+                dimensions,
                 parallelism=parallelism,
                 on_complete=complete,
+                question_payloads=question_payloads,
             )
             async with self._lock:
                 if generation == self._generation and self._snapshot.state == 'classifying':
@@ -441,11 +753,15 @@ class RunStore:
                         self._finish('cancelled')
                     self._task = None
             finally:
-                if self._close is not None:
-                    close, self._close = self._close, None
-                    result = close()
-                    if inspect.isawaitable(result):
-                        await result
+                try:
+                    if self.explorer is not None:
+                        await self.explorer.close()
+                finally:
+                    if self._close is not None:
+                        close, self._close = self._close, None
+                        result = close()
+                        if inspect.isawaitable(result):
+                            await result
 
     async def reset(self) -> RunSnapshot:
         """Cancel owned work and return a new empty idle generation."""
@@ -488,7 +804,7 @@ class RunStore:
                 trace=trace.model_copy(deep=True),
                 projection=projection.model_copy(deep=True) if projection is not None else None,
                 classification=classification.model_copy(deep=True) if classification is not None else None,
-                compiled=current.compiled.model_copy(deep=True) if current.compiled is not None else None,
+                dimensions=_revalidated(current.dimensions) if current.dimensions is not None else None,
             )
 
     async def _stop_current(self) -> None:
@@ -540,17 +856,26 @@ class RunStore:
             percent=current.completed / current.total * 100 if current.total else 0.0,
             elapsed=elapsed,
             rate=current.completed / elapsed if elapsed else 0.0,
+            classifier_model=self._classifier_model,
         )
         return _detach(view) if detach else view
 
 
-def _merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSelection:
+def merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSelection:
     """Merge facets with caller-supplied non-empty values taking precedence."""
 
     return FacetSelection(
         project_id=caller.project_id,
         **{name: getattr(caller, name) or getattr(generated, name) for name in FACET_NAMES},
     )
+
+
+def _empty_traces_error(*, loaded_rows: bool) -> ValueError:
+    """Describe an empty selection using the path that supplied its rows."""
+
+    if loaded_rows:
+        return ValueError('None of the loaded traces have usable messages to classify.')
+    return ValueError('No traces match the classifier-selected filters.')
 
 
 def _review_explicit(
@@ -569,7 +894,170 @@ def _review_explicit(
     })
 
 
-def _merge_numeric(caller: NumericFilters, generated: NumericFilters) -> NumericFilters:
+def _revalidated(dimensions: Sequence[CompiledQuery]) -> tuple[CompiledQuery, ...]:
+    """Detach dimensions from caller-owned instances by validating fresh copies."""
+
+    return tuple(CompiledQuery.model_validate(dimension.model_dump()) for dimension in dimensions)
+
+
+# ponytail: a word list, not a parser; it only has to spot a question that says more than its numeric bounds.
+_NUMERIC_QUERY_WORDS = frozenset([
+    'all',
+    'any',
+    'and',
+    'are',
+    'between',
+    'calls',
+    'conversations',
+    'duration',
+    'faster',
+    'fewer',
+    'find',
+    'for',
+    'get',
+    'has',
+    'have',
+    'least',
+    'less',
+    'list',
+    'longer',
+    'milliseconds',
+    'minutes',
+    'more',
+    'most',
+    'over',
+    'requests',
+    'runs',
+    'second',
+    'seconds',
+    'show',
+    'shorter',
+    'slower',
+    'than',
+    'that',
+    'the',
+    'them',
+    'those',
+    'total',
+    'trace',
+    'traces',
+    'token',
+    'tokens',
+    'under',
+    'used',
+    'using',
+    'which',
+    'with',
+    'above',
+    'below',
+    'took',
+    'taking',
+])
+
+
+def _unsupported_warning(reason: str | None) -> str | None:
+    """Say plainly that an aggregate question was not answered, instead of reporting a quiet success."""
+
+    if reason is None:
+        return None
+    return f"Ask AI finds traces; it can't compute totals, averages or rankings. {reason}"
+
+
+def _uncovered_words_warning(query: str, dimensions: tuple[CompiledQuery, ...], filters: FacetSelection) -> str | None:
+    """Warn when nothing but numeric bounds survived planning, yet the question says more than numbers."""
+
+    if dimensions or any(getattr(filters, name) for name in FACET_NAMES):
+        return None
+    words = tuple(dict.fromkeys(w for w in re.findall(r'[a-z]{3,}', query.casefold()) if w not in _NUMERIC_QUERY_WORDS))
+    if not words:
+        return None
+    logger.warning('Trace finder plan applies only numeric bounds; the question also says {}', ', '.join(words))
+    return (
+        f'Only the numeric bounds were applied. No AI question or filter covers "{" ".join(words)}", '
+        'so rephrase the question or use Review to add one.'
+    )
+
+
+def _narrowed(
+    traces: tuple[TraceRecord, ...],
+    facets: FacetSelection,
+    bounds: NumericFilters,
+    population: PopulationRequest | None = None,
+) -> tuple[TraceRecord, ...]:
+    """Keep loaded traces inside the generated filters and optional effective time window."""
+
+    return tuple(
+        trace
+        for trace in traces
+        if _within_facets(trace, facets)
+        and _within_numeric(trace, bounds)
+        and (population is None or population.contains_time(trace.timestamp))
+    )
+
+
+def _nothing_kept_message(traces: tuple[TraceRecord, ...], facets: FacetSelection, bounds: NumericFilters) -> str:
+    """Name each filter or bound that dropped loaded rows, with the nearest loaded value, so the user knows what to change."""
+
+    reasons: list[str] = []
+    for name in FACET_NAMES:
+        selected: frozenset[str] = getattr(facets, name)
+        if selected and not all(
+            _within_facets(trace, FacetSelection.model_validate({name: selected})) for trace in traces
+        ):
+            reasons.append(f'{name.replace("_", " ")} {" or ".join(sorted(selected))}')
+    tokens = [trace.total_tokens for trace in traces if trace.total_tokens is not None]
+    durations = [trace.duration_ms for trace in traces if trace.duration_ms is not None]
+    for field, values, wanted, nearest in (
+        ('tokens_min', tokens, 'at least {:,} tokens', lambda: f'the largest has {max(tokens):,}'),
+        ('tokens_max', tokens, 'at most {:,} tokens', lambda: f'the smallest has {min(tokens):,}'),
+        (
+            'duration_ms_min',
+            durations,
+            'a duration of at least {:,} ms',
+            lambda: f'the longest took {max(durations):,} ms',
+        ),
+        (
+            'duration_ms_max',
+            durations,
+            'a duration of at most {:,} ms',
+            lambda: f'the shortest took {min(durations):,} ms',
+        ),
+    ):
+        bound: int | None = getattr(bounds, field)
+        if bound is not None and not all(_within_numeric(trace, NumericFilters(**{field: bound})) for trace in traces):
+            reasons.append(wanted.format(bound) + (f' ({nearest()})' if values else ''))
+    detail = ' and '.join(reasons) or 'the filters in the question'
+    return f'None of the {len(traces):,} loaded traces have {detail}. Try New search to look beyond the loaded rows.'
+
+
+def _within_facets(trace: TraceRecord, facets: FacetSelection) -> bool:
+    """Apply selected facet values to one loaded trace; an empty facet places no constraint."""
+
+    for name in FACET_NAMES:
+        selected: frozenset[str] = getattr(facets, name)
+        if not selected:
+            continue
+        values = trace.tool_names if name == 'tool_name' else (getattr(trace, name),)
+        if not selected.intersection(values):
+            return False
+    return True
+
+
+def _within_numeric(trace: TraceRecord, bounds: NumericFilters) -> bool:
+    """Apply inclusive numeric bounds to one loaded trace; a trace missing a bounded value is excluded."""
+
+    for value, low, high in (
+        (trace.total_tokens, bounds.tokens_min, bounds.tokens_max),
+        (trace.duration_ms, bounds.duration_ms_min, bounds.duration_ms_max),
+    ):
+        if low is None and high is None:
+            continue
+        if value is None or (low is not None and value < low) or (high is not None and value > high):
+            return False
+    return True
+
+
+def merge_numeric(caller: NumericFilters, generated: NumericFilters) -> NumericFilters:
     """Merge numeric bounds with each caller-supplied bound taking precedence."""
 
     return NumericFilters(**{
@@ -578,13 +1066,18 @@ def _merge_numeric(caller: NumericFilters, generated: NumericFilters) -> Numeric
     })
 
 
+def _merge_numeric(caller: NumericFilters, generated: NumericFilters) -> NumericFilters:
+    """Internal spelling retained by the trace-finder planner."""
+    return merge_numeric(caller, generated)
+
+
 def _detach(snapshot: RunSnapshot) -> RunSnapshot:
     """Copy nested mutable payloads at the public read boundary."""
 
     return replace(
         snapshot,
         request=snapshot.request.model_copy(deep=True) if snapshot.request is not None else None,
-        compiled=snapshot.compiled.model_copy(deep=True) if snapshot.compiled is not None else None,
+        dimensions=_revalidated(snapshot.dimensions) if snapshot.dimensions is not None else None,
         explicit_filters=snapshot.explicit_filters.model_copy(deep=True),
         explicit_numeric=snapshot.explicit_numeric.model_copy(deep=True),
         generated_filters=snapshot.generated_filters.model_copy(deep=True),
@@ -595,4 +1088,6 @@ def _detach(snapshot: RunSnapshot) -> RunSnapshot:
         traces=tuple(trace.model_copy(deep=True) for trace in snapshot.traces),
         results={key: value.model_copy(deep=True) for key, value in snapshot.results.items()},
         projections={key: value.model_copy(deep=True) for key, value in snapshot.projections.items()},
+        generated_time=snapshot.generated_time,
+        provenance=dict(snapshot.provenance),
     )

@@ -25,7 +25,7 @@ from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id
 
 if TYPE_CHECKING:
-    from evaluatorq.simulation.types import TurnMetrics
+    from evaluatorq.simulation.contracts import TurnMetrics
 
 # ---------------------------------------------------------------------------
 # Shared fixture factories
@@ -106,7 +106,7 @@ def _make_sim_run(
     existing callers that don't care about turn metrics are unaffected.
     """
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
     personas = personas or ['alice', 'bob']
     goal_achieved_flags = goal_achieved_flags or [True, False]

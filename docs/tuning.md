@@ -144,7 +144,7 @@ The target is the slow, flaky part of any run: it is a real agent running real t
 | `target_agent_timeout_ms` / `--target-timeout-ms` | `240000` (4 min) | A single target call legitimately takes minutes — a self-hosted endpoint, or an agent that chains several tools per turn |
 | `max_target_retries` / `--max-target-retries` | `2` (0–10) | The target's transport is flaky. A retry never consumes a new attacker turn and never changes the transcript |
 | `max_tool_continuations` / `--max-tool-continuations` | `5` | An Orq agent needs more client-driven tool-result rounds than five to finish a turn |
-| `per_simulation_timeout_s` (simulation, Python only) | `None` — unbounded | A conversation can stall in a loop. Without it, only the per-call timeouts apply |
+| `per_simulation_timeout_s` (simulation; no flag, set it in `--config` on the CLI) | `None` — unbounded | A conversation can stall in a loop. Without it, only the per-call timeouts apply |
 
 `per_simulation_timeout_s` is a wall clock over **one whole datapoint** — every turn, plus the user-simulator and judge calls. On expiry the simulation does not raise: it returns a partial result with `terminated_by="timeout"` and the turns it completed, and logs a warning naming the budget. Set it on any unattended run; `simulate()` calls the runner once per row and is otherwise unbounded. `None` is the only spelling of unbounded — `0` is rejected at construction rather than read as "no bound".
 

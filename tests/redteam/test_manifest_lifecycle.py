@@ -109,7 +109,7 @@ async def test_sync_user_hook_warns_but_composite_does_not_misfire() -> None:
     class SyncHook(DefaultHooks):
         # Sync override of the now-async on_confirm — intentional (this is what
         # trips warn_if_sync_hooks).
-        def on_confirm(self, payload: Any) -> bool:  # pyright: ignore[reportIncompatibleMethodOverride]
+        def on_confirm(self, payload: Any) -> Any:
             return True
 
         async def on_complete(self, report: Any, **_kw: Any) -> None:

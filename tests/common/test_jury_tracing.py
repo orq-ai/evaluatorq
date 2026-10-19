@@ -497,3 +497,25 @@ async def test_no_spans_when_tracing_disabled() -> None:
     with patch('evaluatorq.common.tracing.get_tracer', return_value=None):
         deliberation = await run_jury(judge_fn=judge_fn, panel=['gpt-a'], verdict_kind=VerdictKind.CATEGORICAL)
     assert deliberation.verdict == 'yes'
+
+
+@pytest.mark.asyncio
+async def test_pairwise_comparison_records_its_jury_trace_id(span_collector) -> None:
+    async def judge_fn(first: str, second: str, model: str) -> Prediction:
+        return Prediction(value='A')
+
+    comparison = await run_pairwise(judge_fn=judge_fn, panel=['gpt-a'], response_a='x', response_b='y')
+
+    jury_span = _by_name(span_collector, 'orq.pairwise_jury')[0]
+    assert jury_span.context is not None
+    assert comparison.trace_id == format(jury_span.context.trace_id, '032x')
+
+
+@pytest.mark.asyncio
+async def test_pairwise_comparison_trace_id_is_none_without_tracing() -> None:
+    async def judge_fn(first: str, second: str, model: str) -> Prediction:
+        return Prediction(value='A')
+
+    with patch('evaluatorq.common.tracing.get_tracer', return_value=None):
+        comparison = await run_pairwise(judge_fn=judge_fn, panel=['gpt-a'], response_a='x', response_b='y')
+    assert comparison.trace_id is None

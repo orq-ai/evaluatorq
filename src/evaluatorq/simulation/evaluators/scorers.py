@@ -13,7 +13,7 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Self
 
-from evaluatorq.simulation.types import CriteriaMeta, SimulationResult, TerminatedBy, parse_criteria_meta
+from evaluatorq.simulation.contracts import CriteriaMeta, SimulationResult, TerminatedBy, parse_criteria_meta
 
 # A run that ended this way never reached the judge's criteria audit, so its
 # criteria outcome is unknown — not met. Shared with `api._sim_evaluation_details`
@@ -327,7 +327,7 @@ class ConversationQualityScore(float):
         super().__init__()
         self.breakdown: dict[str, dict[str, float]] = breakdown
 
-    def __getnewargs__(self) -> tuple[float, dict[str, dict[str, float]]]:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __getnewargs__(self) -> tuple[float, dict[str, dict[str, float]]]:  # ty: ignore[invalid-method-override]
         return (float(self), self.breakdown)
 
 

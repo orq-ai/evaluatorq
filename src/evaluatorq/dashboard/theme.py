@@ -83,6 +83,7 @@ EDITORIAL_CSS = """
     --red-50:    #fdeee9;
     --amber-600: #ff8f34;
     --amber-100: #ffe8d2;
+    --amber-ink: #765400;   /* AA-contrast dark amber for text on the Insights yellow chip tint */
     --green-600: #299D8F;
     --green-100: #d6ece8;
     --green-50:  #eef6f4;
@@ -113,6 +114,12 @@ EDITORIAL_CSS = """
     --chart-grid:  #e8e6e1;
     --chart-track: #ece9e4;
     --chart-axis:  #9d9ba4;
+    --traj-system:    #8c8a91;
+    --traj-user:      #25232e;
+    --traj-assistant: #4da296;
+    --traj-reasoning: #a6d3cc;
+    --traj-call:      #ff9747;
+    --traj-result:    #c4c2bd;
 
     /* Type — Orq brand fonts (self-hosted above), system fallbacks. */
     --font-display: 'Kurrent', Georgia, 'Times New Roman', ui-serif, serif;

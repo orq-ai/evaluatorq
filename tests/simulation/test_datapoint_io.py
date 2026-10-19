@@ -1,4 +1,4 @@
-"""Unit tests for the shared `_as_obj` helper in `_datapoint_io.py`."""
+"""Unit tests for the shared `parse_json_or_value` helper the datapoint readers share."""
 
 from __future__ import annotations
 
@@ -7,49 +7,68 @@ from datetime import datetime
 
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation import _datapoint_io
-from evaluatorq.simulation._datapoint_io import _as_obj, _extract_single_datapoint
-from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+from evaluatorq.common.messages import parse_json_or_value
+from evaluatorq.simulation._datapoint_io import _extract_single_datapoint
+from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 from evaluatorq.simulation.utils import dataset_export
 from evaluatorq.types import DataPoint
 
 
-def test_as_obj_parses_valid_json_object_string() -> None:
-    result = _as_obj('{"name": "Priya", "age": 30}')
+def test_parse_json_or_value_parses_valid_json_object_string() -> None:
+    result = parse_json_or_value('{"name": "Priya", "age": 30}')
     assert result == {"name": "Priya", "age": 30}
 
 
-def test_as_obj_parses_valid_json_array_string() -> None:
-    result = _as_obj('["a", "b", "c"]')
+def test_parse_json_or_value_parses_valid_json_array_string() -> None:
+    result = parse_json_or_value('["a", "b", "c"]')
     assert result == ["a", "b", "c"]
 
 
-def test_as_obj_returns_original_string_on_malformed_json() -> None:
+def test_parse_json_or_value_returns_original_string_on_malformed_json() -> None:
     malformed = '{"name": "P"'
-    result = _as_obj(malformed)
+    result = parse_json_or_value(malformed)
     assert result == malformed
     assert result is malformed
 
 
-def test_as_obj_returns_plain_non_json_string_unchanged() -> None:
+def test_parse_json_or_value_returns_plain_non_json_string_unchanged() -> None:
     plain = "hello"
-    result = _as_obj(plain)
+    result = parse_json_or_value(plain)
     assert result == plain
     assert result is plain
 
 
-def test_as_obj_passes_through_dict_unchanged() -> None:
+def test_parse_json_or_value_passes_through_dict_unchanged() -> None:
     value = {"already": "a dict"}
-    result = _as_obj(value)
+    result = parse_json_or_value(value)
     assert result is value
 
 
-def test_as_obj_passes_through_none_and_int_unchanged() -> None:
-    assert _as_obj(None) is None
-    assert _as_obj(42) == 42
+def test_parse_json_or_value_passes_through_none_and_int_unchanged() -> None:
+    assert parse_json_or_value(None) is None
+    assert parse_json_or_value(42) == 42
 
 
-def test_dataset_export_as_obj_is_shared_implementation() -> None:
-    assert dataset_export._as_obj is _datapoint_io._as_obj
+def test_dataset_export_uses_the_shared_parser() -> None:
+    assert dataset_export.parse_json_or_value is parse_json_or_value
+    assert _datapoint_io.parse_json_or_value is parse_json_or_value
+
+
+def test_parse_jsonl_returns_dicts_for_non_pydantic_class() -> None:
+    content = '{"name": "Priya"}\n{"name": "Sam"}\n'
+
+    assert dataset_export.parse_jsonl(content, cls=dict) == [
+        {'name': 'Priya'},
+        {'name': 'Sam'},
+    ]
+
+
+def test_parse_jsonl_validates_pydantic_models() -> None:
+    content = '{"input_tokens": 3, "output_tokens": 5}\n'
+
+    assert dataset_export.parse_jsonl(content, cls=TokenUsage) == [
+        TokenUsage(input_tokens=3, output_tokens=5)
+    ]
 
 
 _DP = {

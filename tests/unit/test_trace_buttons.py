@@ -32,7 +32,7 @@ from evaluatorq.redteam.contracts import (
 )
 from evaluatorq.contracts import ResponseTrace
 from evaluatorq.redteam.reports.converters import compute_report_summary
-from evaluatorq.simulation.types import SimulationRun
+from evaluatorq.simulation.contracts import SimulationRun
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +40,7 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
     for var in ('ORQ_UI_BASE_URL', 'ORQ_BASE_URL', 'ORQ_WORKSPACE_SLUG', 'ORQ_WORKSPACE', 'ORQ_API_KEY'):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr('evaluatorq.dashboard.orq_workspace.shutil.which', lambda _: None)
 
 
 def _make_run(run_id: str | None) -> SimulationRun:
@@ -151,7 +152,7 @@ class TestRedteamConversationTraceButton:
 
 
 def _make_entry(thread_id: str | None, last_trace_id: str | None = None) -> Any:
-    from evaluatorq.simulation.types import SimulationEntry
+    from evaluatorq.simulation.contracts import SimulationEntry
 
     return SimulationEntry(
         index=0,

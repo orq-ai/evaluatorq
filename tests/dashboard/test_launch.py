@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import click
 import pytest
+import typer.core
 from typer.main import get_command
 from typer.testing import CliRunner
 
@@ -328,7 +328,7 @@ def test_eq_dashboard_help() -> None:
     result = runner.invoke(app, ['dashboard', '--help'])
     assert result.exit_code == 0
     command = get_command(app)
-    assert isinstance(command, click.Group)
+    assert isinstance(command, typer.core.TyperGroup)
     help_text = command.commands['dashboard'].help
     assert help_text is not None
     for store in ('.evaluatorq/runs/', '.evaluatorq/sim-runs/', '.evaluatorq/pairwise-runs/'):
@@ -345,6 +345,17 @@ def test_dashboard_browser_flag_reaches_launcher(extra_args: list[str], expected
 
     assert result.exit_code == 0, result.output
     assert mock_serve.call_args.kwargs['open_browser'] is expected_open
+
+
+@pytest.mark.parametrize('flag', ['--port', '-p'])
+def test_dashboard_port_flag_reaches_launcher(flag: str) -> None:
+    from evaluatorq.cli import app
+
+    with patch('evaluatorq.dashboard.launch.serve') as mock_serve:
+        result = CliRunner().invoke(app, ['dashboard', flag, '8125', '--no-browser'])
+
+    assert result.exit_code == 0, result.output
+    assert mock_serve.call_args.kwargs['port'] == 8125
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +434,21 @@ def test_reload_worker_reads_local_env(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     assert os.environ['ORQ_WORKSPACE'] == 'orq-research'
     build.assert_called_once_with(None)
+
+
+def test_reload_worker_registers_browser_readiness_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The browser readiness route registers when the reload worker starts."""
+    from starlette.testclient import TestClient
+
+    from evaluatorq.dashboard.launch import build_app_from_env
+
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_LAUNCH_NONCE', 'test-nonce')
+    with patch('evaluatorq.dashboard.launch._install_log_bridge'):
+        app = build_app_from_env()
+
+    response = TestClient(app).get('/_dashboard-ready')
+    assert response.status_code == 200
+    assert response.text == 'test-nonce'
 
 
 def test_browser_opens_after_dashboard_listener_is_ready() -> None:

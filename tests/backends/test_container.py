@@ -6,8 +6,8 @@ import os
 import re
 import shutil
 import signal
-import stat
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -27,6 +27,8 @@ from evaluatorq.backends.container import (
     unsafe_mounts,
     watchdog_script,
 )
+from evaluatorq.common.cli_tty import shell_join
+from tests.backends.fakes import install_fake
 
 
 def test_default_image_tag_is_docker_safe() -> None:
@@ -57,7 +59,7 @@ def test_options_frozen_and_workdir_absolute() -> None:
         assert DockerOptions(workdir=workdir).workdir == workdir
     opts = DockerOptions()
     with pytest.raises(pydantic.ValidationError):
-        opts.image = 'x'  # pyright: ignore[reportAttributeAccessIssue]
+        opts.image = 'x'  # ty: ignore[invalid-assignment]
 
 
 @pytest.mark.parametrize('name_prefix', ['', '.', '..', '../evq-leak', '../../evq-leak', 'a/b', 'a\\b', '-task', '_task'])
@@ -256,23 +258,30 @@ def test_run_args_and_reserved_env_warn_at_construction() -> None:
 
 # Lifecycle cleanup tests exercise the real subprocess boundary with a tiny Docker stand-in.
 
-FAKE_DOCKER = r"""#!/bin/sh
-printf '%s\n' "$*" >> "$FAKE_LOG"
-case "$1" in
-  rm) shift 2; for n in "$@"; do
-        case " $FAKE_RM_MISSING " in *" $n "*) echo "Error response from daemon: No such container: $n" >&2; st=1;; esac
-        case " $FAKE_RM_FAIL " in *" $n "*) echo "Error response from daemon: cannot remove $n: busy" >&2; st=1;; esac
-      done; exit ${st:-0};;
-  ps) printf '%b' "$FAKE_PS"; exit 0;;
-esac
+FAKE_DOCKER = """\
+import codecs, os, sys
+
+args = sys.argv[1:]
+with open(os.environ['FAKE_LOG'], 'a', encoding='utf-8') as f:
+    f.write(' '.join(args) + '\\n')
+if args[:1] == ['rm']:
+    status = 0
+    for name in args[2:]:
+        if name in os.environ.get('FAKE_RM_MISSING', '').split():
+            print(f'Error response from daemon: No such container: {name}', file=sys.stderr)
+            status = 1
+        if name in os.environ.get('FAKE_RM_FAIL', '').split():
+            print(f'Error response from daemon: cannot remove {name}: busy', file=sys.stderr)
+            status = 1
+    sys.exit(status)
+if args[:1] == ['ps']:
+    sys.stdout.write(codecs.decode(os.environ.get('FAKE_PS', ''), 'unicode_escape'))
 """
 
 
 @pytest.fixture
 def fake_docker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Path]:
-    script = tmp_path / 'docker'
-    script.write_text(FAKE_DOCKER)
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    script = install_fake(tmp_path, 'docker', FAKE_DOCKER)
     log = tmp_path / 'log'
     monkeypatch.setenv('FAKE_LOG', str(log))
     monkeypatch.setattr(c, 'LIVE_CONTAINERS', {})
@@ -336,7 +345,9 @@ def test_heartbeat_warns_again_after_recovery(fake_docker, tmp_path) -> None:
     assert sum('heartbeat for container recovering failed' in message for message in seen) == 2
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='the watchdog runs inside a Linux container, never on a Windows host')
 @pytest.mark.parametrize('shell', ['sh', 'busybox'])
+@pytest.mark.slow
 def test_watchdog_script_lifecycle(tmp_path: Path, shell: str) -> None:
     if shutil.which(shell) is None:
         pytest.skip(f'{shell} not installed')
@@ -526,9 +537,7 @@ def test_unregister_waits_for_inflight_heartbeat_write(fake_docker, tmp_path, mo
 
 def test_remove_error_shell_quotes_manual_command(fake_docker, monkeypatch) -> None:
     _, log = fake_docker
-    binary = str(Path(log.parent) / 'docker engine')
-    Path(binary).write_text(FAKE_DOCKER)
-    Path(binary).chmod(Path(binary).stat().st_mode | stat.S_IXUSR)
+    binary = str(install_fake(log.parent, 'docker engine', FAKE_DOCKER))
     monkeypatch.setenv('FAKE_RM_FAIL', 'b')
     seen: list[str] = []
     sink = logger.add(lambda message: seen.append(str(message)), level='ERROR')
@@ -536,4 +545,4 @@ def test_remove_error_shell_quotes_manual_command(fake_docker, monkeypatch) -> N
         assert c.remove_containers(binary, None, ['b']) == ['b']
     finally:
         logger.remove(sink)
-    assert any(f"run: '{binary}' rm -f b" in message for message in seen)
+    assert any(f'run: {shell_join([binary, "rm", "-f", "b"])}' in message for message in seen)

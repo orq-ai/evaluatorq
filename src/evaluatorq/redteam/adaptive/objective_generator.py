@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 from evaluatorq.common.content_filter import is_content_filter_error, regenerate_on_content_filter
 from evaluatorq.common.llm_call import execute_chat_parse
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
     SEVERITY_DEFINITIONS,
@@ -29,6 +28,7 @@ from evaluatorq.redteam.contracts import (
     Severity,
     TurnType,
     Vulnerability,
+    attacker_model_for,
 )
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
@@ -325,7 +325,7 @@ async def generate_objectives_for_vulnerability(
     vuln: Vulnerability,
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
-    model: str = DEFAULT_PIPELINE_MODEL,
+    model: str | None = None,
     count: int = 3,
     turn_type: TurnType | None = None,
     max_turns: int = 5,
@@ -352,6 +352,7 @@ async def generate_objectives_for_vulnerability(
     Returns:
         List of generated objectives with requirements
     """
+    model = attacker_model_for(model, pipeline_config)
     cfg = pipeline_config or PIPELINE_CONFIG
     vdef = VULNERABILITY_DEFS.get(vuln)
     vulnerability_name = vdef.name if vdef is not None else vuln.value
@@ -384,7 +385,7 @@ async def generate_objectives_for_category(
     category: str,
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
-    model: str = DEFAULT_PIPELINE_MODEL,
+    model: str | None = None,
     count: int = 3,
     turn_type: TurnType | None = None,
     max_turns: int = 5,
@@ -412,6 +413,7 @@ async def generate_objectives_for_category(
     Returns:
         List of generated objectives with requirements
     """
+    model = attacker_model_for(model, pipeline_config)
     cfg = pipeline_config or PIPELINE_CONFIG
     vuln = resolve_category_safe(category)
     if vuln is not None:
@@ -580,7 +582,7 @@ async def generate_strategies_for_vulnerability(
     vuln: Vulnerability,
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
-    model: str = DEFAULT_PIPELINE_MODEL,
+    model: str | None = None,
     count: int = 2,
     turn_type: TurnType | None = None,
     max_turns: int = 5,
@@ -635,7 +637,7 @@ async def generate_strategies_for_category(
     category: str,
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
-    model: str = DEFAULT_PIPELINE_MODEL,
+    model: str | None = None,
     count: int = 2,
     turn_type: TurnType | None = None,
     max_turns: int = 5,

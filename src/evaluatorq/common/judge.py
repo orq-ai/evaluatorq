@@ -23,8 +23,8 @@ from evaluatorq.common.llm_call import (
     execute_response,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.messages import coerce_content_text
-from evaluatorq.common.model_catalogue import qualified_model, supports_classify
+from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, UNKNOWN_ARGUMENTS_TEXT, coerce_content_text
+from evaluatorq.common.model_catalogue import is_known_classify_model, qualified_model, supports_classify
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.structured_output import warn_unread_config_fields
@@ -42,7 +42,7 @@ from evaluatorq.contracts import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from openai import AsyncOpenAI
     from pydantic import BaseModel as _BaseModel
@@ -91,7 +91,7 @@ DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT = (
 # billed takes down the run's report instead of the one verdict.
 #
 # The classify leg is the second producer of this payload and fills it differently:
-# a `/classify` answer carries a distribution, not prose, so it never abstains and its
+# a `/decisions` answer carries a distribution, not prose, so it abstains only by refusing and its
 # `explanation` is synthesised from the numbers (`ClassifyQuestion` below). Nothing on
 # that path is generated against this model's schema, so the field-order and prompt
 # notes above do not bind it.
@@ -143,7 +143,7 @@ class EvaluatorResponsePayload(BaseModel):
 
 
 class ClassifyQuestion(BaseModel):
-    """One question for the Orq router's ``/classify`` endpoint.
+    """One question for the Orq router's ``/decisions`` endpoint.
 
     A classify model is not prompted: it is handed the material to judge
     (``state``) and a question about it. ``kind`` picks the answer shape —
@@ -176,9 +176,10 @@ class ClassifyQuestion(BaseModel):
 
 
 class ClassifyAnswer(BaseModel):
-    """One answer from ``/classify``; only the field matching ``type`` is filled.
+    """One answer from ``/decisions``; only the field matching ``type`` is filled.
 
-    ``extra='allow'`` because the endpoint's answer shape is the provider's to
+    ``type`` is ``noul``, ``choice``, ``score`` or ``refusal``; a refusal carries no other
+    field. ``extra='allow'`` because the endpoint's answer shape is the provider's to
     extend — an unknown field is kept in `raw_content` rather than dropped.
     """
 
@@ -201,7 +202,7 @@ class ClassifyAnswer(BaseModel):
 
 
 class ClassifyResponse(BaseModel):
-    """A ``/classify`` reply. ``model`` is the bare id the router served (``jev-latest``)."""
+    """A ``/decisions`` reply. ``model`` is echoed by the router and passed through unchanged."""
 
     model_config = ConfigDict(extra='allow')
 
@@ -211,7 +212,7 @@ class ClassifyResponse(BaseModel):
 
 
 class ClassifyRequest(BaseModel):
-    """Several questions about one ``state``, answered in one ``/classify`` round trip."""
+    """Several questions about one ``state``, answered in one ``/decisions`` round trip."""
 
     state: dict[str, Any] | str | list[Any]
     questions: dict[str, ClassifyQuestion] = Field(min_length=1)  # the request's state wins over each question's state
@@ -311,6 +312,10 @@ def judge_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, A
     }
 
 
+def _arguments_for_judge(item: ToolCallOutputItem) -> Any:
+    return UNKNOWN_ARGUMENTS_TEXT if item.arguments == UNKNOWN_ARGUMENTS else item.arguments_dict
+
+
 def _format_output_message(item: OutputMessage) -> dict[str, Any] | None:
     if isinstance(item, TextOutputItem):
         return {'role': 'assistant', 'content': item.text}
@@ -322,7 +327,7 @@ def _format_output_message(item: OutputMessage) -> dict[str, Any] | None:
                 {
                     'id': item.id,
                     'type': 'function',
-                    'function': {'name': item.name, 'arguments': item.arguments_dict},
+                    'function': {'name': item.name, 'arguments': _arguments_for_judge(item)},
                 }
             ],
             'result': item.result,
@@ -349,7 +354,7 @@ def _build_namespace(
     ]
     response = ''.join(i.text for i in output_messages if isinstance(i, TextOutputItem))
     tools_called = [
-        {'name': i.name, 'arguments': i.arguments_dict, 'result': i.result, 'id': i.id}
+        {'name': i.name, 'arguments': _arguments_for_judge(i), 'result': i.result, 'id': i.id}
         for i in output_messages
         if isinstance(i, ToolCallOutputItem)
     ]
@@ -384,7 +389,7 @@ def _build_namespace(
     return nested, flat
 
 
-# Use an EXPLICIT signature (not **kwargs) so basedpyright checks call sites and
+# Use an EXPLICIT signature (not **kwargs) so the type checker checks call sites and
 # the `error` kwarg actually reaches _build_namespace.
 def build_eval_replacements(
     *,
@@ -562,7 +567,7 @@ async def _responses_judge(
             value=parsed.value,
             explanation=parsed.explanation,
             abstain=bool(getattr(parsed, 'abstain', False)),
-        )  # pyright: ignore[reportAttributeAccessIssue]
+        )
     return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)
 
 
@@ -682,7 +687,7 @@ async def run_classify(
     request: ClassifyRequest,
     span_attributes: dict[str, Any] | None = None,
 ) -> ClassifyOutcome:
-    """Call ``/classify`` once for all questions in ``request`` and validate the reply.
+    """Call ``/decisions`` once for all questions in ``request`` and validate the reply.
 
     The caller owns retry policy. This helper owns the classify span, timeout, wire
     response validation, and mapping provider failures into ``ClassifyOutcome``.
@@ -706,23 +711,6 @@ async def run_classify(
             )
             raw_payload = json.dumps(payload, default=str)
             response = ClassifyResponse.model_validate(payload)
-            missing = sorted(set(request.questions) - set(response.answers))
-            if missing:
-                logger.error(
-                    'Judge [{}] classify reply is missing answers for {} (received={})',
-                    model,
-                    missing,
-                    sorted(response.answers),
-                )
-                return ClassifyOutcome(
-                    error_kind=JudgeError.PARSE,
-                    error_message=(
-                        f'classify reply is missing answers for: {", ".join(missing)} '
-                        f'(received: {", ".join(sorted(response.answers))})'
-                    ),
-                    token_usage=usage,
-                    raw_content=response.model_dump_json(),
-                )
             answer = response.answers.get('verdict')
             if answer is not None:
                 set_span_attrs(
@@ -767,13 +755,14 @@ async def _classify_judge(
     question: ClassifyQuestion,
     span_attributes: dict[str, Any] | None = None,
 ) -> JudgeOutcome:
-    """Judge via the Orq router's ``/classify`` endpoint — the only endpoint a classify model serves.
+    """Judge via the Orq router's ``/decisions`` endpoint — the only endpoint a classify model serves.
 
     There is no prompt and no verdict schema on this path: the model answers the
     question it was handed, and `_classify_verdict` maps that answer onto the
-    payload every other judge leg returns. A classify answer never abstains — an
-    answer that cannot be read at all is a `JudgeError.PARSE`, not an abstention,
-    so a broken verdict is never counted as a judge declining to call it.
+    payload every other judge leg returns. A classify answer abstains only when the
+    model answers `refusal`, as the chat and Responses legs do; any other answer that
+    cannot be read is a `JudgeError.PARSE`, so a broken verdict is never counted as
+    a judge declining to call it.
 
     `run_classify` owns the decoded response shape and all provider error mapping;
     this function only translates the ``verdict`` answer into the neutral judge
@@ -789,6 +778,13 @@ async def _classify_judge(
     error_exc = outcome.error_exc
     if error_exc is not None:
         raise error_exc
+    return _classify_answer_outcome(model=model, question=question, outcome=outcome, key='verdict')
+
+
+def _classify_answer_outcome(
+    *, model: str, question: ClassifyQuestion, outcome: ClassifyOutcome, key: str
+) -> JudgeOutcome:
+    """Translate the ``key`` answer of one ``/decisions`` reply into the neutral judge outcome."""
     if outcome.error_kind is not None:
         return JudgeOutcome(
             error_kind=outcome.error_kind,
@@ -807,7 +803,28 @@ async def _classify_judge(
             endpoint='classify',
         )
     raw = response.model_dump_json()
-    answer = response.answers['verdict']
+    answer = response.answers.get(key)
+    if answer is None:
+        logger.error('Judge [{}] classify reply is missing answer key {} (raw={})', model, key, raw[:500])
+        return JudgeOutcome(
+            error_kind=JudgeError.PARSE,
+            error_message=(
+                f'classify reply is missing answer for {key} (received: {", ".join(sorted(response.answers))})'
+            ),
+            token_usage=outcome.token_usage,
+            raw_content=raw,
+            endpoint='classify',
+        )
+    if answer.type == 'refusal':
+        message = f'classify model refused to answer the {question.kind} question'
+        logger.warning('Judge [{}] {} (raw={})', model, message, raw[:500])
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=None, abstain=True, explanation=message),
+            token_usage=outcome.token_usage,
+            raw_content=raw,
+            error_message=message,
+            endpoint='classify',
+        )
     verdict = _classify_verdict(question, answer)
     if verdict is None:
         logger.error(
@@ -833,6 +850,87 @@ async def _classify_judge(
         raw_output=answer_output,
         endpoint='classify',
     )
+
+
+async def run_classify_judges(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    cfg: LLMCallConfig,
+    state: dict[str, Any] | str | list[Any],
+    questions: Mapping[str, ClassifyQuestion],
+    span_attributes: dict[str, str] | None = None,
+) -> dict[str, JudgeOutcome]:
+    """Judge several questions about one ``state``, returning one outcome per question key.
+
+    A classify model (Jev) answers every question in one ``/decisions`` round trip, so
+    three questions cost one call, not three. Its token usage rides on each outcome,
+    because the reply is not split per question. Any other model falls back to one
+    `run_judge` call per question, which is what a single-question caller gets.
+
+    **Retry.** The classify call runs under `with_retry` for ``cfg.retry_count + 1``
+    attempts on a client with its SDK retries disabled, the same single layer
+    `run_judge` uses; the fallback inherits `run_judge`'s.
+    """
+    if not questions:
+        return {}
+    client = without_client_retries(client)
+    if not (client_routes_through_orq(client) and await supports_classify(model, client)):
+        outcomes = await asyncio.gather(
+            *(
+                run_judge(
+                    client=client,
+                    model=model,
+                    cfg=cfg,
+                    prompt_template=(
+                        'Judge the supplied state using the full question and rubric below. '
+                        'Return the requested verdict as JSON.\n\n{classify_question}'
+                    ),
+                    replacements={
+                        'classify_question': json.dumps(
+                            question.model_copy(update={'state': state}).model_dump(mode='json'),
+                            ensure_ascii=False,
+                        )
+                    },
+                    span_attributes=span_attributes,
+                    classify=question.model_copy(update={'state': state}),
+                )
+                for question in questions.values()
+            )
+        )
+        return dict(zip(questions, outcomes, strict=True))
+    warn_unread_config_fields(cfg, read=frozenset({'timeout_ms', 'retry_count'}), caller='run_classify_judges')
+    request = ClassifyRequest(state=state, questions=dict(questions))
+
+    async def classify_once() -> ClassifyOutcome:
+        outcome = await run_classify(
+            client=client, model=model, cfg=cfg, request=request, span_attributes=span_attributes
+        )
+        if outcome.error_exc is not None:
+            raise outcome.error_exc
+        return outcome
+
+    try:
+        outcome = await with_retry(classify_once, max_attempts=cfg.retry_count + 1, label=f'judge[{model}]')
+    except (asyncio.TimeoutError, APITimeoutError) as e:
+        logger.error('Judge [{}] classify call timed out after {}ms', model, cfg.timeout_ms)
+        failed = JudgeOutcome(
+            error_kind=JudgeError.TIMEOUT,
+            error_message=f'timed out after {cfg.timeout_ms}ms',
+            error_exc=e,
+            timeout_ms=cfg.timeout_ms,
+            endpoint='classify',
+        )
+        return {key: failed.model_copy() for key in questions}
+    except Exception as e:
+        kind = _classify(e) if isinstance(e, APIConnectionError | APIStatusError) else JudgeError.UNKNOWN
+        logger.error('Judge [{}] classify call failed ({}): {}', model, kind.value, e)
+        failed = JudgeOutcome(error_kind=kind, error_message=str(e), error_exc=e, endpoint='classify')
+        return {key: failed.model_copy() for key in questions}
+    return {
+        key: _classify_answer_outcome(model=model, question=question, outcome=outcome, key=key)
+        for key, question in questions.items()
+    }
 
 
 async def _chat_verdict(
@@ -1091,6 +1189,23 @@ async def _attempt(
         ).model_copy(update={'endpoint': 'chat'})
 
 
+# Classify/prompt mismatches already warned about, keyed by model and direction. The same
+# judge runs once per datapoint and the default judge model is not classify-capable (a custom
+# classify-capable one would hit this too), so without this every attack evaluation in a
+# red-team run logs a line the caller cannot act on from `red_team()`. Same reasoning as
+# `_classify_fallback_warned` in `model_catalogue`.
+_classify_mismatch_warned: set[tuple[str, str]] = set()
+
+
+def _warn_classify_mismatch_once(model: str, direction: str, message: str) -> None:
+    """Log ``message`` for this ``model`` and ``direction`` at most once per process."""
+    key = (model, direction)
+    if key in _classify_mismatch_warned:
+        return
+    _classify_mismatch_warned.add(key)
+    logger.warning(message, model)
+
+
 async def run_judge(
     *,
     client: AsyncOpenAI,
@@ -1107,15 +1222,24 @@ async def run_judge(
 ) -> JudgeOutcome:
     """Render the template, call the judge model, and parse the verdict.
 
-    **Classify models.** A model the catalogue marks as classify-only (Jev) is
-    judged on the router's ``/classify`` endpoint from the ``classify`` question.
+    **Classify models.** A judge is asked on the router's ``/decisions`` endpoint when
+    the caller supplied a ``classify`` question and the catalogue says the model serves
+    that endpoint. The flag alone does not mean classify-*only*, so it never redirects a
+    caller who asked for the prompt path.
     The prompt, the verdict schema and the sampling keywords play no part in that
     call: the leg warns per call about every `LLMCallConfig` field it does not
     read, and the keywords that are not config fields (``system_prompt``,
     ``prompt``, ``temperature``, ``structured_output``) are warned about once by
-    the caller that set them — `llm_jury` does it at construction. Such a model
-    reached without a ``classify`` question is an error, not a fallback: prompting
-    it would produce a bill and no verdict.
+    the caller that set them — `llm_jury` does it at construction.
+
+    The ``classify`` question decides that routing, not the catalogue: the endpoint
+    follows what the caller asked for, and the catalogue only says whether that
+    endpoint is available. ``supports_classify`` is additive, so a model that gains
+    it while still serving chat keeps behaving exactly as before for a caller that
+    never asked for classify. A model this package ships as classify-*only*
+    (`is_known_classify_model`) is the one exception: reached without a ``classify``
+    question it errors before the call, because prompting it would produce a bill and
+    no verdict. Every other mismatch degrades to the prompt path and says so.
 
     **Which endpoint.** ``cfg.api='responses'`` (the default for evaluators) sends
     the call to the Orq router's Responses endpoint — the one it prices — but only
@@ -1145,24 +1269,52 @@ async def run_judge(
     temp: float | None = cfg.temperature if isinstance(temperature, _UseCfg) else temperature
     client = without_client_retries(client)
     raw_content = ['{}']
-    # Decided before the endpoint resolution below, and independently of `cfg.api`:
-    # a classify model serves neither chat nor Responses, so `api='responses'` (what
-    # `llm_jury` always sets) says nothing about it.
-    use_classify = client_routes_through_orq(client) and await supports_classify(model, client)
-    if use_classify and classify is None:
+    # Decided before the endpoint resolution below, and independently of `cfg.api`.
+    # The caller's intent picks the endpoint; the catalogue only says whether the
+    # wanted one is available. `supports_classify` is *additive* — the router keeps
+    # granting classify to models that also serve chat — so a model gaining it must
+    # never change what a caller who never asked for classify receives. Reading the
+    # capability as "classify-only" is what broke every red-team judge when
+    # `openai/gpt-5.6-luna` picked the flag up (#245).
+    wants_classify = classify is not None
+    serves_classify = client_routes_through_orq(client) and await supports_classify(model, client)
+    if not wants_classify and is_known_classify_model(model):
+        # A model this package ships as classify-*only*. Prompting it buys a provider
+        # rejection rather than a verdict, so fail before the call instead of after it.
+        # The built-in list is the right signal here precisely because it does not grow
+        # when the router grants classify to a chat model, and it is deliberately checked
+        # without `serves_classify`: whether this client routes through the router does not
+        # change what the model can serve, and `register_model` remains the way to correct
+        # the built-in list for a caller who knows better.
         logger.error(
-            'Judge [{}] is a classify model but the caller built no classify question for it; '
+            'Judge [{}] is a classify-only model but the caller built no classify question for it; '
             'from `llm_jury`, pass `criteria` and, for numeric verdicts, `levels`',
             model,
         )
         return JudgeOutcome(
             error_kind=JudgeError.UNKNOWN,
             error_message=(
-                f'{model} is a classify model but the caller passed no classify question. '
+                f'{model} is a classify-only model but the caller passed no classify question. '
                 f'From llm_jury, pass `criteria` and, for numeric verdicts, `levels`; '
                 f'direct run_judge callers must pass `classify`.'
             ),
             endpoint=None,
+        )
+    use_classify = wants_classify and serves_classify
+    if serves_classify and not wants_classify:
+        _warn_classify_mismatch_once(
+            model,
+            'prompted',
+            'Judge [{}] serves the classify endpoint, but the caller built no classify question; '
+            'judging it on the prompt path instead. From `llm_jury`, pass `criteria` and, for '
+            'numeric verdicts, `levels` to judge it on classify.',
+        )
+    elif wants_classify and not serves_classify:
+        _warn_classify_mismatch_once(
+            model,
+            'dropped',
+            'Judge [{}] does not serve the classify endpoint; dropping the classify question and '
+            'judging it on the prompt path instead.',
         )
     classify_question = classify if use_classify else None
     if use_classify:

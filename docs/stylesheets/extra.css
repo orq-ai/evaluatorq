@@ -439,3 +439,62 @@ html { font-size: 100%; }
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
   margin: 1em 0;
 }
+
+/* Content tabs (CLI / Python, ...): a framed card with a tinted tab bar. Material
+   draws the selected label and the underline in --md-default-fg-color, so
+   recolouring that variable inside the bar tints both and leaves unselected
+   labels grey. */
+.md-typeset .tabbed-set {
+  --tab-bar-bg: color-mix(in srgb, var(--orq-teal) 7%, var(--md-default-bg-color));
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.5rem;
+}
+.md-typeset .tabbed-labels {
+  --md-default-fg-color: var(--orq-teal);
+  background: var(--tab-bar-bg);
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.5rem 0.5rem 0 0;
+  box-shadow: none;
+  padding: 0 0.2rem;
+}
+.md-typeset .tabbed-labels > label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.4em 0.9em 0.35em;
+}
+[data-md-color-scheme="slate"] .md-typeset .tabbed-set {
+  --tab-bar-bg: color-mix(in srgb, var(--orq-teal-light) 12%, var(--md-default-bg-color));
+}
+[data-md-color-scheme="slate"] .md-typeset .tabbed-labels {
+  --md-default-fg-color: color-mix(in srgb, var(--orq-teal-light) 80%, white);
+}
+.md-typeset .tabbed-block > .highlight:last-child > pre,
+.md-typeset .tabbed-block > pre:last-child {
+  margin-bottom: 0;
+}
+.md-typeset .tabbed-labels > label:hover {
+  color: var(--md-typeset-color);
+}
+.md-typeset .tabbed-block > :not(.highlight):not(pre) {
+  margin-inline: 0.8rem;
+}
+.md-typeset .tabbed-block > .highlight:last-child > pre > code {
+  border-bottom-left-radius: calc(0.5rem - 1px);
+  border-bottom-right-radius: calc(0.5rem - 1px);
+}
+.md-typeset .tabbed-control--next {
+  background: linear-gradient(to left, var(--tab-bar-bg) 60%, transparent);
+}
+.md-typeset .tabbed-control--prev {
+  background: linear-gradient(to right, var(--tab-bar-bg) 60%, transparent);
+}
+@media screen and (max-width: 44.984375em) {
+  .md-content__inner.md-typeset > .tabbed-set .tabbed-labels {
+    margin: 0;
+    padding-left: 0.2rem;
+    max-width: none;
+  }
+  .md-content__inner.md-typeset > .tabbed-set .tabbed-labels ~ .tabbed-control {
+    margin: 0;
+  }
+}

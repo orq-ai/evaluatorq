@@ -12,6 +12,12 @@ CSRF_FIELD = 'csrf'
 _CSRF_TOKEN = secrets.token_urlsafe(32)
 
 
+def csrf_token() -> str:
+    """Return the process-wide token that `request_rejected` expects in the `csrf` form field."""
+
+    return _CSRF_TOKEN
+
+
 def csrf_field() -> str:
     """Render the hidden token carried by every dashboard state-changing form."""
 

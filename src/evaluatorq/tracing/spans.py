@@ -176,7 +176,7 @@ async def with_evaluation_span(
 
 def set_evaluation_attributes(
     span: Span | None,
-    score: str | float | bool | dict[str, Any] | EvaluationResultCell,  # noqa: FBT001
+    score: str | float | bool | dict[str, Any] | EvaluationResultCell | None,  # noqa: FBT001
     *,
     explanation: str | None = None,
     pass_: bool | None = None,
@@ -213,14 +213,15 @@ def set_evaluation_attributes(
     if explanation is not None and len(explanation) > _SPAN_TEXT_MAX_CHARS:
         explanation = explanation[: _SPAN_TEXT_MAX_CHARS - 1] + '…'
 
-    span.set_attribute(
-        'orq.score',
-        json.dumps(score.model_dump())
-        if isinstance(score, EvaluationResultCell)
-        else json.dumps(score)
-        if isinstance(score, dict)
-        else str(score),
-    )
+    if score is not None:
+        span.set_attribute(
+            'orq.score',
+            json.dumps(score.model_dump())
+            if isinstance(score, EvaluationResultCell)
+            else json.dumps(score)
+            if isinstance(score, dict)
+            else str(score),
+        )
     if explanation is not None:
         span.set_attribute('orq.explanation', explanation)
     if pass_ is not None:

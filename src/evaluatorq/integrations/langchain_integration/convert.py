@@ -428,7 +428,7 @@ def _get_tool_calls(msg_data: MessageData) -> list[ToolCall]:
                 'args': getattr(tc, 'args', {}),
             })
 
-    return result
+    return result  # ty: ignore[invalid-return-type]
 
 
 def _get_tool_call_id(msg_data: MessageData) -> str:

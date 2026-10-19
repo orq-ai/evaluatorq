@@ -38,7 +38,7 @@ load_dotenv()
 
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 from evaluatorq.simulation import simulate
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     Persona,

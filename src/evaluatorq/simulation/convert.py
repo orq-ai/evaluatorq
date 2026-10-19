@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 from pydantic_core import to_jsonable_python
 
+from evaluatorq.common.output_adapters import RESPONSES_ASSISTANT_TURN_ORDER_KEY, RESPONSES_ITEM_ORDER_KEY
 from evaluatorq.contracts import content_to_text
 from evaluatorq.openresponses.convert_models import (
     FunctionCall,
@@ -33,7 +34,7 @@ from evaluatorq.openresponses.input_items import responses_function_call_item_id
 _ContentList = list[InputTextContent | InputImageContent | InputFileContent | OutputTextContent]
 
 if TYPE_CHECKING:
-    from evaluatorq.simulation.types import SimulationResult
+    from evaluatorq.simulation.contracts import SimulationResult
 
 
 def _generate_item_id(prefix: str) -> str:
@@ -70,6 +71,9 @@ def to_open_responses(
     - messages with role "user"      -> input[] as Message with input_text content
     - messages with role "assistant"  -> output[] as Message with output_text content
     - messages with role "system"     -> input[] as Message with input_text content
+    - messages with role "tool"       -> output[] as FunctionCallOutput
+    - transcript order                -> metadata["item_order"] for input/output interleaving,
+      plus metadata["assistant_turn_order"] for assistant text/function-call grouping
     - token_usage                     -> Usage
     - terminated_by                   -> status
     - goal_achieved, rules_broken, criteria_results, turn_metrics -> metadata
@@ -94,8 +98,10 @@ def to_open_responses(
 
     input_items: list[dict[str, Any]] = []
     output_items: list[dict[str, Any]] = []
+    item_order: list[str] = []
+    assistant_turn_order: list[int | None] = []
 
-    for msg in result.messages:
+    for message_index, msg in enumerate(result.messages):
         if msg.role in ('user', 'system'):
             in_content: _ContentList = [InputTextContent(type='input_text', text=content_to_text(msg.content))]
             message = Message(
@@ -106,12 +112,14 @@ def to_open_responses(
                 content=in_content,
             )
             input_items.append(message.model_dump(mode='json'))
+            item_order.append('input')
         elif msg.role == 'assistant':
             # An assistant turn can carry text and/or tool_calls. Emit the text
             # message when there is content, then a function_call item per call
             # (separate Responses output items). A tool-only turn skips the empty
-            # text message. Mirrors the langchain integration's mapping.
-            if msg.content:
+            # text message. A turn with neither still emits an empty text message,
+            # so a silent reply keeps its place in the rebuilt conversation.
+            if msg.content or not msg.tool_calls:
                 out_content: _ContentList = [OutputTextContent(text=content_to_text(msg.content), annotations=[])]
                 message = Message(
                     type='message',
@@ -121,6 +129,8 @@ def to_open_responses(
                     content=out_content,
                 )
                 output_items.append(message.model_dump(mode='json'))
+                assistant_turn_order.append(message_index)
+                item_order.append('output')
             for tc in msg.tool_calls or []:
                 function_call = FunctionCall(
                     type='function_call',
@@ -128,9 +138,11 @@ def to_open_responses(
                     call_id=tc.id,
                     name=tc.function.name,
                     arguments=tc.function.arguments,
-                    status=FunctionCallStatus.completed,
+                    status=FunctionCallStatus.incomplete if tc.incomplete else FunctionCallStatus.completed,
                 )
                 output_items.append(function_call.model_dump(mode='json'))
+                assistant_turn_order.append(message_index)
+                item_order.append('output')
         elif msg.role == 'tool':
             function_call_output = FunctionCallOutput(
                 type='function_call_output',
@@ -140,6 +152,8 @@ def to_open_responses(
                 status=FunctionCallStatus.completed,
             )
             output_items.append(function_call_output.model_dump(mode='json'))
+            item_order.append('output')
+            assistant_turn_order.append(None)
 
     # Map terminated_by to status
     if result.terminated_by.value == 'judge':
@@ -183,6 +197,8 @@ def to_open_responses(
         'criteria_errors': _jsonable(result.metadata.get('criteria_errors'), 'criteria_errors'),
         'scorer_errors': _jsonable(result.metadata.get('scorer_errors'), 'scorer_errors'),
         'datapoint_id': _jsonable(result.metadata.get('datapoint_id'), 'datapoint_id'),
+        RESPONSES_ASSISTANT_TURN_ORDER_KEY: assistant_turn_order,
+        RESPONSES_ITEM_ORDER_KEY: item_order,
     }
     # `is not None`, not truthiness: {} is a scenario with zero criteria, not an absent block.
     if result.criteria_results is not None:

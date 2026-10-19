@@ -7,6 +7,7 @@ the compare picker on the sim overview.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,7 +33,7 @@ def _result(
     msgs: list[tuple[str, str]] | None = None,
 ):
     from evaluatorq.contracts import Message, TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
     return SimulationResult(
         messages=[Message(role=r, content=c) for r, c in (msgs or [])],
@@ -49,7 +50,7 @@ def _result(
 
 
 def _run(name: str, results: list, averages: dict[str, float]):
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun
 
     return SimulationRun(
         run_name=name,
@@ -142,6 +143,17 @@ def test_compare_kpis_covers_aggregates_scorers_and_terminated():
 # ---------------------------------------------------------------------------
 
 
+def test_match_entries_counts_repeated_same_object_by_position() -> None:
+    from evaluatorq.dashboard.sim_compare import match_entries
+    from evaluatorq.simulation.reports.sections import individual_entries
+
+    entry = individual_entries(_run_a().results[:1])[0]
+    matching = match_entries([entry, entry], [entry, entry])
+    assert [(pair.a, pair.b) for pair in matching.matched] == [(entry, entry), (entry, entry)]
+    assert matching.a_only == []
+    assert matching.b_only == []
+
+
 def test_match_entries_pairs_and_flags_unmatched():
     from evaluatorq.dashboard.sim_compare import match_entries
     from evaluatorq.simulation.reports.sections import individual_entries
@@ -189,6 +201,41 @@ def test_compare_transcript_route_shows_both_sides(roots: list[Path]):
     assert 'cmp-transcript-grid' in html
 
 
+def test_compare_transcript_route_scopes_session_slug_to_one_response(
+    roots: list[Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.dashboard import orq_scope, orq_workspace, sim_compare
+    from evaluatorq.dashboard.trace_links import thread_trace_url
+
+    for name in ('ORQ_API_KEY', 'ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(roots[0] / 'settings.json'))
+    monkeypatch.setattr(orq_workspace.shutil, 'which', lambda _name: '/usr/bin/orq')
+    slugs = iter(('first-workspace', 'second-workspace'))
+    calls = 0
+
+    def discover(profile: str | None, *, use_cli_session: bool = False):
+        nonlocal calls
+        calls += 1
+        assert profile is None and use_cli_session is True
+        return orq_scope.OrqScope(workspace_key=next(slugs))
+
+    monkeypatch.setattr(orq_scope, 'discover_orq_scope', discover)
+    monkeypatch.setattr(
+        sim_compare, 'render_transcript_fragment', lambda entry: thread_trace_url(str(entry.index)) or ''
+    )
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+
+    first = client.get(f'/compare/sim/transcript?a={rid_a}&b={rid_b}&ia=0&ib=0').text
+    assert calls == 1
+    assert first.count('/first-workspace/traces?') == 2
+
+    second = client.get(f'/compare/sim/transcript?a={rid_a}&b={rid_b}&ia=0&ib=0').text
+    assert calls == 2
+    assert second.count('/second-workspace/traces?') == 2
+
+
 def test_compare_missing_param_is_400(roots: list[Path]):
     client = TestClient(build_app(roots))
     rid_a, _ = _rids(roots)
@@ -231,8 +278,11 @@ def test_compare_empty_runs_render_na_kpis_without_failure(tmp_path: Path):
 
     html = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}').text
 
-    assert html.count('n/a') >= 2
-    assert '-100%' not in html
+    kpi_text = ' '.join(re.findall(r'<div class="kpi-(?:value|label)">([^<]*)</div>', html))
+    assert 'Goal-achieved · n/a vs A' in kpi_text
+    assert 'Mean score · n/a vs A' in kpi_text
+    assert 'Mean turns · n/a vs A' in kpi_text
+    assert '-100%' not in kpi_text
     assert 'kpi-card kpi-card--fail' not in html
     assert 'Outcomes' in html
     assert 'No outcome data' in html
@@ -242,7 +292,9 @@ def test_compare_partially_empty_run_keeps_outcomes_panel(tmp_path: Path):
     sim = tmp_path / 'sim-runs'
     sim.mkdir()
     (sim / 'a.json').write_text(_run('empty-A', [], {}).model_dump_json())
-    (sim / 'b.json').write_text(_run('nonempty-B', [_result('alice', 'billing', goal=True, score=1.0, turns=1)], {}).model_dump_json())
+    (sim / 'b.json').write_text(
+        _run('nonempty-B', [_result('alice', 'billing', goal=True, score=1.0, turns=1)], {}).model_dump_json()
+    )
     rid_a = report_id(sim / 'a.json')
     rid_b = report_id(sim / 'b.json')
 
@@ -282,7 +334,7 @@ def test_compare_corrupt_report_is_422(tmp_path: Path):
 
 def test_compare_syntactically_corrupt_report_is_422(tmp_path: Path):
     # A file that isn't even valid JSON must be reported as corrupt (422), not masked
-    # as "not found" (404). Guards the load_surface_strict path in _resolve_run.
+    # as "not found" (404). Guards the load_surface_strict path in resolve_run.
     sim = tmp_path / 'sim-runs'
     sim.mkdir()
     (sim / 'good.json').write_text(_run_a().model_dump_json())

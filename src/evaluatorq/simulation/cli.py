@@ -30,33 +30,59 @@ import asyncio
 import json
 import logging
 import os
-import shlex
 import sys
-from dataclasses import dataclass
-from pathlib import Path  # noqa: TC003 — typer resolves the command annotations at runtime
-from typing import TYPE_CHECKING, Annotated, Any, NoReturn
+from enum import Enum
+from pathlib import Path
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn, cast
 
 import typer
 from loguru import logger
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_config import (
+    JSON_OUTPUT_HELP,
+    Flag,
+    config_option_help,
+    echo_schema,
+    explicitly_set,
+    json_flag,
+    model_kwargs,
+    reserve_stdout_for_json,
+    resolve_config,
+)
 from evaluatorq.common.cli_epilog import examples as _examples
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
-from evaluatorq.common.cli_tty import should_skip_confirm
-from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.llm_limit import check_llm_parallelism_option, llm_concurrency_limit
+from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
+from evaluatorq.common.llm_limit import DEFAULT_LLM_PARALLELISM, check_llm_parallelism_option, llm_concurrency_limit
+from evaluatorq.common.model_roles import role_model
+from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
+from evaluatorq.common.run_manifest import read_manifest
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
-from evaluatorq.simulation.types import DEFAULT_MODEL
-from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
+from evaluatorq.simulation.contracts import DEFAULT_MAX_TURNS, DEFAULT_RUN_NAME
+from evaluatorq.simulation.run_config import (
+    GenerateAndSimulateCliConfig,
+    SimulateCliConfig,
+)
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
 from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name
 from evaluatorq.simulation.utils.run_store import write_report as _write_report
 
 if TYPE_CHECKING:
-    from evaluatorq.simulation.types import SimulationRun
+    from collections.abc import Callable
+
+    from pydantic import BaseModel
+
+    from evaluatorq.common.cli_config import ModelT
+    from evaluatorq.simulation.contracts import SimulationDatapoint, SimulationRun
+
+
+class _SchemaCommand(str, Enum):
+    SIMULATE = 'simulate'
+    RUN = 'run'
+
 
 app = typer.Typer(
     name='sim',
@@ -179,7 +205,9 @@ def _resolve_target(
         )
     from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
-    return OpenAIModelTarget(model=openai_model)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    if openai_model is None:
+        raise typer.BadParameter('--openai-model is required for an OpenAI model target')
+    return OpenAIModelTarget(model=openai_model)
 
 
 def _require_orq_api_key(flag: str) -> None:
@@ -308,6 +336,16 @@ def _provider_label() -> str:
     return 'unresolved provider'
 
 
+def _sim_llm_config(sim_model: str | None) -> LLMCallConfig:
+    """An unset ``--sim-model`` leaves the model unset so each role resolves its own."""
+    return LLMCallConfig(model=sim_model) if sim_model else LLMCallConfig()
+
+
+def _generation_model(sim_model: str | None) -> str:
+    """The model for generation, recommendations and summaries: the flag, else the fast role."""
+    return sim_model or role_model('fast', task='sim.generator')
+
+
 def _echo_using(model: str) -> None:
     """Show the provider branch selected by the environment for generations."""
     typer.echo(f'Using for generations: {_provider_label()} · {model}', err=True)
@@ -328,7 +366,7 @@ def _echo_generate_plan(
     prompts — generation is cheap and approval is file-mediated (edit the JSONL),
     so a confirm gate here would be friction, not clarity.
     """
-    from evaluatorq.common.reports import confirm_run_plan
+    from evaluatorq.common.reports import render_plan_table
 
     total = num_personas * num_scenarios
     rows = [
@@ -337,17 +375,12 @@ def _echo_generate_plan(
         ('Building', f'{num_personas} personas x {num_scenarios} scenarios = {total} datapoints'),
         ('Output', str(output)),
     ]
-    asyncio.run(confirm_run_plan(console, title='Generate Plan', rows=rows, prompt='', skip_confirm=True))
-
-
-def _shell_path(path: Path) -> str:
-    """Render a path safely for a copyable shell command."""
-    return shlex.quote(str(path))
+    render_plan_table(console, title='Generate Plan', rows=rows)
 
 
 def _dashboard_command(directory: Path) -> str:
     """Build the canonical multi-run dashboard command for *directory*."""
-    return f'eq dashboard {_shell_path(directory)}'
+    return f'eq dashboard {shell_path(directory)}'
 
 
 _TARGET_PLACEHOLDER = 'agent:<your-agent-key>'
@@ -361,7 +394,7 @@ def _simulate_command(datapoints_path: Path, target: str | None) -> str:
     ``_TARGET_HINT`` at the call site) rather than a bare ``<target>``.
     """
     target_part = target or _TARGET_PLACEHOLDER
-    return f'eq sim simulate -i {_shell_path(datapoints_path)} --target {target_part}'
+    return f'eq sim simulate -i {shell_path(datapoints_path)} --target {target_part}'
 
 
 def _render_rich(renderable: Any, *, soft_wrap: bool = False) -> str:
@@ -495,37 +528,194 @@ _UPLOAD_DATASET_EPILOG = _examples(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class SimulateOptions:
-    verbose: int
-    hooks: Any
+_CONFIG_HELP_TAIL = (
+    'Explicit flags override it. --sim-model wins over "llm_config.model" when passed; '
+    '"target" takes the agent:<key> / deployment:<key> string forms only.'
+)
+
+_SIMULATE_CONFIG_HELP = f'{config_option_help("simulate()", "eq sim schema")} {_CONFIG_HELP_TAIL}'
+_RUN_CONFIG_HELP = f'{config_option_help("generate_and_simulate()", "eq sim schema --command run")} {_CONFIG_HELP_TAIL}'
+
+_LLM_CONFIG_HELP = (
+    'LLMCallConfig for every simulation-side LLM call as a JSON object, e.g. '
+    '\'{"model": "openai/gpt-5.6-luna", "temperature": 0.2}\'. Merged field by field into "llm_config" '
+    'from --config. --sim-model wins over its "model" when passed.'
+)
 
 
-def _resolve_simulate_options(
-    *,
-    datapoints: Path | None,
-    dataset_id: str | None,
-    experiment_id: str | None,
-    experiment_run_id: str | None,
-    from_run: str | None,
-    sim_model: str,
-    verbose: int,
-    quiet: bool,
-    yes: bool,
-    executive_summary: bool,
-) -> SimulateOptions:
-    """Configure logging and hooks for ``eq simulate``, then validate its input-source flags.
+def _run_default(field: str) -> Any:
+    """`GenerateAndSimulateCliConfig`'s default for ``field``, for a flag's help text."""
+    return GenerateAndSimulateCliConfig.model_fields[field].default
 
-    This is not a pure resolver. Before validating anything it sets the process
-    log level via ``_configure_logging``, builds a stderr ``rich.Console`` and a
-    ``RichHooks`` unless ``--quiet``, and echoes the resolved simulation model.
-    That ordering is deliberate so a validation error is rendered by the same
-    console the run would have used.
 
-    Raises ``typer.BadParameter`` when the number of input sources is not
-    exactly one, when ``--experiment-run-id`` is given without
-    ``--experiment-id``, or when ``--input`` names a file that does not exist.
-    ``--dataset-id`` and ``--experiment-id`` additionally require ``ORQ_API_KEY``.
+_NAME_HELP = (
+    f'Run name. Unset unless passed: the SDK then saves the run as "{DEFAULT_RUN_NAME}" and names an uploaded '
+    'experiment simulation-<timestamp>-<id>.'
+)
+_DATAPOINT_PARALLELISM_HELP = f'Concurrent simulations. Defaults to {DEFAULT_DATAPOINT_PARALLELISM}.'
+_LLM_PARALLELISM_HELP = (
+    f'Ceiling on in-flight LLM requests for the whole run. Defaults to {DEFAULT_LLM_PARALLELISM}, -1 for no limit; '
+    'size it against your provider concurrency limit.'
+)
+_SAVE_HELP = (
+    f'Write the run to .evaluatorq/sim-runs/. Defaults to {_run_default("save")}; --no-save skips it. '
+    'The SDK writes it, after the recommendations and executive summary are attached.'
+)
+_RECOMMENDATIONS_HELP = (
+    'Generate LLM remediation suggestions for failures with a concrete cause '
+    '(broken rules/criteria, poor quality metrics). '
+    f'Defaults to {_run_default("recommendations")}; --no-recommendations skips the extra LLM cost. '
+    'Uses --sim-model.'
+)
+_EXECUTIVE_SUMMARY_HELP = (
+    'Generate an LLM narrative executive summary at the top of the report (needs LLM creds). '
+    f'Defaults to {_run_default("executive_summary")}.'
+)
+
+
+def _load_datapoints(path: Path) -> list[SimulationDatapoint]:
+    """Read the ``--input`` JSONL into the config's ``datapoints`` field.
+
+    A missing file is a bad parameter (exit 2); an empty or unparseable one raises ``ValueError``, which the
+    command reports as a one-line error with exit 1.
+    """
+    from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
+
+    if not path.exists():
+        raise typer.BadParameter(f'Datapoints file not found: {path}')
+    loaded = load_datapoints_from_jsonl(str(path))
+    if not loaded:
+        raise ValueError(f'No datapoints loaded from {path}')
+    return loaded
+
+
+def _resolve_cli_config(
+    ctx: typer.Context,
+    model: type[ModelT],
+    flags: tuple[Flag, ...],
+    cli_args: dict[str, Any],
+    config_source: str | None,
+) -> ModelT:
+    """`resolve_config`, with the errors a flag's value converter raises (``ValueError``) reported as exit 1."""
+    try:
+        return resolve_config(ctx, model, flags, cli_args, config_source=config_source)
+    except _clean_cli_error_types() as exc:
+        _handle_cli_error(exc)
+
+
+# Order matters: later rows win for a shared field, so ``--sim-model`` beats ``--llm-config``. Each row names the
+# config field the click parameter sets. ``--target``, ``--vercel-url`` and ``--openai-model`` each replace the
+# file's ``target``; the last two build the target object outside the config, so they have no path.
+_SHARED_FLAGS: tuple[Flag, ...] = (
+    Flag('target'),
+    Flag('vercel_url', None, replaces=('target',)),
+    Flag('openai_model', None, replaces=('target',)),
+    Flag('memory_entity', 'memory_entity_id'),
+    Flag('report_path', replaces=('report',)),
+    Flag('name', 'run_name', replaces=('evaluation_name',)),
+    Flag('max_turns'),
+    Flag('datapoint_parallelism', replaces=('parallelism',)),
+    Flag('llm_parallelism'),
+    Flag('evaluator', 'evaluator_names'),
+    Flag('save'),
+    Flag('recommendations'),
+    Flag('executive_summary'),
+    json_flag('llm_config_json', 'llm_config', LLMCallConfig, flag='--llm-config'),
+    Flag('sim_model', 'llm_config.model'),
+)
+
+# Choosing an input on the command line replaces every input the file chose, so a flag never collides with the
+# file in the "exactly one source" check. --experiment-run-id is no trigger: alone it narrows the file's experiment.
+_INPUT_FIELDS = (
+    'datapoints',
+    'personas',
+    'scenarios',
+    'dataset_id',
+    'experiment_id',
+    'experiment_run_id',
+    'previous_run',
+)
+
+_SIMULATE_FLAGS: tuple[Flag, ...] = (
+    *_SHARED_FLAGS,
+    Flag('datapoints', to_value=_load_datapoints, replaces=_INPUT_FIELDS),
+    Flag('dataset_id', replaces=_INPUT_FIELDS),
+    Flag('experiment_id', replaces=_INPUT_FIELDS),
+    Flag('experiment_run_id'),
+    Flag('from_run', 'previous_run', replaces=_INPUT_FIELDS),
+)
+
+_RUN_FLAGS: tuple[Flag, ...] = (
+    *_SHARED_FLAGS,
+    Flag('agent_description'),
+    Flag('num_personas'),
+    Flag('num_scenarios'),
+    Flag('persona_seed', 'persona_seeds'),
+    Flag('scenario_seed', 'scenario_seeds'),
+    Flag('generation_instructions'),
+    Flag('target_reasoning_effort'),
+)
+
+# Config fields the CLI consumes itself: ``target`` and ``memory_entity_id`` become the resolved target object
+# (the SDK rejects a ``memory_entity_id`` beside an object target), and ``--report`` also accepts a directory.
+# Aliases are resolved to current names by the config model; internal run functions receive only those names.
+_CLI_OWNED_FIELDS = frozenset({
+    'target',
+    'memory_entity_id',
+    'report_path',
+    'evaluation_name',
+    'evaluation_description',
+    'orq_results_path',
+    'exit_on_failure',
+    'report',
+    'parallelism',
+})
+
+
+def _forwarded_kwargs(cfg: BaseModel) -> dict[str, Any]:
+    """The keyword arguments of the internal run function that ``cfg`` supplies: every field the CLI does not own."""
+    return {name: value for name, value in model_kwargs(cfg).items() if name not in _CLI_OWNED_FIELDS}
+
+
+def _sim_model(cfg: BaseModel) -> str:
+    """The model every simulation-side LLM call uses, for display."""
+    llm_config: LLMCallConfig | None = getattr(cfg, 'llm_config', None)
+    if llm_config is not None and 'model' in llm_config.model_fields_set:
+        return llm_config.model
+    return role_model('fast', task='sim.user')
+
+
+@app.command()
+def schema(
+    input_schema: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--input/--output',
+            help='--input (default): the shape --config accepts. --output: the SimulationRun that --json prints.',
+        ),
+    ] = True,
+    command: Annotated[
+        _SchemaCommand,
+        typer.Option(
+            '--command',
+            help="Which command's --config to describe with --input: `sim simulate` or `sim run`.",
+        ),
+    ] = _SchemaCommand.SIMULATE,
+) -> None:
+    """Print the JSON schema of `sim simulate` / `sim run`'s config or of their JSON result."""
+    from evaluatorq.simulation.contracts import SimulationRun
+
+    if not input_schema:
+        echo_schema(SimulationRun, output=True)
+        return
+    echo_schema(SimulateCliConfig if command == 'simulate' else GenerateAndSimulateCliConfig, output=False)
+
+
+def _setup_run_output(*, verbose: int, quiet: bool, yes: bool, executive_summary: bool, sim_model: str) -> Any:
+    """Configure logging, build the run hooks (``None`` under ``--quiet``) and echo the simulation model.
+
+    Runs before the input-source validation so a validation error is rendered by the same console
+    the run would have used.
     """
     if quiet:
         verbose = -1
@@ -546,34 +736,93 @@ def _resolve_simulate_options(
         )
     _configure_logging(verbose, console=log_console)
     _echo_using(sim_model)
+    return hooks
 
+
+def _validate_input_sources(ctx: typer.Context, cfg: SimulateCliConfig) -> None:
+    """Require exactly one input source on the resolved config, and its credentials.
+
+    ``personas`` and ``scenarios`` together count as one inline source. Raises ``typer.BadParameter``
+    when the number of sources is not one, when ``--experiment-run-id`` is given without
+    ``--experiment-id``, or when ``--dataset-id`` / ``--experiment-id`` lack ``ORQ_API_KEY``.
+    """
+    datapoints_label = '--input' if explicitly_set(ctx, 'datapoints') else 'inline datapoints in --config'
     sources = [
-        name
-        for name, given in (
-            ('--input', datapoints),
-            ('--dataset-id', dataset_id),
-            ('--experiment-id', experiment_id),
-            ('--from-run', from_run),
+        label
+        for label, given in (
+            (datapoints_label, cfg.datapoints is not None),
+            ('--dataset-id', cfg.dataset_id is not None),
+            ('--experiment-id', cfg.experiment_id is not None),
+            ('--from-run', cfg.previous_run is not None),
+            ('inline personas/scenarios in --config', cfg.personas is not None or cfg.scenarios is not None),
         )
-        if given is not None
+        if given
     ]
     if len(sources) != 1:
         got = f' (got: {", ".join(sources)})' if sources else ''
         raise typer.BadParameter(f'Provide exactly one of --input, --dataset-id, --experiment-id, or --from-run{got}.')
-    if experiment_run_id is not None and experiment_id is None:
+    if cfg.experiment_run_id is not None and cfg.experiment_id is None:
         raise typer.BadParameter('--experiment-run-id requires --experiment-id.')
-    if datapoints is not None and not datapoints.exists():
-        raise typer.BadParameter(f'Datapoints file not found: {datapoints}')
-    if dataset_id is not None:
+    if cfg.dataset_id is not None:
         _require_orq_api_key('--dataset-id')
-    if experiment_id is not None:
+    if cfg.experiment_id is not None:
         _require_orq_api_key('--experiment-id')
 
-    return SimulateOptions(verbose=verbose, hooks=hooks)
+
+def _saved_run_path(run: SimulationRun) -> Path | None:
+    """Where the SDK saved ``run``, from its run manifest; ``None`` when it was not saved."""
+    manifest = read_manifest(_get_sim_runs_dir(), run.run_id) if run.run_id else None
+    return Path(manifest.report_path) if manifest is not None and manifest.report_path else None
+
+
+def _finish_run(
+    run: SimulationRun,
+    *,
+    cfg: SimulateCliConfig | GenerateAndSimulateCliConfig,
+    hooks: Any,
+    results_path: Path | None,
+    report_md: Path | None,
+    report_html: Path | None,
+    emit_json: Callable[[BaseModel], None] | None,
+) -> None:
+    """Write the CLI-owned outputs of a finished run and point at the run the SDK saved."""
+    if results_path:
+        _write_results(run.results, results_path)
+
+    if hooks is not None and cfg.executive_summary:
+        hooks.print_summary(run.results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
+
+    if report_md is not None:
+        _export_report(run, report_md, fmt='md')
+    if report_html is not None:
+        _export_report(run, report_html, fmt='html')
+
+    report_path = cfg.report_path
+    if report_path is not None:
+        report_path = _resolve_report_target(report_path, ext='json', run=run)
+        _write_report(run, report_path)
+        _echo_saved('Report', report_path)
+
+    if emit_json is not None:
+        emit_json(run)
+
+    if cfg.save:
+        run_path = _saved_run_path(run)
+        if run_path is None:
+            logger.warning(
+                f'Run {run.run_id} was not saved: no saved report in the run manifests under {_get_sim_runs_dir()} '
+                '(the cause is logged above).'
+            )
+        else:
+            _echo_saved('Run', run_path)
+            _echo_next(_dashboard_command(_get_sim_runs_dir()), 'explore the results')
+    elif report_path is None:
+        _recho('[yellow]Tip:[/] run without --no-save to browse results in the dashboard.', soft_wrap=True)
 
 
 @app.command(no_args_is_help=True, epilog=_SIMULATE_EPILOG)
 def simulate(
+    ctx: typer.Context,
     datapoints: Annotated[
         Path | None,
         typer.Option(
@@ -668,57 +917,47 @@ def simulate(
         ),
     ] = None,
     name: Annotated[
-        str,
-        typer.Option('--name', '-n', help='Run name for the run-store entry.'),
-    ] = 'sim',
+        str | None,
+        typer.Option('--name', '-n', help=_NAME_HELP),
+    ] = None,
     sim_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--sim-model',
-            help=f'Model for the user-simulator, the judge, the recommendations pass and the executive summary. {MODEL_OPTION_NOTE}',
+            help=f'Model for the user-simulator, the judge, the recommendations pass and the executive summary. Default: the fast model role, and the smart model role for the judge. {MODEL_OPTION_NOTE}',
         ),
-    ] = DEFAULT_MODEL,
+    ] = None,
     max_turns: Annotated[
         int | None,
         typer.Option(
             '--max-turns',
             min=1,
-            help="Maximum conversation turns. Defaults to 10, or to the replayed run's cap with --from-run.",
+            help=f"Maximum conversation turns. Defaults to {DEFAULT_MAX_TURNS}, or to the replayed run's cap with --from-run.",
         ),
     ] = None,
     datapoint_parallelism: Annotated[
-        int,
-        typer.Option('--datapoint-parallelism', '--parallelism', min=1, help='Concurrent simulations.'),
-    ] = 10,
+        int | None,
+        typer.Option('--datapoint-parallelism', '--parallelism', min=1, help=_DATAPOINT_PARALLELISM_HELP),
+    ] = None,
     llm_parallelism: Annotated[
         int | None,
-        typer.Option(
-            '--llm-parallelism',
-            callback=check_llm_parallelism_option,
-            help='Ceiling on in-flight LLM requests for the whole run. Defaults to 10, -1 for no limit; '
-            'size it against your provider concurrency limit.',
-        ),
+        typer.Option('--llm-parallelism', callback=check_llm_parallelism_option, help=_LLM_PARALLELISM_HELP),
     ] = None,
     evaluator: Annotated[
         list[str] | None,
         typer.Option('--evaluator', help='Evaluator name (repeatable). Defaults to API defaults.'),
     ] = None,
-    no_save: Annotated[  # noqa: FBT002
-        bool,
-        typer.Option('--no-save', help='Skip writing to .evaluatorq/sim-runs/.'),
-    ] = False,
-    recommendations: Annotated[  # noqa: FBT002
-        bool,
+    save: Annotated[
+        bool | None,
+        typer.Option('--save/--no-save', help=_SAVE_HELP),
+    ] = None,
+    recommendations: Annotated[
+        bool | None,
         typer.Option(
             '--recommendations/--no-recommendations',
-            help=(
-                'Generate LLM remediation suggestions for failures with a '
-                'concrete cause (broken rules/criteria, poor quality metrics). '
-                'On by default; --no-recommendations skips the extra LLM cost. '
-                'Uses --sim-model.'
-            ),
+            help=_RECOMMENDATIONS_HELP,
         ),
-    ] = True,
+    ] = None,
     verbose: Annotated[
         int,
         typer.Option(
@@ -756,13 +995,25 @@ def simulate(
             ),
         ),
     ] = None,
-    executive_summary: Annotated[  # noqa: FBT002
-        bool,
+    executive_summary: Annotated[
+        bool | None,
         typer.Option(
             '--executive-summary/--no-executive-summary',
-            help='Generate an LLM narrative executive summary at the top of the report (needs LLM creds).',
+            help=_EXECUTIVE_SUMMARY_HELP,
         ),
-    ] = True,
+    ] = None,
+    config_source: Annotated[
+        str | None,
+        typer.Option('--config', metavar='PATH|JSON|-', help=_SIMULATE_CONFIG_HELP),
+    ] = None,
+    llm_config_json: Annotated[
+        str | None,
+        typer.Option('--llm-config', metavar='JSON', help=_LLM_CONFIG_HELP),
+    ] = None,
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help=JSON_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Run simulations from a pre-built datapoints file, an Orq dataset, experiment, or previous run.
 
@@ -783,47 +1034,27 @@ def simulate(
 
     Note: --target agent:<key> invokes a hosted Orq agent through the Responses
     router. --target deployment:<key> uses the deployment callback path.
+
+    Every option above can also come from --config, which accepts inline JSON, a config path, or "-" for stdin.
+    The config additionally accepts "datapoints", or "personas" and "scenarios", as the input source.
     """
-    options = _resolve_simulate_options(
-        datapoints=datapoints,
-        dataset_id=dataset_id,
-        experiment_id=experiment_id,
-        experiment_run_id=experiment_run_id,
-        from_run=from_run,
-        sim_model=sim_model,
-        verbose=verbose,
-        quiet=quiet,
-        yes=yes,
-        executive_summary=executive_summary,
+    cli_args = dict(locals())
+    emit_json = reserve_stdout_for_json(ctx) if json_output else None
+    cfg = _resolve_cli_config(ctx, SimulateCliConfig, _SIMULATE_FLAGS, cli_args, config_source)
+    hooks = _setup_run_output(
+        verbose=verbose, quiet=quiet, yes=yes, executive_summary=cfg.executive_summary, sim_model=_sim_model(cfg)
     )
-    hooks = options.hooks
+    _validate_input_sources(ctx, cfg)
 
     try:
         resolved_target = _resolve_target(
-            target=target,
+            target=cfg.target,
             vercel_url=vercel_url,
             openai_model=openai_model,
-            memory_entity_id=memory_entity,
+            memory_entity_id=cfg.memory_entity_id,
         )
-        evaluator_names = _resolve_evaluators(evaluator)
-        run = asyncio.run(
-            _simulate_impl(
-                datapoints_path=datapoints,
-                dataset_id=dataset_id,
-                experiment_id=experiment_id,
-                experiment_run_id=experiment_run_id,
-                previous_run=from_run,
-                target=resolved_target,
-                sim_model=sim_model,
-                max_turns=max_turns,
-                datapoint_parallelism=datapoint_parallelism,
-                llm_parallelism=llm_parallelism,
-                evaluator_names=evaluator_names,
-                evaluation_name=name,
-                hooks=hooks,
-                recommendations=recommendations,
-            )
-        )
+        cfg = cfg.model_copy(update={'evaluator_names': _resolve_evaluators(cfg.evaluator_names)})
+        run = asyncio.run(_simulate_impl(cfg, target=resolved_target, hooks=hooks))
     except KeyboardInterrupt:
         typer.echo('^C aborted.', err=True)
         raise typer.Exit(130) from None
@@ -838,77 +1069,25 @@ def simulate(
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         _handle_cli_error(exc)
 
-    results = run.results
-
-    if results_path:
-        _write_results(results, results_path)
-
-    _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
-    if hooks is not None and executive_summary:
-        hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
-
-    if report_md is not None:
-        _export_report(run, report_md, fmt='md')
-    if report_html is not None:
-        _export_report(run, report_html, fmt='html')
-
-    if report_path is not None:
-        report_path = _resolve_report_target(report_path, ext='json', run=run)
-        _write_report(run, report_path)
-        _echo_saved('Report', report_path)
-
-    if not no_save:
-        run_path = _auto_save_run(run=run, run_name=name)
-        _echo_saved('Run', run_path)
-        _echo_next(_dashboard_command(_get_sim_runs_dir()), 'explore the results')
-    elif report_path is None:
-        _recho('[yellow]Tip:[/] run without --no-save to browse results in the dashboard.', soft_wrap=True)
-
-
-async def _simulate_impl(
-    *,
-    datapoints_path: Path | None,
-    dataset_id: str | None = None,
-    experiment_id: str | None = None,
-    experiment_run_id: str | None = None,
-    previous_run: str | None = None,
-    target: Any,
-    sim_model: str,
-    max_turns: int | None,
-    datapoint_parallelism: int,
-    llm_parallelism: int | None,
-    evaluator_names: list[str] | None,
-    evaluation_name: str,
-    hooks: Any = None,
-    recommendations: bool = True,
-) -> SimulationRun:
-    from evaluatorq.simulation.api import _simulate_run
-    from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
-
-    loaded = None
-    if dataset_id is None and experiment_id is None and previous_run is None:
-        if datapoints_path is None:  # the command guarantees exactly one source
-            raise ValueError('One of datapoints_path, dataset_id, experiment_id, or previous_run is required')
-        loaded = load_datapoints_from_jsonl(str(datapoints_path))
-        if not loaded:
-            raise ValueError(f'No datapoints loaded from {datapoints_path}')
-
-    return await _simulate_run(
-        datapoints=loaded,
-        dataset_id=dataset_id,
-        experiment_id=experiment_id,
-        experiment_run_id=experiment_run_id,
-        previous_run=previous_run,
-        target=target,
-        llm_config=LLMCallConfig(model=sim_model),
-        max_turns=max_turns,
-        datapoint_parallelism=datapoint_parallelism,
-        llm_parallelism=llm_parallelism,
-        evaluator_names=evaluator_names,
-        evaluation_name=evaluation_name,
+    _finish_run(
+        run,
+        cfg=cfg,
         hooks=hooks,
-        recommendations=recommendations,
+        results_path=results_path,
+        report_md=report_md,
+        report_html=report_html,
+        emit_json=emit_json,
     )
+
+
+async def _simulate_impl(cfg: SimulateCliConfig, *, target: Any, hooks: Any) -> SimulationRun:
+    """Run ``_simulate_run`` with every field of ``cfg`` the CLI does not own.
+
+    ``target`` is the CLI's resolved object, built from the target flag and ``memory_entity_id``.
+    """
+    from evaluatorq.simulation.api import _simulate_run
+
+    return await _simulate_run(**_forwarded_kwargs(cfg), target=target, hooks=hooks)
 
 
 # ---------------------------------------------------------------------------
@@ -918,6 +1097,7 @@ async def _simulate_impl(
 
 @app.command(no_args_is_help=True, epilog=_RUN_EPILOG)
 def run(
+    ctx: typer.Context,
     agent_description: Annotated[
         str | None,
         typer.Option('--agent-description', help='Free-text description of the agent under test.'),
@@ -976,44 +1156,49 @@ def run(
         ),
     ] = None,
     name: Annotated[
-        str,
-        typer.Option('--name', '-n', help='Run name for the run-store entry.'),
-    ] = 'sim',
+        str | None,
+        typer.Option('--name', '-n', help=_NAME_HELP),
+    ] = None,
     sim_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--sim-model',
             help=(
                 'Model for the user-simulator, the judge, persona/scenario/first-message '
-                f'generation, the recommendations pass and the executive summary. {MODEL_OPTION_NOTE}'
+                'generation, the recommendations pass and the executive summary. Default: the fast model role, '
+                'and the smart model role for the judge. '
+                f'{MODEL_OPTION_NOTE}'
             ),
         ),
-    ] = DEFAULT_MODEL,
+    ] = None,
     max_turns: Annotated[
-        int,
-        typer.Option('--max-turns', min=1, help='Maximum conversation turns.'),
-    ] = 10,
+        int | None,
+        typer.Option('--max-turns', min=1, help=f'Maximum conversation turns. Defaults to {DEFAULT_MAX_TURNS}.'),
+    ] = None,
     datapoint_parallelism: Annotated[
-        int,
-        typer.Option('--datapoint-parallelism', '--parallelism', min=1, help='Concurrent simulations.'),
-    ] = 10,
+        int | None,
+        typer.Option('--datapoint-parallelism', '--parallelism', min=1, help=_DATAPOINT_PARALLELISM_HELP),
+    ] = None,
     llm_parallelism: Annotated[
         int | None,
-        typer.Option(
-            '--llm-parallelism',
-            callback=check_llm_parallelism_option,
-            help='Ceiling on in-flight LLM requests for the whole run. Defaults to 10, -1 for no limit; '
-            'size it against your provider concurrency limit.',
-        ),
+        typer.Option('--llm-parallelism', callback=check_llm_parallelism_option, help=_LLM_PARALLELISM_HELP),
     ] = None,
     num_personas: Annotated[
-        int,
-        typer.Option('--num-personas', min=1, help='Number of personas to generate.'),
-    ] = 5,
+        int | None,
+        typer.Option(
+            '--num-personas',
+            min=1,
+            help=f'Number of personas to generate. Defaults to {_run_default("num_personas")}.',
+        ),
+    ] = None,
     num_scenarios: Annotated[
-        int,
-        typer.Option('--num-scenarios', min=1, help='Number of scenarios to generate.'),
-    ] = 5,
+        int | None,
+        typer.Option(
+            '--num-scenarios',
+            min=1,
+            help=f'Number of scenarios to generate. Defaults to {_run_default("num_scenarios")}.',
+        ),
+    ] = None,
     persona_seed: Annotated[
         list[str] | None,
         typer.Option(
@@ -1037,16 +1222,16 @@ def run(
         ),
     ] = None,
     generation_instructions: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--generation-instructions',
             help=(
                 'Free-text steer applied to every generated persona AND scenario, '
                 'e.g. "enterprise B2B buyers, replying in German". Stacks on top of '
-                'any seeds and --edge-case-percentage.'
+                'any seeds and --edge-case-percentage. Empty leaves the built-in prompts unchanged.'
             ),
         ),
-    ] = '',
+    ] = None,
     target_reasoning_effort: Annotated[
         str | None,
         typer.Option(
@@ -1058,22 +1243,17 @@ def run(
         list[str] | None,
         typer.Option('--evaluator', help='Evaluator name (repeatable). Defaults to API defaults.'),
     ] = None,
-    no_save: Annotated[  # noqa: FBT002
-        bool,
-        typer.Option('--no-save', help='Skip writing to .evaluatorq/sim-runs/.'),
-    ] = False,
-    recommendations: Annotated[  # noqa: FBT002
-        bool,
+    save: Annotated[
+        bool | None,
+        typer.Option('--save/--no-save', help=_SAVE_HELP),
+    ] = None,
+    recommendations: Annotated[
+        bool | None,
         typer.Option(
             '--recommendations/--no-recommendations',
-            help=(
-                'Generate LLM remediation suggestions for failures with a '
-                'concrete cause (broken rules/criteria, poor quality metrics). '
-                'On by default; --no-recommendations skips the extra LLM cost. '
-                'Uses --sim-model.'
-            ),
+            help=_RECOMMENDATIONS_HELP,
         ),
-    ] = True,
+    ] = None,
     datapoints_path: Annotated[
         Path | None,
         typer.Option(
@@ -1122,13 +1302,25 @@ def run(
             ),
         ),
     ] = None,
-    executive_summary: Annotated[  # noqa: FBT002
-        bool,
+    executive_summary: Annotated[
+        bool | None,
         typer.Option(
             '--executive-summary/--no-executive-summary',
-            help='Generate an LLM narrative executive summary at the top of the report (needs LLM creds).',
+            help=_EXECUTIVE_SUMMARY_HELP,
         ),
-    ] = True,
+    ] = None,
+    config_source: Annotated[
+        str | None,
+        typer.Option('--config', metavar='PATH|JSON|-', help=_RUN_CONFIG_HELP),
+    ] = None,
+    llm_config_json: Annotated[
+        str | None,
+        typer.Option('--llm-config', metavar='JSON', help=_LLM_CONFIG_HELP),
+    ] = None,
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help=JSON_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Generate personas and scenarios, then run simulations (generate + simulate).
 
@@ -1142,57 +1334,35 @@ def run(
 
     If --target is an agent target, --agent-description may be omitted and is
     fetched from Orq agent context. Other targets require --agent-description.
+
+    Every option above can also come from --config, which accepts inline JSON, a config path, or "-" for stdin.
+    This config object can also reach options without a flag, such as "edge_case_percentage".
     """
-    if quiet:
-        verbose = -1
-
-    hooks: Any = None
-    log_console: Any = None
-    if not quiet:
-        from rich.console import Console
-
-        from evaluatorq.simulation.hooks import RichHooks
-
-        log_console = Console(stderr=True)
-        hooks = RichHooks(
-            console=log_console,
-            skip_confirm=should_skip_confirm(yes),
-            defer_summary=executive_summary,
-            verbose=verbose,
-        )
-    _configure_logging(verbose, console=log_console)
-    _echo_using(sim_model)
+    cli_args = dict(locals())
+    emit_json = reserve_stdout_for_json(ctx) if json_output else None
+    cfg = _resolve_cli_config(ctx, GenerateAndSimulateCliConfig, _RUN_FLAGS, cli_args, config_source)
+    hooks = _setup_run_output(
+        verbose=verbose, quiet=quiet, yes=yes, executive_summary=cfg.executive_summary, sim_model=_sim_model(cfg)
+    )
 
     try:
         resolved_agent_description = asyncio.run(
-            _resolve_agent_description(agent_description=agent_description, target=target)
+            _resolve_agent_description(agent_description=cfg.agent_description, target=cfg.target)
         )
         resolved_target = _resolve_target(
-            target=target,
+            target=cfg.target,
             vercel_url=vercel_url,
             openai_model=openai_model,
-            memory_entity_id=memory_entity,
+            memory_entity_id=cfg.memory_entity_id,
         )
-        evaluator_names = _resolve_evaluators(evaluator)
+        cfg = cfg.model_copy(update={'evaluator_names': _resolve_evaluators(cfg.evaluator_names)})
         run = asyncio.run(
             _run_impl(
+                cfg,
                 agent_description=resolved_agent_description,
                 target=resolved_target,
-                sim_model=sim_model,
-                max_turns=max_turns,
-                datapoint_parallelism=datapoint_parallelism,
-                llm_parallelism=llm_parallelism,
-                num_personas=num_personas,
-                num_scenarios=num_scenarios,
-                evaluator_names=evaluator_names,
-                evaluation_name=name,
-                save_datapoints=datapoints_path,
                 hooks=hooks,
-                recommendations=recommendations,
-                persona_seeds=persona_seed,
-                scenario_seeds=scenario_seed,
-                generation_instructions=generation_instructions,
-                target_reasoning_effort=target_reasoning_effort,
+                save_datapoints=datapoints_path,
             )
         )
     except KeyboardInterrupt:
@@ -1209,53 +1379,30 @@ def run(
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         _handle_cli_error(exc)
 
-    results = run.results
-
-    if results_path:
-        _write_results(results, results_path)
-
-    _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
-    if hooks is not None and executive_summary:
-        hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
-
-    if report_md is not None:
-        _export_report(run, report_md, fmt='md')
-    if report_html is not None:
-        _export_report(run, report_html, fmt='html')
-
-    if report_path is not None:
-        report_path = _resolve_report_target(report_path, ext='json', run=run)
-        _write_report(run, report_path)
-        _echo_saved('Report', report_path)
-
-    if not no_save:
-        run_path = _auto_save_run(run=run, run_name=name)
-        _echo_saved('Run', run_path)
-        _echo_next(_dashboard_command(_get_sim_runs_dir()), 'explore the results')
-    elif report_path is None:
-        _recho('[yellow]Tip:[/] run without --no-save to browse results in the dashboard.', soft_wrap=True)
+    _finish_run(
+        run,
+        cfg=cfg,
+        hooks=hooks,
+        results_path=results_path,
+        report_md=report_md,
+        report_html=report_html,
+        emit_json=emit_json,
+    )
 
 
 async def _run_impl(
+    cfg: GenerateAndSimulateCliConfig,
     *,
     agent_description: str,
     target: Any,
-    sim_model: str,
-    max_turns: int,
-    datapoint_parallelism: int,
-    llm_parallelism: int | None,
-    num_personas: int,
-    num_scenarios: int,
-    evaluator_names: list[str] | None,
-    evaluation_name: str,
+    hooks: Any,
     save_datapoints: Path | None = None,
-    hooks: Any = None,
-    recommendations: bool = True,
-    persona_seeds: list[str] | None = None,
-    scenario_seeds: list[str] | None = None,
-    generation_instructions: str = '',
-    target_reasoning_effort: str | None = None,
 ) -> SimulationRun:
+    """Run ``_generate_and_simulate_run`` with every field of ``cfg`` the CLI does not own.
+
+    ``agent_description`` and ``target`` are the CLI's resolved values: the description may have been
+    fetched from the agent, and the target is an object built from the target flag.
+    """
     from evaluatorq.simulation.api import _generate_and_simulate_run
 
     emit = None
@@ -1271,25 +1418,9 @@ async def _run_impl(
 
         emit = _emit
 
-    return await _generate_and_simulate_run(
-        agent_description=agent_description,
-        target=target,
-        llm_config=LLMCallConfig(model=sim_model),
-        max_turns=max_turns,
-        datapoint_parallelism=datapoint_parallelism,
-        llm_parallelism=llm_parallelism,
-        num_personas=num_personas,
-        num_scenarios=num_scenarios,
-        evaluator_names=evaluator_names,
-        evaluation_name=evaluation_name,
-        emit_datapoints=emit,
-        hooks=hooks,
-        recommendations=recommendations,
-        persona_seeds=persona_seeds,
-        scenario_seeds=scenario_seeds,
-        generation_instructions=generation_instructions,
-        target_reasoning_effort=target_reasoning_effort,
-    )
+    kwargs = _forwarded_kwargs(cfg)
+    kwargs['agent_description'] = agent_description
+    return await _generate_and_simulate_run(**kwargs, target=target, hooks=hooks, emit_datapoints=emit)
 
 
 # ---------------------------------------------------------------------------
@@ -1318,12 +1449,13 @@ def generate(
         ),
     ] = None,
     sim_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--sim-model',
-            help=f'Model for persona/scenario/first-message generation. {MODEL_OPTION_NOTE}',
+            help=f'Model for persona/scenario/first-message generation. Default: the fast model role. {MODEL_OPTION_NOTE}',
+            show_default=False,
         ),
-    ] = DEFAULT_MODEL,
+    ] = None,
     num_personas: Annotated[
         int,
         typer.Option('--num-personas', min=1, help='Number of personas to generate.'),
@@ -1420,7 +1552,7 @@ def generate(
         _echo_generate_plan(
             console=log_console,
             source=source,
-            model=sim_model,
+            model=_generation_model(sim_model),
             num_personas=num_personas,
             num_scenarios=num_scenarios,
             output=datapoints_path,
@@ -1527,12 +1659,16 @@ def from_traces(
         ),
     ] = None,
     sim_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--sim-model',
-            help=f'Model for persona/scenario inference and extension generation. {MODEL_OPTION_NOTE}',
+            help=(
+                'Model for persona/scenario inference and extension generation. '
+                f'Default: the fast model role. {MODEL_OPTION_NOTE}'
+            ),
+            show_default=False,
         ),
-    ] = DEFAULT_MODEL,
+    ] = None,
     replay_first_message: Annotated[  # noqa: FBT002
         bool,
         typer.Option(
@@ -1690,7 +1826,7 @@ def from_traces(
 async def _generate_impl(
     *,
     agent_description: str,
-    sim_model: str,
+    sim_model: str | None,
     num_personas: int,
     num_scenarios: int,
     hooks: Any = None,
@@ -1704,7 +1840,7 @@ async def _generate_impl(
         agent_description=agent_description,
         num_personas=num_personas,
         num_scenarios=num_scenarios,
-        llm_config=LLMCallConfig(model=sim_model),
+        llm_config=_sim_llm_config(sim_model),
         hooks=hooks,
         persona_seeds=persona_seeds,
         scenario_seeds=scenario_seeds,
@@ -1720,7 +1856,7 @@ async def _generate_impl(
 def _load_results_for_export(input_path: Path) -> tuple[list[Any], list[Any]]:
     """Load ``(results, stored_recommendations)`` from a results JSONL or a
     full ``SimulationRun`` report JSON (the ``--report-output`` file)."""
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun
     from evaluatorq.simulation.utils.dataset_export import parse_jsonl
 
     content = input_path.read_text(encoding='utf-8')
@@ -1732,7 +1868,7 @@ def _load_results_for_export(input_path: Path) -> tuple[list[Any], list[Any]]:
             run = None
         if run is not None:
             return list(run.results), list(run.recommendations or [])
-    results: list[SimulationResult] = parse_jsonl(content, cls=SimulationResult)  # pyright: ignore[reportAssignmentType]
+    results = parse_jsonl(content, cls=SimulationResult)
     return results, []
 
 
@@ -1768,9 +1904,13 @@ def export(
         ),
     ] = False,
     sim_model: Annotated[
-        str,
-        typer.Option('--sim-model', help=f'Model for --recommendations generation. {MODEL_OPTION_NOTE}'),
-    ] = DEFAULT_MODEL,
+        str | None,
+        typer.Option(
+            '--sim-model',
+            help=f'Model for --recommendations generation. Default: the fast model role. {MODEL_OPTION_NOTE}',
+            show_default=False,
+        ),
+    ] = None,
     target: Annotated[
         str,
         typer.Option('--target-label', help='Target name shown in md/html report headers.'),
@@ -1806,7 +1946,7 @@ def export(
 
     recs = stored_recs or None
     if recommendations and not recs:
-        recs = _maybe_generate_recommendations(results, sim_model)
+        recs = _maybe_generate_recommendations(results, _generation_model(sim_model))
     elif recs:
         typer.echo(f'Using {len(recs)} stored remediation suggestion(s) from the input run.', err=True)
 
@@ -1833,7 +1973,7 @@ def _validate_datapoints(path: Path) -> None:
     if not path.exists():
         raise typer.BadParameter(f'File not found: {path}')
 
-    from evaluatorq.simulation.types import SimulationDatapoint
+    from evaluatorq.simulation.contracts import SimulationDatapoint
 
     try:
         content = path.read_text(encoding='utf-8')
@@ -1957,7 +2097,7 @@ def upload_dataset(
 
     # ponytail: single bulk create; chunk if a set ever exceeds the API's array cap.
     # rows are plain dicts matching the SDK's CreateDatasetItem TypedDict shape.
-    client.datasets.create_datapoint(dataset_id=dataset_id, request_body=rows)  # pyright: ignore[reportArgumentType]
+    client.datasets.create_datapoint(dataset_id=dataset_id, request_body=cast('Any', rows))
 
     base = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
     typer.echo(f'Uploaded {len(rows)} datapoint(s) -> dataset {dataset_id} ({base})')
@@ -2154,27 +2294,6 @@ def _format_scorer_averages(averages: dict[str, float]) -> str:
     if not averages:
         return '—'
     return '  '.join(f'{k}={v:.2f}' for k, v in averages.items())
-
-
-def _maybe_generate_executive_summary(run: Any, *, enabled: bool, model: str) -> None:
-    """Populate ``run.executive_summary`` in place. Best-effort; never raises.
-
-    Thin sync wrapper over the shared async helper, passing the module-level
-    ``resolve_llm_client`` so tests that monkeypatch it here keep working.
-    """
-    from evaluatorq.simulation.reports.executive_summary import populate_run_executive_summary
-
-    try:
-        asyncio.run(
-            populate_run_executive_summary(
-                run,
-                enabled=enabled,
-                model=model,
-                resolve_client=resolve_llm_client,
-            )
-        )
-    except Exception:
-        logger.warning('Failed to generate executive summary', exc_info=True)
 
 
 def _resolve_report_target(target: Path, *, ext: str, run: Any) -> Path:

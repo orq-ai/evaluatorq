@@ -7,12 +7,11 @@ the public ``simulate()`` / ``generate_and_simulate()`` / ``generate()``
 signatures are unaffected by this type; it exists purely to reduce the
 parameter-threading boilerplate between the internal layers.
 
-Field names here are the canonical INTERNAL names, which intentionally diverge
-from the public keyword names at the one seam where they're built
-(``_simulate_run`` / ``_generate_and_simulate_run``):
+Field names here are the public keyword names of ``simulate()`` /
+``generate_and_simulate()``, except where noted at the one seam where they're
+built (``_simulate_run`` / ``_generate_and_simulate_run``):
 
 * ``model`` (was the public ``sim_model``)
-* ``run_output`` (was the public ``report``)
 
 Never call ``model_dump`` / serialize this model — several fields hold
 callables, an ``AsyncOpenAI`` client, an ``AgentTarget`` instance, and hook
@@ -36,14 +35,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # static typing) — pydantic resolves annotations at class-creation time even
 # with `from __future__ import annotations`, so they must be real, importable
 # names in this module's namespace and can't live behind `TYPE_CHECKING`.
+from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
 from evaluatorq.contracts import DEFAULT_TARGET_TIMEOUT_MS, AgentTarget, LLMCallConfig, TokenUsage
+from evaluatorq.simulation.contracts import Message, Persona, Scenario, SimulationDatapoint  # noqa: TC001
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
-from evaluatorq.simulation.types import DEFAULT_MODEL, Message, Persona, Scenario, SimulationDatapoint
 
 # Named because every `simulate` overload repeats them; as literals they drifted one
-# signature at a time.
+# signature at a time. DEFAULT_DATAPOINT_PARALLELISM is shared with red team, so it lives in common.
 DEFAULT_TARGET_AGENT_TIMEOUT_MS = DEFAULT_TARGET_TIMEOUT_MS
 DEFAULT_MAX_TARGET_RETRIES = 2
 DEFAULT_MAX_TOOL_RESULT_CHARS = 500
@@ -60,7 +60,7 @@ class SimulationConfig(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra='forbid')
 
     # --- Run identity / target resolution inputs -------------------------
-    evaluation_name: str = ''
+    run_name: str = ''
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None
     personas: list[Persona] | None = None
     scenarios: list[Scenario] | None = None
@@ -78,12 +78,17 @@ class SimulationConfig(BaseModel):
     max_turns: int | None = None
     """None means "unset": resolved in ``_simulate_core`` to a replayed run's
     cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
-    llm_config: LLMCallConfig = Field(default_factory=lambda: LLMCallConfig(model=DEFAULT_MODEL))
+    llm_config: LLMCallConfig = Field(default_factory=LLMCallConfig)
     """Sampling/transport settings for every simulation-side LLM call — five roles:
     the user simulator, the judge, the persona / scenario / first-message
     generators, the recommendations pass and the executive summary. Never the
     target under test — that is the thing being measured, and it is configured
     where it is constructed.
+
+    The model is left unset by default, so each call site resolves its own
+    model role through `sim_role_config`: the judge runs on the smart role,
+    everything else on the fast role. A model set here explicitly applies to
+    every call site, the judge included.
 
     Three fields are narrower than the rest. ``max_tokens`` is read by the two
     agents and the executive summary; the generators and the recommendations
@@ -100,10 +105,10 @@ class SimulationConfig(BaseModel):
 
     @property
     def model(self) -> str:
-        """Resolved simulation model, derived from ``llm_config`` — no second field to keep in step."""
-        return self.llm_config.model
+        """Resolved user-simulator model, derived from ``llm_config`` — no second field to keep in step."""
+        return sim_role_config(self.llm_config, 'sim.user').model
 
-    datapoint_parallelism: int = 10
+    datapoint_parallelism: int = DEFAULT_DATAPOINT_PARALLELISM
     target_agent_timeout_ms: int = Field(default=DEFAULT_TARGET_AGENT_TIMEOUT_MS, gt=0)
     """Per-call timeout for the target under test, threaded into
     ``SimulationRunner``. Mirrors red team's equivalent knob — a slow
@@ -148,11 +153,11 @@ class SimulationConfig(BaseModel):
     GENERATE stage (``None`` for `simulate`, which never generates), folded into
     ``SimulationRun.token_usage_total`` by ``_simulate_core``."""
     upload_results: bool = True
-    evaluation_description: str | None = None
-    orq_results_path: str | None = None
-    exit_on_failure: bool = True
+    experiment_description: str | None = None
+    orq_folder_path: str | None = None
+    raise_on_execution_failure: bool = True
     save: bool = False
-    run_output: str | Path | None = None
+    report_path: str | Path | None = None
     recommendations: SimulationRecommendationConfig | None = None
     """Generate remediation suggestions in-core (before save), mirroring red teaming's
     ``recommendations=`` on ``red_team``. ``None`` means off. The public
@@ -181,19 +186,42 @@ def sim_llm_config(llm_config: LLMCallConfig | None) -> LLMCallConfig:
     """The caller's simulation-side config, or the default one.
 
     ``llm_config`` is the only place the simulation-side model is named, so an
-    omitted config means every field stays unset and the per-call-site defaults
-    keep applying — including `DEFAULT_MODEL`.
+    omitted config means every field stays unset and each call site resolves
+    its own model role through `sim_role_config`.
     """
-    return llm_config if llm_config is not None else LLMCallConfig(model=DEFAULT_MODEL)
+    return llm_config if llm_config is not None else LLMCallConfig()
 
 
-def resolve_sim_llm_config(*, model: str, llm_config: LLMCallConfig | None, caller: str) -> LLMCallConfig:
+def sim_role_config(llm_config: LLMCallConfig | None, task: str) -> LLMCallConfig:
+    """The config one simulation call site sends, with its model role resolved.
+
+    An explicitly set ``llm_config.model`` applies to every call site, so the
+    config comes back unchanged. Otherwise the model is the one configured for
+    ``task``'s role (``sim.user`` and ``sim.generator`` are fast, ``sim.judge``
+    is smart), resolved now so a settings change reaches the next run.
+
+    Raises ``KeyError`` for a task not in `TASKS`.
+    """
+    from evaluatorq.common.model_roles import TASKS, role_model
+
+    config = sim_llm_config(llm_config)
+    if 'model' in config.model_fields_set:
+        return config
+    return config.model_copy(update={'model': role_model(TASKS[task], task=task)})
+
+
+def resolve_sim_llm_config(*, model: str | None, llm_config: LLMCallConfig | None, caller: str) -> LLMCallConfig:
     """Fold a ``model`` shorthand and a full ``llm_config`` into one config.
 
     For the constructors that still take a bare model string beside the config
     (`SimulationRunner`, the generators, the trace helpers). The public
     ``simulate`` / ``generate`` entry points no longer have that pair — they take
     ``llm_config`` only and call `sim_llm_config`.
+
+    A ``model`` of ``None`` means the caller chose none, so the config keeps
+    its model unset and `sim_role_config` picks one per call site. A non-``None``
+    ``model`` is folded into the config, where it counts as explicit for every
+    call site.
 
     An explicitly set ``llm_config.model`` wins: a caller who set it said
     everything they wanted to say about the simulation-side calls. A ``model``
@@ -204,26 +232,22 @@ def resolve_sim_llm_config(*, model: str, llm_config: LLMCallConfig | None, call
     flag ``LLMCallConfig(temperature=0.2)`` beside a ``model`` as a
     contradiction and fall back to the default model.
 
-    The contradiction check only fires when ``model`` differs from
-    `DEFAULT_MODEL`, so passing `DEFAULT_MODEL` explicitly beside a different
-    ``llm_config.model`` is indistinguishable from not passing it at all and is
-    not warned about.
-
     Args:
-        model: The bare model keyword as the constructor spells it.
+        model: The bare model keyword as the constructor spells it, or ``None``.
         llm_config: The full config, or ``None``.
         caller: Class or function name, for the contradiction warning.
     """
-    if llm_config is None:
-        return LLMCallConfig(model=model)
-    if 'model' not in llm_config.model_fields_set:
-        return llm_config.model_copy(update={'model': model})
-    if model != DEFAULT_MODEL and llm_config.model != model:
+    config = sim_llm_config(llm_config)
+    if model is None:
+        return config
+    if 'model' not in config.model_fields_set:
+        return config.model_copy(update={'model': model})
+    if config.model != model:
         logger.warning(
             '{}(): model={!r} contradicts llm_config.model={!r}; using llm_config.model. '
             'Drop the model argument, or set the model on llm_config only.',
             caller,
             model,
-            llm_config.model,
+            config.model,
         )
-    return llm_config
+    return config

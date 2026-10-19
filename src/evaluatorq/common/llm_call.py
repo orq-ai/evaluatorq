@@ -22,8 +22,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 from openai import BadRequestError
 
+from evaluatorq.common.cli_oauth import DECISIONS_PATH
 from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
+from evaluatorq.common.model_input import classifier_question_wire_payloads
 from evaluatorq.common.responses import responses_text_config
 from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
@@ -40,7 +42,7 @@ from evaluatorq.contracts import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Mapping
 
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletion, ParsedChatCompletion
@@ -507,16 +509,10 @@ async def execute_response(
 def classify_request_body(
     model: str,
     state: dict[str, Any] | str | list[Any],
-    questions: dict[str, ClassifyQuestion],
+    questions: Mapping[str, ClassifyQuestion],
 ) -> dict[str, Any]:
-    """Build the exact body sent to the Orq ``/classify`` endpoint."""
-    wire_questions: dict[str, dict[str, Any]] = {}
-    for name, current in questions.items():
-        wire_question: dict[str, Any] = {'type': current.kind, 'instructions': current.instructions}
-        if current.criteria is not None:
-            wire_question['criteria'] = current.criteria
-        wire_questions[name] = wire_question
-    return {'model': model, 'state': state, 'questions': wire_questions}
+    """Build the exact body sent to the Orq ``/decisions`` endpoint."""
+    return {'model': model, 'state': state, 'questions': classifier_question_wire_payloads(questions)}
 
 
 async def execute_classify(
@@ -529,12 +525,12 @@ async def execute_classify(
     timeout_s: float,
     inject_trace_headers: bool = True,
 ) -> tuple[Any, TokenUsage | None]:
-    """Execute one Orq router ``/classify`` call and return the decoded reply plus its usage.
+    """Execute one Orq router ``/decisions`` call and return the decoded reply plus its usage.
 
     Pass exactly one of ``question`` for the single-question form or ``request``
     for the multi-question form. The request's state is used for every question.
 
-    The classify endpoint has no SDK method, so this is the one sanctioned
+    The decisions endpoint has no SDK method, so this is the one sanctioned
     ``client.post`` in the package — it owns the same things the chat and
     Responses executors own and nothing more: the bounded call, trace-header
     injection, span input/output recording and usage extraction. The reply is
@@ -568,9 +564,8 @@ async def execute_classify(
         request = cast('ClassifyRequest', request)
         questions = request.questions
         state = request.state
-    # No `apply_pipeline_metadata` here: the /classify wire contract accepts only
-    # model, state and questions, so a metadata block is an unknown key on a body
-    # the router validates strictly.
+    # No `apply_pipeline_metadata` here: the wire contract accepts only model, state and
+    # questions, so a metadata block is an unknown key on a body the router validates strictly.
     body = classify_request_body(model, state, questions)
     wire_questions = body['questions']
 
@@ -603,7 +598,7 @@ async def execute_classify(
         ],
     )
     payload = await _bounded_call(
-        client.post('/classify', cast_to=object, body=body, options=options),  # pyright: ignore[reportArgumentType]
+        client.post(DECISIONS_PATH, cast_to=object, body=body, options=cast('Any', options)),
         timeout_s,
     )
     # `record_llm_response` is duck-typed (its `_field` helper reads dicts as well as

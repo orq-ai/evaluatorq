@@ -14,11 +14,11 @@ from pydantic import BaseModel, Field
 
 from evaluatorq.common.llm_call import execute_chat_parse
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     AgentCapability,
     AgentContext,
     LLMConfig,
+    attacker_model_for,
 )
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
@@ -131,7 +131,7 @@ Inference rules:
 async def classify_agent_capabilities(
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
-    model: str = DEFAULT_PIPELINE_MODEL,
+    model: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
 ) -> AgentCapabilities:
@@ -150,6 +150,7 @@ async def classify_agent_capabilities(
     Returns:
         AgentCapabilities with all classified capabilities
     """
+    model = attacker_model_for(model, pipeline_config)
     cfg = pipeline_config or PIPELINE_CONFIG
     capabilities: dict[str, list[AgentCapability]] = {}
 

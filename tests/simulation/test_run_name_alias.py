@@ -31,7 +31,7 @@ async def test_simulate_accepts_run_name_without_changing_legacy_keyword(
     monkeypatch.setattr('evaluatorq.simulation.api._simulate_run', fake_run)
 
     assert await simulate(run_name=run_name, evaluation_name=evaluation_name) == []
-    assert captured['evaluation_name'] == 'support-replay'
+    assert captured['run_name'] == 'support-replay'
 
 
 @pytest.mark.asyncio
@@ -56,7 +56,7 @@ async def test_generate_and_simulate_accepts_run_name(monkeypatch: pytest.Monkey
     monkeypatch.setattr('evaluatorq.simulation.api._generate_and_simulate_run', fake_run)
 
     assert await generate_and_simulate(run_name='support-generated') == []
-    assert captured['evaluation_name'] == 'support-generated'
+    assert captured['run_name'] == 'support-generated'
 
 
 @pytest.mark.asyncio

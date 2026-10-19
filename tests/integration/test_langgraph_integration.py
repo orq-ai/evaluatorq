@@ -7,6 +7,8 @@ wiring works: graph creation -> invoke -> response extraction -> reset -> clone.
 
 from __future__ import annotations
 
+import typing
+
 import pytest
 
 pytest.importorskip("langgraph")
@@ -19,7 +21,7 @@ from evaluatorq.contracts import Message  # noqa: E402
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget  # noqa: E402
 
 
-def _build_echo_graph() -> CompiledStateGraph:  # pyright: ignore[reportMissingTypeArgument]
+def _build_echo_graph() -> CompiledStateGraph[typing.Any, typing.Any, typing.Any, typing.Any]:
     """Build a minimal LangGraph that uses a fake LLM to respond."""
     model = FakeListChatModel(responses=["I am a helpful assistant.", "Sure, I can help with that."])
 
@@ -27,7 +29,7 @@ def _build_echo_graph() -> CompiledStateGraph:  # pyright: ignore[reportMissingT
         response = model.invoke(state["messages"])
         return {"messages": [response]}
 
-    graph = StateGraph(MessagesState)
+    graph = StateGraph(MessagesState)  # ty: ignore[invalid-argument-type]
     graph.add_node("agent", agent_node)
     graph.set_entry_point("agent")
     graph.add_edge("agent", END)

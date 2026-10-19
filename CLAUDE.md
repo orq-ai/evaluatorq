@@ -10,6 +10,17 @@ When you flag something that changes what the user should do — a bug you found
 
 This is about the surfacing, not the work. Code, commits, and PR bodies stay normal.
 
+## Working style
+
+- **Explain, then plan, then code.** Before a design choice, or before deleting anything, explain the decision in plain language and get the plan approved. Small calls in the middle of a task do not wait: take the sensible default, say which one you took, and keep going.
+- **Ask questions in one round.** Batch every open question into one numbered list so each can be answered by number.
+- **Scope an instruction to exactly what was named.** Removing a feature does not mean removing the validation next to it. Ask before deleting anything adjacent.
+- **Back claims with something runnable.** Support a claim with a command or snippet the reader can execute, and ground every number in a source. Never invent figures.
+- **Fix review findings in the PR they were found in.** If something is genuinely deferred, give it a ticket id in the same message.
+- **Say "verified" only about the pushed commit**, never the working tree.
+- **End with the link.** The final message names the PR, ticket or page URL.
+- **Review state on GitHub.** Agent reviews post as comments marked as agent output. Set APPROVE or REQUEST_CHANGES only when asked to, and only after reading every review at the current head.
+
 ## Parallel sessions
 
 Parallel agent sessions typically run in their own git worktree, so uncommitted changes you did not make may appear in the working tree from concurrent work. **Never run `git stash` (any subcommand) or `git reset`.** Not `stash` to clean the tree, and not `stash pop`/`apply` either: the stash holds other sessions' autostash entries, and popping one drops a merge into your tree and consumes the entry. `git checkout <path>` and `git checkout -- .` are equally destructive to uncommitted work you did not write. When committing, stage only the exact files your task changed.
@@ -26,11 +37,17 @@ Processes are shared too. **Never `pkill -f` a command name** (`mkdocs serve`, `
 # Install dependencies (dev group + all optional extras)
 uv sync --all-extras --all-groups
 
-# Run unit tests (excludes integration tests)
+# Run the quick local profile (excludes integration and deliberately slow tests)
+uv run pytest
+
+# Run the complete non-integration profile before pushing (matches CI selection)
 uv run pytest -m 'not integration'
 
 # Run a specific test file
 uv run pytest tests/redteam/test_vulnerability_first.py -v
+
+# The default marker still applies; opt a targeted slow test back in explicitly
+uv run pytest -m 'not integration' path/to/test.py::test_name
 
 # Run integration tests (requires ORQ_API_KEY in .env)
 uv run pytest -m integration
@@ -41,8 +58,8 @@ uv run ruff check src
 # Format
 uv run ruff format src
 
-# Type check — the whole repo. Never scope it to a path (see "Before pushing").
-uv run basedpyright
+# Type check — the configured source, test, root, and docs files. Never scope it to a path (see "Before pushing").
+uv run ty check
 
 # Build
 uv build
@@ -78,6 +95,8 @@ This runs 3 personas × 3 scenarios for agent simulation and a small hybrid red-
 
 Reviewers need no flag: `.github/CODEOWNERS` requests them on every PR and skips the author. Change that file, not the `gh` invocation, to change who reviews.
 
+**Show visible changes in the PR.** If a change affects anything in the browser, attach screenshots of the changed pages or states and embed them in the PR description. If a change affects the CLI, include fenced before and after snippets in the PR description showing the same command and its output on each version. Cover every user-visible change so a reviewer can see what was done. When the change is an interaction rather than a state (a click, a filter, a flow across pages), also attach a short video recorded with the `dashboard-demo-video` skill.
+
 **The ticket is named by its id in the PR title, and by nothing else anywhere.** Put it in trailing parentheses after a conventional-commit subject — `docs: unwrap every hard-wrapped markdown file (RES-1495)`. No Linear URL in the title, the body, a comment or a commit message: the id is what a reader greps, quotes in Slack and types into search, and a pasted URL rots the moment a workspace or slug changes while the id never does. Linear links the two directions on its own from the id plus the PR attachment. The cost to know: dropping the `Closes <id>` line means **merging will not close the ticket** — move it yourself, or say so in the PR.
 
 ## Before pushing to a PR
@@ -87,13 +106,13 @@ Run the same checks CI runs, **verbatim**, before every push:
 ```bash
 uv run ruff check src
 uv run ruff format --check src
-uv run basedpyright                 # whole repo — NOT a path
+uv run ty check                     # configured repo surface — NOT a path
 uv run pytest -m 'not integration'
 ```
 
-**Do not scope `basedpyright` to a path.** CI runs it bare, which covers `tests/` as well as `src/`. Running `uv run basedpyright src/` passes clean while CI fails on type errors in test files — parametrized args annotated `str` where the signature wants a `Literal`, raw dicts passed where a pydantic model is expected. That exact mistake left PR #119 red across all four Python versions for three commits without any local signal.
+**Do not scope `ty` to a path.** The configured bare check covers `tests/`, `src/`, root Python files, and docs Python files. A scoped run can pass while CI fails on a type error elsewhere. CI runs the bare check once, on Ubuntu with Python 3.10.
 
-Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **basedpyright** is not scoped. Match CI, not intuition.
+Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **ty** is not scoped. Match CI, not intuition.
 
 CI does not run integration tests. Real-API coverage runs weekly via `.github/workflows/examples-weekly.yml`, which opens an issue on failure rather than blocking a PR.
 
@@ -109,7 +128,9 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Building call params | `LLMCallConfig.request_params(...)` (`contracts.py`) | hand-built `extra_kwargs` dict — it skips the reserved-key guard |
 | Resolving an LLM client | `common.llm_client.resolve_llm_client` | `AsyncOpenAI(...)` anywhere but that module |
 | Retry / backoff | `common.retry.with_retry`, or the SDK's own `max_retries` — **exactly one of the two** | a second retry layer on a client that already retries (they multiply) |
-| Calling the target under test | `common.target_call.call_target_with_retry` | ad-hoc `respond()` + try/except |
+| Choosing the default model for a call | `common.model_roles.role_model(role, task=...)` (roles `fast`, `smart`, `classifier`, `embedding`) | `DEFAULT_PIPELINE_MODEL` as a parameter default — it is the fast built-in, and a parameter default snapshots it at import so a role setting never reaches the call |
+| Calling the target under test | `common.target_call.call_target_with_retry`. It also hands the target a replay copy without unpaired tool calls and orphan results (`common.messages.drop_unreplayable_tool_records`); `test_targets_are_called_only_through_call_target_with_retry` fails on any other `.respond()` call. Tool calls and results pair by id inside a turn window; `common.messages.match_tool_results` owns that rule and the display pairing in `common.model_input` calls it too | ad-hoc `respond()` + try/except |
+| Replaying a recorded transcript to a simulation agent or the in-loop judge | `BaseAgent._call_llm`: it shows an unpaired call as text and replays the rest | passing the raw transcript to `to_chat_completion()` or `messages_to_responses_input` for a replay. The recorded transcript is evidence and keeps incomplete calls; scorer inputs (`evaluators.py`, the red-team seed context in `redteam/adaptive/pipeline.py`) filter with `incomplete_as_text=True` before rendering |
 | LLM-as-judge | `common.judge.run_judge`; multi-judge via `common.jury` | new judge prompt + parse loop |
 | OTel spans, token usage, cost | `common.tracing` (`with_llm_span`, `record_token_usage`, `record_llm_response`) | `get_tracer` / `start_as_current_span` outside a `tracing.py` module |
 | Surface-specific span naming | `redteam/tracing.py`, `simulation/tracing.py` — thin wrappers that delegate | new span vocabulary |
@@ -117,14 +138,19 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Prompt templating | `common.template_engine.render_template` | f-string prompt assembly |
 | Untrusted text into a prompt | `common.sanitize.delimit` | raw interpolation |
 | Run lifecycle state | `common.run_manifest` (`start_manifest`, `list_manifests`) | new status dict / sidecar file |
+| Strict cross-process file locking | `common.file_lock.strict_file_lock` on a permanent sibling lock file | locks on atomically replaced data files or surface-local platform locking |
 | Applying recommendations to an agent | `common.apply.apply_recommendations` | surface-local merge logic |
 | Console / HTML / MD report output | `common/reports/` (`console`, `render`, `vega`, `palette`) | new renderer or colour set |
 | CLI output, errors, JSON, width | `common/cli_*.py` | bespoke `typer.echo` formatting |
 | Normalising agent output shapes | `common.output_adapters`, `common.messages` | per-surface `isinstance` ladders |
-| Turning message content or a tool result into text | `contracts.content_to_text` / `tool_result_to_text` | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
+| Turning message content or a tool result into text | `contracts.content_to_text` / `common.messages.tool_result_to_text` (`contracts.tool_result_to_text` stays the public alias; `common.messages` is the home) | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
+| Reading `function_call` / `orq:` tool records from a response or trace | `openresponses.tool_records.iter_paired` (or `normalize_tool_records` on top of it) | `startswith('orq:')` outside the allowlist in `tests/test_reuse_guardrails.py`; hand-pairing by `call_id` is not mechanically enforced |
 | Rendering a whole message list as one text blob | `common.messages.messages_to_text` | `''.join(...)` over `content` — it glues turns into one word, drops `tool_calls` (so an agent that acted scores as silent) and lets tool JSON read as the agent's answer |
 | Turning a `TraceInput` or loaded traces into rows | `common.trace_input.load_traces` (fetch + one `partition_traces` log) | `fetch_traces` then a hand-rolled usable/failed split |
+| Computing trace signals | `evaluatorq.signals.compute_signals` | ad-hoc counting over trajectories |
+| Representing an Insights conversation with trace metadata | `common.trace_document.TraceDocument`; convert with `ensure_trace_document`, render with `to_chat_messages`, persist coverage with `source_coverage` | a second stored message list beside the ATIF trajectory, or unrestricted capture payloads in saved review data |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
+| Untrusted trace text (a shell command, tool arguments or output) going to an external classifier | `common.redact.scrub_known_secrets` (local, pure, no network) before the text is rendered or sent | an ad-hoc credential regex, or sending the raw text |
 | Rendering a transcript as Responses `input` | `openresponses.input_items.messages_to_responses_input` | a hand-built `{'role', 'content'}` list — an assistant turn needs `output_text` parts or the Orq router **silently drops it** |
 
 
@@ -193,10 +219,13 @@ These tests use fakes and do not require API credentials. The repository does no
 - `ORQ_WORKSPACE` (or `ORQ_WORKSPACE_SLUG`) — workspace slug for dashboard→Orq trace deep-links; buttons hidden when unset
 - `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
 - `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` — `false`/`0` stops W3C `traceparent` injection on outgoing LLM/target calls (default on)
-- `EVALUATORQ_APPLY_MODEL` — model for the dashboard's apply-recommendations merge (default `openai/gpt-5.6-luna`, the shared `DEFAULT_PIPELINE_MODEL`)
+- `EVALUATORQ_FAST_MODEL` — model for the fast role: simulated user, simulation generators, trace-finder compiler (default `openai/gpt-6-luna`, the `DEFAULT_PIPELINE_MODEL` alias)
+- `EVALUATORQ_SMART_MODEL` — model for the smart role: red-team attacks, every judge and evaluator, apply-recommendations, Insights summaries (default `openai/gpt-6-sol`)
+- `EVALUATORQ_APPLY_MODEL` — deprecated; pins the `apply` task. Use `--model-override apply=...`, the settings file's `model_overrides`, or `EVALUATORQ_SMART_MODEL`
 - `EVALUATORQ_DASHBOARD_SETTINGS` — path to the dashboard and trace-finder settings JSON (default `.evaluatorq/dashboard-settings.json`)
-- `EVALUATORQ_COMPILER_MODEL` — trace-finder compiler model (default `openai/gpt-5.6-luna`)
-- `EVALUATORQ_CLASSIFIER_MODEL` — trace-finder classifier model (default `typesafe/jev-latest`)
+- `EVALUATORQ_COMPILER_MODEL` — deprecated; pins the `finder.compiler` task. Use `--model-override finder.compiler=...` or `EVALUATORQ_FAST_MODEL`
+- `EVALUATORQ_CLASSIFIER_MODEL` — model for the classifier role: Ask AI, trace-finder classification, Insights labels, signals (default `typesafe/jev-latest`)
+- `EVALUATORQ_EMBEDDING_MODEL` — model for the embedding role: Insights embeddings (default `openai/text-embedding-3-small`)
 - `EVALUATORQ_FINDER_WINDOW_DAYS` — trace-finder lookback window in days (default `7`)
 - `EVALUATORQ_FINDER_LIMIT` — trace-finder population cap (default `500`)
 - `EVALUATORQ_FINDER_PARALLELISM` — concurrent trace-finder classify calls (default `100`)
@@ -206,7 +235,7 @@ These tests use fakes and do not require API credentials. The repository does no
 - Python 3.10+ compatible (use `from __future__ import annotations` for newer typing syntax)
 - `StrEnum` polyfill for Python 3.10 (native in 3.11+)
 - Linting: ruff
-- Type checking: basedpyright (lenient config — many rules disabled)
+- Type checking: ty
 - Logging: `loguru` everywhere (core runtime dependency since 1.3)
 
 ### Releases
@@ -217,7 +246,7 @@ Releases are **tag-driven**. The package version comes from the latest git tag v
   - `feat:` → minor; `fix:`/`perf:` → patch; `feat!:`/`fix!:`/`BREAKING CHANGE:` → major; `docs:`/`chore:`/`ci:`/`test:`/`refactor:`/`style:`/`build:`/`revert:` → no release.
 - The workflow releases the **exact commit CI validated** (`workflow_run.head_sha`), never whatever `main` points at when the job starts. A manual `workflow_dispatch` off any ref other than `main` is refused before checkout — tags are not governed by the branch ruleset, so nothing else would stop a feature branch from being tagged and published.
 - On a release-worthy push the workflow: computes the next version, **pushes the tag `vX.Y.Z`**, builds the wheel/sdist (version derived from the tag), **publishes to PyPI via token auth** (the `PYPI_TOKEN` repo secret, passed to `pypa/gh-action-pypi-publish`), then creates a GitHub Release with PR-based auto-notes (`.github/release.yml` controls the categories — merged PRs + contributor attributions).
-- **Never write a breaking commit without explicit approval.** Do not use `feat!:`/`fix!:` or a `BREAKING CHANGE:` footer unless the user has explicitly approved a major release for that change. A single one halts **all** releases (see next bullet) until a human forces a bump — in July 2026 three `!` commits froze PyPI on `v1.10.1` for 24 days and 317 commits, and the client bug that surfaced it was already fixed in an unreleased commit. If a change is genuinely breaking, ask first; otherwise land it as `feat:`/`fix:`/`refactor:` and describe the break in the PR body.
+- **Never write a breaking commit without explicit approval.** Do not use `feat!:`/`fix!:` or a `BREAKING CHANGE:` footer unless the user has explicitly approved a major release for that change. A single one halts **all** releases (see next bullet) until a human forces a bump — in July 2026 three `!` commits froze PyPI on `v1.10.1` for 24 days and 317 commits, and the client bug that surfaced it was already fixed in an unreleased commit. If a change is genuinely breaking, ask first; otherwise land it as `feat:`/`fix:`/`refactor:`, describe the break in the PR body and the `CHANGELOG.md`, and add a test for the new behaviour. A break is acceptable without a major release when the affected users are known.
 - **Accidental majors are refused.** A computed `major` bump is skipped unless you re-run via **workflow_dispatch** with `force_level=major`. Use `force_level=minor`/`patch` to override the computed level (e.g. to ship breaking changes as a minor deliberately). The refusal **fails the run** (`::error::` + `exit 1`) so a blocked release is visible; a genuine no-op (a `docs:`-only push, or the tag already pointing at the commit being released) still exits 0 and stays green. A tag that already exists but points at a **different** commit fails the run with both SHAs rather than skipping quietly. The `!` commits stay in range until someone releases, so the block is permanent, not transient — a red Release run means act, not retry.
 - The GitHub Release notes are generated from merged PRs and are created last, non-blocking — a notes failure never blocks the PyPI publish. The committed `CHANGELOG.md` is hand-written and separate from them: a behaviour change to a public default belongs under its `### Notable defaults` section in the same PR, not only in a docstring.
 - PyPI publishing uses the **`PYPI_TOKEN`** repo secret (an API token). To switch to OIDC trusted publishing later, configure a **Trusted Publisher** on PyPI for this repo + `release.yml` (PyPI → project → Publishing) and delete the `with: password:` block in the publish step — `id-token: write` is already granted.

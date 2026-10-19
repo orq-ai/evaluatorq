@@ -14,6 +14,7 @@ import statistics
 from collections import Counter
 from dataclasses import dataclass
 from functools import partial
+from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
@@ -136,6 +137,16 @@ class PairwiseComparison(BaseModel):
     votes: list[PairwiseVote] = Field(default_factory=list, description='Per-judge reconciled votes')
     token_usage: TokenUsage | None = Field(
         default=None, description='Summed token usage across both orderings and any replacements'
+    )
+    judge_latency_ms: float | None = Field(
+        default=None,
+        ge=0.0,
+        allow_inf_nan=False,
+        description='End-to-end wall time spent judging this comparison, including replacements, in milliseconds',
+    )
+    trace_id: str | None = Field(
+        default=None,
+        description='OTel trace id (32-char hex) of the orq.pairwise_jury span that judged this pair; None when tracing was off',
     )
 
 
@@ -852,10 +863,14 @@ def _pairwise_observations(
     only the collapsed vote (RES-1251)."""
     out: list[RepetitionObservation] = []
     failures = 0
-    for ordering, jv, swapped in (
+    orderings: tuple[
+        tuple[Literal['ab'], JuryVote | None, Literal[False]],
+        tuple[Literal['ba'], JuryVote | None, Literal[True]],
+    ] = (
         ('ab', first_votes.get(model), False),
         ('ba', second_votes.get(model), True),
-    ):
+    )
+    for ordering, jv, swapped in orderings:
         if jv is None:
             continue
         failures += jv.repetitions_failed
@@ -883,7 +898,7 @@ def _pairwise_observations(
                 failures += 1
             out.append(
                 RepetitionObservation(
-                    ordering=cast("Literal['ab', 'ba']", ordering),
+                    ordering=ordering,
                     repetition=i,
                     verdict=verdict,
                     explanation=rep.explanation,
@@ -933,6 +948,11 @@ async def run_pairwise(
     jury_ctx: object | None = None
 
     async with with_span('orq.pairwise_jury') as jury_span:
+        trace_id = None
+        if jury_span is not None:
+            span_ctx = jury_span.get_span_context()
+            if span_ctx.is_valid:
+                trace_id = format(span_ctx.trace_id, '032x')
         # Captured before any judge runs so every judge span (both orderings,
         # replacements included) parents to this one comparison-level span.
         jury_ctx = current_otel_context()
@@ -944,23 +964,33 @@ async def run_pairwise(
             propagate_errors=propagate_errors,
             jury_ctx=jury_ctx,
         )
-        first_votes, second_votes, usages = await _run_pairwise_both(resolved_panel, call, swap=swap)
+        # Time just the judgement rounds: panel orderings and any promoted
+        # replacements. Panel validation above remains outside the measurement.
+        judge_started = monotonic()
+        try:
+            first_votes, second_votes, usages = await _run_pairwise_both(resolved_panel, call, swap=swap)
 
-        num_failed = sum(1 for model in resolved_panel if _pairwise_failed(model, first_votes, second_votes, swap=swap))
-        seen = set(resolved_panel)
-        stand_ins: list[str] = []
-        for candidate in replacement_judges or []:
-            if candidate and candidate not in seen:
-                stand_ins.append(candidate)
-                seen.add(candidate)
-        stand_ins = stand_ins[:num_failed]
+            num_failed = sum(
+                1 for model in resolved_panel if _pairwise_failed(model, first_votes, second_votes, swap=swap)
+            )
+            seen = set(resolved_panel)
+            stand_ins: list[str] = []
+            for candidate in replacement_judges or []:
+                if candidate and candidate not in seen:
+                    stand_ins.append(candidate)
+                    seen.add(candidate)
+            stand_ins = stand_ins[:num_failed]
 
-        stand_in_set = set(stand_ins)
-        if stand_ins:
-            rep_first, rep_second, rep_usages = await _run_pairwise_both(stand_ins, call, swap=swap, replacement=True)
-            first_votes.update(rep_first)
-            second_votes.update(rep_second)
-            usages.extend(rep_usages)
+            stand_in_set = set(stand_ins)
+            if stand_ins:
+                rep_first, rep_second, rep_usages = await _run_pairwise_both(
+                    stand_ins, call, swap=swap, replacement=True
+                )
+                first_votes.update(rep_first)
+                second_votes.update(rep_second)
+                usages.extend(rep_usages)
+        finally:
+            judge_latency_ms = (monotonic() - judge_started) * 1000.0
 
         votes: list[PairwiseVote] = []
         for model in (*resolved_panel, *stand_ins):
@@ -989,7 +1019,14 @@ async def run_pairwise(
 
         decisive = [v.vote for v in votes if v.vote is not None]
         winner = 'inconclusive' if len(decisive) < max(1, min_successful_judges) else pairwise_consensus(decisive)
-        comparison = PairwiseComparison(winner=winner, votes=votes, token_usage=_sum_usage(usages))
+        comparison = PairwiseComparison(
+            winner=winner,
+            votes=votes,
+            token_usage=_sum_usage(usages),
+            judge_latency_ms=judge_latency_ms,
+            trace_id=trace_id,
+        )
+
         _record_pairwise_span(
             jury_span,
             comparison,

@@ -1,0 +1,493 @@
+"""Validated data contracts for an insights run: population, labels, clusters, the run record."""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime  # noqa: TC003
+from pathlib import Path  # noqa: TC003
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from typing_extensions import Self
+
+from evaluatorq.common.judge import ClassifyQuestion
+from evaluatorq.common.model_roles import role_model
+from evaluatorq.common.trace_document import (  # noqa: TC001 — Pydantic needs the runtime model types.
+    DatasetRef,
+    Outcome,
+)
+from evaluatorq.contracts import StageRecord, Usage  # noqa: TC001 — Pydantic needs the runtime model types.
+from evaluatorq.insights.transcript import ToolStats  # noqa: TC001 — Pydantic needs the runtime model type.
+from evaluatorq.signals.config import SignalsConfig  # noqa: TC001 — Pydantic field type.
+from evaluatorq.signals.models import SignalReport  # noqa: TC001 — Pydantic field type.
+from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
+from evaluatorq.trace_finder.settings import (
+    MAX_TRACE_INPUT_CHARS,
+    MIN_TRACE_INPUT_CHARS,
+    effective_settings,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
+    from evaluatorq.trace_finder.export import RunExport
+
+DimensionName = Literal['intent', 'failure', 'sentiment']
+BoundedRatio = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+
+
+def default_insights_models(
+    summary: str | None = None, classifier: str | None = None, embedding: str | None = None
+) -> dict[str, str]:
+    """The summary/classifier/embedding ids an Insights run uses: explicit values win, else each task's model role."""
+    return {
+        'summary': summary or role_model('smart', task='insights.summary'),
+        'classifier': classifier or role_model('classifier', task='insights.labels'),
+        'embedding': embedding or role_model('embedding', task='insights.embedding'),
+    }
+
+
+class _TraceIdentity(Protocol):
+    @property
+    def trace_id(self) -> str: ...
+
+
+PopulationSource = Literal['snapshot', 'query', 'export', 'filter', 'unknown']
+
+
+_ORQ_POPULATION_SOURCES: Mapping[str, PopulationSource] = MappingProxyType({
+    'query': 'query',
+    'export': 'export',
+    'filter': 'filter',
+})
+
+
+def population_source(population: Mapping[str, object]) -> PopulationSource:
+    """Classify a saved population echo by the mode population.py wrote; a recorded snapshot path means a snapshot."""
+    mode = population.get('mode')
+    if mode == 'snapshot' or population.get('snapshot_path'):
+        return 'snapshot'
+    return _ORQ_POPULATION_SOURCES.get(mode, 'unknown') if isinstance(mode, str) else 'unknown'
+
+
+def reads_snapshot(population: Mapping[str, object]) -> bool:
+    """Whether a saved population echo describes a run read from a local snapshot file."""
+    return population_source(population) == 'snapshot'
+
+
+def reads_orq(population: Mapping[str, object]) -> bool:
+    """Whether a saved population echo describes a run that read its traces from Orq, by a mode the pipeline writes."""
+    return population_source(population) in _ORQ_POPULATION_SOURCES
+
+
+def ensure_unique_trace_ids(traces: Iterable[_TraceIdentity]) -> None:
+    """Reject duplicate IDs where downstream analysis stores results by trace ID."""
+    seen: set[str] = set()
+    for trace in traces:
+        if trace.trace_id in seen:
+            raise ValueError(
+                'trace_id values must be unique for analysis; select one span per trace or use distinct '
+                f'dataset-row trace IDs (duplicate trace_id={trace.trace_id!r})'
+            )
+        seen.add(trace.trace_id)
+
+
+class LabelSpec(BaseModel):
+    """A fixed classifier question answered per trace: `noul` (yes/no), `choice`, or `score`.
+
+    `name` is the key the answer is stored under on `TraceInsight.labels` and in
+    `InsightsConfig.labels`; the pattern excludes `__match__`, the key `labeling.py`
+    reserves for the optional population-match question sent alongside labels.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str = Field(pattern=r'^[a-z][a-z0-9_]*$')
+    kind: Literal['noul', 'choice', 'score']
+    instructions: str
+    criteria: dict[str, str | None] | list[str] | None = None
+    noul_threshold: BoundedRatio = 0.5
+
+    def to_question(self, state: dict[str, Any] | str | list[Any]) -> ClassifyQuestion:
+        """Build the `/decisions` question for this label against `state`, validating the criteria/kind shape."""
+        return ClassifyQuestion(
+            kind=self.kind,
+            instructions=self.instructions,
+            criteria=self.criteria,
+            state=state,
+            noul_threshold=self.noul_threshold,
+        )
+
+
+class InsightsPopulation(BaseModel):
+    """The traces in an insights run, chosen by filters only — never influenced by labels.
+
+    Either filtered live through `trace_finder` (`query`/`facets`/`numeric`/window/limit),
+    hydrated from a finder export, or read from a local `Snapshot` JSON file.
+    File sources fix the population and cannot be combined with live selection. `filters` is an input-only
+    shorthand for facet and numeric fields; persisted runs retain the `facets` and `numeric` shape.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    query: str | None = None
+    facets: FacetSelection = FacetSelection()
+    numeric: NumericFilters = NumericFilters()
+    filters: dict[str, Any] | None = Field(default=None, exclude=True)
+    start: datetime | None = None
+    end: datetime | None = None
+    time_origin: Literal['default', 'explicit'] = 'default'
+    window_days: int = Field(default=7, ge=1, le=90)
+    filter_selection: Literal['llm', 'llm+jev'] | None = None
+    limit: int = Field(default=500, ge=1, le=5000)
+    finder_export: Path | None = None
+    snapshot_path: Path | None = None
+    _finder_export_snapshot: RunExport | None = PrivateAttr(default=None)
+
+    @model_validator(mode='before')
+    @classmethod
+    def _unpack_unified_filters(cls, value: Any) -> Any:
+        """Split unified facet/numeric filters through their canonical validators."""
+        if not isinstance(value, dict) or value.get('filters') is None:
+            return value
+        filters = value['filters']
+        if not isinstance(filters, dict):
+            raise ValueError('filters must be a dictionary')  # noqa: TRY004 — Pydantic must report validation errors.
+        if 'facets' in value or 'numeric' in value:
+            raise ValueError('filters cannot be combined with legacy facets or numeric arguments')
+
+        facet_fields = set(FacetSelection.model_fields)
+        numeric_fields = set(NumericFilters.model_fields)
+        unknown = set(filters) - facet_fields - numeric_fields
+        if unknown:
+            raise ValueError(f'unknown filter keys: {", ".join(sorted(map(str, unknown)))}')
+
+        facet_values = {key: item for key, item in filters.items() if key in facet_fields}
+        numeric_values = {key: item for key, item in filters.items() if key in numeric_fields}
+        return {
+            **value,
+            'filters': None,
+            'facets': FacetSelection.model_validate(facet_values),
+            'numeric': NumericFilters.model_validate(numeric_values),
+        }
+
+    @model_validator(mode='after')
+    def _file_source_excludes_live_selection(self) -> Self:
+        for name in ('start', 'end'):
+            value = getattr(self, name)
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise ValueError(f'{name} must be timezone-aware')
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError('start must not be later than end')
+        if self.filter_selection is not None and self.query is None:
+            raise ValueError('filter_selection requires query')
+
+        if self.finder_export is None and self.snapshot_path is None:
+            return self
+        if self.finder_export is not None and self.snapshot_path is not None:
+            raise ValueError('finder_export and snapshot_path are mutually exclusive')
+        live_fields = {
+            'query': self.query is not None,
+            'facets': self.facets != FacetSelection(),
+            'numeric': self.numeric != NumericFilters(),
+            'start': self.start is not None,
+            'end': self.end is not None,
+            'time_origin': self.time_origin != 'default',
+            'window_days': self.window_days != 7,
+            'filter_selection': self.filter_selection is not None,
+            'limit': self.limit != 500,
+        }
+        conflicting = [name for name, used in live_fields.items() if used]
+        if conflicting:
+            raise ValueError(
+                'file sources cannot be combined with live population settings '
+                f'({", ".join(conflicting)}): the file already fixes the trace population'
+            )
+        return self
+
+    @classmethod
+    def from_finder_export(cls, path: Path, *, export: RunExport | None = None) -> InsightsPopulation:
+        """Build a population from a finder export; reuse a CLI-validated snapshot when provided."""
+        population = cls(finder_export=path)
+        population._finder_export_snapshot = export
+        return population
+
+    def finder_export_snapshot(self) -> RunExport | None:
+        """Return the validated export supplied by the CLI, if any."""
+        return self._finder_export_snapshot
+
+    @classmethod
+    def from_snapshot(cls, path: Path) -> InsightsPopulation:
+        """Build a population from a local `Snapshot` JSON file without querying Orq."""
+        return cls(snapshot_path=path)
+
+
+def label_key(spec: LabelSpec, value: object) -> str:
+    """The text an answer value counts, filters and displays under: `yes`/`no`, a score level's own number, or the choice.
+
+    A score keys by the number its level text starts with ("1 calm: ...") so a 1-5
+    scale does not read as 0-4; a level without a number keys by its 0-based index.
+    """
+    if spec.kind == 'noul':
+        return 'yes' if value is True else 'no'
+    if spec.kind == 'score' and isinstance(value, (int, float)) and not isinstance(value, bool):
+        levels = spec.criteria if isinstance(spec.criteria, list) else []
+        index = round(float(value) * max(0, len(levels) - 1))
+        number = re.match(r'\d+', levels[index]) if index < len(levels) else None
+        return number.group() if number else str(index)
+    return str(value)
+
+
+def label_order(spec: LabelSpec) -> list[str]:
+    """Every value `label_key` can give for `spec`, in the spec's own order: yes before no, score levels low to high, choices as listed."""
+    if spec.kind == 'noul':
+        return ['yes', 'no']
+    if spec.kind == 'score' and isinstance(spec.criteria, list):
+        top = max(1, len(spec.criteria) - 1)
+        return [label_key(spec, index / top) for index in range(len(spec.criteria))]
+    return list(spec.criteria) if isinstance(spec.criteria, dict) else []
+
+
+class LabelAnswer(BaseModel):
+    """One label's answer for one trace. `error` set means the value could not be read — never guess a default."""
+
+    value: bool | BoundedRatio | str | None
+    confidence: BoundedRatio | None
+    probabilities: dict[str, Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]] | None
+    error: str | None
+
+
+class TraceSummary(BaseModel):
+    """The fixed per-trace text summary produced by `summarize.py`, feeding the discovered dimensions."""
+
+    summary: str
+    request: str | None
+    task: str | None
+    topic: str | None
+    assistant_errors: list[str] = []
+    sentiment_explanation: str | None
+    languages: list[str] = []
+
+
+_NO_ERROR_SENTINELS = frozenset({'none', 'n/a', 'no errors', 'no errors were made', 'no error'})
+
+
+def real_assistant_errors(summary: TraceSummary) -> list[str]:
+    """`assistant_errors` without placeholder entries a model writes for a clean trace ('None', 'No errors')."""
+    return [
+        error for error in summary.assistant_errors if error.strip().rstrip('.').casefold() not in _NO_ERROR_SENTINELS
+    ]
+
+
+class ClusterAssignment(BaseModel):
+    """Which top- and base-level cluster a trace fell into for one discovered dimension. `'noise'` marks an outlier."""
+
+    top: str
+    base: str
+
+
+class TraceInsight(BaseModel):
+    """One trace's labels, summary, clusters, saved map layouts and per-stage errors."""
+
+    trace_id: str
+    span_id: str | None = None
+    timestamp: datetime | None = None
+    dataset: DatasetRef | None = None
+    outcome: Outcome | None = None
+    agent_name: str = ''
+    project: str = ''
+    labels: dict[str, LabelAnswer] = {}
+    summary: TraceSummary | None = None
+    tool_stats: ToolStats | None = None
+    signals: SignalReport | None = None
+    source_coverage: dict[str, Any] = Field(default_factory=dict)
+    assignments: dict[str, ClusterAssignment] = {}
+    coords: dict[str, tuple[FiniteFloat, FiniteFloat, FiniteFloat]] = {}
+    # None identifies legacy files; an empty dict means no 2D layout was produced for a new run.
+    coords_2d: dict[str, tuple[FiniteFloat, FiniteFloat]] | None = None
+    errors: dict[str, str] = {}
+
+
+class Cluster(BaseModel):
+    """One cluster (top or base level) within a discovered dimension."""
+
+    id: str
+    parent_id: str | None
+    level: Literal['top', 'base']
+    name: str
+    description: str
+    size: int
+    trace_ids: list[str]
+    example_trace_ids: list[str]
+    group: str | None = None
+
+
+class DimensionResult(BaseModel):
+    """Clustering output for one discovered dimension."""
+
+    name: DimensionName
+    source_field: str
+    clusters: list[Cluster]
+    n_noise: int = 0
+    n_no_signal: int = 0
+    n_failed: int = 0
+    warnings: list[str] = []
+
+
+class LabelResult(BaseModel):
+    """Aggregate stats for one label across the run."""
+
+    spec: LabelSpec
+    counts: dict[str, int]
+    mean_confidence: BoundedRatio | None
+    n_low_confidence: int
+    n_failed: int
+    n_not_asked: int = 0
+
+
+class PriorityPoint(BaseModel):
+    """One cluster's point in the priority matrix (volume vs. satisfaction vs. error share)."""
+
+    cluster_id: str
+    name: str
+    volume: int
+    mean_satisfaction: BoundedRatio
+    error_share: BoundedRatio
+
+
+class StageFailure(BaseModel):
+    """A whole pipeline stage that failed; the run still completes with `status='error'` and partial results."""
+
+    stage: str
+    message: str
+    dimension: str | None = None
+
+
+class InsightsConfig(BaseModel):
+    """Every knob of an insights run, defaulted per the design's Global Constraints, plus the requested labels and dimensions."""
+
+    model_config = ConfigDict(frozen=True)
+
+    labels: list[LabelSpec]
+    dimensions: list[DimensionName]
+    summary_model: str = Field(default_factory=lambda: default_insights_models()['summary'])
+    classifier_model: str = Field(default_factory=lambda: default_insights_models()['classifier'])
+    compiler_model: str | None = None
+    embedding_model: str = Field(default_factory=lambda: default_insights_models()['embedding'])
+    max_clusters: int = Field(default=15, ge=1)
+    max_subclusters: int = Field(default=15, ge=1)
+    outlier_zscore: FiniteFloat | None = Field(default=None, ge=0)
+    parallelism: int = Field(default=100, ge=1)
+    trace_input_chars: int = Field(
+        default_factory=lambda: effective_settings().trace_input_chars,
+        ge=MIN_TRACE_INPUT_CHARS,
+        le=MAX_TRACE_INPUT_CHARS,
+    )
+    priority_dimension: DimensionName = 'intent'
+    cache: bool = True
+    coding_analysis: bool = False
+    coding_labels: list[LabelSpec] = Field(default_factory=list)
+    signals: SignalsConfig | None = None
+
+    @model_validator(mode='after')
+    def _selections_are_unique(self) -> Self:
+        label_names = [label.name for label in self.labels]
+        if len(label_names) != len(set(label_names)):
+            raise ValueError('labels must have unique names')
+        coding_label_names = [label.name for label in self.coding_labels]
+        if len(coding_label_names) != len(set(coding_label_names)):
+            raise ValueError('coding_labels must have unique names')
+        if set(label_names).intersection(coding_label_names):
+            raise ValueError('labels and coding_labels must have unique names')
+        if len(self.dimensions) != len(set(self.dimensions)):
+            raise ValueError('dimensions must not contain duplicates')
+        return self
+
+
+class InsightsStageHistory(BaseModel):
+    """Pipeline stage plan and records stored with the run so the file stays self-sufficient."""
+
+    planned_stages: list[str] = Field(default_factory=list)
+    stage_labels: dict[str, str] = Field(default_factory=dict)
+    stages: list[StageRecord] = Field(default_factory=list)
+
+
+class InsightsRun(BaseModel):
+    """The full, persisted result of one insights run — written as `insights_<timestamp>_<slug>.json`."""
+
+    schema_version: Literal[1, 2] = 2
+    # None on runs saved before the stamp existed.
+    evaluatorq_version: str | None = None
+    run_id: str
+    run_name: str
+    created_at: datetime
+    status: Literal['completed', 'error']
+    stage_failures: list[StageFailure]
+    population: dict[str, Any]
+    config: InsightsConfig
+    traces: list[TraceInsight]
+    dimensions: dict[str, DimensionResult]
+    labels: dict[str, LabelResult]
+    priority: list[PriorityPoint] | None
+    priority_reason: str | None
+    counts: dict[str, int]
+    warnings: list[str]
+    cost_by_stage: dict[str, Usage | None] = {}
+    # None on runs saved before stage history was stored.
+    stage_history: InsightsStageHistory | None = None
+
+    @model_validator(mode='after')
+    def _trace_identities_are_unique(self) -> Self:
+        if self.schema_version == 1:
+            return self
+
+        identities: set[tuple[str, str | None]] = set()
+        for trace in self.traces:
+            identity = (trace.trace_id, trace.span_id or None)
+            if identity in identities:
+                raise ValueError(
+                    'traces must have unique (trace_id, span_id) pairs; '
+                    f'duplicate trace_id={trace.trace_id!r}, span_id={trace.span_id!r}'
+                )
+            identities.add(identity)
+        return self
+
+    @model_validator(mode='after')
+    def _label_values_match_specs(self) -> Self:
+        kinds = {spec.name: spec.kind for spec in self.config.labels}
+        if self.config.coding_analysis or self.config.coding_labels:
+            from evaluatorq.insights.presets import CODING_LABELS
+
+            coding_specs = (
+                CODING_LABELS
+                if self.config.coding_analysis
+                else (
+                    *CODING_LABELS[:1],
+                    *self.config.coding_labels,
+                )
+            )
+            kinds.update({spec.name: spec.kind for spec in coding_specs})
+        for trace in self.traces:
+            for name, answer in trace.labels.items():
+                if name not in kinds:
+                    raise ValueError(f'trace {trace.trace_id!r} has unconfigured label {name!r}')
+                value = answer.value
+                if value is None:
+                    continue
+                kind = kinds[name]
+                valid = (
+                    (kind == 'noul' and isinstance(value, bool))
+                    or (kind == 'choice' and isinstance(value, str))
+                    or (kind == 'score' and isinstance(value, float))
+                )
+                if not valid:
+                    raise ValueError(f'trace {trace.trace_id!r} label {name!r} has a value incompatible with {kind!r}')
+        return self
+
+    @model_validator(mode='after')
+    def _created_at_is_timezone_aware(self) -> Self:
+        if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
+            raise ValueError('created_at must be timezone-aware')
+        return self

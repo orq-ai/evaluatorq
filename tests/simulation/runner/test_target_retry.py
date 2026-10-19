@@ -12,6 +12,7 @@ Verifies:
 from __future__ import annotations
 
 import asyncio
+import typing
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -24,7 +25,7 @@ from evaluatorq.contracts import (
     TokenUsage,
 )
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     CriterionVerdict,
@@ -368,7 +369,7 @@ async def test_outer_timeout_preserves_criteria_state_and_partial_usage() -> Non
         max_target_retries=0,
         target_agent_timeout_ms=60000,
         user_simulator=_make_mock_user_simulator(),
-        judge=_AuditingContinueJudge(),  # pyright: ignore[reportArgumentType]
+        judge=typing.cast(typing.Any, _AuditingContinueJudge()),
     )
 
     result = await runner._run_with_timeout(datapoint, max_turns=5, timeout_s=0.3)

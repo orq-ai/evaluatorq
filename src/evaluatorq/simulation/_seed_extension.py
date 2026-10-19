@@ -19,7 +19,7 @@ from evaluatorq.common.template_engine import render_template
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import LLMCallConfig
-    from evaluatorq.simulation.types import SimulationDatapoint
+    from evaluatorq.simulation.contracts import SimulationDatapoint
 
 
 def require_orq_api_key(api_key: str | None, *, purpose: str) -> str:
@@ -53,7 +53,7 @@ async def extend_from_seeds(
     also replay the originals.
 
     ``agent_description`` is derived from the seed scenarios' goals when omitted. ``llm_config``
-    defaults to the simulation default model with every other field unset. ``api_key`` authenticates
+    defaults to the fast model role with every other field unset. ``api_key`` authenticates
     generation through Orq unless ``llm_config.client`` supplies a client.
     """
     from evaluatorq.simulation._config import sim_llm_config

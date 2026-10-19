@@ -8,7 +8,7 @@ import pytest
 
 from evaluatorq.contracts import Message, TokenUsage
 from evaluatorq.simulation.reports import export_html, export_markdown
-from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TurnMetrics
+from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy, TurnMetrics
 
 
 def _make_result(
@@ -451,7 +451,7 @@ def test_md_omits_model_when_unknown(make_result):
 def test_overview_html_and_md_show_traits_and_goal():
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.reports import export_html, export_markdown
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
     r = SimulationResult(
         messages=[],
@@ -490,7 +490,7 @@ def test_overview_html_and_md_show_traits_and_goal():
 def test_overview_renders_zero_trait_and_fallback_without_metadata():
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.reports import export_html, export_markdown
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
     def _result(metadata):
         return SimulationResult(

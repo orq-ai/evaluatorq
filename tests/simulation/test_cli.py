@@ -1,13 +1,13 @@
 """Unit tests for evaluatorq.simulation.cli."""
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import IO
-
 import json
+import sys
+import typing
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,20 +15,22 @@ from click.testing import Result
 from typer import Typer
 from typer.testing import CliRunner
 
+from evaluatorq.common.cli_tty import shell_path
+from evaluatorq.common.run_manifest import start_manifest
 from evaluatorq.simulation.cli import (
-    _auto_save_run,
     _configure_logging,
     _echo_using,
     _format_scorer_averages,
     _resolve_agent_description,
     _resolve_target,
     _sanitise_run_name,
-    _shell_path,
     _write_report,
     app,
 )
-from evaluatorq.simulation.types import DEFAULT_MODEL
+from evaluatorq.simulation.contracts import DEFAULT_MODEL
+from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
 from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
+
 
 class _OfflineCliRunner(CliRunner):
     """CliRunner that keeps these tests off the network by default.
@@ -87,7 +89,7 @@ def test_epilog_examples_use_only_real_flags(command: str) -> None:
     import typer
 
     click_group = typer.main.get_command(app)
-    subcommands = click_group.commands  # pyright: ignore[reportAttributeAccessIssue]
+    subcommands = typing.cast(typing.Any, click_group).commands
 
     def valid_flags(name: str) -> set[str]:
         flags: set[str] = set()
@@ -123,7 +125,7 @@ def test_output_flags_expose_short_aliases(command: str, long: str, short: str) 
     """Guard the self-describing output flags keep both their long and short spellings."""
     import typer
 
-    subcommands = typer.main.get_command(app).commands  # pyright: ignore[reportAttributeAccessIssue]
+    subcommands = typing.cast(typing.Any, typer.main.get_command(app)).commands
     opts = {opt for param in subcommands[command].params for opt in param.opts}
     assert long in opts, f'{command} missing {long}'
     assert short in opts, f'{command} missing {short}'
@@ -163,8 +165,10 @@ def test_provider_context_uses_openai_when_orq_is_absent(
     assert 'secret' not in output
 
 
-def test_shell_path_quotes_paths_with_spaces() -> None:
-    assert _shell_path(Path('/tmp/sim runs')) == "'/tmp/sim runs'"
+def test_shell_path_quotes_paths_with_spaces(tmp_path: Path) -> None:
+    spaced = tmp_path / 'sim runs'
+    quote_char = '"' if sys.platform == 'win32' else "'"
+    assert shell_path(spaced) == f'{quote_char}{spaced}{quote_char}'
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +184,7 @@ def _make_result(
     scorer_scores: dict[str, float] | None = None,
 ) -> Any:
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         SimulationResult,
         TerminatedBy,
     )
@@ -200,7 +204,7 @@ def _make_result(
 
 
 def _make_datapoints(count: int = 2) -> list[Any]:
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Persona,
         Scenario,
@@ -259,7 +263,7 @@ def _stub_run(
     """
     return _build_simulation_run(
         run_name="test-run",
-        mode=mode,
+        mode=typing.cast(typing.Any, mode),
         target_kind="openai_model",
         target="gpt-4o",
         target_model="gpt-4o",
@@ -545,7 +549,7 @@ def test_runs_suggests_dashboard_directory(tmp_path: Path) -> None:
     result = runner.invoke(app, ["runs", str(runs_dir)])
 
     assert result.exit_code == 0, result.output
-    assert f"open: eq dashboard '{runs_dir}'" in result.stdout
+    assert f"open: eq dashboard {shell_path(runs_dir)}" in result.stdout
 
 
 def test_runs_full_does_not_truncate(tmp_path: Path) -> None:
@@ -695,15 +699,24 @@ def test_simulate_success_no_save(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
 
+def _save_manifest(runs_dir: Path, run: Any, saved_run: Path) -> None:
+    """Leave the manifest the SDK writes when it saves ``run`` to ``saved_run``."""
+    run.run_id = "run-1"
+    start_manifest(run_id="run-1", surface="sim", run_name=run.run_name, runs_dir=runs_dir).complete(
+        report_path=saved_run
+    )
+
+
 def test_simulate_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     runs_dir = tmp_path / 'sim runs'
     saved_run = runs_dir / 'sim_20260713-220000.json'
+    run = _stub_run([], mode="simulate")
+    _save_manifest(runs_dir, run, saved_run)
 
     with (
         patch("evaluatorq.simulation.cli._resolve_target", return_value=MagicMock()),
-        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock, return_value=_stub_run([], mode="simulate")),
-        patch("evaluatorq.simulation.cli._auto_save_run", return_value=saved_run),
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock, return_value=run),
         patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
     ):
         result = runner.invoke(
@@ -718,23 +731,23 @@ def test_simulate_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None
         )
 
     assert result.exit_code == 0, result.output
-    # Scope to the next-step CTA — the run filename legitimately appears in other
-    # stderr lines (e.g. the "Run saved" log). The dashboard hand-off must point
+    # The run path is read from the manifest and echoed on its own line. The dashboard hand-off must point
     # at the directory, not the specific run file.
+    assert saved_run.name in result.stderr.split('▸ Next', 1)[0]
     handoff = result.stderr.split('▸ Next', 1)[1]
-    assert "eq dashboard '" in handoff
-    assert str(runs_dir) in handoff
+    assert f"eq dashboard {shell_path(runs_dir)}" in handoff
     assert saved_run.name not in handoff
 
 
 def test_run_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None:
     runs_dir = tmp_path / 'sim-runs'
     saved_run = runs_dir / 'run_20260713-220000.json'
+    run = _stub_run([], mode="run")
+    _save_manifest(runs_dir, run, saved_run)
 
     with (
         patch("evaluatorq.simulation.cli._resolve_target", return_value=MagicMock()),
-        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock, return_value=_stub_run([], mode="run")),
-        patch("evaluatorq.simulation.cli._auto_save_run", return_value=saved_run),
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock, return_value=run),
         patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
     ):
         result = runner.invoke(
@@ -749,7 +762,29 @@ def test_run_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
+    assert saved_run.name in result.stderr.split('▸ Next', 1)[0]
     assert f"eq dashboard {runs_dir}" in result.stderr
+
+
+def test_a_run_the_sdk_could_not_save_prints_no_saved_line_and_still_exits_zero(tmp_path: Path) -> None:
+    dp_file = _make_datapoints_file(tmp_path)
+    runs_dir = tmp_path / 'sim-runs'
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target", return_value=MagicMock()),
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock, return_value=_stub_run([], mode="simulate")),
+        patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
+    ):
+        result = runner.invoke(
+            app,
+            ["simulate", "--input", str(dp_file), "--openai-model", "gpt-4o", "--yes"],
+            env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "was not saved" in result.stderr
+    assert "Run saved" not in result.stderr
+    assert "▸ Next" not in result.stderr
 
 
 def test_simulate_writes_results_file(tmp_path: Path) -> None:
@@ -819,12 +854,13 @@ def test_simulate_report_writes_full_report(
     assert not (tmp_path / ".evaluatorq" / "sim-runs").exists()
 
 
-def test_run_report_and_autosave_both_written(
+def test_run_report_is_written_and_the_run_is_left_for_the_sdk_to_save(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Without --no-save, --report writes the explicit file AND the
-    # auto-save still lands under .evaluatorq/sim-runs/ (independent sinks).
+    # --report writes the explicit file; saving under .evaluatorq/sim-runs/ is the SDK's job, so the CLI
+    # asks for it through `save` instead of writing a second copy itself.
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("EVALUATORQ_DIR", str(tmp_path / ".evaluatorq"))
     report = tmp_path / "report.json"
 
     with (
@@ -846,10 +882,9 @@ def test_run_report_and_autosave_both_written(
         )
 
     assert result.exit_code == 0, result.output
-    assert report.exists()
     assert json.loads(report.read_text())["mode"] == "run"
-    run_store = list((tmp_path / ".evaluatorq" / "sim-runs").glob("*.json"))
-    assert len(run_store) == 1
+    assert mock_impl.call_args.args[0].save is True
+    assert not (tmp_path / ".evaluatorq" / "sim-runs").exists()
 
 
 def test_simulate_rejects_three_targets(tmp_path: Path) -> None:
@@ -901,12 +936,13 @@ def test_simulate_forwards_flags(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    kwargs = mock_impl.call_args.kwargs
-    assert kwargs["sim_model"] == "custom-model"
-    assert kwargs["max_turns"] == 7
-    assert kwargs["datapoint_parallelism"] == 3
-    assert kwargs["evaluator_names"] == ["goal_achieved"]
-    assert kwargs["evaluation_name"] == "My Run"
+    cfg = mock_impl.call_args.args[0]
+    assert cfg.llm_config is not None
+    assert cfg.llm_config.model == "custom-model"
+    assert cfg.max_turns == 7
+    assert cfg.datapoint_parallelism == 3
+    assert cfg.evaluator_names == ["goal_achieved"]
+    assert cfg.run_name == "My Run"
 
 
 def test_simulate_impl_forwards_the_sim_model_flag_as_an_llm_config(tmp_path: Path, monkeypatch) -> None:
@@ -953,7 +989,7 @@ def test_simulate_evaluator_absent_forwards_none(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert mock_impl.call_args.kwargs["evaluator_names"] is None
+    assert mock_impl.call_args.args[0].evaluator_names is None
 
 
 def test_simulate_evaluator_repeated_forwards_list(tmp_path: Path) -> None:
@@ -979,7 +1015,7 @@ def test_simulate_evaluator_repeated_forwards_list(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert mock_impl.call_args.kwargs["evaluator_names"] == ["goal_achieved", "criteria_met"]
+    assert mock_impl.call_args.args[0].evaluator_names == ["goal_achieved", "criteria_met"]
 
 
 # ---------------------------------------------------------------------------
@@ -1241,10 +1277,11 @@ def test_run_forwards_flags(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     kwargs = mock_impl.call_args.kwargs
+    cfg = mock_impl.call_args.args[0]
     assert kwargs["agent_description"] == "A helpful bot"
-    assert kwargs["num_personas"] == 2
-    assert kwargs["num_scenarios"] == 4
-    assert kwargs["max_turns"] == 6
+    assert cfg.num_personas == 2
+    assert cfg.num_scenarios == 4
+    assert cfg.max_turns == 6
 
 
 def test_run_forwards_seeds_and_target_reasoning_effort(tmp_path: Path) -> None:
@@ -1272,10 +1309,10 @@ def test_run_forwards_seeds_and_target_reasoning_effort(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    kwargs = mock_impl.call_args.kwargs
-    assert kwargs["persona_seeds"] == ["angry retiree"]
-    assert kwargs["scenario_seeds"] == ["disputes a refund"]
-    assert kwargs["target_reasoning_effort"] == "high"
+    cfg = mock_impl.call_args.args[0]
+    assert cfg.persona_seeds == ["angry retiree"]
+    assert cfg.scenario_seeds == ["disputes a refund"]
+    assert cfg.target_reasoning_effort == "high"
 
 
 def test_run_runtime_error_is_clean(tmp_path: Path) -> None:
@@ -2120,13 +2157,13 @@ def test_export_md_includes_stored_recommendations(tmp_path):
     """eq sim export --format md renders a run JSON's stored suggestions."""
     import json as _json
 
-    from evaluatorq.simulation.types import (
+    from evaluatorq.contracts import Message, TokenUsage
+    from evaluatorq.simulation.contracts import (
         SimulationRecommendation,
         SimulationResult,
         SimulationRun,
         TerminatedBy,
     )
-    from evaluatorq.contracts import Message, TokenUsage
 
     result = SimulationResult(
         messages=[Message(role="user", content="hi"), Message(role="assistant", content="yo")],
@@ -2178,8 +2215,8 @@ def test_export_md_includes_stored_recommendations(tmp_path):
 def test_export_html_format(tmp_path):
     """eq sim export --format html writes a self-contained HTML report."""
     results = tmp_path / "results.jsonl"
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
     from evaluatorq.contracts import Message, TokenUsage
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
     r = SimulationResult(
         messages=[Message(role="user", content="hi")],
@@ -2232,7 +2269,7 @@ def test_run_recommendations_flag_attaches_to_saved_run(
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        from evaluatorq.simulation.types import SimulationRecommendation
+        from evaluatorq.simulation.contracts import SimulationRecommendation
 
         stub_run = _stub_run([_make_result()], mode="run")
         stub_run.recommendations = [SimulationRecommendation.model_validate(r) for r in fake_recs]
@@ -2254,7 +2291,7 @@ def test_run_recommendations_flag_attaches_to_saved_run(
     assert result.exit_code == 0, result.output
     await_args = mock_impl.await_args
     assert await_args is not None
-    assert await_args.kwargs['recommendations'] is True
+    assert await_args.args[0].recommendations is True
     saved = json.loads(report.read_text())
     assert saved["recommendations"][0]["suggestions"] == ["Fix x."]
 
@@ -2283,7 +2320,7 @@ def test_run_defaults_to_recommendations_on(
     assert result.exit_code == 0, result.output
     await_args = mock_impl.await_args
     assert await_args is not None
-    assert await_args.kwargs['recommendations'] is True
+    assert await_args.args[0].recommendations is True
 
 
 def test_run_no_recommendations_flag_skips_generation(
@@ -2310,7 +2347,7 @@ def test_run_no_recommendations_flag_skips_generation(
     assert result.exit_code == 0, result.output
     await_args = mock_impl.await_args
     assert await_args is not None
-    assert await_args.kwargs['recommendations'] is False
+    assert await_args.args[0].recommendations is False
 
 
 def test_generate_forwards_generation_instructions(tmp_path: Path) -> None:
@@ -2357,4 +2394,4 @@ def test_run_forwards_generation_instructions(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert mock_impl.call_args.kwargs["generation_instructions"] == "EU consumer-law framing"
+    assert mock_impl.call_args.args[0].generation_instructions == "EU consumer-law framing"

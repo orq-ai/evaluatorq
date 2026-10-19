@@ -17,6 +17,7 @@ back to ``PIPELINE_CONFIG`` fails here.
 from __future__ import annotations
 
 import sys
+import typing
 from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -54,7 +55,7 @@ class TestDeploymentLegReadsCfg:
     @staticmethod
     def _install_sdk(monkeypatch: pytest.MonkeyPatch, deployments: MagicMock) -> None:
         module = ModuleType('orq_ai_sdk')
-        module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # pyright: ignore[reportAttributeAccessIssue]
+        typing.cast(typing.Any, module).Orq = MagicMock(return_value=MagicMock(deployments=deployments))
         monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 

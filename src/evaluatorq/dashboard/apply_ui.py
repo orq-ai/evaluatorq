@@ -33,7 +33,6 @@ Public entry points:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import secrets
@@ -44,21 +43,19 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
-from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, resolve_orq_client
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.reports import esc
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
+from evaluatorq.contracts import DEFAULT_SMART_MODEL
 from evaluatorq.dashboard.security import _CSRF_TOKEN as _SECURITY_CSRF_TOKEN
 from evaluatorq.dashboard.security import CSRF_FIELD as _SECURITY_CSRF_FIELD
 from evaluatorq.dashboard.security import csrf_field, request_rejected
-from evaluatorq.trace_finder.settings import effective_settings
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from evaluatorq.redteam.contracts import FocusAreaRecommendation, RedTeamReport
     from evaluatorq.redteam.reports.apply import ApplyRecommendationsResult
-    from evaluatorq.simulation.types import SimulationRecommendation, SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRecommendation, SimulationRun
 
 DRAWER_ID = 'rt-apply-drawer'
 AGENT_FIELD_ID = 'rt-apply-agent-field'
@@ -91,28 +88,19 @@ def _pop_preview(token: str) -> dict[str, Any] | None:
         return _PREVIEWS.pop(token, None)
 
 
-def _credential_identity(profile: OrqProfile | None) -> tuple[str, str, str]:
-    """Identify the credentials a preview used without retaining another copy of its API key."""
-    key = profile.api_key if profile is not None else os.environ.get('ORQ_API_KEY', '')
-    host = (
-        (profile.server or DEFAULT_ORQ_BASE_URL)
-        if profile is not None
-        else os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
-    )
-    return (profile.name if profile is not None else '', host.rstrip('/'), hashlib.sha256(key.encode()).hexdigest())
+def _credential_identity(auth: Any, settings: Any) -> str:
+    """Identify the complete selected dashboard account without retaining secrets."""
+    from evaluatorq.dashboard.auth import auth_identity
+
+    return auth_identity(auth, settings)
 
 
-# Model for the instruction-merge call. It used to default to its own literal,
-# on the reasoning that rewriting production agent instructions warrants a
-# stronger model than scoring does; it now falls back to the shared default and
-# keeps EVALUATORQ_APPLY_MODEL (Settings page) as the way to raise it again.
-APPLY_MODEL_ENV = 'EVALUATORQ_APPLY_MODEL'
-DEFAULT_APPLY_MODEL = DEFAULT_PIPELINE_MODEL
+DEFAULT_APPLY_MODEL = DEFAULT_SMART_MODEL
 
 
 def apply_model() -> str:
     """The model used to merge recommendations into agent instructions."""
-    return effective_settings().apply_model
+    return role_model('smart', task='apply')
 
 
 # ---------------------------------------------------------------------------
@@ -267,8 +255,8 @@ def drawer(
     footer_html = f'<div class="rt-drawer-footer">{footer}</div>' if footer else ''
     return (
         f'{overlay}'
-        '<aside class="rt-drawer" role="dialog" aria-modal="true">'
-        f'<div class="rt-drawer-head"><h3 class="rt-drawer-title">{title}</h3>{close}</div>'
+        f'<aside class="rt-drawer" role="dialog" aria-modal="true" aria-labelledby="{drawer_id}-title" tabindex="-1">'
+        f'<div class="rt-drawer-head"><h3 class="rt-drawer-title" id="{drawer_id}-title">{title}</h3>{close}</div>'
         f'<div class="rt-drawer-body">{body}</div>'
         f'{footer_html}'
         '</aside>'
@@ -462,33 +450,43 @@ def record_applied_on_report(path: Path, recommendations: list[str], field: str 
 # ---------------------------------------------------------------------------
 
 
-def _build_clients(profile: OrqProfile | None) -> tuple[Any, Any, str]:
+def _build_clients(auth: Any, settings: Any | None = None) -> tuple[Any, Any, str]:
     """(orq_client, llm_client, model) for the apply flow, or raise ValueError.
 
     The call config (temperature, retries) follows the red-team pipeline's
-    evaluator role; the MODEL is the dashboard's apply-model setting
-    (``EVALUATORQ_APPLY_MODEL``, default ``openai/gpt-5.6-luna``), shown on the
-    Settings page.
+    evaluator role; the MODEL is the ``apply`` task's smart-role model.
     """
-    api_key = profile.api_key if profile is not None else os.environ.get('ORQ_API_KEY', '')
-    if not api_key:
+    if auth.method != 'cli_oauth' and not auth.api_key:
         raise ValueError('ORQ_API_KEY is not set; the dashboard cannot reach the Orq API to apply recommendations.')
-    if '*' in api_key:
-        raise ValueError('The selected Orq credential has no usable API key; choose another profile or Environment.')
-    from evaluatorq.redteam.contracts import PIPELINE_CONFIG
+    from evaluatorq.dashboard.auth import build_auth_clients
 
-    host = (profile.server or DEFAULT_ORQ_BASE_URL) if profile is not None else None
     try:
-        orq_client = resolve_orq_client(api_key, base_url=host)
+        orq_client, llm_client = build_auth_clients(
+            auth,
+            workspace=getattr(settings, 'orq_workspace', None),
+            project=getattr(settings, 'orq_project_id', None),
+        )
     except ImportError as e:  # pragma: no cover - extra not installed
         raise ValueError("The 'orq-ai-sdk' package is required to apply recommendations (install extra 'orq').") from e
-    llm_client = resolve_llm_client(
-        None if profile is not None else PIPELINE_CONFIG.evaluator.as_call_config().client,
-        extra_api_key=api_key,
-        orq_host=host,
-        max_retries=PIPELINE_CONFIG.retry_count,
-    ).client
     return orq_client, llm_client, apply_model()
+
+
+async def _close_apply_clients(orq_client: Any, llm_client: Any) -> None:
+    """Close both request-owned clients; cleanup failures must not mask apply results."""
+    from evaluatorq.common.orq_client import close_orq_client
+
+    try:
+        await close_orq_client(orq_client)
+    except Exception:
+        logger.opt(exception=True).warning('apply_ui: could not close Orq client')
+    try:
+        close = getattr(llm_client, 'close', None)
+        if close is not None:
+            result = close()
+            if hasattr(result, '__await__'):
+                await result
+    except Exception:
+        logger.opt(exception=True).warning('apply_ui: could not close LLM client')
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +517,7 @@ async def _confirm_response(
     """
     from evaluatorq.common.apply import read_instructions, write_instructions
     from evaluatorq.dashboard import library
-    from evaluatorq.dashboard.trace_finder.routes import _profile
+    from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
 
     form = await req.form()
     rejected = _request_rejected(req, form)
@@ -558,13 +556,14 @@ async def _confirm_response(
         )
 
     try:
-        profile = _profile(req.app)
-        if 'credential_identity' in entry and entry['credential_identity'] != _credential_identity(profile):
+        auth = selected_dashboard_auth(req.app)
+        settings = req.app.state.finder_settings
+        if 'credential_identity' in entry and entry['credential_identity'] != _credential_identity(auth, settings):
             return Response(
                 render_error_drawer('The Orq credentials changed after this preview; run the preview again.'),
                 media_type='text/html',
             )
-        orq_client, _llm_client, _model = _build_clients(profile)
+        orq_client, llm_client, _model = _build_clients(auth, settings)
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')
 
@@ -573,9 +572,11 @@ async def _confirm_response(
     try:
         current = await read_instructions(orq_client, agent_key)
     except Exception as e:
+        await _close_apply_clients(orq_client, llm_client)
         logger.opt(exception=True).warning('apply_ui: pre-write read failed for {}', agent_key)
         return Response(render_error_drawer(f'Could not re-read the agent before writing: {e}'), media_type='text/html')
     if current.strip() != str(entry['original_instructions']).strip():
+        await _close_apply_clients(orq_client, llm_client)
         return Response(
             render_error_drawer(
                 'The agent instructions changed after this preview was made; run the preview again '
@@ -592,8 +593,10 @@ async def _confirm_response(
             version_description=f'Applied {len(recommendations)} {version_note}',
         )
     except Exception as e:
+        await _close_apply_clients(orq_client, llm_client)
         logger.opt(exception=True).warning('apply_ui: agent update failed for {}', agent_key)
         return Response(render_error_drawer(f'Agent update failed: {e}'), media_type='text/html')
+    await _close_apply_clients(orq_client, llm_client)
 
     # Record on the report so a later preview skips these. A write-back
     # failure must not hide that the agent WAS updated - report it as a
@@ -685,7 +688,7 @@ async def _preview_response(
     bullet(s), run ``apply(apply=False)``, and render the drawer. Only the
     loader, enable gate, narrowing, and apply wrapper differ between surfaces.
     """
-    from evaluatorq.dashboard.trace_finder.routes import _profile
+    from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
 
     if obj is None:
         return Response(not_found_html, status_code=404, media_type='text/html')
@@ -708,16 +711,19 @@ async def _preview_response(
         return Response(render_error_drawer(narrow_error), media_type='text/html')
 
     try:
-        profile = _profile(req.app)
-        orq_client, llm_client, model = _build_clients(profile)
+        auth = selected_dashboard_auth(req.app)
+        settings = req.app.state.finder_settings
+        orq_client, llm_client, model = _build_clients(auth, settings)
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')
 
     try:
         result = await apply_fn(items, agent_key, orq_client, llm_client, model, already_applied)
     except Exception as e:
+        await _close_apply_clients(orq_client, llm_client)
         logger.opt(exception=True).warning('apply_ui: preview failed for {}', agent_key)
         return Response(render_error_drawer(f'Preview failed: {e}'), media_type='text/html')
+    await _close_apply_clients(orq_client, llm_client)
 
     if result.merge_failed:
         return Response(
@@ -733,7 +739,7 @@ async def _preview_response(
         'original_instructions': result.original_instructions,
         'new_instructions': result.new_instructions,
         'recommendations': list(result.recommendations),
-        'credential_identity': _credential_identity(profile),
+        'credential_identity': _credential_identity(auth, settings),
     })
     return Response(
         render_preview_drawer(rid, result, area, surface=surface, breakdown=breakdown, confirm_token=token),

@@ -1,13 +1,20 @@
+import hashlib
 import logging
+import os
 import socket
 import threading
 import traceback
+import typing
+from pathlib import Path
 
 import pytest
 
 from evaluatorq.common.judge import reset_responses_rejectors
 from evaluatorq.common.llm_call import reset_reasoning_rejectors
 from evaluatorq.common.model_catalogue import clear_model_overrides, reset_catalogue_cache
+from evaluatorq.common.model_roles import ROLE_ENV, set_cli_models
+# CrewAI starts import-time Scarf tracking unless telemetry is disabled.
+os.environ['CREWAI_DISABLE_TELEMETRY'] = 'true'
 
 
 class LeakedNetworkCall(AssertionError):
@@ -20,6 +27,36 @@ def _is_loopback(address: object) -> bool:
         return False
     host = str(address[0])
     return host in {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
+
+
+@pytest.fixture(autouse=True)
+def _reset_cli_model_flags(monkeypatch, tmp_path):
+    """Keep the global --fast-model/--model-override state, and a developer's own model env and settings, out of tests.
+
+    Tests that exercise one of these set it after this fixture runs, so theirs wins.
+    """
+    for name in (*ROLE_ENV.values(), "EVALUATORQ_COMPILER_MODEL", "EVALUATORQ_APPLY_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("EVALUATORQ_MODEL_OVERRIDES", raising=False)
+    monkeypatch.setenv("EVALUATORQ_DASHBOARD_SETTINGS", str(tmp_path / "dashboard-settings.json"))
+    monkeypatch.setenv("EVALUATORQ_USER_SETTINGS", str(tmp_path / "user-settings.json"))
+    set_cli_models()
+    yield
+    set_cli_models()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_local_session_roots(tmp_path, monkeypatch):
+    """Point every local-session root at an absent directory under the test's tmp_path, so no test reads real sessions.
+
+    Nothing is created here: `tmp_path_factory.mktemp` per test rescans every earlier numbered directory, which made
+    the whole suite time out on Windows runners.
+    """
+    base = tmp_path / "session-roots"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(base / "claude"))
+    monkeypatch.setenv("CODEX_HOME", str(base / "codex"))
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(base / "omp-agent"))
+    monkeypatch.setattr("evaluatorq.local_sessions.roots.claude_desktop_dir", lambda: base / "claude-desktop")
 
 
 @pytest.fixture(autouse=True)
@@ -102,7 +139,8 @@ def _reset_reasoning_rejectors():
     reset_responses_rejectors()
 
 
-class _OfflineCatalogues(dict):  # pyright: ignore[reportMissingTypeArgument]
+
+class _OfflineCatalogues(dict[typing.Any, typing.Any]):
     """A catalogue cache that reports every host as already-fetched-and-empty."""
 
     def get(self, key, default=None):
@@ -136,12 +174,17 @@ def _offline_model_catalogue(request, monkeypatch):
     clear_model_overrides()
 
 
+def _run_store_path(base: Path, nodeid: str) -> Path:
+    """Return a lazy, filesystem-safe run-store path unique to one test node."""
+    node_digest = hashlib.sha256(nodeid.encode()).hexdigest()
+    return base / "evaluatorq-run-stores" / node_digest
+
+
 @pytest.fixture(autouse=True)
-def _isolate_run_stores(tmp_path, monkeypatch):
-    """Point the redteam/sim run stores at a tmp dir so tests never write
-    runs into the repo's real ``.evaluatorq/`` store."""
-    monkeypatch.setenv("EVALUATORQ_DIR", str(tmp_path / ".evaluatorq"))
-    yield
+def _isolate_run_stores(tmp_path_factory, request, monkeypatch):
+    """Point each test at a lazy run store below pytest's session temp root."""
+    path = _run_store_path(tmp_path_factory.getbasetemp(), request.node.nodeid)
+    monkeypatch.setenv("EVALUATORQ_DIR", str(path))
 
 
 @pytest.fixture(autouse=True)
@@ -177,8 +220,12 @@ class _LoguruPropagateHandler(logging.Handler):
 
 
 @pytest.fixture(autouse=True)
-def _propagate_loguru_to_stdlib():
-    """Bridge loguru records into stdlib logging so pytest's caplog can capture them."""
+def _propagate_loguru_to_stdlib(request):
+    """Bridge Loguru only when caplog is in the test's fixture dependency closure."""
+    if "caplog" not in request.fixturenames:
+        yield
+        return
+
     from loguru import logger
 
     handler_id = logger.add(_LoguruPropagateHandler(), format="{message}", level="DEBUG")

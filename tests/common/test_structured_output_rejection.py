@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import typing
 from types import SimpleNamespace
 
 from openai import BadRequestError
@@ -13,7 +14,7 @@ def test_rejection_message_names_schema_clue_without_logging_provider_body() -> 
     secret = 'private customer transcript\nFAKE LOG ENTRY'
     error = BadRequestError(
         'invalid request',
-        response=SimpleNamespace(status_code=400, headers={}, request=None),  # pyright: ignore[reportArgumentType]
+        response=typing.cast(typing.Any, SimpleNamespace(status_code=400, headers={}, request=None)),
         body={'error': {'message': f'Invalid schema for response_format: oneOf is not permitted. {secret}'}},
     )
 

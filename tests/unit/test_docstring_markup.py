@@ -31,7 +31,7 @@ def test_no_sphinx_markup_in_src(pattern: re.Pattern[str]) -> None:
     offenders = [
         f"{path.relative_to(SRC)}:{text.count(chr(10), 0, m.start()) + 1}"
         for path in sorted(SRC.rglob("*.py"))
-        for text in [path.read_text()]
+        for text in [path.read_text(encoding="utf-8")]
         for m in pattern.finditer(text)
     ]
     assert not offenders, "Sphinx markup renders literally on the docs site: " + ", ".join(offenders)
@@ -72,7 +72,7 @@ def test_example_sections_are_fenced() -> None:
     offenders = [
         f"{path.relative_to(SRC)}: {first!r}"
         for path in sorted(SRC.rglob("*.py"))
-        for node in ast.walk(ast.parse(path.read_text()))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
         if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
         for doc in [ast.get_docstring(node, clean=False)]
         if doc

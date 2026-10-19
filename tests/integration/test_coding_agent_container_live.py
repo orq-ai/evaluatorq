@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 import pytest
@@ -160,7 +161,7 @@ async def test_isolation(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(os.uname().sysname != 'Linux', reason='macOS engines map ownership to the host user themselves')
+@pytest.mark.skipif(sys.platform != 'linux', reason='macOS engines map ownership to the host user themselves')
 async def test_written_file_owned_by_host_uid() -> None:
     _needs_key('ANTHROPIC_API_KEY')
     target = CodingAgentTarget(agent='claude', container=DockerOptions(), keep_workdir=True)

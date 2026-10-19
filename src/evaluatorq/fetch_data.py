@@ -197,7 +197,7 @@ def _experiment_row_to_datapoint(row: dict[str, Any]) -> DataPoint:
     # replay path raises a clear per-row error and the run fails loudly.
     if response is not None and str(response).strip():
         messages.append({'role': 'assistant', 'content': response})
-    inputs['messages'] = messages
+    inputs['messages'] = messages  # ty: ignore[invalid-assignment]
 
     return DataPoint(inputs=inputs, expected_output=row.get('expected_output'))
 

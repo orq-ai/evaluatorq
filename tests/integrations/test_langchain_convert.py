@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import typing
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, messages_to_dict
@@ -69,7 +70,8 @@ def test_unhashable_str_subclass_message_type_is_converted(caplog: pytest.LogCap
     """
 
     class UnhashableStr(str):
-        __hash__ = None  # pyright: ignore[reportAssignmentType]
+
+        __hash__: typing.Any = None
 
     logger_name = 'evaluatorq.integrations.langchain_integration.convert'
     with caplog.at_level(logging.WARNING, logger=logger_name):
@@ -79,7 +81,8 @@ def test_unhashable_str_subclass_message_type_is_converted(caplog: pytest.LogCap
 
     def _without_ids(items: object) -> list[dict[str, object]]:
         # Message ids are random per call, so compare everything else.
-        return [{k: v for k, v in item.items() if k != 'id'} for item in items or []]  # pyright: ignore[reportAttributeAccessIssue, reportGeneralTypeIssues]
+        assert isinstance(items, list)
+        return [{k: v for k, v in item.items() if k != 'id'} for item in items]
 
     assert _without_ids(result.get('input')) == _without_ids(plain.get('input'))
     assert result.get('input')

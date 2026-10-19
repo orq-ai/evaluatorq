@@ -8,24 +8,25 @@ surface: one config in at the entry point, honoured at each call site.
 
 from __future__ import annotations
 
+import typing
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.common.structured_output import UNSET
+from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.simulation._config import resolve_sim_llm_config
 from evaluatorq.simulation.agents.base import AgentConfig, _config_from_agent_config
 from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
-from evaluatorq.simulation._config import resolve_sim_llm_config
 from evaluatorq.simulation.generators import (
     FirstMessageGenerator,
     PersonaGenerator,
     ScenarioGenerator,
 )
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import DEFAULT_MODEL, CommunicationStyle, Persona, Scenario
+from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 
 
 def _persona() -> Persona:
@@ -57,7 +58,7 @@ def test_llm_config_wins_over_the_model_argument(caplog: pytest.LogCaptureFixtur
 def test_no_warning_when_the_model_argument_is_untouched(caplog: pytest.LogCaptureFixture) -> None:
     cfg = LLMCallConfig(model='openai/gpt-4o')
     with caplog.at_level('WARNING'):
-        assert resolve_sim_llm_config(model=DEFAULT_MODEL, llm_config=cfg, caller='SimulationRunner') is cfg
+        assert resolve_sim_llm_config(model=None, llm_config=cfg, caller='SimulationRunner') is cfg
     assert caplog.text == ''
 
 
@@ -584,7 +585,7 @@ async def test_simulate_hands_its_config_to_the_run(monkeypatch: pytest.MonkeyPa
         return []
 
     async def fake_datapoints(*_a: Any, **_kw: Any) -> list[Any]:
-        from evaluatorq.simulation.types import SimulationDatapoint
+        from evaluatorq.simulation.contracts import SimulationDatapoint
 
         return [
             SimulationDatapoint(
@@ -622,7 +623,7 @@ async def test_generate_and_simulate_hands_its_config_to_the_run(monkeypatch: py
         return []
 
     async def fake_inner(*_a: Any, **_kw: Any) -> tuple[Any, ...]:
-        from evaluatorq.simulation.types import SimulationDatapoint
+        from evaluatorq.simulation.contracts import SimulationDatapoint
 
         datapoints = [
             SimulationDatapoint(
@@ -690,7 +691,7 @@ def test_the_simulation_config_refuses_the_removed_model_keyword() -> None:
     from evaluatorq.simulation._config import SimulationConfig
 
     with pytest.raises(ValidationError):
-        SimulationConfig(model='chosen/model')  # pyright: ignore[reportCallIssue]
+        typing.cast(typing.Any, SimulationConfig)(model='chosen/model')
 
 
 def test_no_public_entry_point_still_takes_sim_model() -> None:

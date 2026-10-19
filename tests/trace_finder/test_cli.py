@@ -9,9 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-import click
 import pytest
 import typer
+import typer.core
 from rich.console import Console
 from typer.main import get_command
 from typer.testing import CliRunner
@@ -21,8 +21,12 @@ from evaluatorq.common.judge import ClassifyQuestion
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.trace_finder import (
     CompiledQuery,
+    DimensionAnswer,
+    FacetSelection,
+    NumericFilters,
     RunSnapshot,
     TraceClassification,
+    ThresholdSelection,
     TraceRecord,
     ValueSelection,
 )
@@ -44,9 +48,9 @@ def test_find_help_describes_profile_option() -> None:
 
     assert result.exit_code == 0, result.output
     command = get_command(_app())
-    assert isinstance(command, click.Group)
+    assert isinstance(command, typer.core.TyperGroup)
     option = next((param for param in command.commands['find'].params if '--profile' in param.opts), None)
-    assert isinstance(option, click.Option)
+    assert isinstance(option, typer.core.TyperOption)
     assert option.help is not None
     assert 'ORQ_API_KEY and ORQ_BASE_URL' in option.help
 
@@ -79,6 +83,7 @@ class FakeStore:
         self.request = request
         trace = _trace()
         compiled = CompiledQuery(
+            name='Refund',
             task=ClassifyQuestion(
                 kind='choice',
                 instructions='Does the trace mention a refund?',
@@ -90,15 +95,14 @@ class FakeStore:
         result = TraceClassification(
             trace_id=trace.trace_id,
             span_id=trace.span_id,
-            value='yes',
-            confidence=0.94,
+            answers=(DimensionAnswer(value='yes', confidence=0.94, matched=True),),
             matched=True,
             raw_result={'value': 'yes'},
         )
         return RunSnapshot(
             state='completed',
             request=request,
-            compiled=compiled,
+            dimensions=(compiled,),
             trace_ids=(trace.trace_id,),
             traces=(trace,),
             results={trace.trace_id: result},
@@ -106,6 +110,208 @@ class FakeStore:
             completed=1,
             matched=1,
         )
+
+
+class ReviewStore(FakeStore):
+    """Stops at the review gate like the real store, then classifies on start."""
+
+    def __init__(self, **review: Any) -> None:
+        super().__init__()
+        self.review = review
+        self.reviewed: RunSnapshot | None = None
+        self.compiles = 0
+        self.started: list[tuple[Any, tuple[CompiledQuery, ...]]] = []
+
+    async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+        self.compiles += 1
+        completed = await super().compile(request, wait=wait)
+        facets = request.population.facets.model_copy(update={'model': frozenset({'gpt-5.6-luna'})})
+        merged = request.model_copy(update={'population': request.population.model_copy(update={'facets': facets})})
+        review: dict[str, Any] = {
+            'state': 'awaiting_review',
+            'request': merged,
+            'results': {},
+            'completed': 0,
+            'matched': 0,
+            'explicit_filters': FacetSelection(project=frozenset({'support-agent'})),
+            'explicit_numeric': NumericFilters(tokens_min=100),
+            'generated_filters': FacetSelection(model=frozenset({'gpt-5.6-luna'})),
+        }
+        self.reviewed = replace(completed, **{**review, **self.review})
+        return self.reviewed
+
+    async def start(self, request: Any, dimensions: Any, *, wait: bool = True) -> RunSnapshot:
+        assert wait is False
+        self.started.append((request, tuple(dimensions)))
+        return await FakeStore.compile(self, request, wait=False)
+
+
+def _use_review_store(monkeypatch: Any, store: ReviewStore, *, tty: bool) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: store)
+    if tty:
+        monkeypatch.setattr(find_cli, 'should_skip_confirm', lambda yes: yes)
+
+
+def test_find_shows_plan_and_classifies_without_prompt_when_not_a_tty(monkeypatch: Any) -> None:
+    store = ReviewStore()
+    _use_review_store(monkeypatch, store, tty=False)
+
+    result = CliRunner().invoke(
+        _app(), ['find', 'refund requests', '--project', 'support-agent', '--tokens-min', '100']
+    )
+
+    assert result.exit_code == 0, result.output
+    assert store.request is not None
+    assert store.request.mode == 'review'
+    assert 'Find plan' in result.output
+    assert 'project: support-agent; tokens min: 100' in result.output
+    assert 'model: gpt-5.6-luna' in result.output
+    assert 'Does the trace mention a refund?' in result.output
+    assert 'Included when: Verdict yes' in result.output
+    assert 'Classify 1 trace?' not in result.output
+    assert 'Matched traces' in result.output
+
+
+
+@pytest.mark.parametrize(('args', 'expected_origin', 'expected_mode'), [
+    ([], 'default', 'llm+jev'),
+    (['--window-days', '3', '--filter-selection', 'llm'], 'explicit', 'llm'),
+])
+def test_find_preserves_window_and_filter_selection_overrides(
+    monkeypatch: Any, args: list[str], expected_origin: str, expected_mode: str
+) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    store = ReviewStore()
+    captured: dict[str, Any] = {}
+    _use_review_store(monkeypatch, store, tty=False)
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda settings, **kwargs: (captured.update(settings=settings) or store))
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests', *args])
+
+    assert result.exit_code == 0, result.output
+    assert store.request is not None
+    assert store.request.population.time_origin == expected_origin
+    assert captured['settings'].filter_selection == expected_mode
+
+
+def test_find_starts_the_reviewed_plan_without_recompiling(monkeypatch: Any) -> None:
+    store = ReviewStore()
+    _use_review_store(monkeypatch, store, tty=False)
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'])
+
+    assert result.exit_code == 0, result.output
+    assert store.compiles == 1
+    assert store.reviewed is not None
+    assert len(store.started) == 1
+    request, dimensions = store.started[0]
+    assert request == store.reviewed.request
+    assert request.population.facets.model == frozenset({'gpt-5.6-luna'})
+    assert [dimension.name for dimension in dimensions] == ['Refund']
+
+
+def test_find_classifies_after_confirming_the_plan(monkeypatch: Any) -> None:
+    store = ReviewStore()
+    _use_review_store(monkeypatch, store, tty=True)
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'], input='y\n')
+
+    assert result.exit_code == 0, result.output
+    assert 'Classify 1 trace?' in result.output
+    assert len(store.started) == 1
+    assert 'Matched traces' in result.output
+
+
+def test_find_declining_the_plan_classifies_nothing(monkeypatch: Any, tmp_path: Path) -> None:
+    store = ReviewStore()
+    _use_review_store(monkeypatch, store, tty=True)
+    output = tmp_path / 'declined.json'
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests', '--json', str(output)], input='n\n')
+
+    assert result.exit_code == 0, result.output
+    assert store.started == []
+    assert 'no traces were classified' in result.output
+    assert not output.exists()
+
+
+def test_find_yes_skips_the_prompt(monkeypatch: Any) -> None:
+    store = ReviewStore()
+    _use_review_store(monkeypatch, store, tty=True)
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests', '-y'])
+
+    assert result.exit_code == 0, result.output
+    assert 'Find plan' in result.output
+    assert 'Classify 1 trace?' not in result.output
+    assert len(store.started) == 1
+
+
+def test_find_filter_only_plan_skips_the_prompt(monkeypatch: Any) -> None:
+    store = ReviewStore(dimensions=())
+    _use_review_store(monkeypatch, store, tty=True)
+
+    result = CliRunner().invoke(_app(), ['find', 'gpt-5.6-luna traces'])
+
+    assert result.exit_code == 0, result.output
+    assert 'Classify 1 trace?' not in result.output
+    assert len(store.started) == 1
+    assert store.started[0][1] == ()
+
+
+def test_find_plan_shows_window_threshold_rule_and_reached_limit(monkeypatch: Any) -> None:
+    scored = CompiledQuery(
+        name='Frustration',
+        task=ClassifyQuestion(
+            kind='score',
+            instructions='How frustrated is the user?',
+            criteria=['Calm.', 'Annoyed.', 'Very frustrated.'],
+            state={},
+        ),
+        selection=ThresholdSelection(kind='threshold', operator='gte', value=0.7),
+    )
+    store = ReviewStore(dimensions=(scored,), total=1)
+    _use_review_store(monkeypatch, store, tty=False)
+
+    result = CliRunner().invoke(_app(), ['find', 'frustrated users', '--window-days', '3', '--limit', '1'])
+
+    assert result.exit_code == 0, result.output
+    assert 'Window' in result.output
+    assert ' UTC' in result.output
+    assert 'Included when: Score at least 0.7' in result.output
+    assert '(the trace limit; more traces may match)' in result.output
+
+
+def test_find_plan_shows_warnings_and_escapes_markup(monkeypatch: Any) -> None:
+    store = ReviewStore(
+        filter_selection_error='Facet lookup failed [/]',
+        plan_warning='Ranking needs aggregation.',
+    )
+    _use_review_store(monkeypatch, store, tty=False)
+
+    result = CliRunner().invoke(_app(), ['find', 'refund [v2] requests'])
+
+    assert result.exit_code == 0, result.output
+    assert 'Facet lookup failed [/]' in result.output
+    assert 'Ranking needs aggregation.' in result.output
+    assert 'refund [v2] requests' in result.output
+
+
+def test_find_failed_planning_never_starts(monkeypatch: Any) -> None:
+    store = ReviewStore(state='failed', error='live Orq trace loading failed')
+    _use_review_store(monkeypatch, store, tty=True)
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'])
+
+    assert result.exit_code == 1
+    assert 'live Orq trace loading failed' in result.output
+    assert 'Find plan' not in result.output
+    assert store.started == []
 
 
 def test_find_exits_nonzero_when_classifications_failed(monkeypatch: Any, tmp_path: Path) -> None:
@@ -126,6 +332,46 @@ def test_find_exits_nonzero_when_classifications_failed(monkeypatch: Any, tmp_pa
     assert result.exit_code == 1
     assert '1 failed classifications' in result.output
     assert not output.exists()
+
+
+def test_find_prefers_failed_count_over_plan_warning_on_completed_run(monkeypatch: Any, tmp_path: Path) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    class WarnedStore(FakeStore):
+        async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+            snapshot = await super().compile(request, wait=wait)
+            return replace(snapshot, state='completed', error=None, failed=2, plan_warning='Words not covered: foo')
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: WarnedStore())
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'])
+
+    assert result.exit_code == 1
+    assert '2 failed classifications' in result.output
+    assert 'Words not covered' not in result.output
+
+
+def test_find_prints_plan_warning_when_ask_ai_cannot_answer(monkeypatch: Any, tmp_path: Path) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    reason = "Ask AI finds traces; it can't compute totals, averages or rankings. Ranking needs aggregation."
+
+    class CancelledStore(FakeStore):
+        async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+            snapshot = await super().compile(request, wait=wait)
+            return replace(snapshot, state='cancelled', error=None, plan_warning=reason)
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: CancelledStore())
+
+    result = CliRunner().invoke(_app(), ['find', 'which model costs most?'])
+
+    assert result.exit_code == 1
+    assert "can't compute totals" in result.output
+    assert 'ended in cancelled' not in result.output
 
 
 def test_find_missing_orq_key_exits_two(monkeypatch: Any) -> None:
@@ -186,7 +432,7 @@ async def test_find_polling_timeout_cancels_store(monkeypatch: Any) -> None:
     store = StalledStore()
     monkeypatch.setattr(find_cli, 'MAX_FIND_WAIT_SECONDS', 0.01)
 
-    with pytest.raises(TimeoutError, match='wait limit'):
+    with pytest.raises(TimeoutError, match='combined planning and classification limit'):
         await find_cli._run(store, cast(Any, object()), Console())
 
     assert store.cancelled
@@ -241,7 +487,7 @@ def test_find_positive_only_filters_json_and_keeps_summary(monkeypatch: Any, tmp
                     negative.trace_id: TraceClassification(
                         trace_id=negative.trace_id,
                         span_id=negative.span_id,
-                        value='no',
+                        answers=(DimensionAnswer(value='no', matched=False),),
                         matched=False,
                         raw_result={'value': 'no'},
                     ),
@@ -281,6 +527,7 @@ def test_find_debug_flag_shows_progress(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_find_debug_progress_skips_unchanged_polls() -> None:
     from evaluatorq.trace_finder import cli as find_cli
     from evaluatorq.trace_finder.debug import cli_debug
@@ -357,19 +604,19 @@ def test_find_profile_overrides_environment_for_both_clients_without_mutating_it
     assert os.environ['ORQ_API_KEY'] == 'environment-key'
     assert os.environ['ORQ_BASE_URL'] == 'https://environment.example'
     assert store.request is not None
-    assert store.request.population.facets.project_id == ('project-research' if not use_flag else None)
+    assert store.request.population.facets.project_id is None
 
 
 @pytest.mark.parametrize(
-    ('key', 'host', 'expected_project'),
+    ('key', 'host'),
     [
-        ('saved-key', 'https://saved.example', 'saved-project'),
-        ('different-key', 'https://saved.example', None),
-        ('saved-key', 'https://other.example', None),
+        ('saved-key', 'https://saved.example'),
+        ('different-key', 'https://saved.example'),
+        ('saved-key', 'https://other.example'),
     ],
 )
-def test_find_only_reuses_saved_project_for_matching_environment_credentials(
-    monkeypatch: Any, tmp_path: Path, key: str, host: str, expected_project: str | None
+def test_find_ignores_legacy_saved_project_for_environment_credentials(
+    monkeypatch: Any, tmp_path: Path, key: str, host: str
 ) -> None:
     from evaluatorq.trace_finder import cli as find_cli
     from evaluatorq.trace_finder.settings import DashboardSettings, credential_fingerprint, save_settings
@@ -392,7 +639,30 @@ def test_find_only_reuses_saved_project_for_matching_environment_credentials(
 
     assert result.exit_code == 0, result.output
     assert store.request is not None
-    assert store.request.population.facets.project_id == expected_project
+    assert store.request.population.facets.project_id is None
+
+
+def test_find_ignores_dashboard_oauth_project_with_environment_credentials(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+    from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+
+    save_settings(DashboardSettings.model_validate({
+        'orq_auth_method': 'cli_oauth', 'orq_oauth_server': 'https://oauth.example',
+        'orq_workspace': 'oauth-workspace', 'orq_project_id': 'oauth-project',
+    }), tmp_path / 'settings.json')
+    monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    store = FakeStore()
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: store)
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'])
+
+    assert result.exit_code == 0, result.output
+    assert store.request is not None
+    assert store.request.population.facets.project_id is None
 
 
 @pytest.mark.parametrize(
@@ -424,7 +694,7 @@ def test_dashboard_flags_are_handed_to_reload_worker_environment(monkeypatch: An
     from evaluatorq.dashboard import launch
 
     names = (
-        'EVALUATORQ_COMPILER_MODEL',
+        'EVALUATORQ_MODEL_OVERRIDES',
         'EVALUATORQ_CLASSIFIER_MODEL',
         'EVALUATORQ_FINDER_WINDOW_DAYS',
         'EVALUATORQ_FINDER_LIMIT',
@@ -454,8 +724,11 @@ def test_dashboard_flags_are_handed_to_reload_worker_environment(monkeypatch: An
         )
 
         assert result.exit_code == 0, result.output
-        assert os.environ['EVALUATORQ_COMPILER_MODEL'] == 'compiler/model'
-        assert os.environ['EVALUATORQ_CLASSIFIER_MODEL'] == 'classifier/model'
+        assert json.loads(os.environ['EVALUATORQ_MODEL_OVERRIDES']) == {
+            'roles': {'classifier': 'classifier/model'},
+            'overrides': {'finder.compiler': 'compiler/model'},
+        }
+        assert 'EVALUATORQ_COMPILER_MODEL' not in os.environ
         assert os.environ['EVALUATORQ_FINDER_WINDOW_DAYS'] == '14'
         assert os.environ['EVALUATORQ_FINDER_LIMIT'] == '5000'
         assert os.environ['EVALUATORQ_FINDER_PARALLELISM'] == '12'

@@ -11,7 +11,7 @@ from rich.text import Text
 
 from .types import EvaluationResultCell, EvaluatorqResult
 
-ScoreValue = float | bool | str | EvaluationResultCell | dict[str, Any]
+ScoreValue = float | bool | str | EvaluationResultCell | dict[str, Any] | None
 """Score value type - can be numeric, boolean, string, EvaluationResultCell or dict"""
 
 ScoresByEvaluatorAndJob = dict[str, dict[str, list[ScoreValue]]]
@@ -38,7 +38,11 @@ def _format_evaluator_scores(scores: list[ScoreValue]) -> tuple[str, str]:
     if not scores:
         return ('-', 'dim')
 
-    first_score = scores[0]
+    scored = [score for score in scores if score is not None]
+    if not scored:
+        return ('[no basis]', 'dim')
+
+    first_score = scored[0]
 
     if isinstance(first_score, EvaluationResultCell):
         # Structured result cell, show placeholder
@@ -46,8 +50,8 @@ def _format_evaluator_scores(scores: list[ScoreValue]) -> tuple[str, str]:
 
     if isinstance(first_score, bool):
         # Calculate pass rate for boolean scores
-        pass_count = sum(1 for s in scores if s is True)
-        pass_rate = (pass_count / len(scores)) * 100
+        pass_count = sum(1 for s in scored if s is True)
+        pass_rate = (pass_count / len(scored)) * 100
 
         if pass_rate == 100:
             style = 'green'
@@ -59,7 +63,7 @@ def _format_evaluator_scores(scores: list[ScoreValue]) -> tuple[str, str]:
         return (f'{pass_rate:.1f}%', style)
 
     # A string score ('inconclusive') must not dilute or mask the numeric mean.
-    numeric = [coerced for score in scores if (coerced := _coerce_score(score)) is not None]
+    numeric = [coerced for score in scored if (coerced := _coerce_score(score)) is not None]
     if numeric:
         # Calculate average over the numeric scores only
         avg = sum(numeric) / len(numeric)

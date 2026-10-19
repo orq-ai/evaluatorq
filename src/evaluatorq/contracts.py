@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 import sys
 from abc import ABC, abstractmethod
@@ -14,11 +13,13 @@ from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from typing_extensions import TypedDict
 
+from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, tool_result_to_text, wire_arguments
 from evaluatorq.openresponses.convert_models import (
     InputFileContent,
     InputImageContent,
     InputTextContent,
 )
+from evaluatorq.openresponses.tool_records import PairedToolCall, iter_paired
 
 # A single part of multi-modal message content (Responses-API input shapes).
 # Tagged on ``type`` (mirroring ``OutputMessage``) so Pydantic dispatches on the
@@ -93,47 +94,12 @@ def content_to_text(content: str | list[ContentPart] | None) -> str:
     return ''.join(out)
 
 
-def tool_result_to_text(result: object) -> str:
-    """Render a tool's return value for ``ToolCallOutputItem.result``.
-
-    Tools routinely return structured data (``{"temp": 12}``), and ``result``
-    has to be text because it ends up as a tool ``Message.content``. ``str()``
-    would give the Python repr — single-quoted, ``None``/``True`` instead of
-    ``null``/``true`` — which no downstream reader can parse back, so the data
-    is there but unusable. JSON keeps it readable by both a model and a parser.
-    """
-    if isinstance(result, str):
-        return result
-    model_dump_json = getattr(result, 'model_dump_json', None)
-    if callable(model_dump_json):
-        try:
-            rendered = model_dump_json()
-        except Exception as exc:  # noqa: BLE001 - any renderer failure must reach the text fallback
-            logger.warning(
-                'tool_result_to_text: {}.model_dump_json() failed with {}: {}; falling back to JSON encoding',
-                type(result).__name__,
-                type(exc).__name__,
-                exc,
-            )
-        else:
-            if isinstance(rendered, str):
-                return rendered
-            logger.warning(
-                'tool_result_to_text: {}.model_dump_json() returned {}; falling back to JSON encoding',
-                type(result).__name__,
-                type(rendered).__name__,
-            )
-    # default=str: a value JSON cannot encode degrades to its repr rather than
-    # failing the whole response over one odd tool return.
-    return json.dumps(result, default=str)
-
-
 if sys.version_info >= (3, 11):
     from enum import StrEnum
 else:
     from enum import Enum
 
-    class StrEnum(str, Enum):  # type: ignore[no-redef]
+    class StrEnum(str, Enum):
         """String enum compatible with Python 3.10."""
 
 
@@ -145,7 +111,7 @@ class ConversationHistoryMode(StrEnum):
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
 
     from openai import AsyncOpenAI
 
@@ -157,11 +123,15 @@ else:
 # Pipeline defaults (mirrored from redteam.contracts for shared use)
 # ---------------------------------------------------------------------------
 
-# The one default model. Red team reads it directly; simulation, the jury and
-# the dashboard's apply flow alias it as DEFAULT_MODEL, DEFAULT_JUDGE_MODEL and
-# DEFAULT_APPLY_MODEL. Provider-prefixed for the Orq router; a caller pointing
-# at OpenAI directly overrides with the bare id.
-DEFAULT_PIPELINE_MODEL: str = 'openai/gpt-5.6-luna'
+# Built-in model per role. `evaluatorq.common.model_roles.role_model` resolves the
+# configured model for a role at call time; these are its last fallback.
+DEFAULT_FAST_MODEL: str = 'openai/gpt-6-luna'
+DEFAULT_SMART_MODEL: str = 'openai/gpt-6-sol'
+DEFAULT_CLASSIFIER_MODEL: str = 'typesafe/jev-latest'
+DEFAULT_EMBEDDING_MODEL: str = 'openai/text-embedding-3-small'
+# The fast built-in, kept so existing imports keep working. New code asks
+# `role_model` instead, so settings and env vars apply.
+DEFAULT_PIPELINE_MODEL: str = DEFAULT_FAST_MODEL
 # Completion-token budget per call, shared by red team and simulation. On a
 # reasoning model this covers hidden reasoning as well as the visible answer,
 # which is why 5000 stopped being enough when the default model became one.
@@ -425,6 +395,13 @@ class StrategyToolCall(BaseModel):
     # item back to the Responses API on subsequent turns. ``None`` for tool calls
     # that did not originate from a Responses-API turn.
     item_id: str | None = Field(default=None, description='Responses-API function_call item id (fc_*)')
+    incomplete: bool = Field(
+        default=False,
+        description=(
+            'The recorded fact that this call has no result. Judge text and exports mark it from this flag; '
+            'provider replay does not trust it and pairs by position instead (`common.messages.pair_tool_rows`).'
+        ),
+    )
 
 
 class Message(BaseModel):
@@ -459,7 +436,8 @@ class Message(BaseModel):
         Preserves tool-call structure that a naive ``{"role", "content"}`` flatten
         would drop: an assistant message's ``tool_calls`` and a ``tool`` row's
         ``tool_call_id``/``name``. Used by stateless targets to replay a transcript
-        (built by ``turns_to_messages``) without losing multi-turn tool context.
+        (built by ``turns_to_messages``) without losing multi-turn tool context. Arguments go out
+        through `common.messages.wire_arguments`, so unknown ones are ``'{}'`` on the wire.
         """
         if self.role == 'tool':
             # A tool message carries a result keyed to tool_call_id; tool_calls belong
@@ -481,7 +459,7 @@ class Message(BaseModel):
                     {
                         'id': tc.id,
                         'type': 'function',
-                        'function': {'name': tc.function.name, 'arguments': tc.function.arguments},
+                        'function': {'name': tc.function.name, 'arguments': wire_arguments(tc.function.arguments)},
                     }
                     for tc in self.tool_calls
                 ],
@@ -489,30 +467,22 @@ class Message(BaseModel):
         return {'role': self.role, 'content': _render_chat_content(self.content)}
 
 
-def render_tool_call(
-    item: ToolCallOutputItem,
-    *,
-    warn: Callable[[str], None] | None = None,
-) -> tuple[StrategyToolCall, Message] | None:
-    """Render one completed tool call as its paired transcript messages.
+def render_tool_call(item: ToolCallOutputItem) -> tuple[StrategyToolCall, Message | None]:
+    """Render one tool call as its transcript messages.
 
-    A function call without a result cannot be replayed safely: emitting its
-    assistant row would leave an unpaired ``function_call`` on either provider
-    contract. Such calls are dropped and logged. An empty string is a valid result
-    and is therefore retained.
+    A call without a result keeps its place: it is returned with ``incomplete=True`` and no tool
+    message. The replay filter (`common.messages.drop_unreplayable_tool_records`) owns the warning
+    about it, so this logs at debug. An empty string is a valid result.
     """
-    if item.result is None:
-        warning = warn or logger.warning
-        warning(
-            f'Dropping tool call {item.call_id!r} ({item.name!r}): result is None, '
-            'so no paired tool message can be emitted.'
-        )
-        return None
     tool_call = StrategyToolCall(
         id=item.call_id,
         item_id=item.id or None,
         function=FunctionCall(name=item.name, arguments=item.arguments),
+        incomplete=item.result is None,
     )
+    if item.result is None:
+        logger.debug(f'Tool call {item.call_id!r} ({item.name!r}) has no result (None); kept without a tool message.')
+        return tool_call, None
     tool_message = Message(
         role='tool',
         tool_call_id=item.call_id,
@@ -683,28 +653,30 @@ class Usage(BaseModel):
         # runtime via the validation aliases above, but a static type checker only
         # sees the declared field names. Declare the constructor explicitly so call
         # sites passing either spelling type-check cleanly.
-        def __init__(  # pyright: ignore[reportMissingSuperCall]
+
+        def __init__(
             self,
             *,
-            input_tokens: int = ...,
-            output_tokens: int = ...,
-            prompt_tokens: int = ...,
-            completion_tokens: int = ...,
-            total_tokens: int = ...,
-            cached_tokens: int = ...,
-            cache_creation_tokens: int = ...,
-            cache_creation_1h_tokens: int = ...,
-            cache_creation_5m_tokens: int = ...,
-            reasoning_tokens: int = ...,
-            input_cost: float | None = ...,
-            prompt_cost: float | None = ...,
-            output_cost: float | None = ...,
-            completion_cost: float | None = ...,
-            total_cost: float | None = ...,
-            cost_usd: float | None = ...,
-            calls: int = ...,
-            priced_calls: int = ...,
-        ) -> None: ...
+            input_tokens: int = 0,
+            output_tokens: int = 0,
+            prompt_tokens: int = 0,
+            completion_tokens: int = 0,
+            total_tokens: int = 0,
+            cached_tokens: int = 0,
+            cache_creation_tokens: int = 0,
+            cache_creation_1h_tokens: int = 0,
+            cache_creation_5m_tokens: int = 0,
+            reasoning_tokens: int = 0,
+            input_cost: float | None = None,
+            prompt_cost: float | None = None,
+            output_cost: float | None = None,
+            completion_cost: float | None = None,
+            total_cost: float | None = None,
+            cost_usd: float | None = None,
+            calls: int = 0,
+            priced_calls: int = 0,
+        ) -> None:
+            super().__init__()
 
     @property
     def prompt_tokens(self) -> int:
@@ -1193,7 +1165,7 @@ class AgentResponse(BaseModel):
 
     if TYPE_CHECKING:
 
-        def __init__(  # pyright: ignore[reportMissingSuperCall]
+        def __init__(
             self,
             *,
             output: list[OutputMessage] | None = None,
@@ -1206,7 +1178,8 @@ class AgentResponse(BaseModel):
             finish_reason: str | None = None,
             refusal: str | None = None,
             error: AgentResponseError | None = None,
-        ) -> None: ...
+        ) -> None:
+            super().__init__()
 
     @model_validator(mode='before')
     @classmethod
@@ -1236,9 +1209,19 @@ class AgentResponse(BaseModel):
         """Build an AgentResponse from bare Responses ``output`` items, with no usage or metadata."""
         items: list[OutputMessage] = []
         refusal: str | None = None
-        for item in output_items:
+        for item in iter_paired(output_items):
             item_type = _gf(item, 'type')
-            if item_type == 'message':
+            if isinstance(item, PairedToolCall):
+                fields: dict[str, Any] = {
+                    'call_id': item.call_id,
+                    'name': item.name,
+                    'arguments': UNKNOWN_ARGUMENTS if item.arguments is None else item.arguments,
+                    'result': item.result,
+                }
+                if item.item_id:
+                    fields['id'] = item.item_id
+                items.append(ToolCallOutputItem(**fields))
+            elif item_type == 'message':
                 for part in _gf(item, 'content') or []:
                     part_type = _gf(part, 'type')
                     # A message part is 'output_text' or 'refusal'. Keeping only
@@ -1256,25 +1239,9 @@ class AgentResponse(BaseModel):
                         logger.warning(
                             'AgentResponse.from_openresponses: skipping unknown message part type={!r}', part_type
                         )
-            # 'function_call' is the standard Responses shape; the Orq router
-            # instead types agent tool calls as 'orq:<tool_name>' (e.g.
-            # 'orq:query_knowledge_base'). Treat both as tool calls so the
-            # agent's tool activity is captured rather than silently dropped.
-            elif item_type == 'function_call' or (isinstance(item_type, str) and item_type.startswith('orq:')):
-                raw_args = _gf(item, 'arguments') or '{}'
-                call_id = _gf(item, 'call_id') or _gf(item, 'id') or ''
-                result = _gf(item, 'result')
-                if result is None:
-                    result = _gf(item, 'output')
-                name = _gf(item, 'name') or (item_type.split(':', 1)[1] if item_type.startswith('orq:') else '')
-                items.append(
-                    ToolCallOutputItem(
-                        type='function_call',
-                        name=str(name),
-                        call_id=str(call_id),
-                        arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args),
-                        result=tool_result_to_text(result) if result is not None else None,
-                    )
+            elif item_type == 'function_call_output':
+                logger.warning(
+                    'Result for call_id {!r} has no matching call (call input missing); dropped', _gf(item, 'call_id')
                 )
             elif item_type == 'reasoning':
                 pass  # o1/o3/o4-mini reasoning steps intentionally excluded
@@ -1708,6 +1675,7 @@ class ManifestSurface(StrEnum):
 
     SIM = 'sim'
     REDTEAM = 'redteam'
+    INSIGHTS = 'insights'
 
 
 class ManifestStatus(StrEnum):
@@ -1770,6 +1738,19 @@ class StageRecord(BaseModel):
     status: ManifestStatus = ManifestStatus.RUNNING
     started_at: datetime
     ended_at: datetime | None = None
+    completed: int | None = Field(default=None, strict=True)
+    total: int | None = Field(default=None, strict=True)
+
+    @model_validator(mode='after')
+    def validate_progress(self) -> StageRecord:
+        """Keep persisted stage progress within its meaningful range."""
+        if self.completed is not None and self.completed < 0:
+            raise ValueError('completed must be non-negative')
+        if self.total is not None and self.total < 0:
+            raise ValueError('total must be non-negative')
+        if self.completed is not None and self.total is not None and self.completed > self.total:
+            raise ValueError('completed must not exceed total')
+        return self
 
     @property
     def duration_seconds(self) -> float | None:
@@ -1787,11 +1768,17 @@ class RunManifest(BaseModel):
     status: ManifestStatus = ManifestStatus.RUNNING
     stage: str | None = None  # name of the current / most-recent stage
     stages: list[StageRecord] = Field(default_factory=list)
+    planned_stages: list[str] = Field(default_factory=list)
+    stage_labels: dict[str, str] = Field(default_factory=dict)
     started_at: datetime
     updated_at: datetime
     ended_at: datetime | None = None  # set when the run reaches a terminal status
     error: str | None = None
     report_path: str | None = None
+    parallelism: int | None = Field(
+        default=None,
+        description='Concurrent requests the run was started with, so a later estimate can scale stage timings. None when not recorded.',
+    )
     summary: RunSummary | None = Field(
         default=None,
         description=(
@@ -1817,7 +1804,11 @@ class RunManifest(BaseModel):
 
 
 __all__ = [
+    'DEFAULT_CLASSIFIER_MODEL',
+    'DEFAULT_EMBEDDING_MODEL',
+    'DEFAULT_FAST_MODEL',
     'DEFAULT_PIPELINE_MODEL',
+    'DEFAULT_SMART_MODEL',
     'DEFAULT_TARGET_MAX_TOKENS',
     'DEFAULT_TARGET_TIMEOUT_MS',
     'EVAL_ERROR_RAW_OUTPUT_KEY',

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.common.async_utils import MaybeAsync
     from evaluatorq.common.run_manifest import ManifestWriter
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         SimulationDatapoint,
         SimulationResult,
         TurnMetrics,
@@ -63,7 +63,7 @@ _STAGE_LABELS: dict[str, str] = {
 
 def _stage_label(stage: SimStage | str) -> str:
     """Return a human-readable label for *stage*, falling back to the raw value."""
-    return _STAGE_LABELS.get(stage, str(stage))  # type: ignore[arg-type]
+    return _STAGE_LABELS.get(stage, str(stage))
 
 
 class SimulationRunMeta(TypedDict):
@@ -397,7 +397,7 @@ class RichHooks:
             return
         from rich.markup import escape
 
-        from evaluatorq.simulation.types import TerminatedBy
+        from evaluatorq.simulation.contracts import TerminatedBy
 
         dp_id = result.metadata.get('datapoint_id')
         color = 'red' if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout) else 'green'

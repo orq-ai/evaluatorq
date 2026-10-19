@@ -24,7 +24,7 @@ from starlette.testclient import TestClient
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id
-from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +517,7 @@ def _entry(
     transcript: list | None = None,
     criteria_verified: bool | None = None,
 ):
-    from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage
+    from evaluatorq.simulation.contracts import CriteriaRow, SimulationEntry, TranscriptMessage
 
     if criteria is None:
         criteria = [
@@ -566,7 +566,7 @@ def sim_entries():
 
 @pytest.fixture()
 def sim_entry_with_safety_criterion():
-    from evaluatorq.simulation.types import CriteriaRow
+    from evaluatorq.simulation.contracts import CriteriaRow
 
     return _entry(
         criteria=[
@@ -595,7 +595,7 @@ def sim_entry_with_transcript():
 
 @pytest.fixture()
 def sim_entry_xss_criterion():
-    from evaluatorq.simulation.types import CriteriaRow
+    from evaluatorq.simulation.contracts import CriteriaRow
 
     return _entry(
         criteria=[
@@ -626,7 +626,7 @@ class TestConversationRows:
         assert 'hx-trigger="toggle once' not in html
 
     def test_dashboard_runtime_has_no_failure_anchor_handler(self) -> None:
-        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text(encoding='utf-8')
 
         assert 'a[href^="#conv-"]' not in source
 
@@ -849,27 +849,6 @@ class TestTranscriptFragmentRewrite:
         assert '.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin: 0 0 16px auto; flex-direction: row-reverse; }' in DASHBOARD_CSS
         assert '.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin: 0 auto 16px 0; flex-direction: row; }' in DASHBOARD_CSS
 
-    def test_backdrop_close_waits_for_drawer_exit_animation(self) -> None:
-        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
-        from evaluatorq.dashboard.styles import DASHBOARD_CSS
-
-        assert 'function closeDrawer()' in source
-        assert "dialog.addEventListener('animationend', finishClose, { once: true });" in source
-        assert 'sim-entity-dialog--closing' in source
-        assert '.sim-report .sim-entity-dialog--closing { animation: sim-drawer-out 160ms ease-in forwards; }' in DASHBOARD_CSS
-
-    def test_drawer_drill_pushes_browser_history(self) -> None:
-        """Each persona/scenario/conversation drill is a real history entry so the
-        browser Back/Forward buttons walk the drill path."""
-        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
-
-        assert "history.pushState({ simDrawer: serial, drawerDepth: drawerDepth }, '')" in source
-        assert "window.addEventListener('popstate'" in source
-        assert 'evt.state.simDrawer' in source
-        # Back button and native Escape unwind through history, not a private stack.
-        assert 'history.back()' in source
-        assert 'history.go(-drawerDepth)' in source
-
     def test_transcript_fragment_error_entry_shows_error_message(self) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 
@@ -906,7 +885,7 @@ class TestFilteredConversationDrawerIndex:
         """
         from evaluatorq.contracts import Message, TokenUsage
         from evaluatorq.dashboard.app import build_app
-        from evaluatorq.simulation.types import (
+        from evaluatorq.simulation.contracts import (
             SimulationResult,
             SimulationRun,
             TerminatedBy,

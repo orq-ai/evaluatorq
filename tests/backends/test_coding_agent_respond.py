@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import os
-import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import cast
 
 import pytest
 
+from evaluatorq.backends import container as c
 from evaluatorq.backends.coding_agent import (
     AgentName,
     CodingAgentError,
@@ -20,32 +21,17 @@ from evaluatorq.backends.coding_agent import (
 )
 from evaluatorq.contracts import AgentResponse, Message, ToolCallOutputItem
 from evaluatorq.redteam.contracts import Turn, turns_to_messages
+from tests.backends.fakes import ECHO, SLEEPER, install_fake
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 
-_ECHO = """#!/bin/sh
-cat - >/dev/null
-[ -n "$FAKE_STDOUT" ] && cat "$FAKE_STDOUT"
-exit ${FAKE_EXIT:-0}
-"""
-
-_SLEEPER = """#!/bin/sh
-sleep 300 &
-echo $! > "$FAKE_PIDFILE"
-wait
-"""
-
-
 def _install(tmp_path: Path, name: str, body: str) -> str:
     bindir = tmp_path / 'bin'
-    bindir.mkdir(exist_ok=True)
-    script = bindir / name
-    script.write_text(body)
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    install_fake(bindir, name, body)
     return f'{bindir}{os.pathsep}{os.environ.get("PATH", "")}'
 
 
-def _target(tmp_path: Path, agent: str, *, stdout: str | None = None, exit_code: int = 0, body: str = _ECHO, **kw):
+def _target(tmp_path: Path, agent: str, *, stdout: str | None = None, exit_code: int = 0, body: str = ECHO, **kw):
     path = _install(tmp_path, agent, body)
     env = {'PATH': path, 'FAKE_EXIT': str(exit_code)}
     if stdout is not None:
@@ -100,7 +86,7 @@ async def test_non_json_banner_after_final_event_is_skipped(tmp_path: Path) -> N
         '{"type":"item.completed","item":{"id":"a","type":"agent_message","text":"done"}}\n'
         'banner from fake agent\n'
     )
-    path = _install(tmp_path, 'codex', _ECHO)
+    path = _install(tmp_path, 'codex', ECHO)
     target = CodingAgentTarget(agent='codex', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'done'
@@ -110,7 +96,7 @@ async def test_non_json_banner_after_final_event_is_skipped(tmp_path: Path) -> N
 async def test_garbage_stdout_is_parse_error(tmp_path: Path) -> None:
     garbage = tmp_path / 'garbage.txt'
     garbage.write_text('not json at all\n')
-    path = _install(tmp_path, 'codex', _ECHO)
+    path = _install(tmp_path, 'codex', ECHO)
     target = CodingAgentTarget(agent='codex', env={'PATH': path, 'FAKE_STDOUT': str(garbage)})
     with pytest.raises(CodingAgentError) as info:
         await target.respond([Message(role='user', content='x')])
@@ -124,7 +110,7 @@ async def test_parser_failure_is_parse_error(tmp_path: Path) -> None:
         '{"type":"assistant","message":null}\n'
         '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}\n'
     )
-    path = _install(tmp_path, 'claude', _ECHO)
+    path = _install(tmp_path, 'claude', ECHO)
     target = CodingAgentTarget(agent='claude', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
     with pytest.raises(CodingAgentError) as info:
         await target.respond([Message(role='user', content='x')])
@@ -135,7 +121,7 @@ async def test_parser_failure_is_parse_error(tmp_path: Path) -> None:
 async def test_empty_agent_message_is_no_result(tmp_path: Path) -> None:
     fx = tmp_path / 'empty.jsonl'
     fx.write_text('{"type":"item.completed","item":{"id":"a","type":"agent_message","text":""}}\n')
-    path = _install(tmp_path, 'codex', _ECHO)
+    path = _install(tmp_path, 'codex', ECHO)
     target = CodingAgentTarget(agent='codex', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
     with pytest.raises(CodingAgentError) as info:
         await target.respond([Message(role='user', content='x')])
@@ -146,7 +132,7 @@ async def test_empty_agent_message_is_no_result(tmp_path: Path) -> None:
 async def test_is_error_result_is_agent_error(tmp_path: Path) -> None:
     fx = tmp_path / 'err.jsonl'
     fx.write_text('{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom","session_id":"s"}\n')
-    path = _install(tmp_path, 'claude', _ECHO)
+    path = _install(tmp_path, 'claude', ECHO)
     target = CodingAgentTarget(agent='claude', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
     with pytest.raises(CodingAgentError) as info:
         await target.respond([Message(role='user', content='x')])
@@ -163,9 +149,10 @@ async def test_missing_binary_is_not_found_and_non_retryable(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_timeout_kills_and_is_non_retryable(tmp_path: Path) -> None:
     pidfile = tmp_path / 'pid'
-    path = _install(tmp_path, 'claude', _SLEEPER)
+    path = _install(tmp_path, 'claude', SLEEPER)
     target = CodingAgentTarget(agent='claude', env={'PATH': path, 'FAKE_PIDFILE': str(pidfile)}, timeout_ms=1500)
     task = asyncio.create_task(target.respond([Message(role='user', content='x')]))
     deadline = time.time() + 10
@@ -182,7 +169,7 @@ async def test_timeout_kills_and_is_non_retryable(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_cancellation_kills_process_group(tmp_path: Path) -> None:
     pidfile = tmp_path / 'pid'
-    path = _install(tmp_path, 'claude', _SLEEPER)
+    path = _install(tmp_path, 'claude', SLEEPER)
     target = CodingAgentTarget(agent='claude', env={'PATH': path, 'FAKE_PIDFILE': str(pidfile)})
     task = asyncio.create_task(target.respond([Message(role='user', content='x')]))
     deadline = time.time() + 10
@@ -197,14 +184,18 @@ async def test_cancellation_kills_process_group(tmp_path: Path) -> None:
 
 def _assert_gone(pid: int) -> None:
     for _ in range(40):
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        # The sleeper is a grandchild, so waitpid cannot reap it here; a zombie still answers kill(pid, 0).
-        stat = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
-        if not stat or stat.startswith('Z'):
-            return
+        if sys.platform == 'win32':
+            if not c.pid_alive(pid):
+                return
+        else:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            # The sleeper is a grandchild, so waitpid cannot reap it here; a zombie still answers kill(pid, 0).
+            stat = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
+            if not stat or stat.startswith('Z'):
+                return
         time.sleep(0.05)
     raise AssertionError(f'process {pid} still alive')
 
@@ -216,7 +207,7 @@ async def test_denied_tool_call_survives_turns_to_messages(tmp_path: Path) -> No
         '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"rm -rf /"}}]}}\n'
         '{"type":"result","subtype":"success","is_error":false,"result":"not allowed","session_id":"s","usage":{"input_tokens":1,"output_tokens":1},"permission_denials":[{"tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"rm -rf /"}}]}\n'
     )
-    path = _install(tmp_path, 'claude', _ECHO)
+    path = _install(tmp_path, 'claude', ECHO)
     target = CodingAgentTarget(agent='claude', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
     response = await target.respond([Message(role='user', content='wipe it')])
     turn = Turn(attacker=AgentResponse(text='wipe it'), target=response)
@@ -228,7 +219,12 @@ async def test_denied_tool_call_survives_turns_to_messages(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_env_overlay_caller_wins(tmp_path: Path) -> None:
-    body = '#!/bin/sh\ncat - >/dev/null\nprintf \'{"type":"item.completed","item":{"id":"a","type":"agent_message","text":"%s"}}\\n\' "$MARKER"\n'
+    body = (
+        'import json, os, sys\n'
+        'sys.stdin.read()\n'
+        'item = {"id": "a", "type": "agent_message", "text": os.environ["MARKER"]}\n'
+        'print(json.dumps({"type": "item.completed", "item": item}))\n'
+    )
     path = _install(tmp_path, 'codex', body)
     target = CodingAgentTarget(agent='codex', env={'PATH': path, 'MARKER': 'from-env'})
     response = await target.respond([Message(role='user', content='x')])

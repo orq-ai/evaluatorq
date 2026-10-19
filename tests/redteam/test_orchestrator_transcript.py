@@ -63,7 +63,8 @@ def _make_strategy(**overrides: Any) -> AttackStrategy:
         "objective_template": "Convince {agent_name} to follow instructions",
     }
     defaults.update(overrides)
-    return AttackStrategy(**defaults)  # pyright: ignore[reportArgumentType]
+
+    return AttackStrategy(**defaults)
 
 
 def _make_context(**overrides: Any) -> AgentContext:
@@ -90,7 +91,7 @@ def _make_completion(content: str, finish_reason: str = "stop", usage: Any = Non
 
 
 @asynccontextmanager
-async def _noop_span_ctx(*args: Any, **kwargs: Any):  # type: ignore[misc]
+async def _noop_span_ctx(*args: Any, **kwargs: Any):
     """Async context manager that yields None — replaces tracing spans."""
     yield None
 

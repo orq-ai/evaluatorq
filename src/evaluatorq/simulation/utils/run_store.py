@@ -18,13 +18,13 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from evaluatorq.common.llm_client import orq_base_url as _orq_base_url
 from evaluatorq.common.replay import REPLAY_VERSION
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import _coerce_text
-from evaluatorq.simulation.types import AgentInfoSnapshot, SimulationRun
+from evaluatorq.simulation.contracts import DEFAULT_RUN_NAME, AgentInfoSnapshot, SimulationRun
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ def sanitise_run_name(name: str) -> str:
     sanitised = re.sub(r'[^a-z0-9_-]', '_', sanitised)
     sanitised = re.sub(r'_+', '_', sanitised)
     sanitised = sanitised.strip('_')
-    return sanitised[:64] or 'sim'
+    return sanitised[:64] or DEFAULT_RUN_NAME
 
 
 def get_sim_runs_dir() -> Path:
@@ -174,8 +174,8 @@ def get_sim_runs_dir() -> Path:
 def build_simulation_run(
     *,
     run_name: str,
-    mode: str,
-    target_kind: str,
+    mode: Literal['run', 'simulate', 'generate'],
+    target_kind: Literal['orq_agent', 'orq_deployment', 'vercel', 'openai_model', 'callback'],
     evaluator_names: list[str],
     results: list[Any],
     target: str | None = None,
@@ -211,8 +211,8 @@ def build_simulation_run(
     return SimulationRun(
         run_name=run_name,
         created_at=datetime.now(tz=timezone.utc),
-        mode=mode,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-        target_kind=target_kind,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        mode=mode,
+        target_kind=target_kind,
         target=target,
         target_model=target_model,
         max_turns=max_turns,

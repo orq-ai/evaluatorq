@@ -9,28 +9,13 @@ need to normalise an evaluatorq ``DataPoint`` into a single simulation
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.simulation.types import Persona, Scenario, SimulationDatapoint
+from evaluatorq.common.messages import parse_json_or_value
+from evaluatorq.simulation.contracts import Persona, Scenario, SimulationDatapoint
 
 if TYPE_CHECKING:
     from evaluatorq.types import DataPoint
-
-
-def _as_obj(value: Any) -> Any:
-    """Coerce a JSON-stringified object to a dict; pass anything else through.
-
-    orq dataset rows store persona/scenario as JSON strings (the datasets API
-    rejects nested objects in ``inputs``), so a dataset-backed run arrives here
-    with stringified fields. See ``dataset_export.to_orq_dataset_rows``.
-    """
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except (ValueError, TypeError):
-            return value
-    return value
 
 
 def _validate_shape(value: Any, label: str, required_keys: list[str]) -> None:
@@ -59,23 +44,23 @@ def _extract_single_datapoint(
     """
     inputs = data.inputs
     if 'datapoint' in inputs:
-        dp = _as_obj(inputs['datapoint'])
+        dp = parse_json_or_value(inputs['datapoint'])
         _validate_shape(dp, 'datapoint', ['persona', 'scenario', 'first_message'])
         return SimulationDatapoint.model_validate(dp)
     if 'datapoints' in inputs:
-        dps = _as_obj(inputs['datapoints'])
+        dps = parse_json_or_value(inputs['datapoints'])
         if not isinstance(dps, list):
             raise ValueError("Expected 'datapoints' to be an array")
         if len(dps) != 1:
             raise ValueError(
                 f'{source} must encode exactly one datapoint, got {len(dps)}. Use one row per conversation.'
             )
-        first = _as_obj(dps[0])
+        first = parse_json_or_value(dps[0])
         _validate_shape(first, 'datapoints[]', ['persona', 'scenario', 'first_message'])
         return SimulationDatapoint.model_validate(first)
     if 'persona' in inputs and 'scenario' in inputs:
-        persona_raw = _as_obj(inputs['persona'])
-        scenario_raw = _as_obj(inputs['scenario'])
+        persona_raw = parse_json_or_value(inputs['persona'])
+        scenario_raw = parse_json_or_value(inputs['scenario'])
         _validate_shape(persona_raw, 'persona', ['name'])
         _validate_shape(scenario_raw, 'scenario', ['name', 'goal'])
         persona = Persona.model_validate(persona_raw)

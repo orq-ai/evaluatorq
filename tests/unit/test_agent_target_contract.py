@@ -39,7 +39,7 @@ def test_crewai_target_leaves_history_to_the_caller() -> None:
 
 def test_agent_target_defaults_to_caller_owned_history() -> None:
     class _BareTarget(AgentTarget):
-        async def respond(self, messages: list[Message]):  # type: ignore[no-untyped-def]
+        async def respond(self, messages: list[Message]):
             raise NotImplementedError
 
         def new(self) -> _BareTarget:

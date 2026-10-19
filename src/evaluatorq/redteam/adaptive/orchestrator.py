@@ -47,7 +47,6 @@ from evaluatorq.redteam.adaptive.tool_chaining import (
 )
 from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     AgentContext,
     AttackStrategy,
@@ -55,6 +54,7 @@ from evaluatorq.redteam.contracts import (
     OrchestratorResult,
     TokenUsage,
     Turn,
+    attacker_model_for,
     turns_to_messages,
 )
 from evaluatorq.redteam.exceptions import RedTeamError
@@ -579,7 +579,7 @@ class MultiTurnOrchestrator:
     def __init__(
         self,
         llm_client: AsyncOpenAI,
-        model: str = DEFAULT_PIPELINE_MODEL,
+        model: str | None = None,
         backend: Backend | None = None,
         attacker_instructions: str | None = None,
         verbosity: int = 0,
@@ -598,7 +598,7 @@ class MultiTurnOrchestrator:
             pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
         """
         self.llm_client = llm_client
-        self.model = model
+        self.model = attacker_model_for(model, pipeline_config)
         self._backend = backend
         self.attacker_instructions = attacker_instructions
         self.verbosity = verbosity

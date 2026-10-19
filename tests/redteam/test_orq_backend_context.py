@@ -11,6 +11,7 @@ unreachable agent still must.
 from __future__ import annotations
 
 import asyncio
+import typing
 from types import SimpleNamespace
 
 import pytest
@@ -220,7 +221,7 @@ def test_skills_tolerates_bad_shapes(raw, expected):
 def test_key_is_not_coerced():
     """Identity is strict: a bad key must fail, not resolve to something plausible."""
     with pytest.raises(ValidationError):
-        AgentContext(key=_Unset())  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        AgentContext(key=typing.cast(typing.Any, _Unset()))
 
 
 def test_resolve_context_degrades_on_validation_error(monkeypatch):

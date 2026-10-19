@@ -478,7 +478,7 @@ def vl_stacked_bar(
         'height': {'step': 24},
     }
     if tooltip is not None:
-        base['encoding']['tooltip'] = tooltip
+        base['encoding']['tooltip'] = tooltip  # ty: ignore[invalid-assignment]
     bar_layer: dict[str, Any] = {
         'mark': {'type': 'bar'},
     }

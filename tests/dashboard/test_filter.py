@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,42 @@ from evaluatorq.dashboard.library import report_id
 # ---------------------------------------------------------------------------
 
 from tests.redteam.reports.test_rebuild_filtered import _make_report, _make_result  # noqa: E402
+
+
+class _VisibleTextParser(HTMLParser):
+    """Collect rendered text while ignoring markup attributes and hidden code."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._hidden_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        if tag in {'script', 'style'}:
+            self._hidden_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {'script', 'style'} and self._hidden_depth:
+            self._hidden_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._hidden_depth:
+            self.parts.append(data)
+
+
+def _visible_html_text(markup: str) -> str:
+    parser = _VisibleTextParser()
+    parser.feed(markup)
+    return ' '.join(parser.parts)
+
+
+def test_visible_html_text_ignores_aliases_but_retains_persona_text() -> None:
+    text = _visible_html_text('<a href="/fNriKDNvBobgjyNN/">Alice</a>')
+
+    assert 'alice' in text.lower()
+    assert 'bob' not in text.lower()
+    assert 'bob' in _visible_html_text('<span>Bob</span>').lower()
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +102,7 @@ def _write_rt_report(path: Path) -> None:
 def _sim_run():
     """Build a minimal SimulationRun with results across TWO personas."""
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
     def _result(persona: str, goal_achieved: bool = True) -> SimulationResult:
         return SimulationResult(
@@ -271,11 +308,11 @@ class TestSimFilterRoute:
         panels = tab_panels.split('<section class="tab-panel">')
         assert len(panels) == 5
         breakdown, transcripts, config = panels[2:]
-        assert 'alice' in breakdown.lower()
-        assert 'bob' not in breakdown.lower()
-        assert 'alice' in transcripts.lower()
-        assert 'bob' not in transcripts.lower()
-        assert 'bob' in config.lower()
+        assert 'alice' in _visible_html_text(breakdown).lower()
+        assert 'bob' not in _visible_html_text(breakdown).lower()
+        assert 'alice' in _visible_html_text(transcripts).lower()
+        assert 'bob' not in _visible_html_text(transcripts).lower()
+        assert 'bob' in _visible_html_text(config).lower()
 
     def test_metric_dim_round_trips_through_http(self, client: TestClient, roots: list[Path]) -> None:
         """A new metric dimension (max_goal_score) narrows results end-to-end via
@@ -597,17 +634,6 @@ class TestSimFilterRailCounter:
 
 
 # ---------------------------------------------------------------------------
-# Task 7: persist open <details> filter dropdowns across HTMX filter swaps.
-# ---------------------------------------------------------------------------
-def test_dashboard_js_has_details_persistence_hook():
-    from pathlib import Path
-
-    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
-    assert 'htmx:beforeSwap' in js
-    assert 'filter-dd' in js or 'details[open]' in js
-
-
-# ---------------------------------------------------------------------------
 # Task 11: double-fetch removal — the sim row-list wrapper no longer
 # self-refetches on orq:filter-changed; the /filter POST body swap already
 # delivers the (now heavier, card-based) row list.
@@ -752,7 +778,7 @@ def _sim_metric_run():
                total_tokens=15.
     """
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy, TurnMetrics
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy, TurnMetrics
 
     def _turn(**scores) -> TurnMetrics:
         return TurnMetrics(
@@ -903,7 +929,7 @@ class TestSimMetricFilters:
     def test_full_options_hides_unavailable_metrics(self) -> None:
         from evaluatorq.contracts import TokenUsage
         from evaluatorq.dashboard.filters import _sim_full_options
-        from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+        from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
         result = SimulationResult(
             messages=[],

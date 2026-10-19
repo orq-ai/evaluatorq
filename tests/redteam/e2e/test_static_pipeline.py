@@ -183,7 +183,7 @@ async def test_static_unknown_delivery_method_passes_through_and_hard_fails(
 # empty or not. The planner-side behaviour is covered in test_method_selection.py.
 # Selections are passed as explicit keywords rather than `**{name: value}`:
 # dict unpacking erases every other red_team() parameter's type for
-# basedpyright, which CI runs over tests as well as src.
+# static analysis, which CI runs over tests as well as src.
 @pytest.mark.parametrize(
     ("categories", "vulnerabilities", "delivery_methods"),
     [([], None, None), (None, [], None), (None, None, [])],

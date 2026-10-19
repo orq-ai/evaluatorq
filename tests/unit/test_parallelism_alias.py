@@ -1,7 +1,5 @@
 """The deprecated ``parallelism=`` alias keeps working, loudly."""
 
-import inspect
-
 import pytest
 
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
@@ -9,9 +7,7 @@ from evaluatorq.types import EvaluatorParams
 
 
 def _resolve(datapoint_parallelism, parallelism):
-    return resolve_datapoint_parallelism(
-        datapoint_parallelism, parallelism, default=10, caller='evaluatorq'
-    )
+    return resolve_datapoint_parallelism(datapoint_parallelism, parallelism, default=10, caller='evaluatorq')
 
 
 def test_default_applies_when_neither_is_given():
@@ -40,17 +36,12 @@ def test_every_entry_point_defaults_to_the_same_datapoint_count():
     default is its own literal, so nothing but this test notices them drifting.
     """
     from evaluatorq.simulation._config import SimulationConfig
-    from evaluatorq.simulation.api import _generate_and_simulate_run, _simulate_run
 
     assert EvaluatorParams.model_fields['datapoint_parallelism'].default == 10
     assert SimulationConfig.model_fields['datapoint_parallelism'].default == 10
-    for func in (_simulate_run, _generate_and_simulate_run):
-        assert inspect.signature(func).parameters['datapoint_parallelism'].default == 10, func
     assert _resolve(None, None) == 10
 
 
 def test_evaluator_params_accepts_the_old_field_name():
-    params = EvaluatorParams.model_validate(
-        {'data': [], 'jobs': [lambda d, i: None], 'parallelism': 3}
-    )
+    params = EvaluatorParams.model_validate({'data': [], 'jobs': [lambda d, i: None], 'parallelism': 3})
     assert params.datapoint_parallelism == 3

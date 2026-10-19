@@ -4,22 +4,19 @@ import os
 import stat
 import subprocess
 from pathlib import Path
+from typing import Any
 
-from click import unstyle
 import pytest
 from typer.testing import CliRunner
 
 from evaluatorq.backends.coding_agent_cli import BUILD_DIR, app
 from evaluatorq.backends.container import DEFAULT_CODING_AGENT_IMAGE
-
-pytestmark = pytest.mark.skipif(os.name != 'posix', reason='requires Unix shell tooling')
-
+from tests.backends.fakes import install_fake
 
 def test_build_image_argv(tmp_path: Path) -> None:
     log = tmp_path / 'log'
-    fake = tmp_path / 'docker'
-    fake.write_text(f'#!/bin/sh\nfor arg do printf "[%s]\\n" "$arg"; done > {log}\nexit 3\n')
-    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    source = f'import sys\nopen({str(log)!r}, "w").writelines(f"[{{a}}]\\n" for a in sys.argv[1:])\nsys.exit(3)\n'
+    fake = install_fake(tmp_path, 'docker', source)
     result = CliRunner().invoke(
         app,
         [
@@ -48,19 +45,28 @@ def test_build_image_argv(tmp_path: Path) -> None:
     ]
 
 
-def test_build_image_missing_binary(tmp_path: Path) -> None:
-    missing = str(tmp_path / 'missing-docker')
-    result = CliRunner().invoke(app, ['build-image', '--binary', missing])
+def test_build_image_missing_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    missing = tmp_path / 'missing-docker'
+    assert not missing.exists()
+    real_popen = subprocess.Popen
+    started: list[subprocess.Popen[str] | subprocess.Popen[bytes]] = []
+
+    def observe_popen(args: list[str], **kwargs: Any) -> subprocess.Popen[str] | subprocess.Popen[bytes]:
+        process = real_popen(args, **kwargs)
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, 'Popen', observe_popen)
+    result = CliRunner().invoke(app, ['build-image', '--binary', str(missing)])
     assert result.exit_code == 2
-    output = ' '.join(unstyle(result.output).split())
-    assert 'Invalid value for --binary' in output
-    assert 'not' in output and 'found on PATH' in output
+    assert not started
 
 
 def test_build_dir_ships_both_files() -> None:
     assert (BUILD_DIR / 'Dockerfile').is_file() and (BUILD_DIR / 'entrypoint.sh').is_file()
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='entrypoint.sh runs inside a Linux container')
 def test_entrypoint_is_idempotent_and_execs(tmp_path: Path) -> None:
     passwd = tmp_path / 'passwd'
     passwd.write_text('root:x:0:0::/root:/bin/sh\n')

@@ -15,7 +15,7 @@ import pytest
 from evaluatorq.contracts import AgentResponse, InputTextContent, TokenUsage
 from evaluatorq.simulation.runner import simulation as runner_mod
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario, SimulationDatapoint
+from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario, SimulationDatapoint
 
 pytestmark = pytest.mark.asyncio
 

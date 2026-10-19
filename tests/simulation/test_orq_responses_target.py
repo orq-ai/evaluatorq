@@ -311,6 +311,7 @@ class TestOrqResponsesTargetRespond:
             [
                 Message(role="user", content="hi"),
                 Message(role="assistant", content="let me check", tool_calls=[tool_call]),
+                Message(role="tool", tool_call_id="c1", content="ok"),
             ]
         )
 
@@ -1022,7 +1023,8 @@ class TestOrqResponsesTargetClose:
         owned_client.close = AsyncMock()
         monkeypatch.setattr(
             target_mod, "build_simulation_client",
-            lambda _client, **_: (owned_client, True),  # pyright: ignore[reportUnknownLambdaType]
+
+            lambda _client, **_: (owned_client, True),
         )
         t = OrqResponsesTarget(LLMCallConfig(model="m", api="responses"))
 
@@ -1048,7 +1050,8 @@ class TestOrqResponsesTargetClose:
         owned_client.close = AsyncMock()
         monkeypatch.setattr(
             target_mod, "build_simulation_client",
-            lambda _client, **_: (owned_client, True),  # pyright: ignore[reportUnknownLambdaType]
+
+            lambda _client, **_: (owned_client, True),
         )
         t = OrqResponsesTarget(LLMCallConfig(model="m", api="responses"))
 
@@ -1065,7 +1068,8 @@ class TestOrqResponsesTargetClose:
         owned_client.close = AsyncMock()
         monkeypatch.setattr(
             target_mod, "build_simulation_client",
-            lambda _client, **_: (owned_client, True),  # pyright: ignore[reportUnknownLambdaType]
+
+            lambda _client, **_: (owned_client, True),
         )
 
         async with OrqResponsesTarget(LLMCallConfig(model="m", api="responses")) as t:

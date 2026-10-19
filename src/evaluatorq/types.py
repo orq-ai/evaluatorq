@@ -49,7 +49,7 @@ class EvaluationResult(BaseModel):
 
     model_config: ClassVar[ConfigDict] = {'populate_by_name': True}
 
-    value: str | int | float | bool | EvaluationResultCell | dict[str, Any]
+    value: str | int | float | bool | EvaluationResultCell | dict[str, Any] | None
     explanation: str | None = None
     pass_: bool | None = Field(default=None, alias='pass')
     # Optional evaluator-cost metadata: a scorer that calls an LLM judge can report
@@ -63,7 +63,7 @@ class EvaluationResult(BaseModel):
     @field_serializer('value', when_used='json')
     def serialize_value(
         self,
-        value: str | float | bool | EvaluationResultCell | dict[str, Any],  # noqa: FBT001
+        value: str | float | bool | EvaluationResultCell | dict[str, Any] | None,  # noqa: FBT001
     ) -> Any:
         if isinstance(value, dict) and not _is_evaluation_result_cell_dict(value):
             return json.dumps(value, default=_json_default)

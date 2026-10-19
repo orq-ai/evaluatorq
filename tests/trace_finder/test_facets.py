@@ -72,6 +72,8 @@ async def test_load_facet_catalogue_gathers_all_fields_and_resolves_projects() -
     assert catalogue.trace_type == ('span.responses',)
     assert catalogue.agent_name == ('support-agent',)
     assert catalogue.tool_name == ('lookup',)
+    # Orq returned no per-value counts, so no facet claims one.
+    assert catalogue.value_counts == {}
     assert {call['field'] for call in client.traces.calls} == {
         'project_id',
         'model',
@@ -93,7 +95,10 @@ async def test_duplicate_project_names_keep_distinct_id_labels() -> None:
 
     async def facets(**kwargs: object) -> object:
         if kwargs['field'] == 'project_id':
-            return SimpleNamespace(values=[SimpleNamespace(value=name) for name in ('project-1', 'project-2')], has_more=False)
+            return SimpleNamespace(
+                values=[SimpleNamespace(value=name, count=n) for name, n in (('project-1', 3), ('project-2', 8))],
+                has_more=False,
+            )
         return await original_facets(**kwargs)
 
     async def projects(**kwargs: object) -> object:
@@ -102,13 +107,14 @@ async def test_duplicate_project_names_keep_distinct_id_labels() -> None:
             has_more=False,
         )
 
-    client.traces.list_facet_values_async = facets
-    client.projects.list_async = projects
+    client.traces.list_facet_values_async = facets  # ty: ignore[invalid-assignment]
+    client.projects.list_async = projects  # ty: ignore[invalid-assignment]
     now = datetime(2026, 9, 22, tzinfo=timezone.utc)
 
     catalogue = await load_facet_catalogue(cast(Any, client), start=now, end=now)
 
-    assert catalogue.project == ('Research (project-1)', 'Research (project-2)')
+    assert catalogue.project == ('Research (project-2)', 'Research (project-1)')
+    assert catalogue.value_counts['project'] == {'Research (project-2)': 8, 'Research (project-1)': 3}
 
 
 @pytest.mark.asyncio
@@ -136,7 +142,7 @@ async def test_load_facet_catalogue_keeps_ranked_values_when_one_facet_overflows
             )
         return await original_facets(**kwargs)
 
-    client.traces.list_facet_values_async = facets
+    client.traces.list_facet_values_async = facets  # ty: ignore[invalid-assignment]
     start = datetime(2026, 9, 1, tzinfo=timezone.utc)
 
     catalogue = await load_facet_catalogue(cast(Any, client), start=start, end=start)
@@ -144,6 +150,7 @@ async def test_load_facet_catalogue_keeps_ranked_values_when_one_facet_overflows
     assert catalogue.status == ('common', 'middle', 'rare')
     assert catalogue.project == ('Research',)
     assert catalogue.truncated_facets == frozenset({'status'})
+    assert catalogue.value_counts == {'status': {'common': 25, 'middle': 4, 'rare': 1}}
 
 
 @pytest.mark.asyncio

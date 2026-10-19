@@ -73,6 +73,12 @@ def test_noop_filter_reproduces_summary_and_sections():
     rebuilt = rebuild_filtered_report(report, report.results)
 
     assert rebuilt.summary.model_dump() == report.summary.model_dump()
+    assert rebuilt.summary.total_attacks == 3
+    assert rebuilt.summary.evaluated_attacks == 2
+    assert rebuilt.summary.unevaluated_attacks == 1
+    assert rebuilt.summary.vulnerabilities_found == 1
+    assert rebuilt.summary.vulnerability_rate == 0.5
+    assert rebuilt.summary.resistance_rate == 0.5
     assert rebuilt.total_results == report.total_results
     assert rebuilt.categories_tested == report.categories_tested
     assert [s.kind for s in build_report_sections(rebuilt)] == [s.kind for s in build_report_sections(report)]
@@ -111,6 +117,9 @@ def test_category_filter_shrinks_aggregates() -> None:
     assert rebuilt.total_results == 2
     assert rebuilt.categories_tested == ['ASI01']
     assert rebuilt.summary.total_attacks == 2
+    assert rebuilt.summary.evaluated_attacks == 2
+    assert rebuilt.summary.vulnerabilities_found == 1
+    assert rebuilt.summary.vulnerability_rate == 0.5
     # Original metadata preserved.
     assert rebuilt.created_at == report.created_at
     assert rebuilt.pipeline == report.pipeline

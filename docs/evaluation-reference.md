@@ -81,6 +81,29 @@ await evaluatorq(
 )
 ```
 
+### What a job can return
+
+A job's return value is its output, typed as `Output`:
+
+```python
+Output = str | int | float | bool | dict[str, Any] | list[Message] | AgentResponse | None
+```
+
+A job that produces structured data can return a dict instead of flattening it into a string. Scorers receive it unchanged as `params["output"]`, so they can read fields directly:
+
+```python
+@job("extract")
+async def extract(data: DataPoint, _row: int) -> dict:
+    return {"city": data.inputs["text"].split()[-1], "confidence": 0.9}
+
+
+async def city_correct(params: ScorerParameter) -> EvaluationResult:
+    output = params["output"]  # the dict above, not a string
+    return EvaluationResult(value=output["city"] == params["data"].expected_output)
+```
+
+On the way out (the Orq upload and JSON result dumps) a dict output is serialized with `json.dumps`, so the platform shows it as a JSON string. The exception is a dict with `"object": "response"`, which is an OpenResponses payload and is sent as-is. Pydantic models inside the dict are dumped to dicts first; anything else that is not JSON-serializable becomes its `str()`.
+
 ### Reporting a failure the job handled
 
 A job that lets a failure raise needs nothing: `process_job` records it and the row counts as failed. A job that *catches* its failure to keep the rest of the batch alive — a target that answered `401`, a simulation the runner ended in `error` — must say so, because a returned dict looks like a clean run:
@@ -234,6 +257,8 @@ results = await evaluatorq(
 Evaluatorq skips jobs and sends the trace's recorded output to your evaluators — `TraceInput` resolves `inference=False` on its own, so there is no need to pass it. An exact span is parsed on its own; a trace or query selection starts from the latest eligible non-evaluator span and follows parents until it finds messages. Chat Completions, Responses, and OpenTelemetry GenAI messages are accepted from top-level span input/output, flat or nested span attributes, and span event attributes. A query that matches no traces logs a warning, and `evaluatorq()` raises rather than running a green zero-row evaluation.
 
 `orq_evaluator` needs the Orq SDK, which the `evaluatorq[orq]` extra installs (`uv add "evaluatorq[orq]"`) — a base evaluatorq install already carries it, but name the extra explicitly rather than relying on that. `evaluator_id` is required and keyword-only. It identifies an evaluator that already exists in Orq and determines the evaluatorq result name (`orq:eval-1` when `model` is omitted, `orq:eval-1@<model>` when you set one); there is no separate `name=` override. `model=` is optional and overrides the configured model only for model-backed evaluators; deterministic built-ins do not need it. A missing trace response is an error, not a clean score, so check the returned results before trusting a rate.
+
+`orq_evaluator` also scores agent simulation runs, for example `evaluatorq(..., jobs=[wrap_simulation_agent(...)], evaluators=[orq_evaluator(evaluator_id='eval-1')])`. When the datapoint inputs have no `messages` and no string `query`, it reads the conversation from the simulation output: the final simulated-customer turn is sent as `query`, every earlier turn as `messages`, and the agent's final turn, tool calls included, as `output`. When the simulated conversation ends on a customer turn (error or timeout), `output` is empty because the agent never replied.
 
 ## Built-in evaluators
 

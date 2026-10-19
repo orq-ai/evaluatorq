@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reusable dashboard components · evaluatorq</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <link rel="stylesheet" href="/static/ui-components.css">
+  <script src="/static/ui-components.js" defer></script>
+  <style>
+    body { margin:0; background:var(--surface-app); }
+    main { max-width:760px; margin:40px auto; padding:0 20px 40px; }
+    h1 { font:600 24px/1.3 var(--font-sans); margin:0 0 8px; }
+    h2 { font:600 15px/1.5 var(--font-sans); margin:28px 0 10px; }
+    .example-note { color:var(--text-body); max-width:65ch; }
+    .example-foldout { border-bottom:1px solid var(--border-default); }
+    .example-foldout>summary { font-weight:600; }
+    .example-foldout>div { padding:4px 0 12px; }
+    .example-checks { margin-top:18px; }
+  </style>
+</head>
+<body>
+  <main class="eq-components">
+    <h1>Reusable dashboard components</h1>
+    <p class="example-note">Foldouts, result feedback, and precondition lists rendered without the Signals component. Everything below uses fixed example data.</p>
+    <h2>Result feedback</h2>
+    <div id="feedback-example"></div>
+    <h2>Nested foldouts and preconditions</h2>
+    <div id="foldout-example"></div>
+    <p class="example-note">Use Enter or Space to open a foldout. Evidence opens independently from its parent.</p>
+  </main>
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const ui = window.EvaluatorqComponents;
+      document.getElementById('feedback-example').innerHTML = ui.resultFeedback({
+        value: 0, outcome: 'Warnings', tone: 'positive', numeric: true,
+        reason: 'A recorded zero stays visible beside its outcome.',
+      });
+      const checks = ui.preconditionList([
+        {name: 'Source present', met: true, required: true, detail: 'The example includes an input document.'},
+        {name: 'Optional coverage', met: 'partial', required: false, detail: 'One optional field is missing.'},
+        {name: 'Extra check', met: false, required: false, detail: 'This optional check was not satisfied.'},
+      ]);
+      const evidence = ui.foldout({key: 'example:evidence', className: 'example-foldout',
+        summaryHtml: '<span>Evidence</span>', bodyHtml: '<p class="example-note">An independent foldout can contain a transcript, references, or other trusted markup.</p>'});
+      document.getElementById('foldout-example').innerHTML = ui.foldout({
+        key: 'example:validation', className: 'example-foldout', summaryHtml: '<span>Validation checks</span>',
+        bodyHtml: '<div>' + checks + evidence + '</div>',
+      });
+    });
+  </script>
+</body>
+</html>

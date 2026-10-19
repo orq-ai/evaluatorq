@@ -1,10 +1,12 @@
 """The user's line opens the turn it belongs to, not the tail of the previous one."""
 
+import typing
+
 import pytest
 
 from evaluatorq.contracts import AgentResponse, TokenUsage
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import CommunicationStyle, Judgment, Persona, Scenario
+from evaluatorq.simulation.contracts import CommunicationStyle, Judgment, Persona, Scenario
 
 
 class _NeverTerminatingJudge:
@@ -54,8 +56,8 @@ async def test_user_simulator_runs_at_the_head_of_each_later_turn():
     runner = SimulationRunner(
         target=target,
         max_turns=3,
-        user_simulator=_RecordingSimulator(log),  # pyright: ignore[reportArgumentType]
-        judge=_NeverTerminatingJudge(),  # pyright: ignore[reportArgumentType]
+        user_simulator=typing.cast(typing.Any, _RecordingSimulator(log)),
+        judge=typing.cast(typing.Any, _NeverTerminatingJudge()),
     )
     try:
         result = await runner.run(

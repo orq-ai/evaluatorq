@@ -103,9 +103,15 @@ def test_mcp_and_custom_tool_calls_map_to_tool_calls() -> None:
         {'type': 'custom_tool_call_output', 'call_id': 'k1', 'output': 'match'},
     ])
     assert messages[0]['parts'][0] == {'type': 'tool_call', 'id': 'm1', 'name': 'search', 'arguments': {}}
-    assert messages[1] == {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'm1', 'response': {'error': 'boom'}}]}
+    assert messages[1] == {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'm1', 'response': {'status': 'failed', 'error': 'boom'}}]}
     assert messages[2]['parts'][0] == {'type': 'tool_call', 'id': 'k1', 'name': 'grep', 'arguments': 'pattern'}
     assert messages[3] == {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'k1', 'response': 'match'}]}
+
+
+def test_mcp_call_uses_sdk_name_in_input_and_output_messages() -> None:
+    item = {'type': 'mcp_call', 'id': 'm1', 'name': 'search', 'arguments': '{}', 'server_label': 'srv'}
+    assert items_to_input_messages([item])[0]['parts'][0]['name'] == 'search'
+    assert items_to_output_messages([item])[0]['parts'][0]['name'] == 'search'
 
 
 def test_output_messages_carry_finish_reason_and_drop_tool_results() -> None:
@@ -139,3 +145,58 @@ def test_request_span_records_parts_in_gen_ai_and_raw_items_in_openresponses() -
     # The raw items stay verbatim under the key Orq's gateway uses for them.
     assert json.loads(str(attrs['openresponses.input'])) == _TOOL_TRANSCRIPT
     assert attrs['gen_ai.system_instructions'] == 'be brief'
+
+
+_SPLIT_CALL = {'type': 'function_call', 'id': 'fc_1', 'call_id': 'c1', 'name': 'refund', 'arguments': '{"order": "a2"}'}
+_SPLIT_RESULT = {'type': 'orq:refund', 'id': 'orq_9', 'call_id': 'c1', 'result': {'ok': False}}
+
+
+def test_split_orq_pair_is_one_tool_call_with_its_result() -> None:
+    messages = items_to_input_messages([_SPLIT_CALL, _SPLIT_RESULT])
+
+    assert [m['role'] for m in messages] == ['assistant', 'tool']
+    assert messages[0]['parts'] == [{'type': 'tool_call', 'id': 'c1', 'name': 'refund', 'arguments': {'order': 'a2'}}]
+    assert messages[1]['parts'] == [{'type': 'tool_call_response', 'id': 'c1', 'response': {'ok': False}}]
+
+
+def test_reordered_split_pair_gives_the_same_messages() -> None:
+    assert items_to_input_messages([_SPLIT_RESULT, _SPLIT_CALL]) == items_to_input_messages([_SPLIT_CALL, _SPLIT_RESULT])
+
+
+def test_split_pair_in_output_is_one_call_part_and_no_result() -> None:
+    messages = items_to_output_messages([_SPLIT_CALL, _SPLIT_RESULT], 'stop')
+
+    assert len(messages) == 1
+    assert messages[0]['parts'] == [{'type': 'tool_call', 'id': 'c1', 'name': 'refund', 'arguments': {'order': 'a2'}}]
+
+
+def test_unmatched_orq_record_keeps_its_result_and_omits_arguments() -> None:
+    messages = items_to_input_messages([{'type': 'orq:refund', 'call_id': 'c9', 'result': 'ok'}])
+
+    assert messages[0]['parts'] == [{'type': 'tool_call', 'id': 'c9', 'name': 'refund'}]
+    assert messages[1]['parts'] == [{'type': 'tool_call_response', 'id': 'c9', 'response': 'ok'}]
+
+
+def test_parallel_native_calls_keep_their_order_in_input_messages() -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call', 'call_id': 'b', 'name': 'x', 'arguments': '{}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'ra'},
+        {'type': 'function_call_output', 'call_id': 'b', 'output': 'rb'},
+    ]
+    messages = items_to_input_messages(items)
+    assert [(m['parts'][0]['type'], m['parts'][0]['id']) for m in messages] == [
+        ('tool_call', 'a'),
+        ('tool_call', 'b'),
+        ('tool_call_response', 'a'),
+        ('tool_call_response', 'b'),
+    ]
+
+
+def test_unpaired_failed_native_output_reaches_input_messages_as_a_failure() -> None:
+    (message,) = items_to_input_messages([
+        {'type': 'function_call_output', 'call_id': 'z', 'output': 'x', 'error': 'boom'},
+    ])
+    response = message['parts'][0]['response']
+    assert response['status'] == 'failed'
+    assert response['error'] == 'boom'

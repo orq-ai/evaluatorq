@@ -26,7 +26,7 @@ def test_agent_response_carries_error_and_text():
 def test_agent_response_error_is_frozen():
     err = AgentResponseError(message="m", error_type="timeout")
     with pytest.raises(ValidationError):
-        err.message = "changed"  # type: ignore[misc]
+        err.message = "changed"  # ty: ignore[invalid-assignment]
 
 
 def test_agent_response_error_code_optional():

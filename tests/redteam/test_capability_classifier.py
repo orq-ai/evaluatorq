@@ -1,5 +1,6 @@
 """Unit tests for capability classifier."""
 
+import typing
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -241,7 +242,7 @@ async def test_both_classifier_calls_forward_the_attacker_reasoning_effort():
     seen: list[str | None] = []
 
     async def _record(**kwargs: object) -> tuple[MagicMock, None]:
-        seen.append(kwargs.get('reasoning_effort'))  # pyright: ignore[reportArgumentType]
+        seen.append(typing.cast(typing.Any, kwargs.get('reasoning_effort')))
         model = kwargs.get('response_model')
         if model is ResourceCapabilityInference:
             return _mock_resource_response(), None

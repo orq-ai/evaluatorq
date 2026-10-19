@@ -24,7 +24,7 @@ Charts are Vega-Lite specs rendered server-side to SVG via the shared
 from __future__ import annotations
 
 import operator
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +32,7 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects at runtime
 from starlette.responses import Response
 
+from evaluatorq.common.matching import pair_indices_by_key
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.html_helpers import kpi_cards, pct
 from evaluatorq.common.reports.palette import COLORS
@@ -43,7 +44,7 @@ from evaluatorq.dashboard.view import _panel, report_back_link
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from evaluatorq.simulation.types import SimulationEntry, SimulationRun
+    from evaluatorq.simulation.contracts import SimulationEntry, SimulationRun
 
 _UP = COLORS['success_400']  # improved / higher in B
 _DOWN = COLORS['red_400']  # regressed / lower in B
@@ -194,29 +195,16 @@ def match_entries(entries_a: list[SimulationEntry], entries_b: list[SimulationEn
     etc.) — an approximation surfaced by the low-overlap note on the page; any
     leftovers on either side fall into ``a_only`` / ``b_only``.
     """
-    by_key_b: dict[tuple[str, str], list[SimulationEntry]] = defaultdict(list)
-    for e in entries_b:
-        by_key_b[e.persona, e.scenario].append(e)
-
-    matched: list[MatchedPair] = []
-    a_only: list[SimulationEntry] = []
-    consumed_b: set[int] = set()
-    cursor: dict[tuple[str, str], int] = defaultdict(int)
-
-    for ea in entries_a:
-        key = (ea.persona, ea.scenario)
-        bucket = by_key_b.get(key, [])
-        i = cursor[key]
-        if i < len(bucket):
-            eb = bucket[i]
-            cursor[key] = i + 1
-            consumed_b.add(id(eb))
-            matched.append(MatchedPair(ea, eb))
-        else:
-            a_only.append(ea)
-
-    b_only = [e for e in entries_b if id(e) not in consumed_b]
-    return Matching(matched, a_only, b_only)
+    matched_indices, a_only_indices, b_only_indices = pair_indices_by_key(
+        entries_a,
+        entries_b,
+        key=lambda entry: (entry.persona, entry.scenario),
+    )
+    return Matching(
+        [MatchedPair(entries_a[i], entries_b[j]) for i, j in matched_indices],
+        [entries_a[i] for i in a_only_indices],
+        [entries_b[i] for i in b_only_indices],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -523,8 +511,8 @@ def render_compare_page(rid_a: str, rid_b: str, run_a: SimulationRun, run_b: Sim
 # ---------------------------------------------------------------------------
 
 
-def _resolve_run(rid: str, roots: list[Path] | None) -> tuple[str, Any | None]:
-    """Load a sim run by report id.
+def resolve_run(rid: str, roots: list[Path] | None, surface: str) -> tuple[str, Any | None]:
+    """Load a run of the given *surface* ('sim' or 'pairwise') by report id.
 
     Returns ``('ok', run)``, ``('missing', None)`` when the id resolves to no
     file or a valid-but-non-sim report, or ``('error', None)`` when a matching
@@ -543,29 +531,30 @@ def _resolve_run(rid: str, roots: list[Path] | None) -> tuple[str, Any | None]:
     # Strict read: a corrupt/unreadable file must surface as an error, not be masked
     # as an unknown surface (which load_surface does for lenient directory scans).
     try:
-        surface, _raw = library.load_surface_strict(path)
-    except (json.JSONDecodeError, OSError):
-        logger.opt(exception=True).warning('compare: corrupt/unreadable sim report {}', rid)
+        found, _raw = library.load_surface_strict(path)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        logger.opt(exception=True).warning('compare: corrupt/unreadable {} report {}', surface, rid)
         return 'error', None
-    if surface != 'sim':
+    if found != surface:
         return 'missing', None
-    adapter = ADAPTERS.get('sim')
+    adapter = ADAPTERS.get(surface)
     if adapter is None:
         return 'missing', None
     try:
         return 'ok', adapter.load(path)
     except Exception:
-        logger.opt(exception=True).warning('compare: failed to load sim report {}', rid)
+        logger.opt(exception=True).warning('compare: failed to load {} report {}', surface, rid)
         return 'error', None
 
 
-def _error_page(message: str, status: int) -> Response:
+def error_page(message: str, status: int, surface: str) -> Response:
+    """Full-page compare error for *surface* ('sim' or 'pairwise')."""
     body = (
         '<header class="report-hero"><h2 class="report-hero-title">Run comparison</h2></header>'
         f'<p class="sim-empty">{esc(message)}</p>'
     )
     return Response(
-        page('Compare', body, active_surface='sim', back_html=report_back_link('sim')),
+        page('Compare', body, active_surface=surface, back_html=report_back_link(surface)),
         status_code=status,
         media_type='text/html',
     )
@@ -584,18 +573,18 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
         rid_a = req.query_params.get('a') or ''
         rid_b = req.query_params.get('b') or ''
         if not rid_a or not rid_b:
-            return _error_page('Pick two runs to compare.', 400)
+            return error_page('Pick two runs to compare.', 400, 'sim')
         if rid_a == rid_b:
-            return _error_page('Pick two different runs to compare.', 400)
+            return error_page('Pick two different runs to compare.', 400, 'sim')
 
-        status_a, run_a = _resolve_run(rid_a, roots)
-        status_b, run_b = _resolve_run(rid_b, roots)
+        status_a, run_a = resolve_run(rid_a, roots, 'sim')
+        status_b, run_b = resolve_run(rid_b, roots, 'sim')
         if 'error' in (status_a, status_b):
             which = 'A' if status_a == 'error' else 'B'
-            return _error_page(f'Run {which} could not be loaded (the report may be corrupt).', 422)
+            return error_page(f'Run {which} could not be loaded (the report may be corrupt).', 422, 'sim')
         if run_a is None or run_b is None:
             which = 'A' if run_a is None else 'B'
-            return _error_page(f'Run {which} was not found or is not a simulation run.', 404)
+            return error_page(f'Run {which} was not found or is not a simulation run.', 404, 'sim')
 
         body = render_compare_page(rid_a, rid_b, run_a, run_b)
         return Response(
@@ -614,8 +603,8 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
                 '<p class="sim-empty">Invalid conversation index.</p>', status_code=400, media_type='text/html'
             )
 
-        status_a, run_a = _resolve_run(rid_a, roots)
-        status_b, run_b = _resolve_run(rid_b, roots)
+        status_a, run_a = resolve_run(rid_a, roots, 'sim')
+        status_b, run_b = resolve_run(rid_b, roots, 'sim')
         if 'error' in (status_a, status_b):
             return Response(
                 '<p class="sim-empty">A run could not be loaded (report may be corrupt).</p>',
@@ -634,4 +623,8 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
                 '<p class="sim-empty">No conversation at that index.</p>', status_code=404, media_type='text/html'
             )
 
-        return Response(render_compare_transcript(ea, eb, run_a.run_name, run_b.run_name), media_type='text/html')
+        from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
+
+        with cli_slug_render_scope():
+            body = render_compare_transcript(ea, eb, run_a.run_name, run_b.run_name)
+        return Response(body, media_type='text/html')

@@ -27,6 +27,7 @@ keeping the test hermetic.
 
 from __future__ import annotations
 
+import typing
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,7 +35,6 @@ import pytest
 from evaluatorq.redteam.backends.base import HybridAgentBackend
 from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
 from evaluatorq.redteam.backends.registry import make_agent_backend
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -97,7 +97,7 @@ class TestMakeAgentBackend:
 
         target = hybrid.create_target("my-agent")
         # OrqResponsesTarget stores the model in its config
-        assert target.config.model == "agent/my-agent"  # pyright: ignore[reportAttributeAccessIssue]
+        assert typing.cast(typing.Any, target).config.model == "agent/my-agent"
 
     @pytest.mark.asyncio
     async def test_resolve_context_delegates_to_orq_backend_with_bare_key(self):
@@ -181,4 +181,5 @@ class TestExecBackendRequiresOrq:
         backend = OpenResponsesBackend(client=None)
         target = backend.create_target("agent/my-agent")
 
-        assert client_routes_through_orq(target._client) is True  # pyright: ignore[reportAttributeAccessIssue]
+
+        assert client_routes_through_orq(target._client) is True

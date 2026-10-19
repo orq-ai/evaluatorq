@@ -101,6 +101,7 @@ def test_delimit_preserves_ordinary_angle_brackets_and_code_samples(payload: str
         ('<' + ' ' * 998 + 'x') * 250,
         '<data' * 50_000,
     ],
+    ids=['long-spaces-after-angle', 'many-repeated-blocks', 'repeated-data-tag'],
 )
 def test_delimit_rejects_superlinear_tag_prefix_scans(payload: str):
     """Large near-misses must not make untrusted prompt content expensive."""
@@ -246,7 +247,7 @@ async def test_datapoint_system_prompt_always_rebuilt():
     """Verify that SimulationRunner.run() rebuilds the system prompt from
     persona + scenario even when the datapoint carries a cached
     user_system_prompt value (JSONL bypass fix)."""
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Persona,
         Scenario,

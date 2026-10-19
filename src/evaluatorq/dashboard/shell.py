@@ -17,12 +17,33 @@ The CSS layers, in cascade order, are:
 from __future__ import annotations
 
 import base64
+import functools
+import hashlib
 from pathlib import Path
 
 from evaluatorq.common.reports import esc, load_css
 from evaluatorq.dashboard.styles import DASHBOARD_CSS
 from evaluatorq.dashboard.theme import EDITORIAL_CSS
 from evaluatorq.dashboard.view import PAIRWISE_ICON_PATH, SURFACE_LABELS, head_assets
+from evaluatorq.trace_finder.settings import load_settings
+
+
+@functools.cache
+def dashboard_css() -> str:
+    """The three CSS layers above as one stylesheet, served at ``dashboard_css_href()``."""
+    return f'{load_css()}\n{EDITORIAL_CSS}\n{DASHBOARD_CSS}\n'
+
+
+@functools.cache
+def dashboard_css_version() -> str:
+    """Content hash of ``dashboard_css()``; the ``v`` query value that marks a URL as safe to cache forever."""
+    return hashlib.sha256(dashboard_css().encode()).hexdigest()[:12]
+
+
+def dashboard_css_href() -> str:
+    """Content-hashed URL, so the browser caches the ~500KB sheet once instead of every page inlining it."""
+    return f'/static/dashboard.css?v={dashboard_css_version()}'
+
 
 # Sidebar collapse: runs at body-top so the class lands on <html> before the
 # sidebar paints (no flash). State persists in localStorage across the full-page
@@ -33,21 +54,43 @@ _SIDEBAR_TOGGLE_SCRIPT = (
     "(function(){try{if(localStorage.getItem('eq-sidebar-collapsed')==='1')"
     "document.documentElement.classList.add('sidebar-collapsed');}catch(e){}})();"
     'function eqToggleSidebar(){'
-    "var c=document.documentElement.classList.toggle('sidebar-collapsed');"
+    "const c=document.documentElement.classList.toggle('sidebar-collapsed');"
     "try{localStorage.setItem('eq-sidebar-collapsed',c?'1':'0');}catch(e){}}"
     "document.addEventListener('keydown',function(e){"
     "if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&e.key.toLowerCase()==='b')"
     '{e.preventDefault();eqToggleSidebar();}});'
     'function eqFinderTab(el,id){'
-    "var root=el.closest('.rt-drawer');if(!root)return;"
+    "const root=el.closest('.rt-drawer');if(!root)return;"
     "root.querySelectorAll('.fd-tabs [data-panel]').forEach(function(tab){tab.classList.toggle('on',tab===el);});"
-    "root.querySelectorAll('.fd-panel').forEach(function(panel){panel.hidden=panel.id!==id;});}"
+    "let panels=root.querySelectorAll('.fd-technical .fd-panel');if(!panels.length)panels=root.querySelectorAll('.fd-panel');"
+    'panels.forEach(function(panel){panel.hidden=panel.id!==id;});}'
+    'function eqFinderTraceTab(el,id){'
+    "const root=el.closest('.fd-traces');if(!root)return;"
+    "root.querySelectorAll('.fd-tabs button').forEach(function(tab){tab.classList.toggle('on',tab===el);});"
+    "root.querySelectorAll(':scope > .fd-panel').forEach(function(panel){panel.hidden=panel.id!==id;});}"
     # Non-Mac shows "Ctrl B" instead of the ⌘B glyph on the hotkey hint.
     'if(!/Mac|iPhone|iPad/.test(navigator.platform)){'
     "document.addEventListener('DOMContentLoaded',function(){"
     "document.querySelectorAll('.sidebar-toggle-kbd').forEach("
     "function(k){k.textContent='Ctrl B';});});}"
     '</script>\n'
+)
+
+_AUTH_TOAST_SCRIPT = (
+    '<script>'
+    "document.addEventListener('DOMContentLoaded',function(){"
+    "fetch('/auth/status',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(s){"
+    "if(s.status==='valid')return;"
+    "const id='eq-auth-toast:'+s.method+':'+s.status+':'+s.message;"
+    "try{if(sessionStorage.getItem(id))return;sessionStorage.setItem(id,'1');}catch(e){}"
+    "const toast=document.getElementById('eq-auth-toast');if(!toast)return;"
+    "toast.querySelector('.eq-auth-toast-message').textContent=s.message;"
+    "toast.hidden=false;toast.classList.toggle('is-warning',s.status==='unavailable');"
+    'const close=function(){toast.hidden=true};'
+    "toast.querySelector('button').addEventListener('click',close,{once:true});"
+    'setTimeout(close,12000);'
+    '}).catch(function(){});});'
+    '</script>'
 )
 
 # The v1 brand mark (orq ink-nodes logomark), vendored from the design system.
@@ -71,6 +114,7 @@ def _load_mark() -> str:
 _FAVICON_PATH = Path(__file__).parent / 'static' / 'orq-favicon.svg'
 _favicon_cache: str | None = None
 FIND_ICON = '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><circle cx="11" cy="11" r="2"/>'
+TRACE_ICON = '<path d="M3 12h3l3-8 6 16 3-8h3"/>'
 
 
 def _favicon_link() -> str:
@@ -123,6 +167,13 @@ _NAV: list[tuple[str, str, str, str]] = [
         FIND_ICON,
     ),
     (
+        'traces',
+        'Traces',
+        '/traces',
+        TRACE_ICON,
+    ),
+    ('insights', 'Insights', '/insights', '<path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 6-7"/>'),
+    (
         'settings',
         'Settings',
         '/settings',
@@ -131,23 +182,29 @@ _NAV: list[tuple[str, str, str, str]] = [
 ]
 
 
-def _icon(path_data: str) -> str:
+def icon(path_data: str, *, cls: str = 'nav-icon', size: int = 16) -> str:
     return (
-        '<svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        f'<svg class="{cls}" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
         f'{path_data}</svg>'
     )
 
 
-def _sidebar_html(active_nav: str) -> str:
+def _sidebar_html(active_nav: str, *, compression_inspector_enabled: bool) -> str:
     # The v1 brand lockup is the orq mark (not the full wordmark) + the
     # "evaluatorq" wordmark with an orange "q".
     mark = _load_mark()
     logo_html = f'<span class="nav-mark">{mark}</span>' if mark else ''
     items: list[str] = []
-    for key, label, href, icon in _NAV:
+    for key, label, href, icon_path in _NAV:
+        if key == 'settings' and compression_inspector_enabled:
+            inspector_active = ' active' if active_nav == 'compression-inspector' else ''
+            items.append(
+                f'<a class="nav-item{inspector_active}" href="/compression-inspector">'
+                f'{icon(TRACE_ICON)}<span>Compression inspector</span></a>'
+            )
         active = ' active' if key == active_nav else ''
-        items.append(f'<a class="nav-item{active}" href="{href}">{_icon(icon)}<span>{esc(label)}</span></a>')
+        items.append(f'<a class="nav-item{active}" href="{href}">{icon(icon_path)}<span>{esc(label)}</span></a>')
     return (
         '<aside class="app-sidebar">'
         f'<a class="app-brand" href="/">{logo_html}'
@@ -162,6 +219,11 @@ def _sidebar_html(active_nav: str) -> str:
         '<kbd class="sidebar-toggle-kbd">⌘ B</kbd></button>'
         '</aside>'
     )
+
+
+def current_sidebar_html(active_nav: str) -> str:
+    """Render the sidebar for the saved settings, for pages that change them in place."""
+    return _sidebar_html(active_nav, compression_inspector_enabled=load_settings().compression_inspector_enabled)
 
 
 def _resolve_nav(active_surface: str | None, active_nav: str | None) -> str:
@@ -180,6 +242,9 @@ def page(
     active_nav: str | None = None,
     actions_html: str = '',
     back_html: str = '',
+    body_class: str = '',
+    head_html: str = '',
+    topbar: bool = True,
 ) -> str:
     """Render a complete HTML page in the dashboard sidebar shell.
 
@@ -193,17 +258,27 @@ def page(
             default.
         actions_html: Optional pre-rendered HTML for the topbar action area
             (e.g. export buttons on a report view).
+        back_html: Optional pre-rendered topbar lead replacing the title.
+        body_class: Extra class appended to ``eq-dashboard`` on ``<body>``.
+        head_html: Trusted markup placed after the shared head assets.
+        topbar: ``False`` omits the ``<header class="app-topbar">`` bar.
 
     Returns:
         A complete HTML document string starting with ``<!DOCTYPE html>``.
     """
-    css = load_css()
+    css_link = f'<link rel="stylesheet" href="{dashboard_css_href()}">\n'
     nav_key = _resolve_nav(active_surface, active_nav)
-    sidebar = _sidebar_html(nav_key)
-    scripts = ''.join(str(a) for a in head_assets())
+    sidebar = _sidebar_html(nav_key, compression_inspector_enabled=load_settings().compression_inspector_enabled)
+    scripts = ''.join(str(a) for a in head_assets(charts='data-vega-for' in body_html))
     # On report pages the run name is the hero H1, so the topbar carries the
     # back link instead of repeating the title.
     topbar_lead = back_html or f'<h1 class="app-title">{esc(title)}</h1>'
+    topbar_html = (
+        f'<header class="app-topbar">\n{topbar_lead}\n<div class="app-actions">{actions_html}</div>\n</header>\n'
+        if topbar
+        else ''
+    )
+    body_classes = f'eq-dashboard {body_class}'.strip()
 
     return (
         '<!DOCTYPE html>\n'
@@ -213,24 +288,26 @@ def page(
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f'{_favicon_link()}'
         f'<title>{esc(title)} | evaluatorq</title>\n'
-        f'<style>\n{css}\n</style>\n'
-        f'<style>\n{EDITORIAL_CSS}\n</style>\n'
-        f'<style>\n{DASHBOARD_CSS}\n</style>\n'
+        f'{css_link}'
         f'{scripts}\n'
+        f'{head_html}'
         '</head>\n'
-        '<body class="eq-dashboard">\n'
+        f'<body class="{body_classes}">\n'
         f'{_SIDEBAR_TOGGLE_SCRIPT}'
+        f'{_AUTH_TOAST_SCRIPT}'
         '<div class="app-shell">\n'
         f'{sidebar}\n'
         '<div class="app-main">\n'
-        '<header class="app-topbar">\n'
-        f'{topbar_lead}\n'
-        f'<div class="app-actions">{actions_html}</div>\n'
-        '</header>\n'
+        f'{topbar_html}'
         '<main class="app-content">\n'
         f'{body_html}\n'
         '</main>\n'
         '</div>\n'
+        '</div>\n'
+        '<div id="eq-auth-toast" class="eq-auth-toast" role="status" hidden>'
+        '<span class="eq-auth-toast-message"></span>'
+        '<a href="/settings">Settings</a>'
+        '<button type="button" aria-label="Dismiss authentication notice">&times;</button>'
         '</div>\n'
         '</body>\n'
         '</html>\n'

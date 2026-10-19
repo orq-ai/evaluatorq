@@ -67,7 +67,8 @@ class CallableTarget(AgentTarget):
 
     target = CallableTarget(my_agent)
 
-    # Need OpenAI chat-completion dicts? Convert at the boundary yourself:
+    # Need OpenAI chat-completion dicts? Convert at the boundary yourself. The runner already removed
+    # tool calls with no result and results with no call, so the list is safe to send as is:
     async def openai_agent(messages: list[Message]) -> str:
         chat = [m.to_chat_completion() for m in messages]
         return (await client.chat.completions.create(model="gpt-5.6-luna", messages=chat)).choices[0].message.content

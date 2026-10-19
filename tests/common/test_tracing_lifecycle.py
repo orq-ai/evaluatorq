@@ -117,7 +117,7 @@ async def test_evaluatorq_passes_the_yielded_session_context_to_processing(
     await evaluatorq_module.evaluatorq(
         'session-run',
         data=[{'inputs': {'value': 1}}],
-        jobs=[lambda _data, _row: None],
+        jobs=[lambda _data, _row: None],  # ty: ignore[invalid-argument-type]
         print_results=False,
         _send_results=False,
     )

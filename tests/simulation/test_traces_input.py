@@ -9,9 +9,11 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+from evaluatorq.common import retry as retry_module
+from evaluatorq.common import trace_input as trace_input_module
+from evaluatorq.common.retry import MAX_RETRY_ATTEMPTS
 from evaluatorq.common.structured_output import StructuredResult
 from evaluatorq.contracts import Message
-from evaluatorq.common import trace_input as trace_input_module
 from evaluatorq.simulation import traces as traces_module
 from evaluatorq.simulation.traces import (
     TraceConversation,
@@ -20,7 +22,7 @@ from evaluatorq.simulation.traces import (
     fetch_trace_conversations,
     summarize_conversations,
 )
-from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 from evaluatorq.types import Trace, TraceInput
 
 
@@ -181,13 +183,22 @@ async def test_fetch_honours_a_limit_beyond_one_page() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_list_error_raises_runtime_error() -> None:
+async def test_fetch_list_error_raises_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleep = AsyncMock()
+    monkeypatch.setattr(retry_module.asyncio, "sleep", sleep)
+    attempts = 0
+
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
         return httpx.Response(500, json={"message": "boom"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(RuntimeError, match="Failed to list Orq traces"):
             await fetch_trace_conversations(limit=5, api_key="test-key", http_client=client)
+
+    assert attempts == MAX_RETRY_ATTEMPTS
+    assert sleep.await_count == MAX_RETRY_ATTEMPTS - 1
 
 
 # ---------------------------------------------------------------------------

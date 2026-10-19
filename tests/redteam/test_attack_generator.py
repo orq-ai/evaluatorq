@@ -1,5 +1,6 @@
 """Unit tests for attack prompt generation."""
 
+import typing
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -196,7 +197,7 @@ def _make_strategy(**overrides: object) -> AttackStrategy:
         'turn_type': TurnType.SINGLE,
         'objective_template': 'Test',
     }
-    return AttackStrategy(**(defaults | overrides))  # pyright: ignore[reportArgumentType]
+    return AttackStrategy(**typing.cast(typing.Any, (defaults | overrides)))
 
 
 def _mock_llm_client(analysis: ToolAnalysis) -> AsyncMock:

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
 
+from evaluatorq.common.messages import drop_unreplayable_tool_records, messages_to_text
 from evaluatorq.common.orq_client import resolve_orq_client
-from evaluatorq.common.output_adapters import output_to_text
+from evaluatorq.common.output_adapters import output_to_text, responses_transcript
 from evaluatorq.contracts import Message, content_to_text
 from evaluatorq.types import EvaluationResult
 
@@ -138,10 +139,17 @@ def orq_evaluator(
 
     The scorer sends the latest user turn as ``query``, evaluatorq's job output
     as ``output``, ``expected_output`` as the optional human/reference answer,
-    and preserves prior assistant/tool trajectory messages. Orq invocation trace
-    IDs remain in ``EvaluationResult.raw_output`` for local use; evaluatorq's
-    Experiment uploader intentionally strips raw evaluator output. The Orq SDK
-    owns retries for this call; evaluatorq does not add another retry layer.
+    and preserves prior assistant/tool trajectory messages. When the datapoint
+    inputs carry no ``messages`` and no string ``query`` and the job output is
+    a simulation's OpenResponses transcript, the scorer reads the conversation
+    from it instead: the final simulated-user turn is ``query``, earlier turns
+    are ``messages`` and the agent's final turn (tool calls included) is
+    ``output``. When the simulated conversation ends on a customer turn (error
+    or timeout), ``output`` is empty because the agent never replied. Orq
+    invocation trace IDs remain in ``EvaluationResult.raw_output`` for local
+    use; evaluatorq's Experiment uploader intentionally strips raw evaluator
+    output. The Orq SDK owns retries for this call; evaluatorq does not add
+    another retry layer.
     """
 
     cached_client: _OrqClient | None = client
@@ -162,15 +170,29 @@ def orq_evaluator(
         if query is None and latest_user_index is not None:
             query = content_to_text(messages[latest_user_index].content)
         history = messages[:latest_user_index] if latest_user_index is not None else list(messages)
+        output_text = output_to_text(params['output'])
+        if 'messages' not in data.inputs and query is None:
+            transcript = responses_transcript(params['output']) or []
+            transcript_user_index = next(
+                (index for index in range(len(transcript) - 1, -1, -1) if transcript[index].role == 'user'),
+                None,
+            )
+            if transcript_user_index is not None:
+                query = content_to_text(transcript[transcript_user_index].content)
+                history = transcript[:transcript_user_index]
+                output_text = messages_to_text(transcript[transcript_user_index + 1 :])
         retrievals_value = data.inputs.get('retrievals')
         retrievals = [str(item) for item in retrievals_value] if isinstance(retrievals_value, list) else None
         invoke_params: dict[str, Any] = {
             'id': evaluator_id,
             'query': query,
-            'output': output_to_text(params['output']),
+            'output': output_text,
             'reference': None if data.expected_output is None else output_to_text(data.expected_output),
             'retrievals': retrievals,
-            'messages': [message.to_chat_completion() for message in history],
+            'messages': [
+                message.to_chat_completion()
+                for message in drop_unreplayable_tool_records(history, incomplete_as_text=True)
+            ],
         }
         if model is not None:
             invoke_params['model'] = model

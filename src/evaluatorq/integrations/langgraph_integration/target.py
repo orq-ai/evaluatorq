@@ -322,15 +322,14 @@ class LangGraphTarget(AgentTarget):
         ``finally:`` block so partial spend on error paths is preserved.
 
         Each tool call is paired with its ``ToolMessage`` result within the same
-        turn. Two shapes still drop the call from the rendered transcript, both
-        because ``render_tool_call`` cannot emit a call whose ``result`` is
-        ``None``, and both announced by a ``LangGraphTarget:`` warning naming the
-        call:
+        turn. Two shapes leave a call without a ``result``, so the simulation
+        transcript keeps it with no tool row and replay leaves it out, and both
+        are announced by a ``LangGraphTarget:`` warning naming the call:
 
         - A result that arrives in a *later* ``ainvoke`` — the ``interrupt()`` /
           resume shape, where a human approves between the call and its execution.
-          The call is dropped in the turn that emitted it, and the result is
-          discarded in the turn that carried it, so neither reaches the judge.
+          The call is kept without a result in the turn that emitted it, and the
+          result is discarded in the turn that carried it.
         - A tool call the graph emits without an ``id``, which nothing can pair.
         """
         if not messages or messages[-1].role != 'user':
@@ -362,7 +361,7 @@ class LangGraphTarget(AgentTarget):
                 self._warned_unknown_callbacks = True
             new_callbacks = [existing, collector]
 
-        new_config: RunnableConfig = {**base_config, 'callbacks': new_callbacks}
+        new_config: RunnableConfig = {**base_config, 'callbacks': new_callbacks}  # ty: ignore[invalid-argument-type]
 
         prev_count = self._prev_msg_count
         usage: TokenUsage | None = None
@@ -494,10 +493,12 @@ def _introspect_tools(graph: CompiledStateGraph[Any, Any, Any, Any]) -> list[Too
     return tools
 
 
-def _introspect_memory_stores(graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str) -> list[MemoryStoreInfo]:
+def _introspect_memory_stores(
+    graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str | None
+) -> list[MemoryStoreInfo]:
     """Return a single synthetic memory store entry when a checkpointer is attached."""
     checkpointer = getattr(graph, 'checkpointer', None)
-    if checkpointer is None:
+    if checkpointer is None or thread_id is None:
         return []
     return [
         MemoryStoreInfo(

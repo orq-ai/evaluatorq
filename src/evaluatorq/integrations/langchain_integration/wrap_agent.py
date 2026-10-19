@@ -107,7 +107,7 @@ def wrap_langchain_agent(
         if instructions is not None:
             # Resolve instructions (static string or dynamic callable)
             resolved = instructions(data) if callable(instructions) else instructions
-            system_message: dict[str, str] = {'role': 'system', 'content': resolved}
+            system_message: dict[str, str] = {'role': 'system', 'content': resolved}  # ty: ignore[invalid-assignment]
 
             if has_messages and has_prompt:
                 messages = [system_message, *input_messages, {'role': 'user', 'content': prompt}]

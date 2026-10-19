@@ -358,6 +358,70 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
 
 
 # ---------------------------------------------------------------------------
+# Pairwise filter
+# ---------------------------------------------------------------------------
+
+_PAIRWISE_DIMS = ['winner', 'split', 'thrown_out', 'judge_failed', 'judge']
+
+
+def _pairwise_winner_labels(run: Any) -> list[tuple[str, str]]:
+    """``(option label, winner key)`` pairs, in rail order.
+
+    Any collision among the four option values (equal side labels, or a side
+    labelled ``tie`` / ``inconclusive``) would make chips indistinguishable, so
+    both sides fall back to the slot letters.
+    """
+    label_a, label_b = run.label_a, run.label_b
+    if len({label_a, label_b, 'tie', 'inconclusive'}) < 4:
+        label_a, label_b = 'A', 'B'
+    return [(label_a, 'A'), (label_b, 'B'), ('tie', 'tie'), ('inconclusive', 'inconclusive')]
+
+
+def _pairwise_options(run: Any) -> dict[str, list[str]]:
+    from evaluatorq.pairwise_reports.sections import judge_order
+
+    return {
+        'winner': [label for label, _key in _pairwise_winner_labels(run)],
+        'judge': judge_order(run),
+    }
+
+
+def _pairwise_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
+    from evaluatorq.pairwise_reports.sections import judge_order
+    from evaluatorq.pairwise_reports.stats import comparison_flags
+
+    winners = _pairwise_winner_labels(run)
+    winner_keys = {key for label, key in winners if label in _sel(selections, 'winner', default=[])}
+    # Empty (or every outcome selected) means no narrowing.
+    narrow_winner = bool(winner_keys) and len(winner_keys) < len(winners)
+
+    order = judge_order(run)
+    judges = {j for j in selections.get('judge', []) if j in order}
+    narrow_judge = bool(judges) and len(judges) < len(order)
+
+    want_split = 'yes' in selections.get('split', [])
+    want_thrown = 'yes' in selections.get('thrown_out', [])
+    want_failed = 'yes' in selections.get('judge_failed', [])
+
+    kept: list[Any] = []
+    for entry in run.entries:
+        if narrow_winner and entry.comparison.winner not in winner_keys:
+            continue
+        if narrow_judge and not any(v.model in judges and v.vote is not None for v in entry.comparison.votes):
+            continue
+        if want_split or want_thrown or want_failed:
+            flags = comparison_flags(entry, run.judges)
+            if (
+                (want_split and not flags.split)
+                or (want_thrown and not flags.thrown_out)
+                or (want_failed and not flags.judge_failed)
+            ):
+                continue
+        kept.append(entry)
+    return kept
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -372,14 +436,10 @@ FILTERS: dict[str, FilterDef] = {
         options=_sim_full_options,
         apply=_sim_apply,
     ),
-    # Pairwise ships no filter dimensions: a run has no natural facet beyond the
-    # consensus winner, so the rail would be a single control. Registered anyway
-    # because the report route requires a FilterDef, and so the export paths get
-    # the entry list through the same accessor as the other surfaces.
     'pairwise': FilterDef(
-        dimensions=[],
-        options=lambda _run: {},
-        apply=lambda run, _selections: list(run.entries),
+        dimensions=_PAIRWISE_DIMS,
+        options=_pairwise_options,
+        apply=_pairwise_apply,
         results=lambda run: list(run.entries),
     ),
 }

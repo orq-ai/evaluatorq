@@ -39,17 +39,17 @@ class TestSendResultFrozen:
     def test_cannot_assign_text(self) -> None:
         result = SendResult(text="original")
         with pytest.raises(ValidationError):
-            result.output = []  # pyright: ignore[reportAttributeAccessIssue]
+            result.output = []  # ty: ignore[invalid-assignment]
 
     def test_cannot_assign_usage(self) -> None:
         result = SendResult(text="original")
         with pytest.raises(ValidationError):
-            result.usage = TokenUsage()  # pyright: ignore[reportAttributeAccessIssue]
+            result.usage = TokenUsage()  # ty: ignore[invalid-assignment]
 
     def test_cannot_assign_model(self) -> None:
         result = SendResult(text="original")
         with pytest.raises(ValidationError):
-            result.model = "gpt-5"  # pyright: ignore[reportAttributeAccessIssue]
+            result.model = "gpt-5"  # ty: ignore[invalid-assignment]
 
 
 class TestSendResultIsInstance:

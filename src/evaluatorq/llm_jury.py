@@ -6,7 +6,7 @@ from functools import partial
 from typing import Any, Literal
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from evaluatorq.common.judge import ClassifyQuestion, JudgeOutcome, build_eval_replacements, run_judge
 from evaluatorq.common.jury import (
@@ -22,6 +22,7 @@ from evaluatorq.common.jury import (
 )
 from evaluatorq.common.llm_client import client_routes_through_orq, resolve_llm_client
 from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.output_adapters import (
     inputs_to_messages,
     output_error_text,
@@ -29,13 +30,13 @@ from evaluatorq.common.output_adapters import (
     output_to_text,
 )
 from evaluatorq.common.template_engine import extract_template_paths, resolve_template_path
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, JuryResult, LLMCallConfig
+from evaluatorq.contracts import DEFAULT_SMART_MODEL, JuryResult, LLMCallConfig
 from evaluatorq.jury_presets import get_preset
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
-DEFAULT_JUDGE_MODEL = DEFAULT_PIPELINE_MODEL
-"""Judge model when the caller names neither ``model=`` nor ``judges=``."""
+DEFAULT_JUDGE_MODEL = DEFAULT_SMART_MODEL
+"""Built-in judge model. At runtime a call naming neither ``model=`` nor ``judges=`` uses ``role_model('smart')``, which flags, env and settings can change."""
 
 DEFAULT_JURY_MAX_TOKENS = 8000
 
@@ -102,20 +103,17 @@ def _build_verdict_model(
         judge writes its reasoning before committing to a verdict.
     """
     if verdict_kind == 'categorical':
-        value_annotation = bool if labels is None else typing.Literal[tuple(labels)]  # type: ignore[valid-type]
+        value_annotation = bool if labels is None else typing.Literal[tuple(labels)]  # ty: ignore[invalid-type-form]
         description = _labels_description(label_descriptions)
     else:  # numeric
         value_annotation = float
         description = _levels_description(levels, score_range)
 
-    # Create model dynamically
-    class VerdictModel(BaseModel):
-        explanation: str = Field(default='', description='Explanation for the verdict')
-        value: value_annotation = (  # type: ignore  # pyright: ignore[reportInvalidTypeForm]
-            Field(description=description) if description is not None else Field()
-        )
-
-    return VerdictModel
+    return create_model(
+        'VerdictModel',
+        explanation=(str, Field(default='', description='Explanation for the verdict')),
+        value=(value_annotation, Field(description=description) if description is not None else Field()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -444,10 +442,10 @@ async def _run_single_judge(
 
     ``classify`` is a candidate question built whenever the panel fields can express
     one. The fetched catalogue is the runtime authority: `run_judge` reads the question
-    only for a model that serves the router's ``/classify`` endpoint and ignores it for
+    only for a model that serves the router's ``/decisions`` endpoint and ignores it for
     every prompted judge.
 
-    A judge that will be served by ``/classify`` gets a config carrying only the two
+    A judge that will be served by ``/decisions`` gets a config carrying only the two
     fields that leg reads. Passing the prompted judges' sampling settings would mark
     them as explicitly set on a config nothing reads them from, and `run_judge`'s
     `warn_unread_config_fields` guard would then warn about settings the caller never
@@ -616,7 +614,7 @@ def _resolve_panel(judges: list[str] | None, model: str | None) -> list[str]:
         if not model.strip():
             raise ValueError('`model` must be a non-empty judge model identifier.')
         return [model]
-    return [DEFAULT_JUDGE_MODEL]
+    return [role_model('smart')]
 
 
 def _resolve_and_validate_panel(
@@ -938,9 +936,9 @@ def llm_jury(
     Presets are pointwise panels, so ``assignment="cyclic"`` is rejected: a
     rotation runs one judge per item and there is no panel left to agree.
 
-    What a preset cannot express yet is per-judge call settings. Its seats are
-    ranked and costed at particular reasoning efforts — ``JuryPreset.seated_efforts()``
-    reports them — and ``reasoning_effort`` here applies to the whole panel
+    What a preset cannot express yet is per-judge call settings. Its seats run
+    at their catalogue default reasoning efforts — ``JuryPreset.seated_efforts()``
+    reports them — and ``reasoning_effort`` here overrides all of them at once
     (RES-1347).
 
     Provider options

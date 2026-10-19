@@ -42,12 +42,12 @@ def check(name: str, condition: bool, detail: str = "") -> None:
         print(f"  ✗ {name} — {detail}")
 
 
-def make_graph() -> CompiledStateGraph:  # pyright: ignore[reportMissingTypeArgument]
+def make_graph() -> CompiledStateGraph:
     api_key = os.environ["ORQ_API_KEY"]
     model = ChatOpenAI(
         model="openai/gpt-4o-mini",
         base_url="https://my.orq.ai/v3/router",
-        api_key=api_key,  # pyright: ignore[reportArgumentType]
+        api_key=api_key,
     )
     return create_react_agent(model, tools=[], checkpointer=MemorySaver())
 

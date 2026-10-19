@@ -12,21 +12,20 @@ def test_simulation_datapoint_is_canonical_name() -> None:
 
 
 def test_old_datapoint_name_is_gone() -> None:
-    """Agent Simulation is unreleased, so the old name is dropped outright — no
-    backward-compat alias."""
+    """The old class name remains absent from both simulation export surfaces."""
     import evaluatorq.simulation as sim
-    import evaluatorq.simulation.types as sim_types
+    from evaluatorq.simulation import contracts as sim_contracts
 
     assert "Datapoint" not in sim.__all__
     with pytest.raises(AttributeError):
         getattr(sim, "Datapoint")
     with pytest.raises(AttributeError):
-        getattr(sim_types, "Datapoint")
+        getattr(sim_contracts, "Datapoint")
 
 
 def test_simulation_datapoint_constructs() -> None:
     from evaluatorq.simulation import SimulationDatapoint
-    from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+    from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 
     dp = SimulationDatapoint(
         id="dp-1",
