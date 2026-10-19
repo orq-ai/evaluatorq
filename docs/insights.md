@@ -112,6 +112,8 @@ The command prints cluster and label summaries, failed-trace counts, projection 
 
 The priority matrix uses `intent` when selected, otherwise the first `--dimension`. `--priority-dimension` must name one of the selected dimensions.
 
+`--max-clusters`, `--max-subclusters` and `--outlier-zscore` bound the cluster tree each dimension produces; see [Shape the discovered-dimension clusters](#shape-the-discovered-dimension-clusters).
+
 | Model option | Default role and model |
 |---|---|
 | `--summary-model` | `smart`, currently `openai/gpt-6-sol` |
@@ -146,6 +148,69 @@ Save one label object or a list of label objects as JSON, then pass its path wit
 ```bash
 eq insights --query "customers asking about refunds" --label ./resolution-label.json --dimension intent
 ```
+
+## Shape the discovered-dimension clusters
+
+Every discovered dimension groups its traces into a two-level tree: **base clusters** of closely similar traces, gathered into **top clusters**. The dashboard calls a top cluster a **theme** and a base cluster a **subtheme**, so `--max-clusters` caps themes and `--max-subclusters` caps the subthemes inside one theme. Asking for at most six themes means capping `--max-clusters`, and the finer groups you can see under them are the subthemes. Three settings bound that tree. Set them on the CLI or in Python — the dashboard's run form does not offer them.
+
+Reach for them when a saved run is unreadable in one of two directions: one top cluster holding most of the population, or dozens of near-duplicate base clusters nobody can act on. Not before.
+
+| Setting | CLI | Python | Default | What it bounds |
+|---|---|---|---|---|
+| Top clusters | `--max-clusters N` | `max_clusters=N` | `15` | The most top clusters one cluster tree may produce. |
+| Base clusters per top cluster | `--max-subclusters N` | `max_subclusters=N` | `15` | The most base clusters any single top cluster may hold, at `2` and above. `1` is unreliable — see below. |
+| Outlier removal | `--outlier-zscore Z` | `outlier_zscore=Z` | off | How far a trace may sit from its base cluster's centre before it is moved to noise. |
+
+`sentiment` is the one dimension that builds more than one tree: it clusters each sentiment answer on its own, so both caps apply per answer and the dimension can show several times `--max-clusters` top clusters.
+
+Neither cap is a target. The run picks its own cut of the hierarchy, so lowering `--max-clusters` from `15` to `3` changes nothing on a population whose natural cut is already two groups.
+
+**Neither cap is a pure ceiling either.** When no cut of a population stands out — common for traces of one agent doing one job — `max_clusters * max_subclusters` drives the base-cluster count instead, so on flat data *raising* either cap produces **more** base clusters, not fewer. That effect saturates at one base cluster per ten traces, past which raising a cap again does nothing. Lowering both caps is what cures the second symptom above.
+
+**Tightening `--max-subclusters` is the lever for the first symptom**: a top level collapsed into one group splits by lowering `--max-subclusters`, not by raising `--max-clusters`. If the top level cannot grow any further, the run merges the smallest base cluster in the offending group into its nearest sibling — the one case where a cap destroys structure — and logs a `WARNING` naming the group and the cap. That warning reaches the terminal only; it is not recorded in the saved run.
+
+**Do not rely on `--max-subclusters 1`.** The cap is applied and then partly undone: a top cluster holding ten or more traces whose split leaves halves of at least five each is split back into two, while smaller groups keep their single cluster. So some groups honour the cap and some do not, and only the narrowest configuration warns. This is a defect in the clustering code rather than a deliberate floor, reported in the pull request that added this section; `2` is the tightest value that holds everywhere.
+
+`--outlier-zscore` moves a trace to noise when its distance from its base cluster's centre exceeds that cluster's mean distance plus `Z` standard deviations, so **a lower `Z` removes more traces**. Only base clusters with at least three members are examined. Start at `2.0` and lower it only if too little moves: the rule measures distance from a centre, not strangeness, so an ordinary trace sitting at the edge of a broad cluster is moved on exactly the same basis as a genuine one-off. Read back which traces went before you trust the cleaned groups. A pass that moves at least one trace logs a `WARNING` with the number it flagged.
+
+A moved trace is not deleted. It stays in the run with its dimension assignment set to `noise` and counts into `DimensionResult.n_noise`. In the dashboard's review page they land in a pseudo-theme called **Not grouped**, pooled with traces that had no text to group, so that row can exceed `n_noise`; its description splits the two counts. Do not go looking for the word outlier there. A dimension's own tab renders the count separately as an **Outliers (noise)** row.
+
+Reading the result back takes the saved run either way. The CLI prints at most five top clusters per dimension, under a heading that says `(top 5)`, so a dimension capped above five cannot be read off the terminal, and its printed summary counts traces and failed traces without mentioning noise. In the run JSON every trace carries `assignments.<dimension>.top` and `.base`, both set to `noise` for a trace that was moved.
+
+The example below reaches into `evaluatorq.insights.cluster`, which is internal and carries no stability promise. It makes no model requests and needs no credential, so the `insights` extra is all it takes to run.
+
+```python
+import numpy as np
+from evaluatorq.insights.cluster import cluster_two_level
+
+rng = np.random.default_rng(0)
+centres = rng.normal(0, 1, size=(12, 8))
+vectors = np.vstack([rng.normal(centre, 0.05, size=(10, 8)) for centre in centres])
+
+for max_clusters, max_subclusters in ((15, 15), (3, 15), (15, 2)):
+    tree = cluster_two_level(vectors, max_clusters=max_clusters, max_subclusters=max_subclusters)
+    print(f"max_clusters={max_clusters:<3} max_subclusters={max_subclusters:<3} -> {tree.n_top} top, {tree.n_base} base")
+
+for zscore in (None, 3.0, 2.0, 1.0, 0.5):
+    tree = cluster_two_level(vectors, outlier_zscore=zscore)
+    moved = int((tree.base_labels == -1).sum())
+    print(f"outlier_zscore={str(zscore):<4} -> {moved} of 120 traces moved to noise")
+
+flat = rng.normal(0, 1, size=(200, 8))  # no structure to find: the caps drive the cut
+for max_clusters, max_subclusters in ((2, 2), (4, 4), (15, 15)):
+    tree = cluster_two_level(flat, max_clusters=max_clusters, max_subclusters=max_subclusters)
+    print(f"flat: max_clusters={max_clusters:<3} max_subclusters={max_subclusters:<3} -> {tree.n_top} top, {tree.n_base} base")
+```
+
+These counts are the raw tree. A real run then asks the classifier to fold near-duplicate base clusters together, so a saved run's counts are no higher than these and usually lower.
+
+**Below ten traces in a dimension, both caps do nothing, and nothing says so.** The run needs twice its minimum cluster size of five before it will split at all, so a dimension under that floor returns one base cluster inside one top cluster whatever you pass. `--outlier-zscore` is the exception: it still runs on that single cluster, still moves traces to noise, and still logs what it moved. Check `run.counts` before concluding that a cap misbehaved.
+
+Below five traces carrying signal the dimension is skipped outright, produces no clusters, and the run records `dimension <name> skipped: only N traces have signal (need at least 5)` in its warnings, with `trace has` in place of `traces have` when N is one.
+
+At the other end, a clustered population of more than 5000 traces fails rather than sampling traces away, with `clustering supports at most 5000 traces per population`. That dimension is dropped and the run still saves, with `status='error'` and every other dimension intact. The 5000 counts per clustered population — per sentiment answer for `sentiment` — and only traces carrying signal count toward it. Since `--limit` itself stops at 5000, only a Finder export or a snapshot can cross the line, so the fix is to export or snapshot fewer traces.
+
+Bad values are rejected before any model is called: the CLI rejects an out-of-range number while parsing the command, and `insights()` raises before it fetches a trace.
 
 ## Analyze coding agents
 
