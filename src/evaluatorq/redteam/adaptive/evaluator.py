@@ -262,6 +262,7 @@ class OWASPEvaluator:
                 explanation=outcome.payload.explanation,
                 token_usage=outcome.token_usage,
                 abstained=outcome.payload.abstain,
+                verdict_coerced=outcome.verdict_coerced,
             )
 
         deliberation = await run_jury(
