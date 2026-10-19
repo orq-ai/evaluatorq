@@ -75,6 +75,23 @@ House voice is already on the page in `guides/targets.md`, `tuning.md`, `index.m
 ## Mechanics
 
 - **Fence every code sample on a page, with a language.** An indented block reaches Pygments with no lexer and renders as grey text. `docs/hooks.py` fails `--strict` on any unhighlighted block, on every page; the two exemptions there are prose diagrams, not an escape hatch. The docstring version of this rule — griffe section indentation, and the backtick width in `examples/*.py` — lives in `CLAUDE.md`, because it binds when you are editing Python and this skill is not loaded.
+- **Show the same task in the CLI and in Python as tabs, not as two blocks one under the other.** Use `pymdownx.tabbed` (already enabled, `alternate_style`): label the tabs `CLI` then `Python`, in that order, put a blank line after each `=== "..."` line, and indent everything inside a tab by four spaces, fences included. Keep the explanation outside the tabs, or in comments inside the code, never in a lead-in sentence that belongs to one tab only. Wrap shell lines with ` \` before about 75 characters, because the card scrolls sideways and the cut-off part is usually the flag that matters. Do not restyle tabs per page: the look (tinted bar, teal selected label) lives in `docs/stylesheets/extra.css` and applies to every tab group, so change it there. `mkdocs serve` does not live-reload in a worktree, so restart it to see a change. The model is "Replay stored datapoints" in `docs/guides/agent-simulation.md`:
+
+  ````markdown
+  === "CLI"
+
+      ```bash
+      eq sim simulate --input cases.jsonl --target agent:my-agent
+      ```
+
+  === "Python"
+
+      ```python
+      # The comment carries what a lead-in sentence would have said
+      datapoints = load_datapoints_from_jsonl("cases.jsonl")
+      ```
+  ````
+
 - **A new page goes in `mkdocs.yml` twice** — once under `nav:`, once under `plugins.llmstxt.sections`. The llmstxt plugin silently drops any nav page it does not list from `llms.txt` and `llms-full.txt` without failing the build, so `docs/hooks.py` fails `--strict` on the mismatch instead. The check runs one way (nav → sections) and accepts globs, which is why `reference/evaluatorq/*.md` covers every generated API page with one entry.
 - **Name a current model in every example.** `gpt-4o-mini` dates the page the moment a reader sees it, and the reader copies it. The catalog is the source of truth: `orq models list --json` returns a `created` timestamp per entry, so `model_developer == 'openai' and model_type == 'chat'` sorted by `created` descending gives the latest OpenAI family in one command. Prefer the cheap member of that family — it is also the value of `DEFAULT_PIPELINE_MODEL` — unless the sample is specifically about a bigger model. Run the query rather than copying a model name out of a file that does not know today's date.
 
