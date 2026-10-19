@@ -72,7 +72,8 @@ def _commands(path: Path) -> list[tuple[int, list[str]]]:
                 continue
             if argv[:2] == ['uv', 'run']:
                 argv = argv[2:]
-            if argv[0] in ('eq', 'evaluatorq') and not buf.startswith(SKIP):
+            is_synopsis = any(tok.startswith('[') for tok in argv)  # usage lines like `eq sim runs [DIRECTORY]`
+            if argv[0] in ('eq', 'evaluatorq') and not is_synopsis and not buf.startswith(SKIP):
                 found.append((start, _before_shell_operator(argv[1:])))
             buf, start = '', 0
     return found
@@ -118,11 +119,14 @@ def test_documented_command_parses(root_command: click.Command, argv: list[str])
     if any(a in ('--help', '-h') for a in argv):
         return
     cmd, path, rest, ctx = _resolve(root_command, argv)
-    parser = cmd.make_parser(ctx)
-    opts, _, _ = parser.parse_args(list(rest))
+    try:
+        cmd.parse_args(ctx, list(rest))
+    except click.exceptions.Exit:  # --version / --help style eager flags: parsed fine, nothing more to check
+        return
+    opts = ctx.params
 
     for dest, hint, model in (
-        ('config', '--config', CONFIG_MODEL.get(path)),
+        ('config_source', '--config', CONFIG_MODEL.get(path)),
         ('llm_config_json', '--llm-config', LLM_CONFIG_MODEL.get(path[0]) if path else None),
     ):
         value = opts.get(dest)
@@ -135,6 +139,7 @@ def test_documented_command_parses(root_command: click.Command, argv: list[str])
     [
         pytest.param(['redteam', 'run', '--bogus', '1'], id='unknown-flag'),
         pytest.param(['sim', 'simulate', '--target-reasoning-effort', 'low'], id='flag-on-wrong-command'),
+        pytest.param(['sim', 'simulate', '--config', '{"temprature": 1}'], id='wrong-config-key'),
         pytest.param(
             ['redteam', 'run', '-t', 'a', '--llm-config', '{"extra_kwargs": {"top_p": 0.9}}'], id='wrong-llm-config-shape'
         ),
