@@ -307,14 +307,19 @@ def _render_kpi_cards(data: dict[str, Any]) -> str:
         )
 
     # Panel-of-judges health (RES-1649) — the operational counts, as a matching KPI card.
+    # kpi-value stays a short scalar like the other cards; the issue detail goes in kpi-subtitle.
     health = data.get('jury_health')
     if health:
         h = JuryHealth.model_validate(health)
+        summary = h.issue_summary()
+        clean = summary == 'clean'
+        headline = 'clean' if clean else str(h.issue_count())
+        detail = f'{h.samples} multi-judge samples' if clean else f'{summary} ({h.samples} multi-judge samples)'
         cards.append(
             f'<div class="kpi-card">'
-            f'<div class="kpi-value">{_esc(h.issue_summary())}</div>'
+            f'<div class="kpi-value">{_esc(headline)}</div>'
             f'<div class="kpi-label">Jury Health</div>'
-            f'<div class="kpi-subtitle">{_esc(str(h.samples))} multi-judge samples</div>'
+            f'<div class="kpi-subtitle">{_esc(detail)}</div>'
             f'</div>'
         )
 

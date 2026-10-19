@@ -12,7 +12,7 @@ Semantic convention:
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
 
 from pydantic import (
     BaseModel,
@@ -1829,23 +1829,35 @@ class JuryHealth(BaseModel):
         'not count (RES-1649), not just how many. Deduplicated and capped; empty when no judge failed.',
     )
 
+    _SAMPLE_ISSUES: ClassVar[tuple[tuple[str, str], ...]] = (
+        ('samples_with_judge_failure', 'judge-fail'),
+        ('ties', 'tie'),
+        ('inconclusive', 'inconclusive'),
+        ('samples_with_repetition_failure', 'rep-fail'),
+        ('samples_with_abstention', 'abstained'),
+    )
+
+    def issue_count(self) -> int:
+        """Number of issue clauses the summary carries, for a short scalar headline.
+
+        Counts each sample-level issue type that fired, plus one for replacements if any were
+        used. Zero means ``issue_summary()`` returns ``clean``.
+        """
+        count = sum(1 for field, _ in self._SAMPLE_ISSUES if getattr(self, field))
+        if self.replacements_used:
+            count += 1
+        return count
+
     def issue_summary(self) -> str:
         """One-line issue clause for a report, or ``clean`` when nothing went wrong.
 
-        ``replacements_used`` counts replacement *judges*; the other five fields count *samples*.
-        They are listed as separate clauses so a judge count is never folded into an '(of N samples)'
-        total, which would misread it as a sample count (the bug the P1 review flagged). When a judge
-        failed and carried a reason, the distinct reasons are appended so the report says why, not just
-        how many — the ``JuryVote.error`` half of the ticket's "why a judge did not count".
+        ``replacements_used`` counts replacement *judges*, so it is never added to a sample total;
+        the other five fields count *samples*. The clauses are kept distinct for that reason: a
+        judge count must not be folded into a sample count. When a judge failed and carried a
+        reason, the distinct reasons are appended so the report names why a judge did not count
+        (the ``JuryVote.error`` half of the ticket), not just how many.
         """
-        issues = [
-            (self.samples_with_judge_failure, 'judge-fail'),
-            (self.ties, 'tie'),
-            (self.inconclusive, 'inconclusive'),
-            (self.samples_with_repetition_failure, 'rep-fail'),
-            (self.samples_with_abstention, 'abstained'),
-        ]
-        parts = [f'{count} {label}' for count, label in issues if count]
+        parts = [f'{getattr(self, field)} {label}' for field, label in self._SAMPLE_ISSUES if getattr(self, field)]
         if self.replacements_used:
             parts.append(f'{self.replacements_used} replacement judge(s)')
         summary = ', '.join(parts) if parts else 'clean'
