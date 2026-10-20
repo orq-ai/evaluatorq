@@ -323,3 +323,23 @@ def test_review_payload_names_the_source_like_the_run_form_tabs() -> None:
     ):
         payload = build_review_payload(run.model_copy(update={'population': {'mode': mode}}))
         assert _mapping(payload['run'])['source_label'] == label
+
+
+def test_review_payload_reports_a_null_answer_as_a_label_error_not_a_missing_answer() -> None:
+    trace = _trace('span-null')
+    trace.labels['user_frustration'] = LabelAnswer(value=None, confidence=None, probabilities=None, error=None)
+    row = _trace_rows(build_review_payload(_run([trace])))[0]
+
+    assert 'user_frustration' not in _mapping(row['l'])
+    assert _mapping(row['label_errors'])['user_frustration'] == 'The question returned no answer'
+    assert _mapping(row['label_errors'])['failed_question'] == 'classifier failed'
+
+
+def test_review_payload_sends_yes_no_answers_as_label_keys() -> None:
+    answered = _trace('span-yes')
+    answered.labels['failed_question'] = LabelAnswer(value=True, confidence=None, probabilities=None, error=None)
+    denied = _trace('span-no')
+    denied.labels['failed_question'] = LabelAnswer(value=False, confidence=None, probabilities=None, error=None)
+    rows = _trace_rows(build_review_payload(_run([answered, denied])))
+
+    assert [_mapping(row['l'])['failed_question'] for row in rows] == [['yes'], ['no']]
