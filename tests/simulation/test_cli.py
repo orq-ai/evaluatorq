@@ -477,6 +477,23 @@ def test_simulate_accepts_input_option(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
 
 
+def test_simulate_forwards_target_reasoning_effort(tmp_path: Path) -> None:
+    dp_file = _make_datapoints_file(tmp_path)
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target", return_value=MagicMock()),
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock, return_value=_stub_run([], mode="simulate")) as mock_impl,
+    ):
+        result = runner.invoke(
+            app,
+            ["simulate", "--input", str(dp_file), "--openai-model", "gpt-4o", "--target-reasoning-effort", "high", "--no-save"],
+            env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert mock_impl.call_args.args[0].target_reasoning_effort == "high"
+
+
 # ---------------------------------------------------------------------------
 # export command
 # ---------------------------------------------------------------------------
