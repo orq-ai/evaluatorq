@@ -138,7 +138,7 @@ def test_documented_command_parses(root_command: click.Command, argv: list[str])
     'argv',
     [
         pytest.param(['redteam', 'run', '--bogus', '1'], id='unknown-flag'),
-        pytest.param(['sim', 'simulate', '--target-reasoning-effort', 'low'], id='flag-on-wrong-command'),
+        pytest.param(['sim', 'simulate', '--num-personas', '3'], id='flag-on-wrong-command'),
         pytest.param(['sim', 'simulate', '--config', '{"temprature": 1}'], id='wrong-config-key'),
         pytest.param(
             ['redteam', 'run', '-t', 'a', '--llm-config', '{"extra_kwargs": {"top_p": 0.9}}'], id='wrong-llm-config-shape'
