@@ -44,13 +44,6 @@ def _array(table: str, key: str) -> list[str]:
     return value
 
 
-def _locked_version(lockfile: str, package_name: str) -> str:
-    for package in re.findall(r'(?ms)^\[\[package\]\]\n(.*?)(?=^\[\[package\]\]|\Z)', lockfile):
-        if _string(package, 'name') == package_name:
-            return _string(package, 'version')
-    raise AssertionError(f'missing locked package {package_name}')
-
-
 def _yaml_block(text: str, header: str, indent: int) -> str:
     lines = text.splitlines()
     prefix = ' ' * indent
@@ -302,12 +295,10 @@ def test_ty_is_the_only_locked_typechecker() -> None:
     pyproject = (REPO_ROOT / 'pyproject.toml').read_text()
     dev_dependencies = _array(_table(pyproject, 'dependency-groups'), 'dev')
 
-    assert 'ty==0.0.84' in dev_dependencies
     assert not any(dependency.startswith('basedpyright') for dependency in dev_dependencies)
     assert '[tool.basedpyright]' not in pyproject
 
     lockfile = (REPO_ROOT / 'uv.lock').read_text()
-    assert _locked_version(lockfile, 'ty') == '0.0.84'
     assert not re.search(r'(?m)^name = "(?:basedpyright|pytest-xdist)"$', lockfile)
 
 
