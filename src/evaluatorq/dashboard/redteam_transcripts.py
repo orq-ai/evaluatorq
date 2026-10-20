@@ -29,6 +29,7 @@ from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 
 if TYPE_CHECKING:
+    from evaluatorq.contracts import JuryResult, JuryVote
     from evaluatorq.redteam.contracts import RedTeamReport, RedTeamResult
 
 _PAGE_SIZE = 10
@@ -41,6 +42,71 @@ _RT_ROLE_LABELS = {'user': 'USR', 'assistant': 'AGT', 'system': 'SYS', 'develope
 # ---------------------------------------------------------------------------
 # 3. Attack evidence fragment (spec §Attacks)
 # ---------------------------------------------------------------------------
+
+
+def _short_model(model: str) -> str:
+    """The readable tail of a judge model id (``openai/gpt-5`` -> ``gpt-5``)."""
+    return model.rsplit('/', 1)[-1] if model else model
+
+
+def _jury_vote_label(vote: JuryVote) -> str:
+    """One judge's outcome in words: a failure or abstention reads as such, so a
+    bare ``None`` value is never shown as if it were a verdict."""
+    if not vote.success:
+        return 'failed'
+    if vote.abstained:
+        return 'abstained'
+    if vote.value is None:
+        return 'no verdict'
+    return str(vote.value)
+
+
+def _jury_panel_health(jury: JuryResult | None) -> str:
+    """Per-result panel-of-judges health: the configured/succeeded/failed count,
+    replacement/tie/inconclusive flags, then each judge's vote (model, outcome,
+    and any stand-in/abstained/error/failed-repetition status), mirroring the
+    pairwise per-judge vote list (RES-1650).
+
+    Returns '' for a single-judge result (no jury ran), the same way the fragment
+    drops a trace button it has no link for.
+    """
+    if jury is None:
+        return ''
+
+    chips = [tag(f'{jury.judges_succeeded}/{jury.judges_configured} judges')]
+    if jury.judges_failed:
+        chips.append(tag(f'{jury.judges_failed} failed'))
+    if jury.replacements_used:
+        chips.append(tag(f'{jury.replacements_used} replacement{"s" if jury.replacements_used != 1 else ""}'))
+    if jury.tie:
+        chips.append(tag('tie'))
+    if jury.inconclusive:
+        chips.append(tag('inconclusive'))
+    summary = f'<div class="rt-attack-tags">{"".join(chips)}</div>'
+
+    votes = ''
+    if jury.votes:
+        items = []
+        for v in jury.votes:
+            vote_tags: list[str] = []
+            if v.replacement:
+                vote_tags.append(tag('stand-in'))
+            if v.abstained:
+                vote_tags.append(tag('abstained'))
+            if v.error:
+                vote_tags.append(tag('error'))
+            if v.repetitions_failed:
+                vote_tags.append(tag(f'{v.repetitions_failed} failed rep{"s" if v.repetitions_failed != 1 else ""}'))
+            head = f'<b>{esc(_short_model(v.model))}</b> &rarr; {esc(_jury_vote_label(v))}'
+            items.append(f'<li class="rt-jury-vote" style="font-size:13px">{head} {"".join(vote_tags)}</li>')
+        votes = f'<ul class="rt-jury-votes" style="list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:3px">{"".join(items)}</ul>'
+
+    return (
+        '<div class="rt-jury" style="margin-top:10px">'
+        '<span class="rt-verdict-label">Jury panel health</span>'
+        f'{summary}{votes}'
+        '</div>'
+    )
 
 
 def render_attack_fragment(r: RedTeamResult) -> str:
@@ -98,6 +164,8 @@ def render_attack_fragment(r: RedTeamResult) -> str:
             '</div>'
         )
 
+    jury_html = _jury_panel_health(r.evaluation.jury if r.evaluation else None)
+
     transcript_html = render_message_list(r.messages, role_labels=_RT_ROLE_LABELS, class_prefix='rt')
 
     # Deep-link to the last successful target-agent trace when known; fall back to
@@ -109,7 +177,7 @@ def render_attack_fragment(r: RedTeamResult) -> str:
     )
     trace_html = f'<div class="rt-conv-actions">{trace_btn}</div>' if trace_btn else ''
 
-    return f'{tags_html}{verdict_html}{trace_html}{transcript_html}'
+    return f'{tags_html}{verdict_html}{jury_html}{trace_html}{transcript_html}'
 
 
 # ---------------------------------------------------------------------------
