@@ -616,6 +616,7 @@ _SHARED_FLAGS: tuple[Flag, ...] = (
     Flag('max_turns'),
     Flag('datapoint_parallelism', replaces=('parallelism',)),
     Flag('llm_parallelism'),
+    Flag('target_reasoning_effort'),
     Flag('evaluator', 'evaluator_names'),
     Flag('save'),
     Flag('recommendations'),
@@ -653,7 +654,6 @@ _RUN_FLAGS: tuple[Flag, ...] = (
     Flag('persona_seed', 'persona_seeds'),
     Flag('scenario_seed', 'scenario_seeds'),
     Flag('generation_instructions'),
-    Flag('target_reasoning_effort'),
 )
 
 # Config fields the CLI consumes itself: ``target`` and ``memory_entity_id`` become the resolved target object
@@ -942,6 +942,13 @@ def simulate(
     llm_parallelism: Annotated[
         int | None,
         typer.Option('--llm-parallelism', callback=check_llm_parallelism_option, help=_LLM_PARALLELISM_HELP),
+    ] = None,
+    target_reasoning_effort: Annotated[
+        str | None,
+        typer.Option(
+            '--target-reasoning-effort',
+            help='Reasoning effort pinned on the target agent under test (agent:<key> targets only).',
+        ),
     ] = None,
     evaluator: Annotated[
         list[str] | None,
