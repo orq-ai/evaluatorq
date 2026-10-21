@@ -65,6 +65,13 @@ def test_insights_review_dimensionless_run_and_safe_tooltips() -> None:
     subprocess.run(['node', str(script)], check=True, cwd=Path(__file__).parents[2])
 
 
+def test_insights_review_shows_only_questions_the_run_asked() -> None:
+    if shutil.which('node') is None:
+        pytest.skip('Node.js is unavailable')
+    script = Path(__file__).with_name('insights_review_trace_columns.cjs')
+    subprocess.run(['node', str(script)], check=True, cwd=Path(__file__).parents[2])
+
+
 def test_insights_review_reads_noul_answers_from_the_payload(minimal_run, tmp_path) -> None:
     if shutil.which('node') is None:
         pytest.skip('Node.js is unavailable')

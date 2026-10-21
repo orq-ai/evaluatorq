@@ -69,7 +69,7 @@ eq sim simulate --input dp.jsonl --target agent:<key>
 
 Targets — same three flags as `eq sim run`. Provide exactly one input source: `--input` (`-i`), `--dataset-id`, `--experiment-id` (optionally narrowed by `--experiment-run-id`), `--from-run`, or inline `datapoints` (or `personas` with `scenarios`) in `--config`.
 
-There is no `--target-reasoning-effort` flag here — it is a `eq sim run` flag only. To pin the target's reasoning effort on a pre-built datapoint set, set `"target_reasoning_effort"` in `--config`, or call `simulate()` with `target_reasoning_effort=` from Python (see [Tuning](../tuning.md)).
+`--target-reasoning-effort` works here exactly as on `eq sim run` (see the flag table above), and `"target_reasoning_effort"` in `--config` sets the same value.
 
 | Flag | Type / Default | Description |
 |---|---|---|

@@ -36,13 +36,29 @@ If the thing under test already runs on Orq, you do not write a target class. Ho
 | Call a deployment from an `evaluatorq()` **job** | `invoke()` or `deployment()` inside your `@job` — see [Evaluation Reference › Calling an Orq deployment from a job](../evaluation-reference.md#calling-an-orq-deployment-from-a-job) |
 | Pin the exact call parameters instead of discovering them | [`OrqResponsesTarget`](#orqresponsestarget) |
 
-Both string forms are parsed the same way in Python and on the CLI (`eq redteam run --target agent:my-key`), and the `mode="static"` restriction on deployments applies to both — on the CLI it is `--mode static`.
+Both string forms are parsed the same way in Python and on the CLI, and the `mode="static"` restriction on deployments applies to both — on the CLI it is `--mode static`.
+
+=== "CLI"
+
+    ```bash
+    eq redteam run --target agent:my-key --mode dynamic --category LLM01 --yes
+    eq redteam run --target deployment:my-key --mode static --yes
+    ```
+
+=== "Python"
+
+    ```python
+    from evaluatorq.redteam import red_team
+
+    await red_team(target="agent:my-key", mode="dynamic", categories=["LLM01"])
+    await red_team(target="deployment:my-key", mode="static")
+    ```
 
 The first three need `ORQ_API_KEY` in the environment. Python code does not load `.env` automatically, so see [Configuration](../configuration.md). `OrqResponsesTarget` is the exception: it defaults to `require_orq=False` and falls back to `OPENAI_API_KEY`, so it runs without an Orq account until you pass `require_orq=True` or a `model="agent/<key>"`.
 
 ## The quick path: `OpenAIModelTarget`
 
-If you are pointing at an OpenAI (or OpenAI-compatible) chat-completions endpoint, there is nothing to write. `OpenAIModelTarget` is a complete `AgentTarget`: give it a model and a system prompt and pass it to `red_team()`.
+If you are pointing at an OpenAI (or OpenAI-compatible) chat-completions endpoint, there is nothing to write. (`eq sim run --openai-model` builds a bare one with no system prompt; anything more is Python only.) `OpenAIModelTarget` is a complete `AgentTarget`: give it a model and a system prompt and pass it to `red_team()`.
 
 ```python
 import asyncio
@@ -301,11 +317,29 @@ Constructed bare like that it reports **no tools** to the attack planner, which 
 
 `red_team()` and `simulate()` both accept the object, but only `evaluatorq.simulation` re-exports the class — a red-team script imports it from `evaluatorq.integrations.vercel_ai_sdk_integration`, or from `evaluatorq.simulation` as above, because `evaluatorq.redteam` does not carry it.
 
-The simulation CLI accepts the endpoint directly too, which is the one target kind on this page that does not have to be built in Python:
+The simulation CLI accepts the endpoint directly too, which is the one custom target class on this page the CLI can drive without Python. It builds the bare target, so headers, extra body fields and the other constructor arguments need the Python form:
 
-```bash
-eq sim run --vercel-url http://localhost:3000/api/chat --help
-```
+=== "CLI"
+
+    ```bash
+    eq sim run --vercel-url http://localhost:3000/api/chat \
+      --agent-description "Support assistant for Acme" \
+      --max-turns 2 \
+      --evaluator goal_achieved
+    ```
+
+=== "Python"
+
+    ```python
+    from evaluatorq.simulation import VercelAISdkTarget, generate_and_simulate
+
+    await generate_and_simulate(
+        target=VercelAISdkTarget("http://localhost:3000/api/chat"),
+        agent_description="Support assistant for Acme",
+        max_turns=2,
+        evaluator_names=["goal_achieved"],
+    )
+    ```
 
 That path drives the endpoint; it does not gate a build. `eq sim run` has no flag that suppresses the Orq upload — it uploads whenever `ORQ_API_KEY` is set, and that key is also what its own simulator and judge calls need — and it exits `0` whatever the scores are. A CI step therefore reads the file it wrote with `--report` and decides for itself. The flags are in the [simulation CLI reference](../cli-reference/simulation.md).
 
