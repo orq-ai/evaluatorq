@@ -16,7 +16,7 @@ Four separate settings carry the words "reasoning effort", and they apply to fou
 
 | You want to change | Use | Applies to |
 |---|---|---|
-| The **target agent** under test | `--target-reasoning-effort` (`eq redteam run` and `eq sim run`; on `eq sim simulate` set `target_reasoning_effort` in `--config`), or `LLMConfig(target_reasoning_effort=...)` / `simulate(target_reasoning_effort=...)` | The agent being red-teamed or simulated |
+| The **target agent** under test | `--target-reasoning-effort` (`eq redteam run`, `eq sim run` and `eq sim simulate`), or `LLMConfig(target_reasoning_effort=...)` / `simulate(target_reasoning_effort=...)` | The agent being red-teamed or simulated |
 | The **attacker or judge** in red teaming | `LLMCallConfig(reasoning_effort=...)` on `attacker=` / `evaluator=` | evaluatorq's own pipeline calls |
 | The **user simulator and judge** in simulation | `EVALUATORQ_REASONING_EFFORT`, or `llm_config=LLMCallConfig(reasoning_effort=...)` on `simulate()` / `generate_and_simulate()` | evaluatorq's own simulation calls |
 | The **jury** in core evaluation (Python only, no CLI form) | `reasoning_effort=` on `llm_jury()`, `llm_jury_pairwise()` or `PairwiseComparator` | The verdict calls those evaluators make under `evaluatorq()` |
