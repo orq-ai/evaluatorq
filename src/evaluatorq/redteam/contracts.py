@@ -26,6 +26,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.messages import EMPTY_ASSISTANT_TEXT
 from evaluatorq.common.recommendations import RecommendationConfigBase
+from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import RunSummary, StrEnum
 
@@ -1851,9 +1852,14 @@ class JuryHealth(BaseModel):
     )
     judge_failure_reasons: list[str] = Field(
         default_factory=list,
-        description='Distinct JuryVote.error strings behind the judge failures, so the report names why a judge did '
-        'not count (RES-1649), not just how many. Deduplicated and capped; empty when no judge failed.',
+        description='Complete, scrubbed, distinct JuryVote.error strings behind failed configured or replacement '
+        'judges. Sorted and deduplicated after secret scrubbing; display limits apply only in issue_summary().',
     )
+
+    @field_validator('judge_failure_reasons')
+    @classmethod
+    def _scrub_failure_reasons(cls, reasons: list[str]) -> list[str]:
+        return sorted({cleaned for reason in reasons if (cleaned := scrub_known_secrets(reason).strip())})
 
     _SAMPLE_ISSUES: ClassVar[tuple[tuple[str, str], ...]] = (
         ('samples_with_judge_failure', 'judge-fail'),
@@ -1863,14 +1869,26 @@ class JuryHealth(BaseModel):
         ('samples_with_abstention', 'abstained'),
     )
 
+    @model_validator(mode='after')
+    def _check_health_consistency(self) -> 'JuryHealth':
+        for field, _ in self._SAMPLE_ISSUES:
+            if getattr(self, field) > self.samples:
+                raise ValueError(f'{field} cannot exceed samples')
+        if self.samples == 0 and (self.replacements_used or self.judge_failure_reasons):
+            raise ValueError('Replacement judges and failure reasons require multi-judge samples')
+        return self
+
     def issue_count(self) -> int:
         """Number of issue clauses the summary carries, for a short scalar headline.
 
         Counts each sample-level issue type that fired, plus one for replacements if any were
-        used. Zero means ``issue_summary()`` returns ``clean``.
+        used. Failure reasons without a configured failure count add one issue type.
+        Zero means ``issue_summary()`` returns ``clean``.
         """
         count = sum(1 for field, _ in self._SAMPLE_ISSUES if getattr(self, field))
         if self.replacements_used:
+            count += 1
+        if self.judge_failure_reasons and not self.samples_with_judge_failure:
             count += 1
         return count
 
@@ -1886,10 +1904,12 @@ class JuryHealth(BaseModel):
         parts = [f'{getattr(self, field)} {label}' for field, label in self._SAMPLE_ISSUES if getattr(self, field)]
         if self.replacements_used:
             parts.append(f'{self.replacements_used} replacement judge(s)')
-        summary = ', '.join(parts) if parts else 'clean'
         if self.judge_failure_reasons:
-            summary += f' (judge failures: {"; ".join(self.judge_failure_reasons)})'
-        return summary
+            reasons = [reason if len(reason) <= 80 else reason[:79] + '…' for reason in self.judge_failure_reasons[:3]]
+            if len(self.judge_failure_reasons) > 3:
+                reasons.append(f'+{len(self.judge_failure_reasons) - 3} more')
+            parts.append(f'judge failures: {"; ".join(reasons)}')
+        return ', '.join(parts) if parts else 'clean'
 
 
 class ReportSummary(BaseModel):

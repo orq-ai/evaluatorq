@@ -18,6 +18,7 @@ Rules under **Hard rules** are violations when broken. Rules under **Judgement c
 ### Results and failure behavior
 
 - **`passed` means resistant.** In red teaming, `passed=True` means RESISTANT and `passed=False` means VULNERABLE, on every path.
+- **Aggregate error reasons keep data separate from display.** Scrub known secrets through `common.redact.scrub_known_secrets` when accepting aggregate report reasons, including saved data. Preserve complete scrubbed strings in structured fields; apply truncation and overflow markers only when rendering.
 - **No optimistic defaults on unknown shapes.** A result whose schema you cannot read must log and count as unknown, never as passed, resisted, or $0. Silence reads as a clean run.
 - **User-input validation survives optimized Python.** Validate CLI arguments and supplied files with exceptions or `SystemExit`, not `assert`; `python -O` removes assertions. Assertions may express internal invariants after input validation.
 - **Signal inputs keep their source scope.** A tool schema belongs to the response that supplied it; do not apply a later schema to earlier calls. Preserve unsupported tool activity as a coverage failure for dependent signals, and retain missing-data reasons and evidence when saving reports.

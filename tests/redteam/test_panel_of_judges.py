@@ -931,11 +931,11 @@ class TestJuryHealthAggregator:
         h = JuryHealth(samples=4, samples_with_judge_failure=2, judge_failure_reasons=['timeout', 'rate limited'])
         clause = h.issue_summary()
         assert '2 judge-fail' in clause
-        assert 'judge failures: timeout; rate limited' in clause
+        assert 'judge failures: rate limited; timeout' in clause
         # No failures, no reasons clause.
         assert '(judge failures' not in JuryHealth(samples=3).issue_summary()
 
-    def test_compute_jury_health_caps_and_dedupes_failure_reasons(self):
+    def test_compute_jury_health_preserves_reasons_and_caps_only_display(self):
         from types import SimpleNamespace
 
         from evaluatorq.redteam.contracts import JuryResult, JuryVote
@@ -953,19 +953,30 @@ class TestJuryHealthAggregator:
             )
             return SimpleNamespace(evaluation=SimpleNamespace(jury=jr))
 
-        # Five distinct reasons, one duplicated — expect 3 shown + a "+N more" marker.
+        # Saved reasons remain complete; only the display shows three plus an overflow count.
         results: list[Any] = [failed_sample(r) for r in ['a', 'b', 'c', 'd', 'e', 'a']]
         health = _compute_jury_health(results)
         assert health is not None
-        assert health.judge_failure_reasons == ['a', 'b', 'c', '+2 more']
+        assert health.judge_failure_reasons == ['a', 'b', 'c', 'd', 'e']
+        assert 'judge failures: a; b; c; +2 more' in health.issue_summary()
+        assert '+2 more' not in health.model_dump_json()
 
-        # A reason longer than the cap is truncated with an ellipsis.
+        # Long evidence survives serialization, while the display stays compact.
         long_reason = 'x' * 200
         health_long = _compute_jury_health([failed_sample(long_reason)])
         assert health_long is not None
         assert len(health_long.judge_failure_reasons) == 1
-        assert health_long.judge_failure_reasons[0].endswith('…')
-        assert len(health_long.judge_failure_reasons[0]) == 80
+        assert health_long.judge_failure_reasons == [long_reason]
+        assert 'x' * 79 + '…' in health_long.issue_summary()
+        assert long_reason not in health_long.issue_summary()
+        assert results[0].evaluation.jury.votes[1].error == 'a'
+        key = 'sk-' + 'SyntheticCredential1234' * 2
+        source = failed_sample('Incorrect API key provided: ' + key)
+        scrubbed = _compute_jury_health([source])
+        assert scrubbed is not None
+        assert scrubbed.judge_failure_reasons == ['Incorrect API key provided: <API_KEY>']
+        assert source.evaluation.jury.votes[1].error == 'Incorrect API key provided: ' + key
+
 
 
 class TestConfigLevelMinSuccessfulValidation:

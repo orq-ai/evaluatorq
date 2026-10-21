@@ -290,7 +290,9 @@ if health:
     print(health.samples_with_judge_failure, health.replacements_used, health.ties)
 ```
 
-The red-team report renders `jury_health` as a `Jury Health` line alongside `Jury Agreement`: a count of how many multi-judge samples had a judge fail, tied, went inconclusive, had a repetition fail to produce a verdict, or had a judge abstain, plus the total number of replacement judges invoked across those samples. The replacement figure counts judges, not samples, so it is reported as its own clause rather than folded into the sample counts. It is `None` for single-judge runs.
+The red-team report renders `jury_health` as a `Jury Health` line alongside `Jury Agreement`: a count of how many multi-judge samples had a configured judge fail, tied, went inconclusive, had a repetition fail to produce a verdict, or had a judge abstain, plus the total number of replacement judges invoked across those samples. The replacement figure counts judges, not samples, so it is reported as its own clause rather than folded into the sample counts. It is `None` for single-judge runs.
+
+The line also shows up to three distinct failure reasons from configured or replacement judges, each shortened to 80 characters, followed by `+N more` when other reasons exist. The summary’s `judge_failure_reasons` list retains the complete reasons after known credential patterns are scrubbed, without display markers. The HTML card labels its count as issue types: it counts the kinds of issue present, rather than affected samples or judges. Individual votes and abstention explanations remain in `report.results[i].evaluation.jury`; the dashboard’s per-result panel is tracked separately in RES-1650.
 
 ## Reliability, in short
 

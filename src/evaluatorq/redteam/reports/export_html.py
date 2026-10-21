@@ -314,16 +314,19 @@ def _render_kpi_cards(data: dict[str, Any]) -> str:
         summary = h.issue_summary()
         clean = summary == 'clean'
         headline = 'clean' if clean else str(h.issue_count())
+        label = 'Jury Health' if clean else 'Jury Health (issue types)'
         detail = f'{h.samples} multi-judge samples' if clean else f'{summary} ({h.samples} multi-judge samples)'
         cards.append(
             f'<div class="kpi-card">'
             f'<div class="kpi-value">{_esc(headline)}</div>'
-            f'<div class="kpi-label">Jury Health</div>'
+            f'<div class="kpi-label">{_esc(label)}</div>'
             f'<div class="kpi-subtitle">{_esc(detail)}</div>'
             f'</div>'
         )
 
-    return '<div class="kpi-row">' + ''.join(cards) + '</div>'
+    primary = '<div class="kpi-row">' + ''.join(cards[:5]) + '</div>'
+    jury = '<div class="kpi-row">' + ''.join(cards[5:]) + '</div>' if len(cards) > 5 else ''
+    return primary + jury
 
 
 def _render_summary_html(section: ReportSection) -> str:
