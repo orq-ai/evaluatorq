@@ -1043,6 +1043,7 @@ def _sim_failure_modes(rows: list[tuple[str, int]], *, standalone: bool = False)
         '<div class="rk-panel sim-fm" data-fm-panel>'
         f'<div class="rk-panel-title sim-fm-head"><span>Top failure modes</span>{slider}</div>'
         '<div class="rk-panel-body">'
+        '<p class="sim-fm-note">Confirmed criterion failures, including violations observed before an execution error.</p>'
         f'<div class="sim-fm-bars">{"".join(bars)}</div>'
         '<p class="sim-fm-empty" data-fm-empty hidden>No failure modes at or above this count.</p>'
         '</div></div>'

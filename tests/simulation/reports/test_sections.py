@@ -437,16 +437,6 @@ def test_error_counts_are_additive_and_keep_legacy_metric_denominators():
     assert distribution['completed_conversations'] == 1
 
 
-def test_failure_modes_exclude_execution_errors():
-    errored = _make_result(
-        goal_achieved=False,
-        error='timeout',
-        criteria_meta=[{'id': 'criteria_0', 'description': 'Ask order number', 'type': 'must_happen', 'passed': False}],
-    )
-    section = next(s for s in build_report_sections([errored]) if s.kind == 'failure_mode')
-    assert section.data['rows'] == []
-
-
 def test_individual_results_section_carries_transcript_and_meta():
     results = [_make_result(persona='A', goal_achieved=True)]
     sections = build_report_sections(results)

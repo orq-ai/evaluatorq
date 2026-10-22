@@ -719,7 +719,7 @@ def _build_recommendations_section(
 def _build_failure_mode_section(results: list[SimulationResult]) -> ReportSection:
     counts: Counter[str] = Counter()
     for r in results:
-        if r.goal_achieved or _is_errored(r):
+        if r.goal_achieved:
             continue
         scen = _scenario_name(r)
         for c in _criteria_rows(r):
