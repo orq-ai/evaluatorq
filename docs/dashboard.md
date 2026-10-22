@@ -445,7 +445,7 @@ Every report page includes a download sidebar with export links:
 | CSV (filtered result rows) | yes | — | yes |
 | JSON (filtered result rows) | yes | yes | yes |
 
-Simulation and red-team HTML downloads use the dashboard report layout, with each available tab expanded into a section in the same order. The file embeds its styles, fonts, charts and recorded evidence, so it opens without the dashboard server or an internet connection. Conversation and attack details are already present, with local links from summary tables to the evidence. Recommendations retain their recorded applied status; applying changes, fetching live agent details and comparing runs remain dashboard actions.
+Simulation and red-team HTML downloads use the dashboard report layout, with each available tab expanded into a section in the same order. The file embeds its styles, fonts, charts and recorded evidence, so it opens without the dashboard server or an internet connection. Conversation and attack details are embedded in foldable rows that are closed by default, with local links from summary tables to their summaries. Open a row to read the complete transcript. Recommendations retain their recorded applied status; applying changes, fetching live agent details and comparing runs remain dashboard actions.
 
 HTML downloads render the full, unfiltered saved report. For simulation, the saved run supplies the captured agent details, target, model, maximum turns, recommendations and whole-run token usage when recorded. Missing fields in older runs stay unavailable. Transcripts are included in full, so a large run produces a larger file. CSV and JSON downloads continue to contain the filtered result rows.
 

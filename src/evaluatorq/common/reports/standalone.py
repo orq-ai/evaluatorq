@@ -39,7 +39,7 @@ def expanded_sections(group: str, items: list[tuple[str, str] | tuple[str, str, 
 
 
 class _ExpandDetails(HTMLParser):
-    """Open native disclosures without JavaScript, preserving their contents."""
+    """Expand report disclosures while keeping individual evidence folded."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
@@ -47,7 +47,8 @@ class _ExpandDetails(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         raw = self.get_starttag_text() or ''
-        if tag == 'details' and not any(key == 'open' for key, _ in attrs):
+        classes = (dict(attrs).get('class') or '').split()
+        if tag == 'details' and 'export-evidence' not in classes and not any(key == 'open' for key, _ in attrs):
             raw = raw[:-1] + ' open>'
         self.parts.append(raw)
 

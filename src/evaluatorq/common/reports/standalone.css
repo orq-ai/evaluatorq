@@ -10,10 +10,12 @@ body.standalone-report { margin:0; padding:32px 40px; background:var(--surface-a
 .export-section-title { margin:0 0 20px; font-family:var(--font-display); font-size:28px; font-weight:500; color:var(--text-strong); }
 .standalone-report .report-hero { margin:24px 0; }
 .standalone-report .rk-panel,.standalone-report .report-card { margin-bottom:20px; }
-.export-conversation > h3 { margin:0; padding:16px 20px; border-bottom:1px solid var(--border-subtle); font-family:var(--font-display); font-size:18px; }
+.export-conversation > summary { padding:16px 20px; cursor:pointer; }
+.export-conversation[open] > summary { border-bottom:1px solid var(--border-subtle); }
+.export-conversation-title { font-family:var(--font-display); font-size:16px; color:var(--text-strong); }
 .export-conversation .sim-transcript-detail { padding:20px; }
 .export-entity { padding:20px; }
-.export-attack .rt-attack-row-chevron { display:none; }
+
 .standalone-report .sim-transcript-bubbles,.standalone-report .sim-msg-content,.standalone-report .rt-msg-content,.standalone-report pre { max-height:none; overflow:visible; white-space:pre-wrap; overflow-wrap:anywhere; }
 .standalone-report .sim-fm-label,.standalone-report .fail-why { white-space:normal; overflow:visible; text-overflow:clip; max-width:none; }
 .standalone-report .rk-heatmap-wrap,.standalone-report .sim-bd-table { max-width:100%; overflow-x:auto; }
@@ -37,9 +39,7 @@ body.standalone-report { margin:0; padding:32px 40px; background:var(--surface-a
   .standalone-report .rk-heatmap-wrap,.standalone-report .sim-bd-table { overflow:visible; }
 }
 
-.export-attack .rt-attack-row-summary { cursor:default; }
-.export-attack .rt-attack-row-summary:hover { background:transparent; }
-.export-conversation-meta { padding:12px 20px 0; margin:0; color:var(--text-muted); font:12px var(--font-mono); }
+.export-conversation-meta { display:block; margin:6px 0 0; color:var(--text-muted); font:12px var(--font-mono); }
 .standalone-report .sim-config-persona-row,.standalone-report .sim-config-scenario-row { text-decoration:none; }
 @media (max-width:700px) {
   .standalone-report .sim-config-persona-head { display:none; }

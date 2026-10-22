@@ -51,7 +51,7 @@ def test_exports_are_offline_and_have_no_server_controls(rt_report_multi):
         assert not any(tag in {'script', 'iframe', 'dialog', 'template', 'input', 'button'} for tag, _ in elements.tags)
         assert not any(key.startswith('hx-') for _, attrs in elements.tags for key in attrs)
         assert not any(a.get('href', '').startswith('/r/') for _, a in elements.tags)
-        assert all('open' in a for tag, a in elements.tags if tag == 'details')
+        assert all('open' not in a if 'export-evidence' in a.get('class', '').split() else 'open' in a for tag, a in elements.tags if tag == 'details')
         ids = [a['id'] for _, a in elements.tags if 'id' in a]
         assert len(ids) == len(set(ids)), 'A section or chart id is duplicated.'
         for tag, attrs in elements.tags:
@@ -110,7 +110,7 @@ def test_attack_export_keeps_full_text_and_unknown_outcome(rt_report_multi):
     document = rt_html(rt_report_multi)
     assert long_text in document
     assert 'Not evaluated' in document
-    assert document.count('class="rt-attack-row export-attack"') == len(rt_report_multi.results)
+    assert sum(tag == 'details' and 'export-attack' in a.get('class', '').split() for tag, a in Elements(document).tags) == len(rt_report_multi.results)
 
 
 def test_sim_export_preserves_tool_call_evidence():
@@ -194,3 +194,11 @@ def test_sim_saved_run_export_honors_explicit_target_label(tmp_path, label):
     result = CliRunner().invoke(sim_app, ['export', '-i', str(source), '-o', str(target), '--format', 'html', '--target-label', label])
     assert result.exit_code == 0, result.output
     assert f'target {label}</p>' in target.read_text()
+
+
+def test_conversation_evidence_is_native_and_closed_by_default(rt_report_multi):
+    for document, count in [(sim_html(_make_sim_run_with_transcript()), 2), (rt_html(rt_report_multi), len(rt_report_multi.results))]:
+        evidence = [(tag, attrs) for tag, attrs in Elements(document).tags if 'export-evidence' in attrs.get('class', '').split()]
+        assert len(evidence) == count
+        assert all(tag == 'details' and 'open' not in attrs for tag, attrs in evidence)
+        assert document.count('<summary class="export-conversation-summary">') == count or 'rt-attack-row-summary' in document

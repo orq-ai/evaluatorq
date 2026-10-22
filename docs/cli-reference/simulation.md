@@ -265,7 +265,7 @@ eq sim export --input results.jsonl --output payload.json
 eq sim export --input sim-report.json --output report.html --format html --recommendations
 ```
 
-HTML exports use the dashboard's report layout with each available tab expanded into a section, embedded fonts and styles, and complete conversation evidence. They work offline. When the input is a full `SimulationRun` JSON file, the HTML preserves its saved run name, target configuration, agent snapshot, recommendations and whole-run usage. A results JSONL file contains conversation rows only, so those run-level details are unavailable.
+HTML exports use the dashboard's report layout with each available tab expanded into a section, embedded fonts and styles, and complete conversation evidence. Individual conversation transcripts are foldable and closed by default; the report sections stay expanded. They work offline. When the input is a full `SimulationRun` JSON file, the HTML preserves its saved run name, target configuration, agent snapshot, recommendations and whole-run usage. A results JSONL file contains conversation rows only, so those run-level details are unavailable.
 
 Markdown/HTML exports include remediation suggestions if the input run JSON already carries them (runs generate them by default — see `--no-recommendations`), or if `--recommendations` is passed here to generate them at export time for a run that has none stored.
 

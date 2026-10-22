@@ -2240,9 +2240,9 @@ def _rt_attack_row(r: RedTeamResult, rid: str, idx: int, *, standalone: bool = F
         from evaluatorq.dashboard.redteam_transcripts import render_attack_fragment
 
         return (
-            f'<article class="rt-attack-row export-attack" id="attack-{idx + 1}">'
-            + summary_html.replace('<summary ', '<header ').replace('</summary>', '</header>')
-            + f'<div class="rt-attack-row-body">{render_attack_fragment(r)}</div></article>'
+            f'<details class="rt-attack-row export-attack export-evidence" id="attack-{idx + 1}">'
+            + summary_html
+            + f'<div class="rt-attack-row-body">{render_attack_fragment(r)}</div></details>'
         )
     # Lazy-load on the <details> `toggle` event, not a click on the (empty,
     # collapsed) body div — clicking the summary opens the details but never
@@ -2759,10 +2759,21 @@ def _sim_transcripts(rid: str, entries: list[Any], *, standalone: bool = False) 
 
     if not entries:
         return '<p class="rk-empty">No conversations recorded for this run.</p>'
-    return ''.join(
-        f'<article class="rk-panel export-conversation" id="conv-{entry.index + 1}">'
-        f'<h3>Conversation {entry.index + 1} · {esc(entry.persona)} · {esc(entry.scenario)}</h3>'
-        f'<p class="export-conversation-meta">{entry.turn_count} turns · Score {entry.goal_completion_score:.2f} · {esc(entry.terminated_by)} · {entry.total_tokens:,} tokens</p>'
-        f'{render_transcript_fragment(entry)}</article>'
-        for entry in entries
-    )
+    from evaluatorq.common.reports.html_helpers import status_badge
+
+    conversations: list[str] = []
+    for entry in entries:
+        if entry.error or entry.terminated_by == 'error':
+            outcome = status_badge('Error', 'warn')
+        else:
+            outcome = status_badge(
+                'Goal met' if entry.goal_achieved else 'Goal missed', 'pass' if entry.goal_achieved else 'fail'
+            )
+        conversations.append(
+            f'<details class="rk-panel export-conversation export-evidence" id="conv-{entry.index + 1}">'
+            f'<summary class="export-conversation-summary">'
+            f'<span class="export-conversation-title">Conversation {entry.index + 1} · {esc(entry.persona)} · {esc(entry.scenario)}</span> {outcome}'
+            f'<span class="export-conversation-meta">{entry.turn_count} turns · Score {entry.goal_completion_score:.2f} · {entry.total_tokens:,} tokens</span>'
+            f'</summary>{render_transcript_fragment(entry)}</details>'
+        )
+    return ''.join(conversations)
