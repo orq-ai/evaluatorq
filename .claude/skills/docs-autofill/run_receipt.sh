@@ -34,6 +34,26 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT" || exit 1
 
 RECEIPT="$ROOT/.context/receipt.txt"
+OUT_LINES="${RECEIPT_OUT_LINES:-40}"
+# Validated here, before any block runs, because the script is deliberately not
+# `set -e`: an unvalidated value reaches `head -<value>`, which rejects it as an
+# option, writes nothing, and leaves the run to print RESULT: OK over an empty
+# output section. That is the exact failure this cap was raised to prevent.
+case "$OUT_LINES" in
+  '' | *[!0-9]*)
+    printf 'RECEIPT_OUT_LINES must be a non-negative integer, got %s\n' "$OUT_LINES" >&2
+    exit 2
+    ;;
+esac
+# Decimal syntax is not enough. A value the shell accepts can still overflow this
+# platform's `head`, which rejects it ("Value too large for defined data type"),
+# writes nothing, and leaves the run reporting success over an empty output
+# section — the same hole as an unvalidated value. Ask `head` whether it can use
+# the number instead of guessing where its limit is.
+if ! printf '' | head -n "$OUT_LINES" >/dev/null 2>&1; then
+  printf 'RECEIPT_OUT_LINES=%s is not a line count this head accepts\n' "$OUT_LINES" >&2
+  exit 2
+fi
 WORK="$(mktemp -d)"
 mkdir -p "$ROOT/.context"
 
@@ -195,8 +215,17 @@ while IFS=$'\t' read -r idx lang start_line; do
   esac
 
   printf 'command: %s\nexit: %s\n' "$lang" "$code" >>"$RECEIPT"
-  printf 'output (first 5 lines):\n' >>"$RECEIPT"
-  printf '%s\n' "$out" | head -5 >>"$RECEIPT"
+  # Up to OUT_LINES, not 5: the receipt is the evidence for what the prose claims,
+  # and a block whose measurements run past the cap evidences nothing below it. A
+  # 5-line cap on this page's clustering block hid three rows, and two false
+  # z-score claims rode through review behind the truncation.
+  printf 'output (first %s lines):\n' "$OUT_LINES" >>"$RECEIPT"
+  printf '%s\n' "$out" | head -n "$OUT_LINES" >>"$RECEIPT"
+  # `printf '%s\n' ""` still feeds one newline to wc, so an empty output would
+  # claim truncation at OUT_LINES=0. Gate on there being output at all.
+  if [ -n "$out" ] && [ "$(printf '%s\n' "$out" | wc -l)" -gt "$OUT_LINES" ]; then
+    printf '[output truncated at %s lines]\n' "$OUT_LINES" >>"$RECEIPT"
+  fi
   printf '\n' >>"$RECEIPT"
   [ "$code" -ne 0 ] && FAILED=1
 done <"$WORK/index.tsv"
