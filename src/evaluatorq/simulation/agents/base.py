@@ -7,12 +7,11 @@ including LLM interaction with retry logic.
 from __future__ import annotations
 
 import logging
-import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from evaluatorq.common.env_config import env_float, env_int
+from evaluatorq.common.env_config import env_float, env_int, env_raw
 from evaluatorq.common.llm_call import (
     execute_chat_completion,
     execute_response,
@@ -30,7 +29,6 @@ from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_input
 from evaluatorq.contracts import (
-    DEFAULT_TARGET_MAX_TOKENS,
     AgentResponse,
     FunctionCall,
     LLMCallConfig,
@@ -62,7 +60,7 @@ def _default_timeout_s() -> float:
     tailscale box under parallel load) can exceed the default; raise via
     EVALUATORQ_LLM_TIMEOUT_S, or per-agent via ``LLMCallConfig.timeout_ms``.
     """
-    return env_float('EVALUATORQ_LLM_TIMEOUT_S', 60.0, min_value=1.0)
+    return env_float('EVALUATORQ_LLM_TIMEOUT_S')
 
 
 def _default_max_tokens() -> int:
@@ -73,7 +71,7 @@ def _default_max_tokens() -> int:
     as "no text and no tool calls". Raise via EVALUATORQ_LLM_MAX_TOKENS, or
     per-agent via ``LLMCallConfig.max_tokens``.
     """
-    return env_int('EVALUATORQ_LLM_MAX_TOKENS', DEFAULT_TARGET_MAX_TOKENS, min_value=1)
+    return env_int('EVALUATORQ_LLM_MAX_TOKENS')
 
 
 def _default_reasoning_effort() -> str | None:
@@ -95,7 +93,7 @@ def _default_reasoning_effort() -> str | None:
     a `BaseAgent`'s config leaves it unset, that one via an explicit
     ``reasoning_effort=`` threaded into the target's backend construction.
     """
-    raw = os.environ.get('EVALUATORQ_REASONING_EFFORT', '').strip().lower()
+    raw = env_raw('EVALUATORQ_REASONING_EFFORT', '').strip().lower()
     return raw if raw not in ('', 'none', 'off') else None
 
 

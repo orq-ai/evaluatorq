@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import os
 import re
 import uuid
 import warnings
@@ -20,6 +19,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.messages import coerce_content_text
@@ -283,7 +283,7 @@ async def _send_cleaned_results(
     used (RES-912). Falls back to ``ORQ_BASE_URL`` / the default when it is not
     an Orq-routed client.
     """
-    api_key = os.environ.get('ORQ_API_KEY')
+    api_key = env_raw('ORQ_API_KEY')
     if not api_key:
         logger.debug('Skipping result upload to Orq platform: ORQ_API_KEY not set')
         return
@@ -732,7 +732,7 @@ def _validate_credentials_and_deps(
     # Also check per-role clients: if either role has a pre-configured client,
     # we don't need global credentials.
     has_role_client = config.attacker.client is not None or config.evaluator.client is not None
-    if llm_client is None and not has_role_client and not os.getenv('OPENAI_API_KEY') and not os.getenv('ORQ_API_KEY'):
+    if llm_client is None and not has_role_client and not env_raw('OPENAI_API_KEY') and not env_raw('ORQ_API_KEY'):
         raise CredentialError(
             'Missing LLM credentials for attack/evaluation models. '
             'Set OPENAI_API_KEY for direct OpenAI access, or ORQ_API_KEY to use the ORQ router.'

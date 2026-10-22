@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 from evaluatorq.common.llm_client import orq_base_url as _orq_base_url
 from evaluatorq.common.replay import REPLAY_VERSION
 from evaluatorq.common.run_store_dir import get_store_dir
@@ -105,7 +105,7 @@ def _agent_info_from_response(agent_data: Any, agent_key: str) -> AgentInfoSnaps
     # use the configured ORQ_WORKSPACE key instead. The agent payload has never
     # carried a workspace_key on any SDK version — do not re-add a fallback arg.
     workspace_key = studio_workspace_key()
-    base_url = os.getenv('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
+    base_url = env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL).rstrip('/')
     url = orq_studio_url(target_kind='agent', entity_id=agent_id, workspace_id=workspace_key, base_url=base_url)
 
     return {
@@ -136,7 +136,7 @@ async def fetch_agent_info(agent_key: str) -> AgentInfoSnapshot | None:
 
     Deliberately excludes the agent's system prompt / instructions.
     """
-    api_key = os.getenv('ORQ_API_KEY')
+    api_key = env_raw('ORQ_API_KEY')
     if not api_key:
         return None
 
