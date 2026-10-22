@@ -65,7 +65,7 @@ print(inspect.signature(evaluatorq.red_team))
 "
 ```
 
-**Membership and prose — read source.** Registries under `src/evaluatorq/redteam/*_registry.py`, enums in `contracts.py`, env vars via `grep -rn 'environ\|getenv' src`.
+**Membership and prose — read source.** Registries under `src/evaluatorq/redteam/*_registry.py`, enums in `contracts.py`, env vars via the `ENV_VARS` table in `src/evaluatorq/common/env_config.py`.
 
 ## Step 3 — classify each finding
 
@@ -111,7 +111,7 @@ Default is the full sweep. For PR use, take a git range and verify only claims t
 
 ```bash
 git diff --name-only origin/main... -- src
-git diff origin/main... -- src | grep -E '^[+-].*(__all__|@app\.|Option\(|environ)'
+git diff origin/main... -- src | grep -E '^[+-].*(__all__|@app\.|Option\(|EnvVar\()'
 ```
 
 Same steps, smaller claim set. Step 0 still applies.

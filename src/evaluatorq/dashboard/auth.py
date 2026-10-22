@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
+from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, list_orq_profiles, resolve_orq_client
 
@@ -47,8 +47,8 @@ def resolve_dashboard_auth(
 
     method = settings.orq_auth_method
     if method == 'environment':
-        key = os.environ.get('ORQ_API_KEY', '').strip()
-        return DashboardAuth(method, key or None, os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL))
+        key = env_raw('ORQ_API_KEY', '').strip()
+        return DashboardAuth(method, key or None, env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL))
     if method == 'cli_profile':
         name = settings.orq_profile
         if not name:

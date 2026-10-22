@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
 from evaluatorq.common.retry import without_client_retries
 from evaluatorq.redteam.backends._retry import warn_ignored_target_retries
 from evaluatorq.redteam.exceptions import BackendError, CredentialError
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 
 
 # Retained for backward-compatible imports; canonical values live in common.llm_client.
-ORQ_DEFAULT_BASE_URL = 'https://my.orq.ai'
+ORQ_DEFAULT_BASE_URL = DEFAULT_ORQ_BASE_URL
 
 
 def create_async_llm_client(

@@ -13,6 +13,7 @@ from typing import Any
 
 from loguru import logger
 
+from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL
 
 
@@ -83,7 +84,7 @@ def _cli_json(
         command.extend(('--profile', ''))
         for name in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'):
             environment.pop(name, None)
-        environment['ORQ_SERVER'] = os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
+        environment['ORQ_SERVER'] = env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
     if server:
         command.extend(('--server', server))
     if workspace:

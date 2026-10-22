@@ -33,7 +33,7 @@ uv run python -c "import evaluatorq; print(evaluatorq.__all__)"
 uv run eq --help                       # command groups
 uv run eq redteam run --help           # --mode, --target forms
 grep -rn 'register_backend' src        # backend registry
-grep -rn 'environ\|getenv' src         # env vars
+grep -n "EnvVar('" src/evaluatorq/common/env_config.py   # env vars (ENV_VARS)
 ```
 
 ## Step 2 — build the pairwise matrix
