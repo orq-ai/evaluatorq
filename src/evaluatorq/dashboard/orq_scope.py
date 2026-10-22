@@ -13,8 +13,7 @@ from typing import Any
 
 from loguru import logger
 
-from evaluatorq.common.env_config import env_raw
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 
 
 @dataclass(frozen=True)

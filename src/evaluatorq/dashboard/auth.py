@@ -9,9 +9,9 @@ from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from evaluatorq.common.env_config import env_raw
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw, env_text
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, list_orq_profiles, resolve_orq_client
+from evaluatorq.common.orq_client import list_orq_profiles, resolve_orq_client
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -47,8 +47,7 @@ def resolve_dashboard_auth(
 
     method = settings.orq_auth_method
     if method == 'environment':
-        key = env_raw('ORQ_API_KEY', '').strip()
-        return DashboardAuth(method, key or None, env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL))
+        return DashboardAuth(method, env_text('ORQ_API_KEY'), env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL))
     if method == 'cli_profile':
         name = settings.orq_profile
         if not name:

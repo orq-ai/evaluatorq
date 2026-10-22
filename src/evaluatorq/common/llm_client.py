@@ -40,7 +40,7 @@ def orq_base_url() -> str:
     otherwise. See ``dashboard.orq_workspace.classify_host`` for prod/staging/
     on-prem detection from this value.
     """
-    return env_raw('ORQ_BASE_URL', ORQ_DEFAULT_HOST).rstrip('/')
+    return env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL).rstrip('/')
 
 
 class MissingLLMCredentialsError(ValueError):
@@ -80,7 +80,7 @@ def client_routes_through_orq(client: AsyncOpenAI | None) -> bool:
 def resolve_results_base_url(
     client: AsyncOpenAI | None = None,
     *,
-    default_orq_host: str = ORQ_DEFAULT_HOST,
+    default_orq_host: str = DEFAULT_ORQ_BASE_URL,
 ) -> str:
     """Resolve the Orq host that results should be uploaded to.
 
@@ -103,7 +103,7 @@ def resolve_llm_client(
     *,
     extra_api_key: str | None = None,
     orq_host: str | None = None,
-    default_orq_host: str = ORQ_DEFAULT_HOST,
+    default_orq_host: str = DEFAULT_ORQ_BASE_URL,
     honor_openai_base_url: bool = True,
     require_orq: bool = False,
     max_retries: int | None = None,

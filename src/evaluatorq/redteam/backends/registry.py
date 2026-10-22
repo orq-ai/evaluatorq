@@ -18,10 +18,6 @@ if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
 
 
-# Retained for backward-compatible imports; canonical values live in common.llm_client.
-ORQ_DEFAULT_BASE_URL = DEFAULT_ORQ_BASE_URL
-
-
 def create_async_llm_client(
     role_config: LLMCallConfig | None = None,
     *,
@@ -54,7 +50,7 @@ def create_async_llm_client(
     try:
         return resolve_llm_client(
             config_client,
-            default_orq_host=ORQ_DEFAULT_BASE_URL,
+            default_orq_host=DEFAULT_ORQ_BASE_URL,
             honor_openai_base_url=True,
             max_retries=max_retries,
         ).client

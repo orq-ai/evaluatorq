@@ -1159,24 +1159,49 @@ def _module_constants(module: str) -> dict[str, str]:
     }
 
 
+@cache
+def _src_sources() -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (path.relative_to(SRC).as_posix(), path.read_text(encoding='utf-8')) for path in sorted(SRC.rglob('*.py'))
+    )
+
+
+def _string_constants(tree: ast.Module) -> dict[str, str]:
+    """String constants a module defines at top level or imports from another ``evaluatorq`` module."""
+    constants: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith('evaluatorq'):
+            imported = _module_constants(node.module)
+            constants |= {a.asname or a.name: imported[a.name] for a in node.names if a.name in imported}
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            constants[node.targets[0].id] = node.value.value
+    return constants
+
+
 def _env_reads(source: str) -> list[tuple[int, str, str | None]]:
     """``(lineno, enclosing function, variable name or None)`` for every environment read.
 
-    Reads are ``environ.get``/``.setdefault``, ``getenv``, ``environ[...]`` in load context and
-    ``in``/``not in environ``. Writes, ``pop`` and copies of the whole environment are not reads.
+    Reads are ``environ.get``/``.setdefault``, ``getenv``, ``environ[...]`` in load context,
+    ``in``/``not in environ`` and an ``environ.pop`` whose result is used. Writes, a ``pop`` as a
+    statement and copies of the whole environment are not reads.
     """
     tree = ast.parse(source)
     os_names, environ_names, getenv_names = {'os'}, set(), set()
-    constants: dict[str, str] = {}
+    constants = _string_constants(tree)
+    statement_calls = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Expr)}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             os_names |= {a.asname or a.name for a in node.names if a.name == 'os'}
         elif isinstance(node, ast.ImportFrom) and node.module == 'os':
             environ_names |= {a.asname or a.name for a in node.names if a.name == 'environ'}
             getenv_names |= {a.asname or a.name for a in node.names if a.name == 'getenv'}
-        elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith('evaluatorq'):
-            imported = _module_constants(node.module)
-            constants |= {a.asname or a.name: imported[a.name] for a in node.names if a.name in imported}
 
     def is_environ(node: ast.expr) -> bool:
         if isinstance(node, ast.Name):
@@ -1189,11 +1214,13 @@ def _env_reads(source: str) -> list[tuple[int, str, str | None]]:
         )
 
     for node in tree.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                constants[node.targets[0].id] = node.value.value
-            elif is_environ(node.value):
-                environ_names.add(node.targets[0].id)
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and is_environ(node.value)
+        ):
+            environ_names.add(node.targets[0].id)
 
     def name_of(node: ast.expr | None) -> str | None:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -1205,18 +1232,22 @@ def _env_reads(source: str) -> list[tuple[int, str, str | None]]:
     def visit(node: ast.AST, scope: str) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             scope = node.name
-        if isinstance(node, ast.Call) and node.args:
+        if isinstance(node, ast.Call):
             func = node.func
-            if (isinstance(func, ast.Attribute) and func.attr in {'get', 'setdefault'} and is_environ(func.value)) or (
-                (
-                    isinstance(func, ast.Attribute)
-                    and func.attr == 'getenv'
-                    and isinstance(func.value, ast.Name)
-                    and func.value.id in os_names
-                )
-                or (isinstance(func, ast.Name) and func.id in getenv_names)
-            ):
-                reads.append((node.lineno, scope, name_of(node.args[0])))
+            key = next(iter(node.args), None) or next((kw.value for kw in node.keywords if kw.arg == 'key'), None)
+            environ_read = (
+                isinstance(func, ast.Attribute)
+                and is_environ(func.value)
+                and (func.attr in {'get', 'setdefault'} or (func.attr == 'pop' and id(node) not in statement_calls))
+            )
+            getenv_read = (
+                isinstance(func, ast.Attribute)
+                and func.attr == 'getenv'
+                and isinstance(func.value, ast.Name)
+                and func.value.id in os_names
+            ) or (isinstance(func, ast.Name) and func.id in getenv_names)
+            if key is not None and (environ_read or getenv_read):
+                reads.append((node.lineno, scope, name_of(key)))
         elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load) and is_environ(node.value):
             reads.append((node.lineno, scope, name_of(node.slice)))
         elif isinstance(node, ast.Compare):
@@ -1234,11 +1265,10 @@ def _env_read_hits() -> list[str]:
     from evaluatorq.common.env_config import ENV_VARS
 
     hits: list[str] = []
-    for path in sorted(SRC.rglob('*.py')):
-        relative = path.relative_to(SRC).as_posix()
+    for relative, source in _src_sources():
         if relative == _ENV_CONFIG_OWNER:
             continue
-        for line, scope, name in _env_reads(path.read_text()):
+        for line, scope, name in _env_reads(source):
             if name is None:
                 if f'{relative}:{scope}' not in ENV_SITE_EXEMPT:
                     hits.append(f'{relative}:{line} reads an environment variable whose name is not a literal')
@@ -1266,9 +1296,9 @@ def test_env_reads_go_through_env_config() -> None:
 
 def test_env_site_exemptions_still_match_a_read() -> None:
     sites = {
-        f'{path.relative_to(SRC).as_posix()}:{scope}'
-        for path in SRC.rglob('*.py')
-        for _, scope, name in _env_reads(path.read_text())
+        f'{relative}:{scope}'
+        for relative, source in _src_sources()
+        for _, scope, name in _env_reads(source)
         if name is None
     }
     assert set(ENV_SITE_EXEMPT) <= sites
@@ -1287,8 +1317,53 @@ def test_env_site_exemptions_still_match_a_read() -> None:
         ("import os\nENV = os.environ\nif 'Z' not in ENV:\n    pass\n", [(3, '<module>', 'Z')]),
         ("import os\ndef f(n):\n    return os.environ.setdefault(n, '')\n", [(3, 'f', None)]),
         ("import os\nos.environ['X'] = '1'\nos.environ.pop('X', None)\nenv = {**os.environ}\n", []),
+        (
+            "import os\nos.environ.get(key='X')\nv = os.environ.pop('Y', None)\n",
+            [(2, '<module>', 'X'), (3, '<module>', 'Y')],
+        ),
         ('"""os.environ.get(\'X\') in a docstring."""\n', []),
     ],
 )
 def test_env_read_detector_actually_fires(source: str, expected: list[tuple[int, str, str | None]]) -> None:
     assert _env_reads(source) == expected
+
+
+def _env_raw_defaults(source: str) -> list[tuple[int, str, str]]:
+    """``(lineno, name, default)`` for each ``env_raw(name, default)`` whose two arguments resolve to strings."""
+    tree = ast.parse(source)
+    constants = _string_constants(tree)
+
+    def text(node: ast.expr) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        return constants.get(node.id) if isinstance(node, ast.Name) else None
+
+    found: list[tuple[int, str, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'env_raw':
+            if len(node.args) == 2 and (name := text(node.args[0])) and (default := text(node.args[1])) is not None:
+                found.append((node.lineno, name, default))
+    return found
+
+
+def test_env_raw_call_site_defaults_match_the_declared_default() -> None:
+    """A call site's own default must be the row's, so the table and docs describe what the code does.
+
+    ``''`` is exempt: it stands for "unset" at sites that strip or upper-case the value.
+    """
+    from evaluatorq.common.env_config import ENV_VARS
+
+    mismatched = [
+        f'{relative}:{line} reads {name} with default {default!r}; ENV_VARS declares {ENV_VARS[name].default!r}'
+        for relative, source in _src_sources()
+        for line, name, default in _env_raw_defaults(source)
+        if default and default != ENV_VARS[name].default
+    ]
+    assert not mismatched, '\n'.join(mismatched)
+
+
+def test_env_raw_default_detector_resolves_constants() -> None:
+    source = (
+        "from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL\nN = 'X'\nenv_raw(N, DEFAULT_ORQ_BASE_URL)\n"
+    )
+    assert _env_raw_defaults(source) == [(3, 'X', 'https://my.orq.ai')]

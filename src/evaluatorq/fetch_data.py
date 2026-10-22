@@ -10,8 +10,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from loguru import logger
 
-from .common.env_config import env_raw
-from .common.llm_client import ORQ_DEFAULT_HOST
+from .common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 from .common.orq_client import resolve_orq_client
 from .types import DataPoint
 
@@ -154,7 +153,7 @@ _EXPORT_URL_RETRY_SECONDS = 2.0
 
 
 def _resolve_orq_base_url(base_url: str | None) -> str:
-    return (base_url or env_raw('ORQ_BASE_URL', ORQ_DEFAULT_HOST)).rstrip('/')
+    return (base_url or env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)).rstrip('/')
 
 
 def _raise_for_experiment(response: httpx.Response, experiment_id: str, action: str) -> None:

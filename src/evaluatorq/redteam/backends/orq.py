@@ -15,8 +15,7 @@ from typing import Any, cast
 
 from loguru import logger
 
-from evaluatorq.common.env_config import env_raw
-from evaluatorq.redteam.backends.registry import ORQ_DEFAULT_BASE_URL
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 from evaluatorq.redteam.contracts import TargetKind
 from evaluatorq.redteam.exceptions import CredentialError
 
@@ -39,7 +38,7 @@ def _get_orq_api_key() -> str:
 
 def _get_orq_server_url() -> str:
     """Read ORQ_BASE_URL from environment and strip /v3/router for SDK use."""
-    url = env_raw('ORQ_BASE_URL', ORQ_DEFAULT_BASE_URL)
+    url = env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
     return url.rstrip('/').removesuffix('/v3/router')
 
 

@@ -199,11 +199,30 @@ def test_report_status(monkeypatch: pytest.MonkeyPatch, warns: list[str]) -> Non
         assert _reported('X_INT').status == 'rejected', raw
     monkeypatch.setenv('X_FLOAT', 'inf')
     assert _reported('X_FLOAT').status == 'rejected'
-    monkeypatch.setenv('X_BOOL', '')
-    assert _reported('X_BOOL').status == 'set'  # the bool reader treats empty as unset, not as a mistake
+    monkeypatch.setenv('X_BOOL', ' ')
+    assert _reported('X_BOOL').status == 'unset'  # the bool reader treats blank as unset, not as a mistake
     monkeypatch.setenv('X_BOOL', 'maybe')
     assert _reported('X_BOOL').status == 'rejected'
     assert warns == []  # reporting never logs
+
+
+def test_report_blank_owner_row_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', ' ')
+    assert _reported('EVALUATORQ_FINDER_LIMIT').status == 'unset'  # effective_settings skips a blank value
+    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', 'abc')
+    assert _reported('EVALUATORQ_FINDER_LIMIT').status == 'rejected'
+
+
+@pytest.mark.parametrize(
+    ('name', 'reader'), [('X_INT', env_int), ('X_FLOAT', env_float), ('X_BOOL', env_bool)]
+)
+@pytest.mark.parametrize('raw', ['', ' ', '5', '5.5', 'abc', 'nan', '-1', '1e9', 'yes', 'off'])
+def test_report_rejects_exactly_what_the_reader_warns_on(
+    monkeypatch: pytest.MonkeyPatch, warns: list[str], name: str, reader, raw: str  # noqa: ANN001
+) -> None:
+    monkeypatch.setenv(name, raw)
+    reader(name)
+    assert (_reported(name).status == 'rejected') == bool(warns), raw
 
 
 def test_report_masks_secrets_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -229,11 +248,11 @@ def test_mask_secret_shows_only_suffix() -> None:
 def test_role_rows_match_model_roles() -> None:
     from evaluatorq.common.model_roles import BUILTIN, LEGACY_TASK_ENV, ROLE_ENV
 
+    owner = 'evaluatorq.common.model_roles.role_model'
     for role, name in ROLE_ENV.items():
         assert ENV_VARS[name].default == BUILTIN[role]
-        assert ENV_VARS[name].owner == 'evaluatorq.common.model_roles.role_model'
-    for name in LEGACY_TASK_ENV.values():
-        assert ENV_VARS[name].owner == 'evaluatorq.common.model_roles.role_model'
+    owned = {name for name, row in ENV_VARS.items() if row.owner == owner}
+    assert owned == set(ROLE_ENV.values()) | set(LEGACY_TASK_ENV.values())
 
 
 def test_finder_rows_match_settings() -> None:
@@ -269,7 +288,6 @@ _PROSE_DEFAULTS = {
     'EVALUATORQ_DIR': 'falls back to .evaluatorq in the working directory',
     'EVALUATORQ_SPAN_MAX_TEXT_CHARS': 'unset means no limit',
     'EVALUATORQ_REASONING_EFFORT': 'unset means the parameter is not sent',
-    'ORQ_DISABLE_TRACING': 'documented as unset; reads as false',
 }
 
 
@@ -321,4 +339,4 @@ def test_docs_defaults_match_declared_defaults() -> None:
 
 def test_prose_default_exemptions_are_still_needed() -> None:
     assert set(_PROSE_DEFAULTS) <= set(_docs_rows())
-    assert len(_PROSE_DEFAULTS) == 6
+    assert len(_PROSE_DEFAULTS) == 5

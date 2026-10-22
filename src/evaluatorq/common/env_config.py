@@ -178,60 +178,58 @@ def env_text(name: str) -> str | None:
     return os.environ.get(name, '').strip() or None
 
 
-def _bounded(name: str, value: float, default: float, min_value: float | None, max_value: float | None) -> float:
-    if min_value is not None and value < min_value:
-        logger.warning('{} must be >= {} (got {}); using default {}.', name, min_value, value, default)
-        return default
-    if max_value is not None and value > max_value:
-        logger.warning('{} must be <= {} (got {}); using default {}.', name, max_value, value, default)
-        return default
-    return value
+def _parse(row: EnvVar, raw: str) -> tuple[int | float | bool | None, str | None]:
+    """Parse a set value of a typed row without logging.
+
+    Returns ``(value, None)`` when the reader takes it, ``(None, problem)`` when the reader warns and
+    falls back, and ``(None, None)`` for a blank bool, which reads as unset.
+    """
+    value = raw.strip()
+    if row.kind == 'bool':
+        if not value:
+            return None, None
+        if value.lower() in _TRUE:
+            return True, None
+        if value.lower() in _FALSE:
+            return False, None
+        return None, f'is not a boolean ({raw!r})'
+    if not value:
+        # in a CI ``env:`` block an unresolved ``${{ vars.X }}`` expands to empty: signal it
+        return None, 'is set but empty'
+    try:
+        number = int(value) if row.kind == 'int' else float(value)
+    except ValueError:
+        return None, f'is not {"an integer" if row.kind == "int" else "a number"} ({value!r})'
+    if not math.isfinite(number):  # float() accepts nan/inf; a knob is never one of those
+        return None, f'is not a finite number ({value!r})'
+    if row.min_value is not None and number < row.min_value:
+        return None, f'must be >= {row.min_value} (got {number})'
+    if row.max_value is not None and number > row.max_value:
+        return None, f'must be <= {row.max_value} (got {number})'
+    return number, None
 
 
-def _raw_number(name: str, default: float) -> str | None:
-    """Shared prelude for env_int/env_float: None if unset (silent), else the stripped value;
-    an empty/whitespace value warns and returns None so the caller falls back to the default."""
-    raw = os.environ.get(name)
+def _read(row: EnvVar, default: float) -> int | float | bool:
+    raw = os.environ.get(row.name)
     if raw is None:
-        return None
-    raw = raw.strip()
-    if not raw:
-        logger.warning('{} is set but empty; using default {}.', name, default)
-        return None
-    return raw
+        return default
+    value, problem = _parse(row, raw)
+    if problem is not None:
+        # depth=1: the log line names the public reader (env_float, ...), as docs/configuration.md shows
+        logger.opt(depth=1).warning('{} {}; using default {}.', row.name, problem, default)
+    return default if value is None else value
 
 
 def env_int(name: str) -> int:
     """Read an int override. Unset -> default; empty/invalid/out-of-range -> WARNING + default."""
     row = _row(name, 'int')
-    default = cast('int', row.default)
-    raw = _raw_number(name, default)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.warning('{} is not an integer ({!r}); using default {}.', name, raw, default)
-        return default
-    return int(_bounded(name, value, default, row.min_value, row.max_value))
+    return int(_read(row, cast('int', row.default)))
 
 
 def env_float(name: str) -> float:
     """Read a float override. Unset -> default; empty/invalid/out-of-range -> WARNING + default."""
     row = _row(name, 'float')
-    default = float(cast('float', row.default))
-    raw = _raw_number(name, default)
-    if raw is None:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        logger.warning('{} is not a number ({!r}); using default {}.', name, raw, default)
-        return default
-    if not math.isfinite(value):  # float() accepts nan/inf; a knob is never one of those
-        logger.warning('{} is not a finite number ({!r}); using default {}.', name, raw, default)
-        return default
-    return float(_bounded(name, value, default, row.min_value, row.max_value))
+    return float(_read(row, float(cast('float', row.default))))
 
 
 def env_bool(name: str) -> bool:
@@ -239,19 +237,8 @@ def env_bool(name: str) -> bool:
 
     Truthy: 1/true/yes/on. Falsy: 0/false/no/off (case-insensitive).
     """
-    default = bool(_row(name, 'bool').default)
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    value = raw.strip().lower()
-    if not value:  # empty/whitespace reads as "not set" for a bool, unlike the numeric readers
-        return default
-    if value in _TRUE:
-        return True
-    if value in _FALSE:
-        return False
-    logger.warning('{} is not a boolean ({!r}); using default {}.', name, raw, default)
-    return default
+    row = _row(name, 'bool')
+    return bool(_read(row, bool(row.default)))
 
 
 def mask_secret(value: str) -> str:
@@ -264,20 +251,14 @@ def mask_secret(value: str) -> str:
     return f'{stars}{value[-4:]}'
 
 
-def _accepted(row: EnvVar, raw: str) -> bool:
-    """Whether the typed readers would take *raw* rather than fall back, without logging."""
-    value = raw.strip()
+def _status(row: EnvVar, raw: str | None) -> Status:
+    if raw is None:
+        return 'unset'
+    if not raw.strip() and (row.kind == 'bool' or row.owner is not None):
+        return 'unset'  # env_bool and the owners both skip a blank value
     if row.kind == 'raw':
-        return True
-    if row.kind == 'bool':
-        return not value or value.lower() in _TRUE | _FALSE
-    try:
-        number = int(value) if row.kind == 'int' else float(value)
-    except ValueError:
-        return False
-    if not math.isfinite(number):
-        return False
-    return (row.min_value is None or number >= row.min_value) and (row.max_value is None or number <= row.max_value)
+        return 'set'
+    return 'rejected' if _parse(row, raw)[1] is not None else 'set'
 
 
 def report() -> list[EnvReport]:
@@ -285,10 +266,6 @@ def report() -> list[EnvReport]:
     rows: list[EnvReport] = []
     for row in ENV_VARS.values():
         raw = os.environ.get(row.name)
-        if raw is None:
-            status: Status = 'unset'
-        else:
-            status = 'set' if _accepted(row, raw) else 'rejected'
         value = mask_secret(raw) if raw is not None and row.secret else raw
-        rows.append(EnvReport(row.name, status, value, row.default, row.owner))
+        rows.append(EnvReport(row.name, _status(row, raw), value, row.default, row.owner))
     return rows

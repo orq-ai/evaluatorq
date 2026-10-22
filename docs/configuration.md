@@ -210,7 +210,7 @@ See [Tracing](tracing.md) for the full picture.
 
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
-| `ORQ_DISABLE_TRACING` | No | unset | Set to `1`, `true`, `yes` or `on` to suppress all OpenTelemetry spans even when `ORQ_API_KEY` or `OTEL_EXPORTER_OTLP_ENDPOINT` is present. Case-insensitive; see [When a value is wrong](#when-a-value-is-wrong). |
+| `ORQ_DISABLE_TRACING` | No | `false` | Set to `1`, `true`, `yes` or `on` to suppress all OpenTelemetry spans even when `ORQ_API_KEY` or `OTEL_EXPORTER_OTLP_ENDPOINT` is present. Case-insensitive; see [When a value is wrong](#when-a-value-is-wrong). |
 | `ORQ_DEBUG` | No | unset | Set to any non-empty value to print tracing setup diagnostics to stdout (endpoint, auth headers, initialization errors). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | — | Explicit OTLP HTTP endpoint. Takes precedence over the `ORQ_BASE_URL`-derived endpoint. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | No | — | Comma-separated `key=value` pairs added to every OTLP export request. Format: `key1=value1,key2=value2`. |
@@ -284,7 +284,7 @@ EVALUATORQ_CATALOGUE_TIMEOUT_S=abc eq redteam runs
 ```
 
 ```console
-2026-09-14 06:32:21.018 | WARNING  | evaluatorq.common.env_config:env_float:72 - EVALUATORQ_CATALOGUE_TIMEOUT_S is not a number ('abc'); using default 30.0.
+2026-09-14 06:32:21.018 | WARNING  | evaluatorq.common.env_config:env_float:232 - EVALUATORQ_CATALOGUE_TIMEOUT_S is not a number ('abc'); using default 30.0.
 ```
 
 The command then lists your runs as usual and exits `0` — the rejected timeout costs it nothing but that line. Expect one line per read, not one per process: a knob read on every LLM call warns on every LLM call. The same contract on a boolean:
@@ -294,7 +294,7 @@ ORQ_DISABLE_TRACING=maybe python -c "from evaluatorq.tracing import is_tracing_e
 ```
 
 ```console
-2026-09-14 06:19:52.231 | WARNING  | evaluatorq.common.env_config:env_bool:95 - ORQ_DISABLE_TRACING is not a boolean ('maybe'); using default False.
+2026-09-14 06:19:52.231 | WARNING  | evaluatorq.common.env_config:env_bool:241 - ORQ_DISABLE_TRACING is not a boolean ('maybe'); using default False.
 ```
 
 None of the ten raise. A typo costs you a default and a log line, never a stopped process.
