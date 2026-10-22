@@ -695,6 +695,30 @@ def test_sim_outcomes_donut_has_no_verdict_for_all_errors(sim_run) -> None:
     assert 'no goal verdict' in html
 
 
+@pytest.mark.parametrize('as_enum', [False, True])
+def test_sim_outcomes_donut_handles_legacy_string_enum_errors(as_enum) -> None:
+    from enum import Enum
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard.report_tabs import _sim_outcomes_donut
+
+    # Python 3.10's compatibility enum inherits Enum.__str__, which prints
+    # "Termination.error" instead of the underlying "error" value.
+    class Termination(str, Enum):
+        error = 'error'
+
+    row = SimpleNamespace(
+        error=None,
+        terminated_by=Termination.error if as_enum else 'error',
+        goal_achieved=False,
+    )
+    html = _sim_outcomes_donut([row])
+    assert 'n/a' in html
+    assert 'no goal verdict' in html
+    assert 'Errors · 1' in html
+    assert 'Not achieved' not in html
+
+
 def test_sim_outcomes_donut_keeps_error_in_partial_rate_denominator(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import _sim_outcomes_donut
     from evaluatorq.simulation.contracts import TerminatedBy

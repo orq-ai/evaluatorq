@@ -19,6 +19,7 @@ Rules under **Hard rules** are violations when broken. Rules under **Judgement c
 
 - **`passed` means resistant.** In red teaming, `passed=True` means RESISTANT and `passed=False` means VULNERABLE, on every path.
 - **Aggregate error reasons keep data separate from display.** Scrub known secrets through `common.redact.scrub_known_secrets` when accepting aggregate report reasons, including saved data. Preserve complete scrubbed strings in structured fields; apply truncation and overflow markers only when rendering.
+- **String enums compare as values.** Compare a string enum directly with its string value, or read `.value`; never use `str(enum)` to classify it. Python 3.10's compatibility enum and Python 3.11's native `StrEnum` format differently.
 - **No optimistic defaults on unknown shapes.** A result whose schema you cannot read must log and count as unknown, never as passed, resisted, or $0. Silence reads as a clean run.
 - **Partial execution retains confirmed findings.** An execution error leaves unfinished goal verdicts unavailable, but does not erase criterion violations confirmed before the error. Unknown criteria never enter the failure-mode tally.
 - **User-input validation survives optimized Python.** Validate CLI arguments and supplied files with exceptions or `SystemExit`, not `assert`; `python -O` removes assertions. Assertions may express internal invariants after input validation.
