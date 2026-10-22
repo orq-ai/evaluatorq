@@ -4044,3 +4044,14 @@ DASHBOARD_CSS = (
     + _PAIRWISE_COMPARISONS_CSS
     + _PAIRWISE_COMPARE_CSS
 )
+
+# Report foundations and component rules, shared by offline HTML documents.
+# Excludes the unrelated trace explorer, Insights, and settings application CSS.
+REPORT_CSS = (
+    _DASHBOARD_CSS_HEAD
+    + _SIM_REPORT_CSS
+    + _SIM_TRANSCRIPT_CSS
+    + _SIM_REPORT_OVERRIDES_CSS
+    + _SIM_TRANSCRIPT_OVERRIDES_CSS
+    + _RT_REPORT_CSS
+)

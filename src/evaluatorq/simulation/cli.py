@@ -1881,6 +1881,7 @@ def _load_results_for_export(input_path: Path) -> tuple[list[Any], list[Any]]:
 
 @app.command(no_args_is_help=True)
 def export(
+    ctx: typer.Context,
     input_path: Annotated[
         Path,
         typer.Option(
@@ -1962,9 +1963,21 @@ def export(
 
         rendered = export_markdown(results, target=target, recommendations=recs)
     else:
+        from evaluatorq.simulation.contracts import SimulationRun
         from evaluatorq.simulation.reports import export_html
 
-        rendered = export_html(results, target=target, recommendations=recs)
+        content = input_path.read_text(encoding='utf-8')
+        try:
+            saved_run = SimulationRun.model_validate_json(content)
+        except ValueError:
+            saved_run = None
+        if saved_run is not None:
+            saved_run.recommendations = recs
+            if explicitly_set(ctx, 'target'):
+                saved_run.target = target
+            rendered = export_html(saved_run)
+        else:
+            rendered = export_html(results, target=target, recommendations=recs)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered, encoding='utf-8')
     typer.echo(f'Exported {len(results)} result(s) to {output}')
@@ -2334,12 +2347,7 @@ def _export_report(run: Any, target: Path, *, fmt: str) -> None:
             recommendations=run.recommendations,
         )
     else:
-        content = export_html(
-            run.results,
-            run_date=run.created_at,
-            executive_summary=run.executive_summary,
-            recommendations=run.recommendations,
-        )
+        content = export_html(run)
     path = _resolve_report_target(target, ext=fmt, run=run)
     path.write_text(content, encoding='utf-8')
     typer.echo(f'Report written to {path}', err=True)

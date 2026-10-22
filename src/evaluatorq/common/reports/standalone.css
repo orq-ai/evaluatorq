@@ -1,0 +1,59 @@
+/* The dashboard's report components, on a portable document canvas. */
+body.standalone-report { margin:0; padding:32px 40px; background:var(--surface-app); color:var(--text-body); font-family:var(--font-sans); }
+.standalone-report main,.export-brand,.export-footer { max-width:1160px; margin:0 auto; }
+.export-brand { display:flex; align-items:center; gap:12px; padding-bottom:20px; border-bottom:1px solid var(--border-default); color:var(--text-muted); font-size:12px; }
+.export-brand svg { width:28px; height:28px; }
+.export-nav { display:flex; flex-wrap:wrap; gap:8px 24px; padding:16px 0; border-block:1px solid var(--border-default); }
+.export-nav a { color:var(--teal-600); text-decoration:none; font-weight:600; font-size:13px; }
+.export-nav a:hover { text-decoration:underline; }
+.export-section { padding-top:28px; margin-top:20px; border-top:1px solid var(--border-default); scroll-margin-top:20px; }
+.export-section-title { margin:0 0 20px; font-family:var(--font-display); font-size:28px; font-weight:500; color:var(--text-strong); }
+.standalone-report .report-hero { margin:24px 0; }
+.standalone-report .rk-panel,.standalone-report .report-card { margin-bottom:20px; }
+.export-conversation > h3 { margin:0; padding:16px 20px; border-bottom:1px solid var(--border-subtle); font-family:var(--font-display); font-size:18px; }
+.export-conversation .sim-transcript-detail { padding:20px; }
+.export-entity { padding:20px; }
+.export-attack .rt-attack-row-chevron { display:none; }
+.standalone-report .sim-transcript-bubbles,.standalone-report .sim-msg-content,.standalone-report .rt-msg-content,.standalone-report pre { max-height:none; overflow:visible; white-space:pre-wrap; overflow-wrap:anywhere; }
+.standalone-report .sim-fm-label,.standalone-report .fail-why { white-space:normal; overflow:visible; text-overflow:clip; max-width:none; }
+.standalone-report .rk-heatmap-wrap,.standalone-report .sim-bd-table { max-width:100%; overflow-x:auto; }
+.standalone-report svg { max-width:100%; }
+.standalone-report a:focus-visible,.standalone-report summary:focus-visible { outline:2px solid var(--teal-600); outline-offset:4px; }
+.export-footer { padding:32px 0 0; color:var(--text-muted); font-size:12px; }
+@media (max-width:700px) {
+  body.standalone-report { padding:20px 16px; }
+  .export-section-title { font-size:24px; }
+  .export-conversation .sim-transcript-detail { padding:12px; }
+  .export-nav { gap:12px 18px; }
+}
+@media print {
+  body.standalone-report { padding:0; background:white; print-color-adjust:exact; -webkit-print-color-adjust:exact; }
+  .export-nav { display:none; }
+  .export-section { break-before:auto; margin-top:20px; }
+  .export-section:first-of-type { break-before:auto; }
+  .export-section-title,h3,h4 { break-after:avoid; }
+  .standalone-report .rk-panel,.standalone-report .report-card { break-inside:auto; box-shadow:none; }
+  .standalone-report svg,.standalone-report .kpi,.standalone-report .sim-criterion { break-inside:avoid; }
+  .standalone-report .rk-heatmap-wrap,.standalone-report .sim-bd-table { overflow:visible; }
+}
+
+.export-attack .rt-attack-row-summary { cursor:default; }
+.export-attack .rt-attack-row-summary:hover { background:transparent; }
+.export-conversation-meta { padding:12px 20px 0; margin:0; color:var(--text-muted); font:12px var(--font-mono); }
+.standalone-report .sim-config-persona-row,.standalone-report .sim-config-scenario-row { text-decoration:none; }
+@media (max-width:700px) {
+  .standalone-report .sim-config-persona-head { display:none; }
+  .standalone-report .sim-config-persona-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px 16px; }
+  .standalone-report .sim-config-persona-row .sim-trait-minis { display:grid; grid-column:1/-1; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px 24px; padding:4px 0; }
+  .standalone-report .sim-config-persona-row .sim-trait-mini { width:100%; min-width:0; margin:0 0 28px; }
+  .standalone-report .sim-config-persona-row .sim-trait-mini::after { content:attr(aria-label); display:block; font-size:10px; position:absolute; top:12px; left:0; margin:0; padding:0; background:transparent; color:var(--text-muted); box-shadow:none; white-space:normal; line-height:1.4; }
+  .standalone-report .sim-config-scenario-head { display:none; }
+  .standalone-report .sim-config-scenario-row { grid-template-columns:minmax(0,1fr) auto; gap:10px 16px; }
+  .standalone-report .sim-config-scenario-main { grid-column:1/-1; }
+  .standalone-report .sim-config-scenario-goal { max-width:none; }
+  .standalone-report .rt-attack-row-header { display:none; }
+  .standalone-report .export-attack .rt-attack-row-summary { grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; padding:16px; }
+  .standalone-report .rt-attack-row-title { grid-column:1/-1; }
+  .standalone-report .rt-attack-row-agent::before { content:'Agent: '; color:var(--text-muted); }
+  .standalone-report .rt-attack-row-vector::before { content:'Vector: '; color:var(--text-muted); }
+}

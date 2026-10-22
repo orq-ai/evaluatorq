@@ -46,7 +46,7 @@ def parse_experiment_url(url: str | None) -> tuple[str | None, str | None]:
     if not url:
         return None, None
     parsed = urlparse(url)
-    if not parsed.scheme or not parsed.netloc:
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
         return None, None
     segments = [s for s in parsed.path.split('/') if s]
     # Expect /{workspace}/experiments/{id}
@@ -92,5 +92,8 @@ def orq_studio_url(
         workspace_key = studio_workspace_key(workspace_id)
         host = base_url or resolve_base_url()
     if not workspace_key or not host:
+        return None
+    parsed_host = urlparse(host)
+    if parsed_host.scheme not in {'http', 'https'} or not parsed_host.netloc:
         return None
     return f'{host.rstrip("/")}/{workspace_key}/{entity}/{entity_id}'

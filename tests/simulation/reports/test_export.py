@@ -87,8 +87,8 @@ def sample_results():
 
 def test_html_has_hero_kpis_and_cards(sample_results):
     html = export_html(sample_results, target='Acme support agent')
-    assert 'class="hero"' in html
-    assert 'class="kpi-band"' in html
+    assert 'class="report-hero"' in html
+    assert 'class="kpi-band' in html
     assert 'class="report-card"' in html
     assert 'Acme support agent' in html
 
@@ -124,8 +124,8 @@ def test_html_renders_new_charts(sample_results):
     assert '<svg' in html  # criteria + persona/scenario heatmaps rendered as SVG via Vega-Lite
     # Two conversations: the distribution section states the scores directly
     # instead of drawing a two-value histogram.
-    assert 'Goal Score Distribution' in html
-    assert 'goal score(s)' in html
+    assert 'Goal-completion score distribution' in html
+    assert 'rk-histogram' in html
     # Single-turn runs: a one-point timeline reads as broken, so it is omitted.
     assert 'Turn Quality Timeline' not in html
     assert 'Failures' in html
@@ -133,15 +133,16 @@ def test_html_renders_new_charts(sample_results):
     assert 'status-badge--fail' in html
 
 
-def test_html_failures_table_has_criteria_dots_but_no_transcript_anchor(sample_results):
+def test_html_failures_table_links_to_embedded_transcript(sample_results):
     html = export_html(sample_results, target='t')
     failures = html.split('<h2>Failures</h2>', 1)[1].split('</table>', 1)[0]
 
-    # Coloured pass/fail dots are back; the transcript anchor stays gone.
+    # Criterion dots remain, and static evidence is reachable without a server.
     assert 'Criteria' in failures
     assert 'crit-dot' in failures
-    assert 'href="#conv-' not in failures
-    assert 'class="fail-why"' in failures
+    assert 'href="#conv-2"' in failures
+    assert 'id="conv-2"' in html
+    assert 'judge decided' in failures
 
 
 def test_html_charts_render_with_enough_data():
@@ -161,8 +162,8 @@ def test_html_charts_render_with_enough_data():
         for i in range(3)
     ]
     html = export_html(results, target='t')
-    assert 'Turn Quality Timeline' in html
-    assert 'Goal Score Distribution' in html
+    assert 'Per-turn quality' in html
+    assert 'Goal-completion score distribution' in html
     assert 'goal score(s)' not in html  # real histogram, not the fallback note
 
 
@@ -171,7 +172,7 @@ def test_html_persona_rows_show_success_rate_not_sparkline(sample_results):
     # (100% could look weaker than 33%) and duplicated the Success % column.
     html = export_html(sample_results, target='t')
     assert 'class="sparkline"' not in html
-    assert 'Success' in html  # the success-rate column header remains
+    assert 'Goal rate' in html  # the success-rate column header remains
 
 
 def test_html_criterion_description_single_escaped(make_result):
@@ -197,7 +198,7 @@ def test_html_summary_empty_state_message():
     so the report never looks truncated (the headline numbers otherwise live in
     the hero KPI band, so the summary renders no standalone card)."""
     html = export_html([], target='t')
-    assert 'No conversations to summarize.' in html
+    assert 'No conversations recorded for this run.' in html
     # The pass-rate donut was dropped — its data duplicates the KPI band.
     assert 'Goal Outcomes' not in html
 
@@ -325,7 +326,7 @@ def test_export_html_shows_experiment_link_when_set():
 def test_export_html_omits_experiment_link_when_none():
     results = [_result('Alice', achieved=True, score=1.0)]
     html = export_html(results, target='t')
-    assert 'trace-link' not in html
+    assert 'class="btn-secondary trace-link"' not in html.split('</style>', 1)[1]
 
 
 def test_export_html_escapes_user_controlled_metadata():
@@ -400,8 +401,8 @@ def test_export_html_uses_only_defined_css_classes():
             assert f'.{cls}' in css, f"sim HTML uses .{cls} but it's not defined in report.css"
 
 
-def test_export_html_truncates_long_transcript_messages():
-    """Very long messages must be truncated so HTML files stay manageable."""
+def test_export_html_preserves_long_transcript_messages():
+    """The offline report retains the complete evidence without truncation."""
     long_content = 'x' * 5000
     result = SimulationResult(
         messages=[
@@ -419,10 +420,8 @@ def test_export_html_truncates_long_transcript_messages():
         metadata={'persona': 'p', 'scenario': 's', 'model': 'm'},
     )
     html = export_html([result], target='t')
-    # The raw 5000-char run must not appear verbatim.
-    assert long_content not in html
-    # The truncation marker should be present.
-    assert 'truncated' in html
+    assert long_content in html
+    assert '[message truncated]' not in html
 
 
 def test_export_markdown_collapses_token_usage_and_individual_results():
@@ -547,21 +546,15 @@ def test_heatmap_scale_direction_and_absent_sentinel(sim_result_factory):
 
     The absent cell requires 2+ personas AND 2+ scenarios so the grid gap exists.
     """
-    from evaluatorq.common.reports.html_helpers import scale_color
-    from evaluatorq.simulation.reports.export_html import _SCALE_GREEN_HIGH, export_html
+    from evaluatorq.simulation.reports.export_html import export_html
 
     results = [
         sim_result_factory(goal_achieved=True, persona='p1', scenario='s1'),
         sim_result_factory(goal_achieved=True, persona='p1', scenario='s2'),
         sim_result_factory(goal_achieved=True, persona='p2', scenario='s1'),
-        # (p2, s2) intentionally absent — heatmap fills -1.0 -> grey sentinel
     ]
-
-    out = export_html(results).lower()
-    # Deterministic green high endpoint (scale_color at 1.0, a scale endpoint)
-    full = scale_color(1.0, _SCALE_GREEN_HIGH).lstrip('#').lower()  # 157f57
-
-    # Green success cell and grey absent cell both appear, and charts rendered
-    assert full in out and '#e4e2df' in out and '<svg' in out
-    # Guard inversion bug: 1.0 cell must be the green endpoint (not red)
-    assert out.count(full) >= 1
+    body = export_html(results).split('</style>', 1)[1]
+    assert 'rk-heat-cell' in body
+    assert '100%' in body
+    assert '—' in body
+    assert 'Red → yellow → green' in body

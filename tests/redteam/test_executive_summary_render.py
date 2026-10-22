@@ -12,8 +12,8 @@ def test_html_includes_narrative_and_pill():
     report.executive_summary = _NARRATIVE
     html = export_html(report)
     assert _NARRATIVE in html
-    # Confidence pill rendered via shared status_badge component.
-    assert 'status-badge' in html
+    # Confidence uses the dashboard's shared summary pill.
+    assert 'es-confidence' in html
     assert 'CONFIDENCE' in html
 
 

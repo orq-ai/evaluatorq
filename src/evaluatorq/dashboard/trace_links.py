@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.orq_links import parse_experiment_url
@@ -121,7 +121,7 @@ def trace_link_button(
     surrounding ``<details>``. ``extra_attributes`` adds escaped HTML
     attributes; use a ``None`` value for a boolean attribute.
     """
-    if not url:
+    if not url or urlsplit(url).scheme not in {'http', 'https'} or not urlsplit(url).netloc:
         return ''
     onclick_attr = f' onclick="{esc(onclick)}"' if onclick else ''
     extra_attrs = ''.join(

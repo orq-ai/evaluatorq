@@ -10,7 +10,6 @@ break the redteam HTML export path.  Two cases:
 from __future__ import annotations
 
 import builtins
-import importlib
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
@@ -160,14 +159,16 @@ def test_redteam_html_preserves_resistant_vulnerable_and_pre_execution_failures(
         errors=[pre_execution],
         summary=compute_report_summary([resistant, vulnerable], run_errors=[pre_execution]),
     )
+    import evaluatorq.dashboard.report_kit as kit
+
     donut_values: list[int] = []
+    original = kit.donut
 
-    def capture_donut(*, labels, values, colors, title):
-        donut_values.extend(values)
-        return ''
+    def capture_donut(segments, center_text, center_sub):
+        donut_values.extend(row['value'] for row in segments)
+        return original(segments, center_text, center_sub)
 
-    export_html_module = importlib.import_module('evaluatorq.redteam.reports.export_html')
-    monkeypatch.setattr(export_html_module, '_render_donut_chart_common', capture_donut)
+    monkeypatch.setattr(kit, 'donut', capture_donut)
 
     html = export_html(report)
 
@@ -175,5 +176,5 @@ def test_redteam_html_preserves_resistant_vulnerable_and_pre_execution_failures(
     assert 'resistant-001' in html
     assert 'vulnerable-001' in html
     assert 'row failed before execution' in html
-    assert html.count('badge-resistant') >= 1
-    assert html.count('badge-vulnerable') >= 1
+    assert 'Resistant' in html
+    assert 'Vulnerable' in html

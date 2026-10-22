@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
-from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.messages import coerce_content_text, messages_to_text
 from evaluatorq.contracts import ReportSection, Usage
 from evaluatorq.simulation.contracts import CriteriaRow, SimulationEntry, TranscriptMessage, criterion_id_for
 from evaluatorq.simulation.evaluators.scorers import read_criteria_meta
@@ -539,7 +539,13 @@ def individual_entries(results: list[SimulationResult]) -> list[SimulationEntry]
                 judge_reason=r.reason,
                 error=_error_message(r),
                 evaluator_scores=_evaluator_scores(r),
-                transcript=[TranscriptMessage(role=m.role, content=coerce_content_text(m.content)) for m in r.messages],
+                transcript=[
+                    TranscriptMessage(
+                        role=m.role,
+                        content=messages_to_text([m.model_dump()]) if m.tool_calls else coerce_content_text(m.content),
+                    )
+                    for m in r.messages
+                ],
                 thread_id=r.thread_id,
                 last_trace_id=r.last_trace_id,
             )
