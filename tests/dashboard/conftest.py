@@ -26,6 +26,7 @@ from evaluatorq.redteam.contracts import (
     ExecutionDetails,
     FocusAreaRecommendation,
     Framework,
+    JuryHealth,
     JuryReliability,
     KnowledgeBaseInfo,
     Pipeline,
@@ -260,6 +261,7 @@ def rt_report_multi() -> RedTeamReport:
 
     summary = compute_report_summary(results)
     summary.jury_reliability = JuryReliability(krippendorff_alpha=0.82, samples=10)
+    summary.jury_health = JuryHealth(samples=10, samples_with_judge_failure=1, ties=1, replacements_used=2)
 
     return RedTeamReport(
         created_at=datetime.now(tz=timezone.utc),

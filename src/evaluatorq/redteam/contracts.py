@@ -12,7 +12,7 @@ Semantic convention:
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
 
 from pydantic import (
     BaseModel,
@@ -26,6 +26,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.messages import EMPTY_ASSISTANT_TEXT
 from evaluatorq.common.recommendations import RecommendationConfigBase
+from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import RunSummary, StrEnum
 
@@ -1821,6 +1822,96 @@ class JuryReliability(BaseModel):
     )
 
 
+class JuryHealth(BaseModel):
+    """Run-level panel-of-judges operational health across multi-judge samples (RES-1649).
+
+    Complements ``JuryReliability`` (how much the judges agreed) with how well the
+    panel actually ran: how often a configured judge failed, a replacement stood in,
+    the decisive votes tied, the panel went inconclusive, a judge's repetitions
+    produced no usable verdict, or a judge cleanly abstained. Counts are over samples
+    that carried a multi-judge jury (``judges_configured >= 2``). ``None`` for
+    single-judge runs, so the field stays absent on the common path.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    samples: int = Field(ge=0, description='Multi-judge samples considered')
+    samples_with_judge_failure: int = Field(
+        default=0, ge=0, description='Samples where at least one configured judge failed mechanically'
+    )
+    replacements_used: int = Field(default=0, ge=0, description='Total replacement judges invoked across samples')
+    ties: int = Field(default=0, ge=0, description='Samples where the decisive votes tied')
+    inconclusive: int = Field(default=0, ge=0, description='Samples with too few decisive judges to conclude')
+    samples_with_repetition_failure: int = Field(
+        default=0,
+        ge=0,
+        description='Samples where at least one judge had a repetition fail to produce a usable verdict',
+    )
+    samples_with_abstention: int = Field(
+        default=0, ge=0, description='Samples where at least one judge cleanly abstained'
+    )
+    judge_failure_reasons: list[str] = Field(
+        default_factory=list,
+        description='Complete, scrubbed, distinct JuryVote.error strings behind failed configured or replacement '
+        'judges. Sorted and deduplicated after secret scrubbing; display limits apply only in issue_summary().',
+    )
+
+    @field_validator('judge_failure_reasons')
+    @classmethod
+    def _scrub_failure_reasons(cls, reasons: list[str]) -> list[str]:
+        return sorted({cleaned for reason in reasons if (cleaned := scrub_known_secrets(reason).strip())})
+
+    _SAMPLE_ISSUES: ClassVar[tuple[tuple[str, str], ...]] = (
+        ('samples_with_judge_failure', 'judge-fail'),
+        ('ties', 'tie'),
+        ('inconclusive', 'inconclusive'),
+        ('samples_with_repetition_failure', 'rep-fail'),
+        ('samples_with_abstention', 'abstained'),
+    )
+
+    @model_validator(mode='after')
+    def _check_health_consistency(self) -> 'JuryHealth':
+        for field, _ in self._SAMPLE_ISSUES:
+            if getattr(self, field) > self.samples:
+                raise ValueError(f'{field} cannot exceed samples')
+        if self.samples == 0 and (self.replacements_used or self.judge_failure_reasons):
+            raise ValueError('Replacement judges and failure reasons require multi-judge samples')
+        return self
+
+    def issue_count(self) -> int:
+        """Number of issue clauses the summary carries, for a short scalar headline.
+
+        Counts each sample-level issue type that fired, plus one for replacements if any were
+        used. Failure reasons without a configured failure count add one issue type.
+        Zero means ``issue_summary()`` returns ``clean``.
+        """
+        count = sum(1 for field, _ in self._SAMPLE_ISSUES if getattr(self, field))
+        if self.replacements_used:
+            count += 1
+        if self.judge_failure_reasons and not self.samples_with_judge_failure:
+            count += 1
+        return count
+
+    def issue_summary(self) -> str:
+        """One-line issue clause for a report, or ``clean`` when nothing went wrong.
+
+        ``replacements_used`` counts replacement *judges*, so it is never added to a sample total;
+        the other five fields count *samples*. The clauses are kept distinct for that reason: a
+        judge count must not be folded into a sample count. When a judge failed and carried a
+        reason, the distinct reasons are appended so the report names why a judge did not count
+        (the ``JuryVote.error`` half of the ticket), not just how many.
+        """
+        parts = [f'{getattr(self, field)} {label}' for field, label in self._SAMPLE_ISSUES if getattr(self, field)]
+        if self.replacements_used:
+            parts.append(f'{self.replacements_used} replacement judge(s)')
+        if self.judge_failure_reasons:
+            reasons = [reason if len(reason) <= 80 else reason[:79] + '…' for reason in self.judge_failure_reasons[:3]]
+            if len(self.judge_failure_reasons) > 3:
+                reasons.append(f'+{len(self.judge_failure_reasons) - 3} more')
+            parts.append(f'judge failures: {"; ".join(reasons)}')
+        return ', '.join(parts) if parts else 'clean'
+
+
 class ReportSummary(BaseModel):
     """Aggregate summary statistics for a report."""
 
@@ -1868,6 +1959,11 @@ class ReportSummary(BaseModel):
         default=None,
         description='Chance-corrected inter-judge reliability across panel-of-judges samples (RES-739). '
         'None for single-judge runs.',
+    )
+    jury_health: JuryHealth | None = Field(
+        default=None,
+        description='Panel-of-judges operational health across multi-judge samples (RES-1649): judge failures, '
+        'replacements, ties, inconclusive panels, repetition failures, abstentions. None for single-judge runs.',
     )
     datapoint_breakdown: dict[str, int] | None = Field(
         default=None,

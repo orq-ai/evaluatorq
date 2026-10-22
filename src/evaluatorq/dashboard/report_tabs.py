@@ -2261,10 +2261,27 @@ def _rt_config(by_kind: dict[str, Any], report: RedTeamReport) -> str:
             + '</div>'
         )
 
+    # Panel-of-judges health (RES-1649) — the operational counts, mirroring the md/html exports.
+    health = summary_data.get('jury_health')
+    health_html = ''
+    if health is not None:
+        from evaluatorq.redteam.contracts import JuryHealth
+
+        h = JuryHealth.model_validate(health)
+        health_html = (
+            '<div class="rt-config-methodology-row">'
+            '<span class="rt-config-methodology-label">JURY HEALTH</span>'
+            + meta_grid([
+                ('Status', h.issue_summary()),
+                ('Samples', str(h.samples)),
+            ])
+            + '</div>'
+        )
+
     pipeline = method_data.get('pipeline', '')
     scoring = method_data.get('scoring_method', '')
     sub = f'{pipeline} pipeline · {scoring}' if pipeline or scoring else None
-    methodology_html = panel('Methodology', f'{tested_html}{untested_html}{jury_html}', sub=sub)
+    methodology_html = panel('Methodology', f'{tested_html}{untested_html}{jury_html}{health_html}', sub=sub)
 
     kept = _render_sections(by_kind, _SECTION_RENDERERS, ('severity_definitions', 'error_analysis'))
     return f'{run_config_html}{methodology_html}{kept}' or '<p class="rk-empty">No config data available.</p>'

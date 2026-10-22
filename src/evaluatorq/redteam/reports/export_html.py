@@ -37,6 +37,7 @@ from evaluatorq.common.reports.palette import SEVERITY_ORDER as _SEVERITY_ORDER
 from evaluatorq.common.reports.vega import render_svg as _render_svg
 from evaluatorq.common.reports.vega import vl_bar_h as _vl_bar_h
 from evaluatorq.common.reports.vega import vl_donut as _vl_donut
+from evaluatorq.redteam.contracts import JuryHealth
 from evaluatorq.redteam.reports.sections import build_report_sections
 
 if TYPE_CHECKING:
@@ -305,7 +306,27 @@ def _render_kpi_cards(data: dict[str, Any]) -> str:
             f'</div>'
         )
 
-    return '<div class="kpi-row">' + ''.join(cards) + '</div>'
+    # Panel-of-judges health (RES-1649) — the operational counts, as a matching KPI card.
+    # kpi-value stays a short scalar like the other cards; the issue detail goes in kpi-subtitle.
+    health = data.get('jury_health')
+    if health:
+        h = JuryHealth.model_validate(health)
+        summary = h.issue_summary()
+        clean = summary == 'clean'
+        headline = 'clean' if clean else str(h.issue_count())
+        label = 'Jury Health' if clean else 'Jury Health (issue types)'
+        detail = f'{h.samples} multi-judge samples' if clean else f'{summary} ({h.samples} multi-judge samples)'
+        cards.append(
+            f'<div class="kpi-card">'
+            f'<div class="kpi-value">{_esc(headline)}</div>'
+            f'<div class="kpi-label">{_esc(label)}</div>'
+            f'<div class="kpi-subtitle">{_esc(detail)}</div>'
+            f'</div>'
+        )
+
+    primary = '<div class="kpi-row">' + ''.join(cards[:5]) + '</div>'
+    jury = '<div class="kpi-row">' + ''.join(cards[5:]) + '</div>' if len(cards) > 5 else ''
+    return primary + jury
 
 
 def _render_summary_html(section: ReportSection) -> str:
