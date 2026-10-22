@@ -414,6 +414,39 @@ def test_errors_section_count_matches_summary_section_count():
     assert summary.data['errors'] == errors.data['total_errored'] == 2
 
 
+def test_error_counts_are_additive_and_keep_legacy_metric_denominators():
+    completed = _make_result(goal_achieved=True, goal_completion_score=1.0)
+    errored = _make_result(goal_achieved=False, goal_completion_score=0.0, error='timeout')
+    sections = {section.kind: section for section in build_report_sections([completed, errored])}
+
+    persona = sections['persona_breakdown'].data['rows'][0]
+    assert persona['conversations'] == 2
+    assert persona['completed_conversations'] == 1
+    assert persona['errored_conversations'] == 1
+    assert persona['success_rate'] == 0.5
+    assert persona['avg_goal_completion_score'] == 0.5
+
+    cell = sections['persona_scenario_heatmap'].data['cells'][0]
+    assert cell['completed_conversations'] == 1
+    assert cell['errored_conversations'] == 1
+    assert cell['avg_score'] == 0.5
+
+    distribution = sections['score_distribution'].data
+    assert distribution['scores'] == [1.0, 0.0]
+    assert distribution['measured_scores'] == [1.0]
+    assert distribution['completed_conversations'] == 1
+
+
+def test_failure_modes_exclude_execution_errors():
+    errored = _make_result(
+        goal_achieved=False,
+        error='timeout',
+        criteria_meta=[{'id': 'criteria_0', 'description': 'Ask order number', 'type': 'must_happen', 'passed': False}],
+    )
+    section = next(s for s in build_report_sections([errored]) if s.kind == 'failure_mode')
+    assert section.data['rows'] == []
+
+
 def test_individual_results_section_carries_transcript_and_meta():
     results = [_make_result(persona='A', goal_achieved=True)]
     sections = build_report_sections(results)

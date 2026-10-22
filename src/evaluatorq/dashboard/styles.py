@@ -1529,6 +1529,7 @@ _SIM_REPORT_CSS = """
     text-align: center; vertical-align: middle;
 }
 .report-aligned .rk-heat-empty { background: var(--surface-sunken); color: var(--text-faint); }
+.report-aligned .rk-heat-no-verdict { background: var(--surface-sunken); color: var(--text-muted); font-style: italic; }
 
 /* Per-persona / per-scenario tables (html_table output) + failures table */
 .report-aligned .rk-panel-body { display: grid; }
@@ -2650,10 +2651,12 @@ _RT_REPORT_CSS = """
     background: var(--surface-card); border: 1px solid var(--border-subtle);
     border-radius: 999px; padding: 3px 10px; font-size: 13px;
 }
+.rt-hero-pill--unknown { background: var(--surface-sunken); border-color: var(--border-default); }
 .rt-hero-dot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; }
 .rt-hero-dot--critical { background: var(--red-600); }
 .rt-hero-dot--vuln { background: var(--orange-500); }
 .rt-hero-dot--clean { background: var(--green-600); }
+.rt-hero-dot--unknown { background: var(--gray-500); }
 .rt-hero-pill-name { color: var(--text-strong); }
 .rt-hero-pill-sub {
     font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);

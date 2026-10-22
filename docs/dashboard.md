@@ -391,7 +391,7 @@ Those four are scored by the judge on every turn regardless of what you passed i
 
 Two numbers on this screen are easy to conflate. The **pass rate** is the share of conversations where the judge set `goal_achieved` — the donut. **Average score** is the mean `goal_completion_score`, the judge's 0–1 rating of *how fully* the goal was met, so a run can average 0.7 while passing half its conversations.
 
-The **CONFIDENCE** badge is a band on the pass rate, not a statistical confidence: ≥ 80% of goals achieved reads HIGH, ≥ 50% MEDIUM, below that LOW. It carries no sample-size meaning at all — three conversations that all pass still read HIGH. A LOW badge says the run went badly, not that you need more data.
+The simulation summary does not show a confidence badge: goal success alone does not establish how much evidence supports the result. Read the conversation count and errors alongside the rates. When every conversation errors, the summary states that no goal verdict is available. Cohorts with no completed conversations show unavailable goal rates and scores in Breakdown; the distribution includes only completed conversations. Partial cohorts retain the total-conversation denominator and display their error counts.
 
 Filters sit in the right rail on every tab — goal outcome, rule violations, who terminated the conversation, persona, scenario, and score/turn thresholds — and the whole page respects them. "Terminated by" takes four values: `judge` (the judge decided the conversation was done), `max_turns` (the turn cap hit first), `error`, and `timeout`. A run dominated by `max_turns` means the cap, not the agent, decided where the conversations ended.
 
@@ -445,7 +445,9 @@ Every report page includes a download sidebar with export links:
 | CSV (filtered result rows) | yes | — | yes |
 | JSON (filtered result rows) | yes | yes | yes |
 
-Simulation and red-team HTML downloads use the dashboard report layout, with each available tab expanded into a section in the same order. The file embeds its styles, fonts, charts and recorded evidence, so it opens without the dashboard server or an internet connection. Conversation and attack details are embedded in foldable rows that are closed by default, with local links from summary tables to their summaries. Open a row to read the complete transcript. Recommendations retain their recorded applied status; applying changes, fetching live agent details and comparing runs remain dashboard actions.
+Simulation and red-team HTML downloads use the dashboard report layout, with each available tab expanded into a section in the same order. The file embeds its styles, fonts, charts and recorded evidence, so it opens without the dashboard server or an internet connection. Conversation and attack details are embedded in foldable rows that are closed by default, with local links from summary tables to their summaries. Open a row to read the complete transcript. Printing includes the evidence rows you have opened; closed rows retain only their summaries. A notice in the printout explains this limit. Recommendations retain their recorded applied status; applying changes, fetching live agent details and comparing runs remain dashboard actions.
+
+Red-team rates use evaluated attacks as their denominator. The Overview shows evaluation coverage and distinguishes attacks without verdicts from recorded errors, so a partially evaluated run does not read as a clean pass.
 
 HTML downloads render the full, unfiltered saved report. For simulation, the saved run supplies the captured agent details, target, model, maximum turns, recommendations and whole-run token usage when recorded. Missing fields in older runs stay unavailable. Transcripts are included in full, so a large run produces a larger file. CSV and JSON downloads continue to contain the filtered result rows.
 

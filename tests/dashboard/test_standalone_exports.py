@@ -51,6 +51,7 @@ def test_exports_are_offline_and_have_no_server_controls(rt_report_multi):
         assert not any(tag in {'script', 'iframe', 'dialog', 'template', 'input', 'button'} for tag, _ in elements.tags)
         assert not any(key.startswith('hx-') for _, attrs in elements.tags for key in attrs)
         assert not any(a.get('href', '').startswith('/r/') for _, a in elements.tags)
+        assert 'Collapsed conversations and attacks are omitted from print' in document
         assert all('open' not in a if 'export-evidence' in a.get('class', '').split() else 'open' in a for tag, a in elements.tags if tag == 'details')
         ids = [a['id'] for _, a in elements.tags if 'id' in a]
         assert len(ids) == len(set(ids)), 'A section or chart id is duplicated.'
@@ -110,6 +111,7 @@ def test_attack_export_keeps_full_text_and_unknown_outcome(rt_report_multi):
     document = rt_html(rt_report_multi)
     assert long_text in document
     assert 'Not evaluated' in document
+    assert 'Expand an attack to read its verdict and full transcript.' in document
     assert sum(tag == 'details' and 'export-attack' in a.get('class', '').split() for tag, a in Elements(document).tags) == len(rt_report_multi.results)
 
 
@@ -182,7 +184,7 @@ def test_redteam_retains_saved_narrative_without_a_verdict(total, evaluated):
     body = _rt_exec_summary({'total_attacks': total, 'evaluated_attacks': evaluated, 'narrative': 'Saved narrative evidence'}, {})
     assert 'Saved narrative evidence' in body
     if total:
-        assert 'no verdict is available' in body
+        assert '2</strong> had no verdict' in body
 
 
 @pytest.mark.parametrize('label', ['agent', 'Custom export target'])
