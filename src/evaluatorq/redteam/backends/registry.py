@@ -17,6 +17,9 @@ if TYPE_CHECKING:
     from evaluatorq.redteam.backends.base import Backend
     from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
 
+# Retained for backward-compatible imports; the canonical value lives in common.env_config.
+ORQ_DEFAULT_BASE_URL = DEFAULT_ORQ_BASE_URL
+
 
 def create_async_llm_client(
     role_config: LLMCallConfig | None = None,

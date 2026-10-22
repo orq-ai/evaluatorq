@@ -25,6 +25,8 @@ from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw, env_text
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+# Retained for backward-compatible imports; the canonical value lives in common.env_config.
+DEFAULT_BASE_URL = DEFAULT_ORQ_BASE_URL
 _cli_slug_cache: dict[tuple[str | None, str | None, bool], tuple[float, str | None]] = {}
 _render_cli_slug_cache: ContextVar[dict[tuple[str | None, str | None], str | None] | None] = ContextVar(
     'render_cli_slug_cache', default=None

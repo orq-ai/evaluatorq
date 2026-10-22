@@ -1150,7 +1150,7 @@ def _module_constants(module: str) -> dict[str, str]:
         return {}
     return {
         node.targets[0].id: node.value.value
-        for node in ast.parse(path.read_text()).body
+        for node in ast.parse(path.read_text(encoding='utf-8')).body
         if isinstance(node, ast.Assign)
         and len(node.targets) == 1
         and isinstance(node.targets[0], ast.Name)
@@ -1193,7 +1193,7 @@ def _env_reads(source: str) -> list[tuple[int, str, str | None]]:
     statement and copies of the whole environment are not reads.
     """
     tree = ast.parse(source)
-    os_names, environ_names, getenv_names = {'os'}, set(), set()
+    os_names, environ_names, getenv_names = set(), set(), set()
     constants = _string_constants(tree)
     statement_calls = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Expr)}
     for node in ast.walk(tree):
@@ -1346,18 +1346,22 @@ def _env_raw_defaults(source: str) -> list[tuple[int, str, str]]:
     return found
 
 
-def test_env_raw_call_site_defaults_match_the_declared_default() -> None:
-    """A call site's own default must be the row's, so the table and docs describe what the code does.
+def test_literal_env_raw_defaults_match_the_declared_default() -> None:
+    """A literal non-empty default passed to ``env_raw`` must be the row's, so the docs describe the code.
 
-    ``''`` is exempt: it stands for "unset" at sites that strip or upper-case the value.
+    Only calls whose name and default resolve to strings are checked. ``''`` is exempt: it stands for
+    "unset" at sites that strip or upper-case the value. Blank handling at the sites that changed shape
+    is pinned by the call-site tests in ``tests/common/test_env_config.py``.
     """
     from evaluatorq.common.env_config import ENV_VARS
 
     mismatched = [
-        f'{relative}:{line} reads {name} with default {default!r}; ENV_VARS declares {ENV_VARS[name].default!r}'
+        f'{relative}:{line} reads undeclared {name}'
+        if name not in ENV_VARS
+        else f'{relative}:{line} reads {name} with default {default!r}; ENV_VARS declares {ENV_VARS[name].default!r}'
         for relative, source in _src_sources()
         for line, name, default in _env_raw_defaults(source)
-        if default and default != ENV_VARS[name].default
+        if name not in ENV_VARS or (default and default != ENV_VARS[name].default)
     ]
     assert not mismatched, '\n'.join(mismatched)
 

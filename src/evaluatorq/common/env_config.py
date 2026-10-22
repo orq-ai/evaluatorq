@@ -40,6 +40,13 @@ _FALSE = {'0', 'false', 'no', 'off'}
 
 @dataclass(frozen=True)
 class EnvVar:
+    """One environment variable evaluatorq owns.
+
+    ``env_int``, ``env_float`` and ``env_bool`` fall back to ``default``. ``env_raw`` and ``env_text``
+    never apply it: for a ``raw`` row, ``default`` records what the call sites fall back to, and
+    ``test_literal_env_raw_defaults_match_the_declared_default`` pins literal ones to it.
+    """
+
     name: str
     kind: Kind
     default: str | int | float | bool | None
@@ -167,7 +174,10 @@ def env_raw(name: str, default: str | None) -> str | None: ...
 
 
 def env_raw(name: str, default: str | None = None) -> str | None:
-    """Return ``os.environ.get(name, default)`` for a declared variable, untouched."""
+    """Return ``os.environ.get(name, default)`` for a declared variable, untouched.
+
+    The row's own default is not applied; pass it explicitly where the call site needs it.
+    """
     _row(name)
     return os.environ.get(name, default)
 

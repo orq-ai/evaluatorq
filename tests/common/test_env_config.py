@@ -213,12 +213,14 @@ def test_report_blank_owner_row_is_unset(monkeypatch: pytest.MonkeyPatch) -> Non
     assert _reported('EVALUATORQ_FINDER_LIMIT').status == 'rejected'
 
 
-@pytest.mark.parametrize(
-    ('name', 'reader'), [('X_INT', env_int), ('X_FLOAT', env_float), ('X_BOOL', env_bool)]
-)
+@pytest.mark.parametrize(('name', 'reader'), [('X_INT', env_int), ('X_FLOAT', env_float), ('X_BOOL', env_bool)])
 @pytest.mark.parametrize('raw', ['', ' ', '5', '5.5', 'abc', 'nan', '-1', '1e9', 'yes', 'off'])
 def test_report_rejects_exactly_what_the_reader_warns_on(
-    monkeypatch: pytest.MonkeyPatch, warns: list[str], name: str, reader, raw: str  # noqa: ANN001
+    monkeypatch: pytest.MonkeyPatch,
+    warns: list[str],
+    name: str,
+    reader,
+    raw: str,  # noqa: ANN001
 ) -> None:
     monkeypatch.setenv(name, raw)
     reader(name)
@@ -274,7 +276,7 @@ def test_other_duplicated_defaults_match_their_source(monkeypatch: pytest.Monkey
 
     assert ENV_VARS['EVALUATORQ_LLM_MAX_TOKENS'].default == DEFAULT_TARGET_MAX_TOKENS
     monkeypatch.delenv('EVALUATORQ_DASHBOARD_SETTINGS', raising=False)
-    assert ENV_VARS['EVALUATORQ_DASHBOARD_SETTINGS'].default == str(settings_path())
+    assert Path(str(ENV_VARS['EVALUATORQ_DASHBOARD_SETTINGS'].default)) == settings_path()
 
 
 # --- the table against docs/configuration.md ---
@@ -292,7 +294,7 @@ _PROSE_DEFAULTS = {
 
 
 def _docs_rows() -> dict[str, str]:
-    text = _DOCS.read_text()
+    text = _DOCS.read_text(encoding='utf-8')
     section = text[text.index('## Full environment variable reference') : text.index('## When a value is wrong')]
     rows: dict[str, str] = {}
     for line in section.splitlines():
@@ -340,3 +342,91 @@ def test_docs_defaults_match_declared_defaults() -> None:
 def test_prose_default_exemptions_are_still_needed() -> None:
     assert set(_PROSE_DEFAULTS) <= set(_docs_rows())
     assert len(_PROSE_DEFAULTS) == 5
+
+
+# --- call sites that moved from ``os.environ.get(name, '').strip()`` to ``env_text`` ---
+# Each read used the value only for truthiness, so ``''`` becoming ``None`` must change nothing:
+# blank and whitespace still read as unset, and a padded value is still stripped.
+_BLANK = [None, '', '   ']
+
+
+def _set(monkeypatch: pytest.MonkeyPatch, name: str, value: str | None) -> None:
+    if value is None:
+        monkeypatch.delenv(name, raising=False)
+    else:
+        monkeypatch.setenv(name, value)
+
+
+@pytest.mark.parametrize('value', _BLANK)
+def test_settings_path_treats_blank_as_unset(monkeypatch: pytest.MonkeyPatch, value: str | None) -> None:
+    from evaluatorq.trace_finder.settings import settings_path
+
+    _set(monkeypatch, 'EVALUATORQ_DASHBOARD_SETTINGS', value)
+    assert settings_path() == Path('.evaluatorq/dashboard-settings.json')
+
+
+def test_settings_path_strips_the_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.trace_finder.settings import settings_path
+
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', '  custom.json  ')
+    assert settings_path() == Path('custom.json')
+
+
+@pytest.mark.parametrize(('value', 'expected'), [(None, None), ('', None), ('   ', None), (' 42 ', 42)])
+def test_finder_env_override_blank_keeps_the_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str | None, expected: int | None
+) -> None:
+    from evaluatorq.trace_finder.settings import DashboardSettings, effective_settings
+
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'missing.json'))
+    _set(monkeypatch, 'EVALUATORQ_FINDER_LIMIT', value)
+    assert effective_settings().limit == (DashboardSettings().limit if expected is None else expected)
+
+
+@pytest.mark.parametrize(('value', 'expected'), [(None, None), ('', None), ('   ', None), ('  key  ', 'key')])
+def test_environment_auth_strips_the_key(
+    monkeypatch: pytest.MonkeyPatch, value: str | None, expected: str | None
+) -> None:
+    from evaluatorq.dashboard.auth import resolve_dashboard_auth
+    from evaluatorq.trace_finder.settings import DashboardSettings
+
+    _set(monkeypatch, 'ORQ_API_KEY', value)
+    assert resolve_dashboard_auth(DashboardSettings(orq_auth_method='environment')).api_key == expected
+
+
+@pytest.mark.parametrize(('value', 'session'), [(None, True), ('', True), ('   ', True), ('  key  ', False)])
+def test_workspace_slug_blank_key_uses_the_cli_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str | None, session: bool
+) -> None:
+    from evaluatorq.dashboard import orq_workspace
+    from evaluatorq.trace_finder.settings import credential_fingerprint
+
+    calls: list[tuple[str | None, str | None, bool]] = []
+
+    def fake_cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool = False) -> None:
+        calls.append((profile, fingerprint, use_cli_session))
+
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'missing.json'))
+    for name in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_BASE_URL'):
+        monkeypatch.delenv(name, raising=False)
+    _set(monkeypatch, 'ORQ_API_KEY', value)
+    monkeypatch.setattr(orq_workspace.shutil, 'which', lambda _: '/usr/bin/orq')
+    monkeypatch.setattr(orq_workspace, '_cli_slug', fake_cli_slug)
+    orq_workspace.resolve_slug()
+    assert calls == [(None, None, True)] if session else [(None, credential_fingerprint('key', None), False)]
+
+
+def test_portable_encryption_key_is_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    fernet = pytest.importorskip('cryptography.fernet')
+    from evaluatorq.trace_finder.secure_credentials import _encryption_key
+
+    key = fernet.Fernet.generate_key()
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY', f'  {key.decode()}  ')
+    assert _encryption_key() == key
+
+
+def test_public_base_url_aliases_are_the_canonical_default() -> None:
+    from evaluatorq.dashboard.orq_workspace import DEFAULT_BASE_URL
+    from evaluatorq.redteam.backends.registry import ORQ_DEFAULT_BASE_URL
+
+    assert DEFAULT_BASE_URL == ORQ_DEFAULT_BASE_URL == env_config.DEFAULT_ORQ_BASE_URL
