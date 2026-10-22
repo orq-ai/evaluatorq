@@ -413,7 +413,8 @@ def test_workspace_slug_blank_key_uses_the_cli_session(
     monkeypatch.setattr(orq_workspace.shutil, 'which', lambda _: '/usr/bin/orq')
     monkeypatch.setattr(orq_workspace, '_cli_slug', fake_cli_slug)
     orq_workspace.resolve_slug()
-    assert calls == [(None, None, True)] if session else [(None, credential_fingerprint('key', None), False)]
+    expected = (None, None, True) if session else (None, credential_fingerprint('key', None), False)
+    assert calls == [expected]
 
 
 def test_portable_encryption_key_is_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -422,7 +423,11 @@ def test_portable_encryption_key_is_stripped(monkeypatch: pytest.MonkeyPatch) ->
 
     key = fernet.Fernet.generate_key()
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY', f'  {key.decode()}  ')
-    assert _encryption_key() == key
+    _encryption_key.cache_clear()
+    try:
+        assert _encryption_key() == key
+    finally:
+        _encryption_key.cache_clear()
 
 
 def test_public_base_url_aliases_are_the_canonical_default() -> None:

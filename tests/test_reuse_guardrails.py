@@ -1355,14 +1355,14 @@ def test_literal_env_raw_defaults_match_the_declared_default() -> None:
     """
     from evaluatorq.common.env_config import ENV_VARS
 
-    mismatched = [
-        f'{relative}:{line} reads undeclared {name}'
-        if name not in ENV_VARS
-        else f'{relative}:{line} reads {name} with default {default!r}; ENV_VARS declares {ENV_VARS[name].default!r}'
-        for relative, source in _src_sources()
-        for line, name, default in _env_raw_defaults(source)
-        if name not in ENV_VARS or (default and default != ENV_VARS[name].default)
-    ]
+    mismatched: list[str] = []
+    for relative, source in _src_sources():
+        for line, name, default in _env_raw_defaults(source):
+            if name not in ENV_VARS:
+                mismatched.append(f'{relative}:{line} reads undeclared {name}')
+            elif default and default != ENV_VARS[name].default:
+                declared = ENV_VARS[name].default
+                mismatched.append(f'{relative}:{line} reads {name} with default {default!r}; ENV_VARS declares {declared!r}')
     assert not mismatched, '\n'.join(mismatched)
 
 
