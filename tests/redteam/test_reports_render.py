@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import re
 
 import pytest
 
@@ -73,13 +72,13 @@ def test_redteam_export_markdown_renders_jury_health():
 def test_redteam_export_html_renders_jury_health(health, headline, label):
     report = _make_empty_report(ReportSummary(jury_health=health))
     html = export_html(report)
-    card = re.search(r'<div class="kpi-card"><div class="kpi-value">([^<]*)</div>'
-                     r'<div class="kpi-label">(Jury Health(?: \(issue types\))?)</div>'
-                     r'<div class="kpi-subtitle">([^<]*)</div>', html)
-    assert card is not None
-    assert card.group(1) == headline
-    assert card.group(2) == label
-    assert '4 multi-judge samples' in card.group(3)
+    config = html.split('id="rttab-config"', 1)[1]
+    assert 'JURY HEALTH' in config
+    assert health.issue_summary() in config
+    assert 'Issue types' in config
+    assert f'>{health.issue_count()}<' in config
+    assert '>4<' in config
+
 
 
 

@@ -36,6 +36,8 @@ from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports.html_helpers import pct
+from evaluatorq.common.reports.icons import _TARGET_ICONS as _TARGET_ICONS
+from evaluatorq.common.reports.messages import render_message_list as render_message_list
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.simulation.metrics import TURN_METRICS
 from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
@@ -420,33 +422,6 @@ _LIFECYCLE_PILL: dict[str, tuple[str, str]] = {
 
 
 # Inline target-kind glyphs (lucide: bot / cpu / rocket), sized to the pill.
-_TARGET_ICONS: dict[str, str] = {
-    'agent': (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        'stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4M8 2h8"/>'
-        '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2M20 14h2"/>'
-        '<path d="M9 13v2M15 13v2"/></svg>'
-    ),
-    'llm': (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        'stroke-linecap="round" stroke-linejoin="round"><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 '
-        '0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 '
-        '9.94l6.14 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>'
-        '<path d="M20 3v4M22 5h-4M4 17v2M5 18H3"/></svg>'
-    ),
-    'deployment': (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        'stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 '
-        '5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 '
-        '2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>'
-        '<path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5z"/></svg>'
-    ),
-    'external': (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/>'
-        '<path d="M3 12h18M12 3a14.9 14.9 0 0 1 0 18M12 3a14.9 14.9 0 0 0 0 18"/></svg>'
-    ),
-}
 
 
 _CHEVRON = (
@@ -2149,81 +2124,6 @@ def report_view_with_filters(
     """
     swap = filter_fragment(rid, surface, body_html, form_html)
     return f'<section class="report-view">{swap}</section>'
-
-
-def render_message_list(
-    messages: list[Any],
-    *,
-    role_labels: dict[str, str],
-    class_prefix: str,
-) -> str:
-    """Render a role-labeled message list as a series of chat-bubble ``<div>``s.
-
-    Each message produces:
-
-    ```html
-    <div class="{class_prefix}-msg {class_prefix}-msg-{css_role}">
-      <span class="{class_prefix}-msg-avatar">{label}</span>
-      <div class="{class_prefix}-msg-bubble">
-        <span class="{class_prefix}-msg-role">{label}</span>
-        <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
-      </div>
-    </div>
-    ```
-
-    Where ``{css_role}`` is the raw role value when it is one of
-    ``user``, ``assistant``, ``system``, ``tool``; otherwise ``unknown``.
-    The ``{class_prefix}-msg-avatar`` span is a short glyph (e.g. "USR" /
-    "AGT" / "SYS" / "TOOL") taken straight from *role_labels* — callers that
-    want a compact avatar should pass short labels; the ``{css_role}`` class
-    is what CSS uses to put user/system on the left and assistant/tool on
-    the right (spec §Transcripts), so no separate "side" marker is needed.
-
-    Every content string is passed through ``esc()`` (HTML-escaping) to
-    prevent stored-XSS vectors. This is purely additive over the prior
-    shape (avatar span + bubble wrapper added); the ``{class_prefix}-msg
-    {class_prefix}-msg-{css_role}`` outer class and the ``-msg-role`` /
-    ``-msg-content`` elements are unchanged, so existing callers keep working.
-
-    Args:
-        messages:     Sequence of message dicts (``role`` / ``content`` keys)
-                      or objects with ``.role`` / ``.content`` attributes.
-        role_labels:  Mapping from role name → display label.  Falls back to
-                      the raw role string when a role is not in the map.
-        class_prefix: CSS class namespace (e.g. ``"sim"`` → ``sim-msg``).
-
-    Returns:
-        Concatenated HTML string (empty string when *messages* is empty).
-    """
-    known_roles = frozenset({'user', 'assistant', 'system', 'tool'})
-
-    parts: list[str] = []
-    for msg in messages:
-        # Support both dict-style and attribute-style message objects.
-        if isinstance(msg, dict):
-            role = str(msg.get('role', 'unknown'))
-            raw_content = msg.get('content', '')
-        else:
-            role = str(getattr(msg, 'role', 'unknown'))
-            raw_content = getattr(msg, 'content', '')
-
-        label = role_labels.get(role, role)
-        content_text: str = raw_content if isinstance(raw_content, str) else str(raw_content or '')
-        safe_content = esc(content_text)
-        css_role = role if role in known_roles else 'unknown'
-        safe_label = esc(label)
-
-        parts.append(
-            f'<div class="{class_prefix}-msg {class_prefix}-msg-{esc(css_role)}">'
-            f'<span class="{class_prefix}-msg-avatar">{safe_label}</span>'
-            f'<div class="{class_prefix}-msg-bubble">'
-            f'<span class="{class_prefix}-msg-role">{safe_label}</span>'
-            f'<pre class="{class_prefix}-msg-content">{safe_content}</pre>'
-            f'</div>'
-            f'</div>'
-        )
-
-    return ''.join(parts)
 
 
 def _sim_rowlist_wrapper(rid: str, inner: str) -> str:

@@ -29,6 +29,56 @@ def test_exec_summary_drops_best_worst_when_all_cells_errored():
     assert 'CONFIDENCE' not in html  # no pill when confidence is None
 
 
+def test_exec_summary_all_errors_has_no_performance_verdict():
+    summary = {
+        'total_conversations': 2,
+        'errors': 2,
+        'success_rate': 0.0,
+        'avg_goal_completion_score': 0.0,
+    }
+    html = report_kit.exec_summary(summary_data=summary, heatmap_data=_heatmap([]), confidence='HIGH')
+
+    assert 'No goal verdict is available' in html
+    assert '0% goal-completion' not in html
+    assert 'HIGH CONFIDENCE' not in html
+
+
+def test_exec_summary_partial_errors_names_rate_denominator():
+    summary = {
+        'total_conversations': 2,
+        'errors': 1,
+        'success_rate': 0.5,
+        'avg_goal_completion_score': 0.5,
+    }
+    html = report_kit.exec_summary(summary_data=summary, heatmap_data=_heatmap([]), confidence=None)
+
+    assert '1/2' in html
+    assert '1</strong> errored' in html
+    assert 'rate and average score above use all 2 conversations' in html
+
+
+def test_heatmap_all_error_cell_is_neutral_even_with_legacy_zero_rate():
+    html = report_kit.heatmap(
+        ['Alice'],
+        ['Refund'],
+        [
+            {
+                'persona': 'Alice',
+                'scenario': 'Refund',
+                'success_rate': 0.0,
+                'avg_score': 0.0,
+                'n': 2,
+                'completed_conversations': 0,
+                'errored_conversations': 2,
+            }
+        ],
+        value_key='avg_score',
+    )
+    assert 'n/a' in html
+    assert 'No completed conversations; 2 errored.' in html
+    assert 'background:' not in html
+
+
 def test_exec_summary_empty_run_returns_empty():
     html = report_kit.exec_summary(summary_data={'total_conversations': 0}, heatmap_data=_heatmap([]), confidence=None)
     assert html == ''

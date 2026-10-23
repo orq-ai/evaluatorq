@@ -205,6 +205,48 @@ def test_sim_overview_single_exec_summary_card_with_narrative(sim_run) -> None:
     assert 'goal-completion rate at an average score' not in html
 
 
+def test_sim_overview_suppresses_performance_based_confidence(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    sim_run.results = sim_run.results[:1]
+    sim_run.executive_summary = None
+    html = sim_report_tabs('rid', sim_run)
+
+    assert 'HIGH CONFIDENCE' not in html
+
+
+def test_sim_overview_all_errors_has_no_goal_verdict(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.contracts import TerminatedBy
+
+    sim_run.executive_summary = None
+    for result in sim_run.results:
+        result.terminated_by = TerminatedBy.error
+        result.metadata['error'] = 'Synthetic timeout'
+        result.goal_achieved = False
+        result.goal_completion_score = 0.0
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'No goal verdict is available' in html
+    assert 'goal-completion rate' not in html
+    assert 'HIGH CONFIDENCE' not in html
+    assert 'n/a' in html
+
+
+def test_sim_overview_partial_errors_names_denominator(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.contracts import TerminatedBy
+
+    sim_run.executive_summary = None
+    sim_run.results[1].terminated_by = TerminatedBy.error
+    sim_run.results[1].metadata['error'] = 'Synthetic timeout'
+
+    html = sim_report_tabs('rid', sim_run)
+    assert '1/2' in html
+    assert '1</strong> errored' in html
+    assert 'rate and average score above use all 2 conversations' in html
+
+
 def test_sim_overview_falls_back_to_computed_summary(sim_run) -> None:
     # With no saved narrative, the computed stat sentence is the summary.
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
@@ -641,6 +683,53 @@ def test_sim_outcomes_donut_still_wraps_in_chart_card(sim_run) -> None:
     assert 'class="chart-card"' in html
 
 
+def test_sim_outcomes_donut_has_no_verdict_for_all_errors(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import _sim_outcomes_donut
+    from evaluatorq.simulation.contracts import TerminatedBy
+
+    for result in sim_run.results:
+        result.terminated_by = TerminatedBy.error
+        result.metadata['error'] = 'Synthetic timeout'
+    html = _sim_outcomes_donut(sim_run.results)
+    assert 'n/a' in html
+    assert 'no goal verdict' in html
+
+
+@pytest.mark.parametrize('as_enum', [False, True])
+def test_sim_outcomes_donut_handles_legacy_string_enum_errors(as_enum) -> None:
+    from enum import Enum
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard.report_tabs import _sim_outcomes_donut
+
+    # Python 3.10's compatibility enum inherits Enum.__str__, which prints
+    # "Termination.error" instead of the underlying "error" value.
+    class Termination(str, Enum):
+        error = 'error'
+
+    row = SimpleNamespace(
+        error=None,
+        terminated_by=Termination.error if as_enum else 'error',
+        goal_achieved=False,
+    )
+    html = _sim_outcomes_donut([row])
+    assert 'n/a' in html
+    assert 'no goal verdict' in html
+    assert 'Errors · 1' in html
+    assert 'Not achieved' not in html
+
+
+def test_sim_outcomes_donut_keeps_error_in_partial_rate_denominator(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import _sim_outcomes_donut
+    from evaluatorq.simulation.contracts import TerminatedBy
+
+    sim_run.results[0].goal_achieved = True
+    sim_run.results[1].terminated_by = TerminatedBy.error
+    sim_run.results[1].metadata['error'] = 'Synthetic timeout'
+    html = _sim_outcomes_donut(sim_run.results)
+    assert '50%' in html
+
+
 def test_sim_report_has_shared_aligned_class(sim_run):
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
@@ -740,8 +829,9 @@ def test_rt_overview_has_exec_summary_and_five_kpis(rt_report_multi):
     html = redteam_report_tabs('rid', rt_report_multi)
     assert 'class="report-aligned rt-report"' in html
     assert 'Executive summary' in html
-    # 5 KPI cards
-    assert html.count('kpi-card') >= 5
+    # Rates are paired with an explicit evaluated/total coverage card.
+    assert html.count('kpi-card') >= 6
+    assert 'Evaluation coverage' in html
     assert 'Attack success rate' in html and 'Resistance rate' in html
 
 
@@ -751,7 +841,7 @@ def test_rt_exec_summary_zero_vuln_fallback(rt_report_clean):
     by = _rt_by_kind(rt_report_clean)
     html = _rt_exec_summary(by['summary'].data, by)
     assert 'resisted' in html.lower()
-    assert 'vulnerabilit' not in html.lower() or 'resisted all' in html.lower()
+    assert 'resisted all of them' not in html.lower()
 
 
 def test_rt_exec_summary_reports_pre_execution_rows() -> None:
@@ -791,15 +881,17 @@ def test_rt_overview_outcome_buckets_conserve_attack_total(monkeypatch, rt_repor
     )
     category = SimpleNamespace(data={'rows': [{'total_attacks': 3}]})
 
-    _rt_overview({'summary': summary, 'category_breakdown': category}, rt_report_clean)
+    rendered = _rt_overview({'summary': summary, 'category_breakdown': category}, rt_report_clean)
 
     segments = captured['segments']
     assert sum(segment['value'] for segment in segments) == summary.data['total_attacks']
     assert {segment['label']: segment['value'] for segment in segments} == {
         'Resistant': 1,
         'Vulnerable': 1,
-        'Error': 1,
+        'Unevaluated': 1,
     }
+    assert 'Recorded errors: 2' in rendered
+    assert 'including 1 pre-execution failure' in rendered
     assert sum(row['total_attacks'] for row in category.data['rows']) == summary.data['total_attacks']
 
 
@@ -847,6 +939,48 @@ def test_rt_kpi_band_zero_evaluated_shows_na_not_perfect(rt_report_clean):
     card = html[max(idx - 200, 0) : idx]
     assert 'n/a' in card
     assert '100%' not in card
+
+
+def test_rt_partial_evaluation_reports_coverage_and_unknowns(rt_report_multi):
+    from evaluatorq.redteam.reports.converters import compute_report_summary
+    from evaluatorq.redteam.reports.export_html import export_html
+
+    report = rt_report_multi.model_copy(deep=True)
+    report.executive_summary = None
+    seen = set()
+    for result in report.results:
+        if result.agent.key in seen:
+            result.vulnerable = None
+            result.evaluation = None
+        else:
+            seen.add(result.agent.key)
+    report.summary = compute_report_summary(report.results)
+
+    document = export_html(report)
+    assert '2/10' in document and '20% coverage' in document
+    assert '2/2' in document and '8</strong> had no verdict' in document
+    assert '0 recorded errors' in document
+    assert 'resisted all of them' not in document
+    assert '8 attacks errored' not in document
+    assert 'Evaluation coverage' in document
+
+
+def test_rt_all_unevaluated_agents_render_neutral_rates(rt_report_multi):
+    from evaluatorq.redteam.reports.converters import compute_report_summary
+    from evaluatorq.redteam.reports.export_html import export_html
+
+    report = rt_report_multi.model_copy(deep=True)
+    for result in report.results:
+        result.vulnerable = None
+        result.evaluation = None
+    report.summary = compute_report_summary(report.results)
+
+    document = export_html(report)
+    import re
+
+    agents = ''.join(re.findall(r'<div class="rk-panel rt-agent-card">(.*?)</div></div>', document, re.S))
+    assert agents.count('n/a') >= 2
+    assert '100%' not in agents and '0%' not in agents
 
 
 def test_rt_tabs_seven_labels(rt_report_multi):

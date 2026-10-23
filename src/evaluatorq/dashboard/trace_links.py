@@ -29,6 +29,7 @@ from urllib.parse import quote
 
 from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.reports import esc
+from evaluatorq.common.reports.html_helpers import parse_http_url
 from evaluatorq.dashboard.orq_links import parse_experiment_url
 
 _LOCATOR_ID = re.compile(r'[A-Za-z0-9._~-]+\Z')
@@ -121,7 +122,7 @@ def trace_link_button(
     surrounding ``<details>``. ``extra_attributes`` adds escaped HTML
     attributes; use a ``None`` value for a boolean attribute.
     """
-    if not url:
+    if parse_http_url(url) is None:
         return ''
     onclick_attr = f' onclick="{esc(onclick)}"' if onclick else ''
     extra_attrs = ''.join(

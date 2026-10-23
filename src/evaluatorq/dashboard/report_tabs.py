@@ -43,7 +43,14 @@ def _render_sections(
     return ''.join(out)
 
 
-def _tabs(group: str, items: list[tuple[str, str] | tuple[str, str, str]], *, active: str | None = None) -> str:
+def _tabs(
+    group: str,
+    items: list[tuple[str, str] | tuple[str, str, str]],
+    *,
+    active: str | None = None,
+    standalone: bool = False,
+    brief: str = '',
+) -> str:
     """Render a CSS-only tab group.
 
     ``items`` is an ordered list of ``(label, panel_html)`` or ``(label,
@@ -57,6 +64,10 @@ def _tabs(group: str, items: list[tuple[str, str] | tuple[str, str, str]], *, ac
     Switching is pure CSS (see ``styles.py``
     ``_TAB_RULES``): the Nth radio toggles the Nth label and Nth panel.
     """
+    if standalone:
+        from evaluatorq.common.reports.standalone import expanded_sections
+
+        return expanded_sections(group, items, brief=brief)
     live = [it for it in items if it[1] and it[1].strip()]
     if not live:
         return ''
@@ -100,7 +111,9 @@ def _stable_entries(run: SimulationRun, rows: list[Any]) -> list[Any]:
     ]
 
 
-def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = None, compare_html: str = '') -> str:
+def sim_report_tabs(
+    rid: str, run: SimulationRun, results: list[Any] | None = None, compare_html: str = '', *, standalone: bool = False
+) -> str:
     """Render the Agent Sim report body as tabs.
 
     Tabs: Overview · Breakdown · Recommendations · Transcripts · Turn quality · Config — each
@@ -111,14 +124,17 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     it defaults to the run's full result list. ``compare_html`` is an optional
     pre-rendered compare-with-another-run control shown in the hero actions.
     """
-    from evaluatorq.dashboard.view import sim_interactive_panels
     from evaluatorq.simulation.reports.export_html import _SECTION_RENDERERS
     from evaluatorq.simulation.reports.sections import build_report_sections
 
     rows = run.results if results is None else results
     # The executive summary describes the complete run and always stays visible,
     # even on filtered views — it is whole-run context, not a subset metric.
-    sections = build_report_sections(rows, executive_summary=run.executive_summary)
+    sections = build_report_sections(
+        rows,
+        executive_summary=run.executive_summary,
+        run_token_usage_total=run.token_usage_total if results is None else None,
+    )
     by_kind: dict[str, Any] = {}
     for s in sections:
         by_kind.setdefault(s.kind, s)
@@ -136,7 +152,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     def render(*kinds: str) -> str:
         return _render_sections(by_kind, _SECTION_RENDERERS, kinds)
 
-    hero = _sim_hero(run, compare_html)
+    hero = _sim_hero(run, compare_html, target_label=run.target if standalone else None)
 
     entries = _stable_entries(run, rows)
 
@@ -149,24 +165,37 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     # registry; Overview handles its own empty state internally).
     no_matches = results is not None and not rows
 
-    breakdown_body = _SIM_NO_MATCH_NOTE if no_matches else _sim_breakdown(by_kind, rid, entity_context)
+    breakdown_body = (
+        _SIM_NO_MATCH_NOTE if no_matches else _sim_breakdown(by_kind, rid, entity_context, standalone=standalone)
+    )
     transcripts_body = (
         _SIM_NO_MATCH_NOTE
         if no_matches
-        else sim_interactive_panels(rid, entries) + render('evaluator_scores', 'judge_verdicts', 'errors')
+        else _sim_transcripts(rid, entries, standalone=standalone)
+        + render('evaluator_scores', 'judge_verdicts', 'errors')
     )
     turn_quality_body = _SIM_NO_MATCH_NOTE if no_matches else _sim_turn_quality(by_kind)
 
     # Folded 7→5 to curb tab sprawl: Evaluators + Judge & errors → Transcripts
     # (all per-conversation verdicts); Tokens → Config. Turn quality is its own
     # tab (unfolded from Breakdown) and drops out when a run has no turn_metrics.
-    recs_body = _sim_recommendations(rid, run)
+    recs_body = _sim_recommendations(rid, run, standalone=standalone)
     n_sim_recs = sum(len(r.suggestions) for r in run.recommendations or [])
 
+    brief = ''
+    if standalone:
+        from evaluatorq.common.reports.brief import simulation_brief
+
+        brief = simulation_brief(run, by_kind)
     tabs = _tabs(
         'simtab',
         [
-            ('Overview', _sim_overview(rid, by_kind, entity_by_kind, rows, run, filtered=results is not None)),
+            (
+                'Overview',
+                _sim_overview(
+                    rid, by_kind, entity_by_kind, rows, run, filtered=results is not None, standalone=standalone
+                ),
+            ),
             ('Breakdown', breakdown_body),
             (
                 'Recommendations',
@@ -179,27 +208,28 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
                 f'Transcripts <span class="tab-count">{len(entries)}</span>',
             ),
             ('Turn quality', turn_quality_body),
-            ('Config', _sim_config(by_kind, run, entity_context) + render('token_usage')),
+            ('Config', _sim_config(by_kind, run, entity_context, standalone=standalone) + render('token_usage')),
         ],
+        standalone=standalone,
+        brief=brief,
     )
-    return f'<div class="report-aligned sim-report">{hero}{tabs}{_sim_entity_modal(entity_context)}</div>'
+    return f'<div class="report-aligned sim-report">{hero}{tabs}{"" if standalone else _sim_entity_modal(entity_context)}</div>'
 
 
-def _sim_recommendations(rid: str, run: SimulationRun) -> str:
+def _sim_recommendations(rid: str, run: SimulationRun, *, standalone: bool = False) -> str:
     """Recommendations tab body: apply bar (RES-1143) + one card per
     simulation recommendation (persona/scenario context, trigger chips, and
     suggestion bullets with per-suggestion Apply buttons). Empty string (tab
     drops out) when the run generated no recommendations."""
-    from evaluatorq.dashboard.apply_ui import (
-        is_sim_apply_enabled,
-        render_sim_apply_panel,
-        render_sim_rec_apply_button,
-    )
-
     if not run.recommendations:
         return ''
-    apply_on = is_sim_apply_enabled(run)
-    apply_bar = render_sim_apply_panel(rid, run)
+    apply_on = False
+    apply_bar = ''
+    if not standalone:
+        from evaluatorq.dashboard.apply_ui import is_sim_apply_enabled, render_sim_apply_panel
+
+        apply_on = is_sim_apply_enabled(run)
+        apply_bar = render_sim_apply_panel(rid, run)
     applied = {s.strip() for s in run.applied_suggestions}
 
     intro = (
@@ -215,6 +245,8 @@ def _sim_recommendations(rid: str, run: SimulationRun) -> str:
                 tail = '<span class="rt-focus-rec-applied">✓ applied</span>'
                 cls = ' rt-focus-rec--applied'
             elif apply_on:
+                from evaluatorq.dashboard.apply_ui import render_sim_rec_apply_button
+
                 tail = render_sim_rec_apply_button(rid, rec.result_index, s)
                 cls = ''
             else:
@@ -305,7 +337,13 @@ def _set_failure_full_run_indexes(section: Any, entries: list[Any]) -> None:
         row['index'] = entry.index + 1
 
 
-def _sim_config(by_kind: dict[str, Any], run: SimulationRun, entity_context: dict[str, Any] | None = None) -> str:
+def _sim_config(
+    by_kind: dict[str, Any],
+    run: SimulationRun,
+    entity_context: dict[str, Any] | None = None,
+    *,
+    standalone: bool = False,
+) -> str:
     """Config tab body: run-configuration meta grid → personas panel →
     scenarios panel (spec §Config.1-3). The kept ``token_usage`` table is
     appended by the caller."""
@@ -372,18 +410,21 @@ def _sim_config(by_kind: dict[str, Any], run: SimulationRun, entity_context: dic
     personas_html = ''
     if personas:
         rows = _sim_config_persona_header() + ''.join(
-            _sim_config_persona_row(p, persona_dom_ids.get(str(p.get('id', '')))) for p in personas
+            _sim_config_persona_row(p, persona_dom_ids.get(str(p.get('id', ''))), standalone=standalone)
+            for p in personas
         )
         personas_html = panel('Personas', rows, sub='Simulated user profiles')
 
     scenarios_html = ''
     if scenarios:
         rows = _sim_config_scenario_header() + ''.join(
-            _sim_config_scenario_row(s, scenario_dom_ids.get(str(s.get('id', '')))) for s in scenarios
+            _sim_config_scenario_row(s, scenario_dom_ids.get(str(s.get('id', ''))), standalone=standalone)
+            for s in scenarios
         )
         scenarios_html = panel('Scenarios', rows, sub='Goals + pass/fail criteria')
 
-    return f'{config_html}{personas_html}{scenarios_html}'
+    details = _sim_entity_modal(entity_context, standalone=True) if standalone else ''
+    return f'{config_html}{personas_html}{scenarios_html}{details}'
 
 
 def _sim_config_persona_header() -> str:
@@ -392,18 +433,20 @@ def _sim_config_persona_header() -> str:
     return f'<div class="sim-config-persona-head"><span>Persona</span><span>Tone</span>{traits}</div>'
 
 
-def _sim_config_persona_row(persona: dict[str, Any], entity_id: str | None = None) -> str:
+def _sim_config_persona_row(persona: dict[str, Any], entity_id: str | None = None, *, standalone: bool = False) -> str:
     """One compact Config-panel persona row: name · tone · trait mini-bars (grid columns)."""
     name = esc(persona.get('name', ''))
     traits = persona.get('traits')
     style = traits.get('communication_style') if isinstance(traits, dict) else None
     style_html = f'<span class="sim-config-persona-style">{esc(str(style)) if style else "—"}</span>'
     traits_html = _sim_trait_minis(traits) if isinstance(traits, dict) else ''
-    trigger_attrs = _sim_entity_trigger_attrs('persona', entity_id)
+    trigger_attrs = f'href="#{esc(entity_id or "")}"' if standalone else _sim_entity_trigger_attrs('persona', entity_id)
+    element = 'a' if standalone else 'button'
+    button_type = '' if standalone else 'type="button"'
     return (
-        f'<button type="button" class="sim-config-persona-row sim-entity-row" {trigger_attrs}>'
+        f'<{element} {button_type} class="sim-config-persona-row sim-entity-row" {trigger_attrs}>'
         f'<span class="sim-config-persona-name">{name}</span>{style_html}{traits_html}'
-        '</button>'
+        f'</{element}>'
     )
 
 
@@ -415,7 +458,9 @@ def _sim_config_scenario_header() -> str:
     )
 
 
-def _sim_config_scenario_row(scenario: dict[str, Any], entity_id: str | None = None) -> str:
+def _sim_config_scenario_row(
+    scenario: dict[str, Any], entity_id: str | None = None, *, standalone: bool = False
+) -> str:
     """One compact Config-panel scenario row: name + goal · criteria split · pass-rate badge
     (three grid columns aligned with the header)."""
     name = esc(scenario.get('name', ''))
@@ -423,15 +468,19 @@ def _sim_config_scenario_row(scenario: dict[str, Any], entity_id: str | None = N
     goal_html = f'<div class="sim-config-scenario-goal">{esc(str(goal))}</div>' if goal else ''
     count_html = _sim_config_criteria_split(scenario.get('criteria') or [])
     badge_html = _sim_pass_rate_badge(scenario.get('pass_rate'))
-    trigger_attrs = _sim_entity_trigger_attrs('scenario', entity_id)
+    trigger_attrs = (
+        f'href="#{esc(entity_id or "")}"' if standalone else _sim_entity_trigger_attrs('scenario', entity_id)
+    )
+    element = 'a' if standalone else 'button'
+    button_type = '' if standalone else 'type="button"'
     return (
-        f'<button type="button" class="sim-config-scenario-row sim-entity-row" {trigger_attrs}>'
+        f'<{element} {button_type} class="sim-config-scenario-row sim-entity-row" {trigger_attrs}>'
         f'<div class="sim-config-scenario-main">'
         f'<span class="sim-config-scenario-name">{name}</span>{goal_html}'
         '</div>'
         f'<span class="sim-config-scenario-checks">{count_html}</span>'
         f'<span class="sim-config-scenario-rate-cell">{badge_html}</span>'
-        '</button>'
+        f'</{element}>'
     )
 
 
@@ -504,7 +553,7 @@ def _sim_entity_trigger_attrs(kind: str, entity_id: str | None) -> str:
     return f'data-sim-entity-trigger data-entity-kind="{esc(kind)}" data-entity-id="{esc(entity_id)}"'
 
 
-def _sim_entity_modal(entity_context: dict[str, Any]) -> str:
+def _sim_entity_modal(entity_context: dict[str, Any], *, standalone: bool = False) -> str:
     personas: list[dict[str, Any]] = entity_context.get('personas', [])
     scenarios: list[dict[str, Any]] = entity_context.get('scenarios', [])
     persona_stats: dict[str, dict[str, Any]] = entity_context.get('persona_stats', {})
@@ -527,7 +576,8 @@ def _sim_entity_modal(entity_context: dict[str, Any]) -> str:
                 len(personas),
                 persona_stats.get(cohort_id),
                 cohorts.get('persona', {}).get(cohort_id, []),
-                rid,
+                '' if standalone else rid,
+                standalone=standalone,
             )
         )
     for i, scenario in enumerate(scenarios):
@@ -540,10 +590,13 @@ def _sim_entity_modal(entity_context: dict[str, Any]) -> str:
                 len(scenarios),
                 scenario_stats.get(cohort_id),
                 cohorts.get('scenario', {}).get(cohort_id, []),
-                rid,
+                '' if standalone else rid,
+                standalone=standalone,
             )
         )
 
+    if standalone:
+        return ''.join(templates)
     return (
         '<dialog class="sim-entity-dialog" aria-label="Simulation entity detail">'
         '<div class="sim-entity-modal-shell">'
@@ -568,6 +621,8 @@ def _sim_persona_template(
     stats: dict[str, Any] | None = None,
     conversations: list[Any] | None = None,
     rid: str = '',
+    *,
+    standalone: bool = False,
 ) -> str:
     name = esc(persona.get('name', ''))
     raw_traits = persona.get('traits')
@@ -601,6 +656,8 @@ def _sim_persona_template(
         f'{_sim_cohort_stats(stats)}{_sim_cohort_list(conversations or [], rid)}'
         f'</div>'
     )
+    if standalone:
+        return f'<article class="rk-panel export-entity" id="{esc(entity_id)}">{body}</article>'
     return (
         f'<template id="{esc(entity_id)}" data-sim-entity-template data-entity-kind="persona" '
         f'data-entity-id="{esc(entity_id)}" data-entity-index="{index}">{body}</template>'
@@ -615,6 +672,8 @@ def _sim_scenario_template(
     stats: dict[str, Any] | None = None,
     conversations: list[Any] | None = None,
     rid: str = '',
+    *,
+    standalone: bool = False,
 ) -> str:
     name = esc(scenario.get('name', ''))
     goal = scenario.get('goal')
@@ -640,6 +699,8 @@ def _sim_scenario_template(
         f'{_sim_cohort_stats(stats)}{_sim_cohort_list(conversations or [], rid)}'
         f'</div>'
     )
+    if standalone:
+        return f'<article class="rk-panel export-entity" id="{esc(entity_id)}">{body}</article>'
     return (
         f'<template id="{esc(entity_id)}" data-sim-entity-template data-entity-kind="scenario" '
         f'data-entity-id="{esc(entity_id)}" data-entity-index="{index}">{body}</template>'
@@ -651,14 +712,20 @@ def _sim_cohort_stats(stats: dict[str, Any] | None) -> str:
         return ''
     from evaluatorq.common.reports.html_helpers import pct
 
-    rate = float(stats.get('success_rate', 0.0))
-    score = float(stats.get('avg_goal_completion_score', 0.0))
+    rate = stats.get('success_rate')
+    score = stats.get('avg_goal_completion_score')
+    conversations = int(stats.get('conversations', 0))
+    completed = int(stats.get('completed_conversations', conversations))
+    errors = int(stats.get('errored_conversations', max(conversations - completed, 0)))
     tokens = stats.get('total_tokens')
     token_text = f'{int(tokens):,}' if isinstance(tokens, int | float) and tokens else '—'
+    goal_rate = 'n/a' if completed == 0 else pct(rate)
+    score_text = 'n/a' if completed == 0 or score is None else f'{score:.2f}'
     return (
         '<div class="sim-cohort-stats">'
-        f'<span><b>Goal rate</b>{esc(pct(rate))}</span>'
-        f'<span><b>Avg score</b>{score:.2f}</span>'
+        f'<span><b>Goal rate</b>{esc(goal_rate)} · {completed}/{conversations} completed</span>'
+        f'<span><b>Avg score</b>{score_text}</span>'
+        f'<span><b>Errors</b>{errors}</span>'
         f'<span><b>Tokens</b>{token_text}</span>'
         '</div>'
     )
@@ -672,7 +739,17 @@ def _sim_cohort_list(entries: list[Any], rid: str) -> str:
 
     items: list[str] = []
     for entry in entries:
-        outcome = status_badge('Passed' if entry.goal_achieved else 'Failed', 'pass' if entry.goal_achieved else 'fail')
+        if entry.error or entry.terminated_by == 'error':
+            outcome = status_badge('Error', 'warn')
+        else:
+            outcome = status_badge(
+                'Passed' if entry.goal_achieved else 'Failed', 'pass' if entry.goal_achieved else 'fail'
+            )
+        if not rid:
+            items.append(
+                f'<a class="sim-cohort-conversation" href="#conv-{entry.index + 1}">#{entry.index + 1} · {esc(entry.persona)} · {esc(entry.scenario)} {outcome}</a>'
+            )
+            continue
         items.append(
             f'<button type="button" class="sim-cohort-conversation" '
             f'data-sim-entity-trigger data-entity-kind="conversation" '
@@ -712,23 +789,33 @@ def _sim_criterion_detail(criterion: dict[str, Any]) -> str:
     )
 
 
-def _tinted(text: str, value: float) -> str:
+def _tinted(text: str, value: float | None) -> str:
     """Wrap a cell value in a span tinted red->yellow->green by ``value`` (0-1,
     higher = better - both goal rate and avg score are goal-completion metrics)."""
     from evaluatorq.dashboard.report_kit import _interp_color
 
+    if value is None:
+        return f'<span class="sim-td-tint sim-td-tint--unknown">{esc(text)}</span>'
     color = _interp_color(max(0.0, min(1.0, value)))
     return f'<span class="sim-td-tint" style="color:{color}">{esc(text)}</span>'
 
 
-def _sim_failures_table(section: Any, rid: str) -> str:
+def _sim_failures_table(section: Any, rid: str, *, standalone: bool = False, errored_count: int = 0) -> str:
     """Dashboard-only failure rows, which open their transcripts in the drawer."""
     from evaluatorq.common.reports.html_helpers import html_table
     from evaluatorq.simulation.reports.export_html import _cap, _criteria_dots
 
     rows = section.data.get('rows', []) if section is not None else []
     if not rows:
-        return '<section class="report-card"><h2>Failures</h2><p>No failed conversations.</p></section>'
+        error_note = (
+            f' {errored_count} execution error{"s" if errored_count != 1 else ""} occurred; see transcript evidence.'
+            if errored_count
+            else ''
+        )
+        return (
+            '<section class="report-card"><h2>Failures</h2>'
+            f'<p>No completed conversations failed their goal.{error_note}</p></section>'
+        )
     headers = ['Scenario', 'Persona', 'Why', 'Criteria', 'Score']
     table_rows = [
         [
@@ -750,7 +837,17 @@ def _sim_failures_table(section: Any, rid: str) -> str:
         f'data-drawer-url="/r/{esc(rid)}/sim/transcript?idx={int(row["index"]) - 1}"'
         for row in rows
     ]
-    return f'<section class="report-card"><h2>Failures</h2>{html_table(headers, table_rows, row_attrs)}</section>'
+    if standalone:
+        row_attrs = None
+        for row, source in zip(table_rows, rows, strict=True):
+            row[0] = f'<a href="#conv-{int(source["index"])}">{row[0]}</a>'
+            row[2] = esc(str(source.get('reason', '')))
+    error_note = (
+        f'<p>{errored_count} execution error{"s" if errored_count != 1 else ""} occurred; see transcript evidence.</p>'
+        if errored_count
+        else ''
+    )
+    return f'<section class="report-card"><h2>Failures</h2>{html_table(headers, table_rows, row_attrs)}{error_note}</section>'
 
 
 def _sim_breakdown_table(
@@ -761,6 +858,8 @@ def _sim_breakdown_table(
     cols: Callable[[dict[str, Any]], list[str]],
     kind: str,
     entity_ids: dict[str, str],
+    *,
+    standalone: bool = False,
 ) -> str:
     """One Breakdown per-persona/per-scenario table (mockup columns), wrapped in
     a serif-titled panel. ``key`` is the label column field; ``cols`` maps a row
@@ -777,14 +876,27 @@ def _sim_breakdown_table(
         f'{_sim_entity_trigger_attrs(kind, entity_ids.get(str(row.get("id", ""))))}'
         for row in rows
     ]
+    if standalone:
+        row_attrs = None
+        for cells, source in zip(table_rows, rows, strict=True):
+            anchor = entity_ids.get(str(source.get('id', '')))
+            if anchor:
+                cells[0] = f'<a href="#{esc(anchor)}">{cells[0]}</a>'
     table = html_table(headers, table_rows, row_attrs)
-    return panel(title, f'<div class="sim-bd-table">{table}</div>')
+    denominator_note = (
+        'Rates and averages use all cohort conversations, including errors. n/a means no conversation completed.'
+        if any(row.get('errored_conversations', 0) for row in rows)
+        else ''
+    )
+    return panel(title, f'<div class="sim-bd-table">{table}</div>', sub=denominator_note)
 
 
 def _sim_breakdown(
     by_kind: dict[str, Any],
     rid: str,
     entity_context: dict[str, Any] | None = None,
+    *,
+    standalone: bool = False,
 ) -> str:
     """Breakdown tab body: heatmap → failures table → top failure modes →
     score-distribution → per-persona/scenario tables (spec §Breakdown)."""
@@ -815,12 +927,20 @@ def _sim_breakdown(
     dist_section = by_kind.get('score_distribution')
     dist_html = ''
     if dist_section is not None:
-        scores = dist_section.data.get('scores', [])
+        scores = dist_section.data.get('measured_scores', dist_section.data.get('scores', []))
+        completed = int(dist_section.data.get('completed_conversations', len(scores)))
+        errors = int(dist_section.data.get('errored_conversations', 0))
         if scores:
             dist_html = panel(
                 'Goal-completion score distribution',
                 histogram(scores),
-                sub=f'{len(scores)} conversations · dashed line = mean',
+                sub=f'{completed} completed · {errors} errors · dashed line = mean',
+            )
+        elif errors:
+            dist_html = panel(
+                'Goal-completion score distribution',
+                '<p class="sim-td-tint sim-td-tint--unknown">No completed conversations to score.</p>',
+                sub=f'0 completed · {errors} errors',
             )
 
     # Dashboard-specific tables (mockup columns), not the flat-export renderer
@@ -831,30 +951,50 @@ def _sim_breakdown(
         by_kind.get('persona_breakdown'),
         'Per-persona',
         'persona',
-        ['Persona', 'Conv', 'Goal rate', 'Avg score', 'Tokens'],
+        ['Persona', 'Conv', 'Errors', 'Goal rate', 'Avg score', 'Tokens'],
         lambda r: [
             str(r['conversations']),
-            _tinted(pct(r['success_rate']), r['success_rate']),
-            _tinted(f'{r["avg_goal_completion_score"]:.2f}', r['avg_goal_completion_score']),
+            str(r.get('errored_conversations', 0)),
+            _tinted(
+                'n/a' if r.get('completed_conversations', r['conversations']) == 0 else pct(r['success_rate']),
+                None if r.get('completed_conversations', r['conversations']) == 0 else r['success_rate'],
+            ),
+            _tinted(
+                'n/a'
+                if r.get('completed_conversations', r['conversations']) == 0
+                else f'{r["avg_goal_completion_score"]:.2f}',
+                None if r.get('completed_conversations', r['conversations']) == 0 else r['avg_goal_completion_score'],
+            ),
             f'{r["total_tokens"]:,}' if r.get('total_tokens') else '—',
         ],
         'persona',
         persona_dom_ids,
+        standalone=standalone,
     )
     scenario_html = _sim_breakdown_table(
         by_kind.get('scenario_breakdown'),
         'Per-scenario',
         'scenario',
-        ['Scenario', 'Conv', 'Goal rate', 'Avg score', 'Avg turns', 'Tokens'],
+        ['Scenario', 'Conv', 'Errors', 'Goal rate', 'Avg score', 'Avg turns', 'Tokens'],
         lambda r: [
             str(r['conversations']),
-            _tinted(pct(r['success_rate']), r['success_rate']),
-            _tinted(f'{r["avg_goal_completion_score"]:.2f}', r['avg_goal_completion_score']),
+            str(r.get('errored_conversations', 0)),
+            _tinted(
+                'n/a' if r.get('completed_conversations', r['conversations']) == 0 else pct(r['success_rate']),
+                None if r.get('completed_conversations', r['conversations']) == 0 else r['success_rate'],
+            ),
+            _tinted(
+                'n/a'
+                if r.get('completed_conversations', r['conversations']) == 0
+                else f'{r["avg_goal_completion_score"]:.2f}',
+                None if r.get('completed_conversations', r['conversations']) == 0 else r['avg_goal_completion_score'],
+            ),
             f'{r["avg_turn_count"]:.1f}',
             f'{r["total_tokens"]:,}' if r.get('total_tokens') else '—',
         ],
         'scenario',
         scenario_dom_ids,
+        standalone=standalone,
     )
     tables_html = f'{persona_html}{scenario_html}'
 
@@ -862,14 +1002,16 @@ def _sim_breakdown(
     failure_html = ''
     if failure_mode_section is not None:
         rows = [(str(label), int(count)) for label, count in failure_mode_section.data.get('rows', [])]
-        failure_html = _sim_failure_modes(rows)
+        failure_html = _sim_failure_modes(rows, standalone=standalone)
 
-    failures_html = f'<div id="section-failures_first">{_sim_failures_table(by_kind.get("failures_first"), rid)}</div>'
+    errors_section = by_kind.get('errors')
+    errored_count = int(errors_section.data.get('total_errored', 0)) if errors_section is not None else 0
+    failures_html = f'<div id="section-failures_first">{_sim_failures_table(by_kind.get("failures_first"), rid, standalone=standalone, errored_count=errored_count)}</div>'
 
     return f'{heatmap_html}{failures_html}{failure_html}{dist_html}{tables_html}'
 
 
-def _sim_failure_modes(rows: list[tuple[str, int]]) -> str:
+def _sim_failure_modes(rows: list[tuple[str, int]], *, standalone: bool = False) -> str:
     """'Top failure modes' as HTML bars with a client-side min-count slider.
 
     Each failed ``scenario: criterion`` pair aggregates across the personas the
@@ -882,7 +1024,7 @@ def _sim_failure_modes(rows: list[tuple[str, int]]) -> str:
     max_c = max(c for _, c in rows)
     # Default: hide singletons when any repeat exists; otherwise show everything
     # (a max of 1 means every failure is a one-off and the slider is a no-op).
-    default = 2 if max_c >= 2 else 1
+    default = 1 if standalone else (2 if max_c >= 2 else 1)
     bars: list[str] = []
     for label, count in rows:
         pct = (count / max_c) * 100 if max_c else 0
@@ -902,10 +1044,13 @@ def _sim_failure_modes(rows: list[tuple[str, int]]) -> str:
         f'<output class="sim-fm-out" data-fm-out>{default}</output>'
         '</span>'
     )
+    if standalone:
+        slider = ''
     return (
         '<div class="rk-panel sim-fm" data-fm-panel>'
         f'<div class="rk-panel-title sim-fm-head"><span>Top failure modes</span>{slider}</div>'
         '<div class="rk-panel-body">'
+        '<p class="sim-fm-note">Confirmed criterion failures, including violations observed before an execution error.</p>'
         f'<div class="sim-fm-bars">{"".join(bars)}</div>'
         '<p class="sim-fm-empty" data-fm-empty hidden>No failure modes at or above this count.</p>'
         '</div></div>'
@@ -1041,6 +1186,7 @@ def _sim_overview(
     run: SimulationRun,
     *,
     filtered: bool,
+    standalone: bool = False,
 ) -> str:
     """Overview tab body: agent info card, exec summary, KPI band, and a
     two-column outcomes/quality grid. Persona and scenario input live in Config.
@@ -1054,7 +1200,11 @@ def _sim_overview(
     """
     from evaluatorq.dashboard.report_kit import callout, exec_summary, panel
 
-    agent_card_html = _sim_agent_section(rid, run)
+    agent_card_html = (
+        _sim_agent_card(run.agent_info or _stored_agent_info(run), experiment_url=run.experiment_url)
+        if standalone
+        else _sim_agent_section(rid, run)
+    )
     summary_section = by_kind.get('summary')
     heatmap_section = by_kind.get('persona_scenario_heatmap')
     tokens_section = by_kind.get('token_usage')
@@ -1071,9 +1221,22 @@ def _sim_overview(
     full_summary_data = s.data if (s := full_by_kind.get('summary')) is not None else {}
     full_heatmap_data = s.data if (s := full_by_kind.get('persona_scenario_heatmap')) is not None else {}
     es_label = 'Executive summary · whole run' if filtered else 'Executive summary'
-    confidence = full_summary_data.get('confidence')
+    # This confidence value is derived from the observed success rate, not the
+    # amount of evidence, so it must not be presented as evidence strength.
+    confidence = None
     if run.executive_summary:
-        summary_html = callout(esc(str(run.executive_summary)), label=es_label, confidence=confidence)
+        narrative = esc(str(run.executive_summary))
+        total = full_summary_data.get('total_conversations', 0)
+        errors = full_summary_data.get('errors', 0)
+        if total and errors >= total:
+            narrative += f' No goal verdict is available because all <strong>{total}</strong> conversations errored.'
+        elif errors:
+            completed = total - errors
+            narrative += (
+                f' <strong>{completed}/{total}</strong> conversations completed and '
+                f'<strong>{errors}</strong> errored; the recorded rate and average score use all {total} conversations.'
+            )
+        summary_html = callout(narrative, label=es_label, confidence=confidence)
     else:
         summary_html = exec_summary(
             summary_data=full_summary_data,
@@ -1290,8 +1453,8 @@ def _sim_agent_card(
     # app resolves that for anyone with access); otherwise fall back to the
     # captured snapshot's workspace/host, then env. Repairs older snapshots that
     # captured a UUID-based URL without altering run JSON.
+    from evaluatorq.common.reports.icons import _TARGET_ICONS
     from evaluatorq.dashboard.orq_links import orq_studio_url
-    from evaluatorq.dashboard.view import _TARGET_ICONS
 
     url = orq_studio_url(
         target_kind='agent',
@@ -1368,13 +1531,15 @@ def _sim_kpi_band(summary_data: dict[str, Any], n_personas: int = 0, n_scenarios
     from evaluatorq.common.reports.html_helpers import kpi_cards
 
     errors = summary_data.get('errors', 0)
+    total = summary_data.get('total_conversations', 0)
+    avg_score = 'n/a' if total and errors >= total else f'{summary_data.get("avg_goal_completion_score", 0.0):.2f}'
     return kpi_cards([
         {'label': 'Personas', 'value': str(n_personas), 'status': 'neutral'},
         {'label': 'Scenarios', 'value': str(n_scenarios), 'status': 'neutral'},
         {'label': 'Conversations', 'value': str(summary_data.get('total_conversations', 0)), 'status': 'neutral'},
         {
             'label': 'Avg score',
-            'value': f'{summary_data.get("avg_goal_completion_score", 0.0):.2f}',
+            'value': avg_score,
             'status': 'neutral',
         },
         {'label': 'Avg turns', 'value': f'{summary_data.get("avg_turn_count", 0.0):.1f}', 'status': 'neutral'},
@@ -1484,7 +1649,7 @@ def _sim_outcomes_donut(rows: list[Any]) -> str:
     """
     achieved = not_achieved = errors = 0
     for r in rows:
-        if str(getattr(r, 'terminated_by', '') or '') == 'error':
+        if getattr(r, 'error', None) or getattr(r, 'terminated_by', None) == 'error':
             errors += 1
         elif getattr(r, 'goal_achieved', False):
             achieved += 1
@@ -1495,7 +1660,8 @@ def _sim_outcomes_donut(rows: list[Any]) -> str:
     if total == 0:
         return ''
 
-    pct_achieved = round(achieved / total * 100)
+    center_value = f'{round(achieved / total * 100)}%' if achieved + not_achieved else 'n/a'
+    center_label = 'goal met' if achieved + not_achieved else 'no goal verdict'
     # One donut implementation: delegate the ring/center/legend markup to
     # report_kit.donut(); this function owns only the chart-card wrapper.
     segments = [
@@ -1504,22 +1670,22 @@ def _sim_outcomes_donut(rows: list[Any]) -> str:
     ]
     from evaluatorq.dashboard.report_kit import donut
 
-    inner = donut(segments, f'{pct_achieved}%', 'goal met')
+    inner = donut(segments, center_value, center_label)
     return f'<figure class="chart-card"><figcaption>Outcomes</figcaption>{inner}</figure>'
 
 
-def _sim_hero(run: SimulationRun, compare_html: str = '') -> str:
+def _sim_hero(run: SimulationRun, compare_html: str = '', *, target_label: str | None = None) -> str:
     # KPI cards intentionally omitted: the same metrics render in the 5-card
     # band inside the Overview tab (_sim_kpi_band), so a hero band duplicated
     # them above the tabs. Hero is now just title + subtitle.
     run_btn = trace_link_button(run_trace_url(run.run_id, run.experiment_url), 'View all run traces ↗')
-    inner = run_btn + compare_html
+    inner = run_btn + trace_link_button(run.experiment_url, 'Open experiment in Orq') + compare_html
     actions = f'<div class="report-hero-actions">{inner}</div>' if inner else ''
     return (
         '<header class="report-hero">'
         '<p class="report-hero-kicker">Agent Simulation</p>'
         f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
-        f'<p class="report-hero-sub">target {esc(run.target_kind)}</p>'
+        f'<p class="report-hero-sub">target {esc(target_label or run.target_kind)}</p>'
         f'{actions}</header>'
     )
 
@@ -1599,23 +1765,55 @@ def _rt_exec_summary(summary_data: dict[str, Any], by_kind: dict[str, Any]) -> s
 
     total = summary_data.get('total_attacks', 0)
     pre_execution_errors = summary_data.get('pre_execution_errors', 0)
+    narrative = summary_data.get('narrative')
+    narrative_html = (
+        callout(esc(str(narrative)), label='Saved executive summary', confidence=summary_data.get('confidence'))
+        if narrative
+        else ''
+    )
     if not total and not pre_execution_errors:
-        return ''
+        return narrative_html
 
     if not total:
-        return callout(
-            f'<strong>{pre_execution_errors}</strong> row'
-            f'{"s" if pre_execution_errors != 1 else ""} failed before execution. '
-            'No attack results were produced for this run.',
-            confidence=summary_data.get('confidence'),
+        return (
+            callout(
+                f'<strong>{pre_execution_errors}</strong> row'
+                f'{"s" if pre_execution_errors != 1 else ""} failed before execution. '
+                'No attack results were produced for this run.',
+                confidence=summary_data.get('confidence'),
+            )
+            + narrative_html
         )
 
+    evaluated = summary_data.get('evaluated_attacks')
+    unevaluated = summary_data.get('unevaluated_attacks')
+    if evaluated is None and unevaluated is not None:
+        evaluated = max(total - unevaluated, 0)
+    if unevaluated is None and evaluated is not None:
+        unevaluated = max(total - evaluated, 0)
+    coverage = summary_data.get('evaluation_coverage')
+    if coverage is None:
+        coverage = evaluated / total if total and evaluated is not None else None
+    total_errors = summary_data.get('total_errors', 0)
+    pre_execution_errors = summary_data.get('pre_execution_errors', 0)
+    error_note = f' {total_errors} recorded error{"s" if total_errors != 1 else ""}.'
+    if pre_execution_errors:
+        error_note += f' {pre_execution_errors} pre-execution failure{"s" if pre_execution_errors != 1 else ""}.'
+    coverage_sentence = (
+        f'<strong>{evaluated}/{total}</strong> attacks evaluated ({pct(coverage)} coverage); '
+        f'<strong>{unevaluated}</strong> had no verdict.{error_note}'
+        if evaluated is not None and unevaluated is not None
+        else f'Evaluation coverage was not recorded; the verdict denominator is unknown.{error_note}'
+    )
+
     if zero_evaluated_attacks(summary_data):
-        sentence = (
-            f'Across <strong>{total}</strong> adversarial attacks, none could be evaluated '
-            '(target or judge errors) — no verdict is available for this run.'
+        sentence = f'No attacks were evaluated: {coverage_sentence}'
+        return callout(sentence, confidence=None) + narrative_html
+
+    if narrative:
+        return callout(esc(str(narrative)), confidence=summary_data.get('confidence')) + callout(
+            coverage_sentence, label='Evaluation coverage', confidence=None
         )
-        return callout(sentence, confidence=summary_data.get('confidence'))
 
     category_section = by_kind.get('category_breakdown')
     rows = category_section.data.get('rows', []) if category_section is not None else []
@@ -1624,19 +1822,19 @@ def _rt_exec_summary(summary_data: dict[str, Any], by_kind: dict[str, Any]) -> s
     vulns = summary_data.get('vulnerabilities_found', 0)
     critical = summary_data.get('critical_exposure', 0)
     resistance_rate = summary_data.get('resistance_rate')
-
-    if vulns:
-        critical_clause = f', including <strong>{critical} critical</strong>' if critical else ''
-        sentence = (
-            f'Across <strong>{total}</strong> adversarial attacks spanning {k} OWASP '
-            f'categor{"y" if k == 1 else "ies"}, the agent resisted <strong>{pct(resistance_rate)}</strong> '
-            f'and exposed <strong>{vulns}</strong> vulnerabilit{"y" if vulns == 1 else "ies"}{critical_clause}.'
-        )
-    else:
-        sentence = (
-            f'Across <strong>{total}</strong> adversarial attacks spanning {k} OWASP '
-            f'categor{"y" if k == 1 else "ies"}, the agent resisted all of them.'
-        )
+    resistant = max(evaluated - vulns, 0) if evaluated is not None else None
+    critical_clause = f', including <strong>{critical} critical</strong>' if critical else ''
+    verdict_sentence = (
+        f'Among evaluated attacks, the agent resisted <strong>{resistant}/{evaluated}</strong> '
+        f'({pct(resistance_rate)}) and exposed <strong>{vulns}</strong> '
+        f'vulnerabilit{"y" if vulns == 1 else "ies"}{critical_clause}.'
+        if evaluated is not None
+        else 'Verdict counts were unavailable for this saved report.'
+    )
+    sentence = (
+        f'Across <strong>{total}</strong> adversarial attacks spanning {k} OWASP '
+        f'categor{"y" if k == 1 else "ies"}, {coverage_sentence} {verdict_sentence}'
+    )
 
     top_rate = rows[0].get('vulnerability_rate') if rows else None
     if top_rate is not None and top_rate > 0:
@@ -1660,21 +1858,11 @@ def _rt_exec_summary(summary_data: dict[str, Any], by_kind: dict[str, Any]) -> s
                     f'{pct(last_rate)} at {last.get("turn_count")} turns.'
                 )
 
-    evaluated = summary_data.get('evaluated_attacks', 0)
-    attack_errors = summary_data.get('unevaluated_attacks')
-    if attack_errors is None:
-        attack_errors = max(total - evaluated, 0)
-    if attack_errors:
-        sentence += f' {attack_errors} attack{"s" if attack_errors != 1 else ""} errored and were not evaluated.'
-    if pre_execution_errors:
-        sentence += f' {pre_execution_errors} row{"s" if pre_execution_errors != 1 else ""} failed before execution.'
-
     return callout(sentence, confidence=summary_data.get('confidence'))
 
 
 def _rt_kpi_band(s: dict[str, Any]) -> str:
-    """5-card KPI band: Attacks run / Vulnerabilities / Attack success rate /
-    Resistance rate / Critical findings (spec §Overview.2)."""
+    """KPI band with verdict rates and the evaluated/total coverage denominator."""
     from evaluatorq.common.reports.html_helpers import kpi_cards, pct
     from evaluatorq.dashboard.metrics import zero_evaluated_attacks
 
@@ -1682,7 +1870,8 @@ def _rt_kpi_band(s: dict[str, Any]) -> str:
     resistance = s.get('resistance_rate', 0.0)
     vulns = s.get('vulnerabilities_found', 0)
     critical = s.get('critical_exposure', 0)
-    if zero_evaluated_attacks(s) or resistance is None or asr is None:
+    has_unknown_denominator = s.get('total_attacks', 0) and s.get('evaluated_attacks') is None
+    if zero_evaluated_attacks(s) or has_unknown_denominator or resistance is None or asr is None:
         # No verdict to show: either nothing was evaluated (the rate is only its
         # schema default — same no-score rule as the landing rows and the red-team
         # overview) or the rate is explicitly null. Both rate cards share the guard.
@@ -1699,12 +1888,22 @@ def _rt_kpi_band(s: dict[str, Any]) -> str:
             'value': pct(asr),
             'status': 'fail' if asr >= 0.25 else ('warn' if asr > 0 else 'pass'),
         }
+    total = s.get('total_attacks', 0)
+    evaluated = s.get('evaluated_attacks')
+    unevaluated = s.get('unevaluated_attacks')
+    if evaluated is None and unevaluated is not None:
+        evaluated = max(total - unevaluated, 0)
+    coverage = s.get('evaluation_coverage')
+    if coverage is None:
+        coverage = evaluated / total if total and evaluated is not None else None
+    coverage_value = f'{evaluated}/{total} ({pct(coverage)})' if coverage is not None and total else 'n/a'
     return kpi_cards([
         {'label': 'Attacks run', 'value': str(s.get('total_attacks', 0)), 'status': 'neutral'},
         {'label': 'Vulnerabilities', 'value': str(vulns), 'status': 'fail' if vulns else 'pass'},
         asr_card,
         resistance_card,
         {'label': 'Critical findings', 'value': str(critical), 'status': 'fail' if critical else 'pass'},
+        {'label': 'Evaluation coverage', 'value': coverage_value, 'status': 'neutral'},
     ])
 
 
@@ -1715,7 +1914,14 @@ def _rt_agent_row(stats: dict[str, Any]) -> str:
 
     critical = stats.get('critical', 0)
     vulns = stats.get('vulns', 0)
-    dot_cls = 'rt-hero-dot--critical' if critical else ('rt-hero-dot--vuln' if vulns else 'rt-hero-dot--clean')
+    attacks = stats.get('attacks', 0)
+    evaluated = stats.get('evaluated', attacks)
+    incomplete = evaluated < attacks
+    dot_cls = (
+        'rt-hero-dot--critical'
+        if critical
+        else ('rt-hero-dot--vuln' if vulns else ('rt-hero-dot--unknown' if incomplete else 'rt-hero-dot--clean'))
+    )
     asr = stats.get('asr')
     # None (no evaluated attacks for this agent): empty track, neutral color, pct() renders 'n/a'.
     bar_pct = max(0.0, min(1.0, asr)) * 100 if asr is not None else 0.0
@@ -1761,6 +1967,7 @@ def _rt_overview(by_kind: dict[str, Any], report: RedTeamReport) -> str:
     (outcome donut + vulnerabilities-by-severity bars) → agents-under-test
     panel (multi-agent only). Spec §Overview."""
     from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.dashboard.metrics import zero_evaluated_attacks
     from evaluatorq.dashboard.report_kit import bar_rows, donut, panel
 
     summary_section = by_kind.get('summary')
@@ -1771,22 +1978,30 @@ def _rt_overview(by_kind: dict[str, Any], report: RedTeamReport) -> str:
 
     evaluated = summary_data.get('evaluated_attacks', 0)
     vulns = summary_data.get('vulnerabilities_found', 0)
-    attack_errors = summary_data.get('unevaluated_attacks')
-    if attack_errors is None:
-        attack_errors = max(summary_data.get('total_attacks', 0) - evaluated, 0)
+    unevaluated = summary_data.get('unevaluated_attacks')
+    if unevaluated is None:
+        unevaluated = max(summary_data.get('total_attacks', 0) - evaluated, 0)
+    total_errors = summary_data.get('total_errors', 0)
+    pre_execution_errors = summary_data.get('pre_execution_errors', 0)
     resistant = max(evaluated - vulns, 0)
     resistance_rate = summary_data.get('resistance_rate', 0.0)
+    if zero_evaluated_attacks(summary_data):
+        resistance_rate = None
 
     outcome_html = donut(
         [
             {'label': 'Resistant', 'value': resistant, 'color': 'var(--green-600)'},
             {'label': 'Vulnerable', 'value': vulns, 'color': 'var(--red-600)'},
-            {'label': 'Error', 'value': attack_errors, 'color': 'var(--amber-600)'},
+            {'label': 'Unevaluated', 'value': unevaluated, 'color': 'var(--gray-500)'},
         ],
         pct(resistance_rate),
         'resistant',
     )
-    outcome_panel = panel('Outcome', outcome_html)
+    error_context = (
+        f'<p class="rt-outcome-errors">Recorded errors: {total_errors} '
+        f'(including {pre_execution_errors} pre-execution failure{"s" if pre_execution_errors != 1 else ""}).</p>'
+    )
+    outcome_panel = panel('Outcome', outcome_html + error_context)
 
     by_severity: dict[str, Any] = summary_data.get('by_severity', {})
 
@@ -1857,8 +2072,6 @@ def _rt_focus_recommendation_list(area: dict[str, Any], applied: set[str], rid: 
     with its own Apply button (opens the breakdown drawer for exactly that
     recommendation), applied bullets with a tick (RES-1143). Empty when the
     pipeline generated none (static runs; never subscript)."""
-    from evaluatorq.dashboard.apply_ui import render_rec_apply_button
-
     recs = area.get('llm_recommendations', {}).get('recommendations') or []
     if not recs:
         return ''
@@ -1871,6 +2084,8 @@ def _rt_focus_recommendation_list(area: dict[str, Any], applied: set[str], rid: 
             tail = '<span class="rt-focus-rec-applied">✓ applied</span>'
             cls = ' rt-focus-rec--applied'
         elif rid:
+            from evaluatorq.dashboard.apply_ui import render_rec_apply_button
+
             tail = render_rec_apply_button(rid, category, rec_text)
             cls = ''
         else:
@@ -1932,20 +2147,22 @@ def _rt_focus_area_card(area: dict[str, Any], applied: set[str] | None = None, r
     return f'<div class="rk-panel rt-focus-card">{head}{body}</div>'
 
 
-def _rt_focus(by_kind: dict[str, Any], rid: str, report: RedTeamReport) -> str:
+def _rt_focus(by_kind: dict[str, Any], rid: str, report: RedTeamReport, *, standalone: bool = False) -> str:
     """Focus areas tab body: apply bar (RES-1143), intro copy + one card per
     top-risk area (worst first, section list is already top-5). Empty list
     (clean run) -> ``''`` so the tab drops entirely (spec §Focus areas)."""
-    from evaluatorq.dashboard.apply_ui import render_apply_panel
-
     section = by_kind.get('focus_areas')
     areas: list[dict[str, Any]] = section.data.get('focus_areas', []) if section is not None else []
     if not areas:
         return ''
 
-    from evaluatorq.dashboard.apply_ui import is_apply_enabled
+    apply_bar = ''
+    action_rid = ''
+    if not standalone:
+        from evaluatorq.dashboard.apply_ui import is_apply_enabled, render_apply_panel
 
-    apply_bar = render_apply_panel(rid, report)
+        apply_bar = render_apply_panel(rid, report)
+        action_rid = rid if is_apply_enabled(report) else ''
     intro = (
         '<p class="rt-focus-intro">Prioritized fixes, ranked by '
         '<code>risk = success rate × avg severity</code>. Start at the top — P1 first.</p>'  # noqa: RUF001
@@ -1953,7 +2170,6 @@ def _rt_focus(by_kind: dict[str, Any], rid: str, report: RedTeamReport) -> str:
     applied = {r.strip() for r in report.applied_recommendations}
     # Per-rec Apply buttons only when the flow is enabled (single-agent runs);
     # rid='' renders the bullets without actions.
-    action_rid = rid if is_apply_enabled(report) else ''
     cards = ''.join(_rt_focus_area_card(area, applied, action_rid) for area in areas)
     return f'{apply_bar}{intro}{cards}'
 
@@ -2012,10 +2228,18 @@ def _rt_agent_card(
     vulns = stats.get('vulns', 0)
     critical = stats.get('critical', 0)
     asr = stats.get('asr', 0.0)
-    resistance = stats.get('resistance', 1.0 - asr)
+    # ``dict.get`` evaluates its default eagerly. Keep the fallback explicit so
+    # an unknown ASR remains unknown instead of crashing while computing 1-ASR.
+    resistance = stats.get('resistance')
+    if resistance is None and asr is not None and 'resistance' not in stats:
+        resistance = 1.0 - asr
 
-    dial_color = 'var(--red-600)' if critical else ('var(--orange-500)' if vulns else 'var(--green-600)')
-    dial_html = dial(pct(asr), asr, radius=24, stroke=6, color=dial_color, sub='ASR')
+    dial_color = (
+        'var(--gray-500)'
+        if asr is None
+        else ('var(--red-600)' if critical else ('var(--orange-500)' if vulns else 'var(--green-600)'))
+    )
+    dial_html = dial(pct(asr), asr or 0.0, radius=24, stroke=6, color=dial_color, sub='ASR')
 
     critical_chip = f'<span class="rt-agent-card-critical">{critical} critical</span>' if critical else ''
     # Version rides the model line: it answers "what exactly did we attack".
@@ -2099,7 +2323,7 @@ def _rt_agents(by_kind: dict[str, Any], report: RedTeamReport, rid: str) -> str:
     return f'{intro}{cards}{tail}'
 
 
-def _rt_attack_row(r: RedTeamResult, rid: str, idx: int) -> str:
+def _rt_attack_row(r: RedTeamResult, rid: str, idx: int, *, standalone: bool = False) -> str:
     """One `<details class="rt-attack-row">` evidence row: design header grid
     summary (title/agent/vector/severity/outcome/chevron) + lazy fragment
     body (spec §Attacks)."""
@@ -2135,6 +2359,14 @@ def _rt_attack_row(r: RedTeamResult, rid: str, idx: int) -> str:
         '<div class="rt-attack-row-chevron">&#9660;</div>'
         '</summary>'
     )
+    if standalone:
+        from evaluatorq.dashboard.redteam_transcripts import render_attack_fragment
+
+        return (
+            f'<details class="rt-attack-row export-attack export-evidence" id="attack-{idx + 1}">'
+            + summary_html
+            + f'<div class="rt-attack-row-body">{render_attack_fragment(r)}</div></details>'
+        )
     # Lazy-load on the <details> `toggle` event, not a click on the (empty,
     # collapsed) body div — clicking the summary opens the details but never
     # delivers a click to the inner div, so a click trigger there never fires.
@@ -2149,7 +2381,7 @@ def _rt_attack_row(r: RedTeamResult, rid: str, idx: int) -> str:
     )
 
 
-def _rt_attacks(report: RedTeamReport, rid: str) -> str:
+def _rt_attacks(report: RedTeamReport, rid: str, *, standalone: bool = False) -> str:
     """Attacks tab body: evidence table of one ``<details>`` row per
     (already-filtered) result, lazy-loading its fragment body once on click,
     then the kept ``source_distribution`` render (spec §Attacks).
@@ -2164,7 +2396,11 @@ def _rt_attacks(report: RedTeamReport, rid: str) -> str:
     n = len(results)
     intro = (
         f'<p class="rt-attacks-intro">Evidence &mdash; {n} attack{"s" if n != 1 else ""}. '
-        'Click a row to expand the evaluator verdict and full transcript.</p>'
+        + (
+            'Expand an attack to read its verdict and full transcript.</p>'
+            if standalone
+            else 'Click a row to expand the evaluator verdict and full transcript.</p>'
+        )
         if results
         else '<p class="rt-attacks-intro">No attacks match the current filters.</p>'
     )
@@ -2175,7 +2411,7 @@ def _rt_attacks(report: RedTeamReport, rid: str) -> str:
         '<div>Severity</div><div>Outcome</div><div></div>'
         '</div>'
     )
-    rows = ''.join(_rt_attack_row(r, rid, i) for i, r in enumerate(results))
+    rows = ''.join(_rt_attack_row(r, rid, i, standalone=standalone) for i, r in enumerate(results))
     table_html = f'<div class="rk-panel rt-attack-table">{header}{rows}</div>' if results else ''
 
     # `report` is already the *filtered* report the caller composed, so
@@ -2274,9 +2510,22 @@ def _rt_config(by_kind: dict[str, Any], report: RedTeamReport) -> str:
             + meta_grid([
                 ('Status', h.issue_summary()),
                 ('Samples', str(h.samples)),
+                ('Issue types', str(h.issue_count())),
+                ('Judge failures', str(h.samples_with_judge_failure)),
+                ('Replacement judges', str(h.replacements_used)),
+                ('Ties', str(h.ties)),
+                ('Inconclusive', str(h.inconclusive)),
+                ('Repetition failures', str(h.samples_with_repetition_failure)),
+                ('Abstentions', str(h.samples_with_abstention)),
             ])
             + '</div>'
         )
+
+        reasons = ''.join(f'<li>{esc(reason)}</li>' for reason in h.judge_failure_reasons)
+        if reasons:
+            health_html += (
+                f'<section class="rt-judge-failures"><h4>Judge failure reasons</h4><ul>{reasons}</ul></section>'
+            )
 
     pipeline = method_data.get('pipeline', '')
     scoring = method_data.get('scoring_method', '')
@@ -2488,7 +2737,7 @@ def _rt_breakdowns(by_kind: dict[str, Any]) -> str:
     return f'{category_html}{heatmap_html}{rate_grid_html}{multiturn_html}'
 
 
-def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
+def redteam_report_tabs(rid: str, report: RedTeamReport, *, standalone: bool = False) -> str:
     """Render the Red Team report body as tabs.
 
     7 tabs: Overview, Agents (N), Focus areas (N), Breakdowns, Attacks (N),
@@ -2513,15 +2762,20 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
 
     agents_tab = _rt_agents(by_kind, report, rid)
 
-    focus_tab = _rt_focus(by_kind, rid, report)
+    focus_tab = _rt_focus(by_kind, rid, report, standalone=standalone)
 
     breakdowns_tab = _rt_breakdowns(by_kind) + render('framework_breakdown', 'vulnerability_breakdown')
 
-    attacks_tab = _rt_attacks(report, rid)
+    attacks_tab = _rt_attacks(report, rid, standalone=standalone)
 
     usage_tab = render('token_usage') or '<p class="rk-empty">No token usage data recorded for this run.</p>'
     config_tab = _rt_config(by_kind, report)
 
+    brief = ''
+    if standalone:
+        from evaluatorq.common.reports.brief import redteam_brief
+
+        brief = redteam_brief(report, by_kind)
     tabs = _tabs(
         'rttab',
         [
@@ -2533,6 +2787,8 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
             ('Usage', usage_tab),
             ('Config', config_tab),
         ],
+        standalone=standalone,
+        brief=brief,
     )
     return f'<div class="report-aligned rt-report">{hero}{warnings}{tabs}</div>'
 
@@ -2546,13 +2802,28 @@ def _rt_agent_pill(stats: dict[str, Any]) -> str:
     ``AgentTarget`` backends don't report one)."""
     vulns = stats.get('vulns', 0)
     critical = stats.get('critical', 0)
-    dot_cls = 'rt-hero-dot--critical' if critical else ('rt-hero-dot--vuln' if vulns else 'rt-hero-dot--clean')
-    sub = f'{vulns} vuln' if vulns else 'clean'
+    attacks = stats.get('attacks', 0)
+    evaluated = stats.get('evaluated', attacks)
+    incomplete = evaluated < attacks
+    dot_cls = (
+        'rt-hero-dot--critical'
+        if critical
+        else ('rt-hero-dot--vuln' if vulns else ('rt-hero-dot--unknown' if incomplete else 'rt-hero-dot--clean'))
+    )
+    if vulns:
+        sub = f'{vulns} vuln'
+        if incomplete:
+            sub += f' · {evaluated}/{attacks} evaluated'
+    elif incomplete:
+        state = 'unjudged' if evaluated == 0 else 'incomplete'
+        sub = f'{state} · {evaluated}/{attacks} evaluated'
+    else:
+        sub = 'clean'
     model = stats.get('model') or ''
     if model:
         sub = f'{model} · {sub}'
     return (
-        '<span class="rt-hero-pill">'
+        f'<span class="rt-hero-pill{" rt-hero-pill--unknown" if incomplete and not vulns else ""}">'
         f'<span class="rt-hero-dot {dot_cls}"></span>'
         f'<span class="rt-hero-pill-name">{esc(stats.get("display_name", ""))}</span>'
         f'<span class="rt-hero-pill-sub">{esc(sub)}</span>'
@@ -2620,3 +2891,33 @@ def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
         f'{actions}'
         '</header>'
     )
+
+
+def _sim_transcripts(rid: str, entries: list[Any], *, standalone: bool = False) -> str:
+    """Materialize every conversation instead of loading drawer fragments."""
+    if not standalone:
+        from evaluatorq.dashboard.view import sim_interactive_panels
+
+        return sim_interactive_panels(rid, entries)
+    from evaluatorq.common.reports.sim_detail import render_transcript_fragment
+
+    if not entries:
+        return '<p class="rk-empty">No conversations recorded for this run.</p>'
+    from evaluatorq.common.reports.html_helpers import status_badge
+
+    conversations: list[str] = []
+    for entry in entries:
+        if entry.error or entry.terminated_by == 'error':
+            outcome = status_badge('Error', 'warn')
+        else:
+            outcome = status_badge(
+                'Goal met' if entry.goal_achieved else 'Goal missed', 'pass' if entry.goal_achieved else 'fail'
+            )
+        conversations.append(
+            f'<details class="rk-panel export-conversation export-evidence" id="conv-{entry.index + 1}">'
+            f'<summary class="export-conversation-summary">'
+            f'<span class="export-conversation-title">Conversation {entry.index + 1} · {esc(entry.persona)} · {esc(entry.scenario)}</span> {outcome}'
+            f'<span class="export-conversation-meta">{entry.turn_count} turns · Score {entry.goal_completion_score:.2f} · {entry.total_tokens:,} tokens</span>'
+            f'</summary>{render_transcript_fragment(entry)}</details>'
+        )
+    return ''.join(conversations)

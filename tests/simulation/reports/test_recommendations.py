@@ -408,13 +408,13 @@ def test_markdown_renders_recommendations():
 
 def test_html_renders_recommendations():
     html = export_html([_make_result()], recommendations=[_sample_recommendation()])
-    assert 'Remediation Suggestions' in html
+    assert 'id="simtab-recommendations"' in html
     assert 'Add a guardrail blocking internal identifiers' in html
 
 
 def test_html_omits_recommendations_section_when_absent():
     html = export_html([_make_result()])
-    assert 'Remediation Suggestions' not in html
+    assert 'id="simtab-recommendations"' not in html
 
 
 def test_find_triggers_resolves_rule_ids_and_dedupes():

@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote as _quote
 
 from evaluatorq.common.reports import esc
+from evaluatorq.common.reports.messages import render_message_list
+from evaluatorq.contracts import content_to_text
 from evaluatorq.dashboard.redteam_charts import (
     agent_key,
     fmt_category,
@@ -24,7 +26,6 @@ from evaluatorq.dashboard.redteam_charts import (
 )
 from evaluatorq.dashboard.report_kit import tag
 from evaluatorq.dashboard.trace_links import single_trace_url, thread_trace_url, trace_link_button
-from evaluatorq.dashboard.view import render_message_list
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 
@@ -75,7 +76,7 @@ def render_attack_fragment(r: RedTeamResult) -> str:
             '<div class="rt-verdict rt-verdict-unknown" '
             'style="background:var(--gray-100);border-left:3px solid var(--gray-500)">'
             '<span class="rt-verdict-label">Evaluator verdict</span>'
-            '<p class="rt-verdict-body">No evaluation available.</p>'
+            f'<p class="rt-verdict-body">{esc(r.evaluation_error.message) if r.evaluation_error else "No evaluation available."}</p>'
             '</div>'
         )
     elif r.vulnerable:
@@ -99,6 +100,15 @@ def render_attack_fragment(r: RedTeamResult) -> str:
         )
 
     transcript_html = render_message_list(r.messages, role_labels=_RT_ROLE_LABELS, class_prefix='rt')
+    # Some older reports kept only the final response outside the message list.
+    # Preserve it explicitly rather than inventing an extra conversation turn.
+    if r.response and not any(m.role == 'assistant' and content_to_text(m.content) == r.response for m in r.messages):
+        transcript_html += (
+            '<section class="rt-recorded-response"><h4>Recorded final response</h4>'
+            f'<pre class="rt-msg-content">{esc(r.response)}</pre></section>'
+        )
+    if not r.messages and not r.response:
+        transcript_html = '<p class="rk-empty">No conversation evidence recorded for this attack.</p>'
 
     # Deep-link to the last successful target-agent trace when known; fall back to
     # the thread filter for older reports (hidden when unconfigured or no id).

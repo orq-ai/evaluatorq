@@ -227,7 +227,7 @@ class TestRedteamRenderReportBody:
         assert '<head' in doc.lower()
 
     def test_export_html_contains_body_fragment_content(self) -> None:
-        """export_html must include all content produced by render_report_body."""
+        """The expanded dashboard report retains the underlying report facts."""
         from evaluatorq.redteam.reports.export_html import export_html, render_report_body
 
         report = _make_redteam_report()
@@ -236,7 +236,7 @@ class TestRedteamRenderReportBody:
         # Pick a stable substring from the fragment that should appear in the full doc.
         # Strip leading/trailing whitespace and check a meaningful chunk.
         # We just verify the section content surfaces in the full doc.
-        assert 'Executive Summary' in doc or 'Summary' in doc
+        assert 'Executive summary' in doc or 'Overview' in doc
 
 
 # ---------------------------------------------------------------------------
@@ -368,9 +368,9 @@ def test_sim_dashboard_adapter_omits_experiment_url_when_unset() -> None:
     )
 
     adapter = ADAPTERS['sim']
-    assert 'trace-link' not in adapter.body(run)
-    assert 'trace-link' not in adapter.export(run)
-    assert 'trace-link' not in adapter.body_from_results(run, results)
+    assert 'class="btn-secondary trace-link"' not in adapter.body(run)
+    assert 'class="btn-secondary trace-link"' not in adapter.export(run)
+    assert 'class="btn-secondary trace-link"' not in adapter.body_from_results(run, results)
 
 
 def test_sim_tabbed_dashboard_always_shows_run_narrative() -> None:
