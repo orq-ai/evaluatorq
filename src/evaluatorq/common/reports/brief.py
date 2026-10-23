@@ -121,7 +121,8 @@ def _finding_rows_sim(
 def _finding_rows_redteam(
     report: RedTeamReport, by_kind: Mapping[str, ReportSection]
 ) -> list[tuple[str, str, str, str, str, str | None]]:
-    focus = _section(by_kind, 'focus_areas').get('focus_areas', [])
+    section = _section(by_kind, 'focus_areas')
+    focus = section.get('ranked_focus_areas', section.get('focus_areas', []))
     rows: list[tuple[str, str, str, str, str, str | None]] = []
     for area in focus:
         category = str(area.get('category') or '')

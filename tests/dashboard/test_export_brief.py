@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from evaluatorq.common.reports.brief import redteam_brief, simulation_brief
 from evaluatorq.contracts import ReportSection
@@ -299,13 +299,22 @@ def test_redteam_brief_escapes_untrusted_saved_text() -> None:
     assert 'No recommendation recorded; review the linked evidence.' in html
 
 
-def test_sim_report_tabs_includes_saved_fixture_recommendation() -> None:
+def test_sim_report_tabs_includes_saved_recommendation(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
-    from evaluatorq.simulation.contracts import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRecommendation, SimulationRun
+    from tests.dashboard.test_sim_transcript import _make_sim_run_with_transcript
 
-    fixture = Path('.context/html-export-parity/sim.json')
-    run = SimulationRun.model_validate(json.loads(fixture.read_text(encoding='utf-8')))
-    html = sim_report_tabs('fixture', run, standalone=True)
+    run = _make_sim_run_with_transcript()
+    run.recommendations = [SimulationRecommendation(
+        result_index=1,
+        persona='bob',
+        scenario='refund request',
+        triggers=['Maximum turns reached'],
+        suggestions=['Ask for the order number before checking refund eligibility.'],
+    )]
+    saved_run = SimulationRun.model_validate_json(run.model_dump_json())
+    monkeypatch.chdir(tmp_path)
+    html = sim_report_tabs('fixture', saved_run, standalone=True)
 
     assert 'Ask for the order number before checking refund eligibility.' in html
     assert 'Findings shown: 1 of 1.' in html
@@ -348,3 +357,23 @@ def test_simulation_recommendation_excerpt_is_bounded_and_links_full_section() -
     assert '<table class="no-stack">' in html
     assert 'class="export-finding-value"' in html
     assert 'class="export-brief-overview"' in html
+
+
+def test_redteam_brief_counts_categories_beyond_the_five_displayed_focus_areas() -> None:
+    from evaluatorq.redteam.reports.converters import compute_report_summary
+    from evaluatorq.redteam.reports.export_html import export_html
+    from evaluatorq.redteam.reports.sections import build_report_sections
+    from tests.redteam.reports.test_export_regression import _make_minimal_report, _make_result
+
+    report = _make_minimal_report()
+    report.results = [_make_result(category=f'ASI{i:02d}', passed=False) for i in range(1, 7)]
+    report.total_results = len(report.results)
+    report.categories_tested = [result.attack.category for result in report.results]
+    report.summary = compute_report_summary(report.results)
+    sections = {section.kind: section for section in build_report_sections(report)}
+
+    assert len(sections['focus_areas'].data['focus_areas']) == 5
+    assert len(sections['focus_areas'].data['ranked_focus_areas']) == 6
+    html = export_html(report)
+    assert 'Findings shown: 3 of 6.' in html
+    assert html.count('id="export-finding-') == 3

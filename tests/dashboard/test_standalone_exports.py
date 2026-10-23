@@ -166,6 +166,15 @@ def test_export_rejects_unsafe_saved_links(value):
     assert not any(url.startswith(('javascript:', 'data:', 'file:')) for url in links)
 
 
+def test_sim_export_omits_malformed_saved_agent_url():
+    run = _make_sim_run_with_transcript()
+    run.agent_info = {'key': 'example', 'id': 'example', 'workspace_key': 'demo', 'base_url': 'https://[bad'}
+    run = type(run).model_validate_json(run.model_dump_json())
+    document = sim_html(run)
+    assert 'https://[bad' not in document
+    assert document.startswith('<!DOCTYPE html>')
+
+
 def test_export_imports_no_dashboard_runtime(tmp_path, rt_report_multi):
     sim = tmp_path/'sim.json'
     rt = tmp_path/'rt.json'

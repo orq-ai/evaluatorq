@@ -11,9 +11,9 @@ UUID-shaped ``workspace_id``: ``{base}/{workspace_key}/{entity}/{id}``.
 from __future__ import annotations
 
 import os
-from urllib.parse import urlparse
 from uuid import UUID
 
+from evaluatorq.common.reports.html_helpers import parse_http_url
 from evaluatorq.dashboard.orq_workspace import resolve_base_url
 
 _ENTITY = {'agent': 'agents', 'deployment': 'deployments'}
@@ -45,8 +45,8 @@ def parse_experiment_url(url: str | None) -> tuple[str | None, str | None]:
     """
     if not url:
         return None, None
-    parsed = urlparse(url)
-    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+    parsed = parse_http_url(url)
+    if parsed is None:
         return None, None
     segments = [s for s in parsed.path.split('/') if s]
     # Expect /{workspace}/experiments/{id}
@@ -93,7 +93,6 @@ def orq_studio_url(
         host = base_url or resolve_base_url()
     if not workspace_key or not host:
         return None
-    parsed_host = urlparse(host)
-    if parsed_host.scheme not in {'http', 'https'} or not parsed_host.netloc:
+    if parse_http_url(host) is None:
         return None
     return f'{host.rstrip("/")}/{workspace_key}/{entity}/{entity_id}'

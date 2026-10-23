@@ -141,6 +141,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Strict cross-process file locking | `common.file_lock.strict_file_lock` on a permanent sibling lock file | locks on atomically replaced data files or surface-local platform locking |
 | Applying recommendations to an agent | `common.apply.apply_recommendations` | surface-local merge logic |
 | Console / HTML / MD report output | `common/reports/` (`console`, `render`, `vega`, `palette`) | new renderer or colour set |
+| Optional external HTTP(S) links in reports | `common.reports.html_helpers.parse_http_url` before rendering; `None` means unavailable | unchecked `urlparse` / `urlsplit` on saved metadata, which can raise on malformed hosts or ports |
 | CLI output, errors, JSON, width | `common/cli_*.py` | bespoke `typer.echo` formatting |
 | Normalising agent output shapes | `common.output_adapters`, `common.messages` | per-surface `isinstance` ladders |
 | Turning message content or a tool result into text | `contracts.content_to_text` / `common.messages.tool_result_to_text` (`contracts.tool_result_to_text` stays the public alias; `common.messages` is the home) | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |

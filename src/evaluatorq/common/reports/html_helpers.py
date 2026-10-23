@@ -16,6 +16,7 @@ import html
 from pathlib import Path
 from string import Template
 from typing import TYPE_CHECKING
+from urllib.parse import SplitResult, urlsplit
 
 from loguru import logger
 
@@ -98,6 +99,22 @@ def pct(rate: float | None) -> str:
     if rate is None:
         return 'n/a'
     return f'{rate:.0%}'
+
+
+def parse_http_url(url: str | None) -> SplitResult | None:
+    """Parse a usable HTTP(S) URL, returning ``None`` for malformed or unsafe input."""
+    if not url:
+        return None
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme not in {'http', 'https'} or not parsed.netloc or not parsed.hostname:
+            return None
+        # Accessing .port validates its syntax and range; .hostname catches
+        # malformed bracketed hosts. Both properties may raise ValueError.
+        _ = parsed.port
+    except ValueError:
+        return None
+    return parsed
 
 
 def humanize_duration(seconds: float | None) -> str:
