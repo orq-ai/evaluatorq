@@ -10,9 +10,9 @@ UUID-shaped ``workspace_id``: ``{base}/{workspace_key}/{entity}/{id}``.
 
 from __future__ import annotations
 
-import os
 from uuid import UUID
 
+from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.reports.html_helpers import parse_http_url
 from evaluatorq.dashboard.orq_workspace import resolve_base_url
 
@@ -62,7 +62,7 @@ def studio_workspace_key(fallback: str | None = None) -> str | None:
     ``fallback`` (the entity's own workspace slug). UUID workspace IDs are never
     accepted as route slugs.
     """
-    env = os.getenv('ORQ_WORKSPACE')
+    env = env_raw('ORQ_WORKSPACE')
     if is_studio_workspace_key(env):
         return env
     return fallback if is_studio_workspace_key(fallback) else None

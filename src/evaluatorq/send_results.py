@@ -1,13 +1,12 @@
 """Send evaluation results to Orq platform."""
 
-import os
 from datetime import datetime
 
 import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from .common.llm_client import ORQ_DEFAULT_HOST
+from .common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 from .types import DataPointResult, EvaluatorqResult
 
 
@@ -95,7 +94,7 @@ async def send_results_to_orq(
             results=results,
         )
 
-        resolved_base_url = (base_url or os.getenv('ORQ_BASE_URL', ORQ_DEFAULT_HOST)).rstrip('/')
+        resolved_base_url = (base_url or env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)).rstrip('/')
         logger.debug('Uploading results to {}', resolved_base_url)
 
         # Serialize with aliases, stripping None on optional fields (the API

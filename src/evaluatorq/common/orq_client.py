@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
 
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
+
 if TYPE_CHECKING:
     from orq_ai_sdk import Orq
 
@@ -32,12 +34,10 @@ _INSTALL_HINT = (
     'uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
 )
 
-DEFAULT_ORQ_BASE_URL = 'https://my.orq.ai'
-
 
 def orq_server_url() -> str:
     """Return the Orq API base URL, honouring ``ORQ_BASE_URL``."""
-    return os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
+    return env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
 
 
 def resolve_orq_client(api_key: str | None = None, base_url: str | None = None) -> Orq:
@@ -51,7 +51,7 @@ def resolve_orq_client(api_key: str | None = None, base_url: str | None = None) 
         ImportError: the optional ``orq-ai-sdk`` dependency is not installed.
         ValueError: no API key was passed and ``ORQ_API_KEY`` is unset.
     """
-    key = api_key or os.environ.get('ORQ_API_KEY')
+    key = api_key or env_raw('ORQ_API_KEY')
     if not key:
         raise ValueError('ORQ_API_KEY environment variable must be set to reach the Orq API.')
 

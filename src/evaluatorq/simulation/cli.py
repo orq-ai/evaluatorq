@@ -55,6 +55,7 @@ from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 from evaluatorq.common.llm_limit import DEFAULT_LLM_PARALLELISM, check_llm_parallelism_option, llm_concurrency_limit
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
@@ -199,7 +200,7 @@ def _resolve_target(
         return VercelAISdkTarget(vercel_url)
 
     # openai_model
-    if not os.environ.get('OPENAI_API_KEY') and not os.environ.get('ORQ_API_KEY'):
+    if not env_raw('OPENAI_API_KEY') and not env_raw('ORQ_API_KEY'):
         raise typer.BadParameter(
             '--openai-model requires OPENAI_API_KEY (or ORQ_API_KEY for the AI Router) to be set in the environment.'
         )
@@ -211,7 +212,7 @@ def _resolve_target(
 
 
 def _require_orq_api_key(flag: str) -> None:
-    if not os.environ.get('ORQ_API_KEY'):
+    if not env_raw('ORQ_API_KEY'):
         raise typer.BadParameter(f'{flag} requires ORQ_API_KEY to be set in the environment.')
 
 
@@ -329,9 +330,9 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
 
 def _provider_label() -> str:
     """The provider branch the environment resolves to for generation LLM calls."""
-    if os.environ.get('ORQ_API_KEY'):
+    if env_raw('ORQ_API_KEY'):
         return 'Orq router'
-    if os.environ.get('OPENAI_API_KEY'):
+    if env_raw('OPENAI_API_KEY'):
         return 'OpenAI-compatible'
     return 'unresolved provider'
 
@@ -2107,7 +2108,7 @@ def upload_dataset(
         raise typer.BadParameter(f'No datapoints found in {input_path}')
 
     rows = to_orq_dataset_rows(datapoints)
-    client = setup_orq_client(os.environ['ORQ_API_KEY'])
+    client = setup_orq_client(env_raw('ORQ_API_KEY') or '')
 
     if dataset_id is None:
         # name is guaranteed non-None here (validated above); SDK expects a TypedDict.
@@ -2119,7 +2120,7 @@ def upload_dataset(
     # rows are plain dicts matching the SDK's CreateDatasetItem TypedDict shape.
     client.datasets.create_datapoint(dataset_id=dataset_id, request_body=cast('Any', rows))
 
-    base = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
+    base = env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL).rstrip('/')
     typer.echo(f'Uploaded {len(rows)} datapoint(s) -> dataset {dataset_id} ({base})')
     _echo_next(
         f'eq sim simulate --dataset-id {dataset_id} --target {_TARGET_PLACEHOLDER}',

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 import typer
+
+from evaluatorq.common.env_config import env_raw
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,7 +26,7 @@ def run_guarded(app_callable: Callable[[], object]) -> None:
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as exc:
-        if os.environ.get('EQ_DEBUG'):
+        if env_raw('EQ_DEBUG'):
             raise
         emit_error(exc)
         typer.echo(f'Set EQ_DEBUG=1 to see the full traceback; report at {_ISSUES_URL}', err=True)

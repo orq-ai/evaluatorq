@@ -30,6 +30,7 @@ from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
 from evaluatorq.common.model_roles import BUILTIN, ROLE_ENV, TASKS, role_model, role_source, task_override
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
@@ -1214,7 +1215,7 @@ def settings_body(
         if setting_value('orq_api_key_ciphertext')
         else ''
     )
-    oauth_server = setting_value('orq_oauth_server') or 'https://my.orq.ai'
+    oauth_server = setting_value('orq_oauth_server') or DEFAULT_ORQ_BASE_URL
     # Checking an expired login calls Orq, so the field loads after the page and never delays it.
     # The hidden input keeps the saved server in the form if Save is pressed before it arrives.
     oauth_control = (
@@ -1270,7 +1271,7 @@ def settings_body(
                 f'{saved_key_hint}{key_error_html}'
                 '<label class="settings-auth-detail-label" for="orq_stored_key_host">Orq server</label>'
                 f'<input id="orq_stored_key_host" name="orq_stored_key_host" type="url" '
-                f'value="{esc(setting_value("orq_profile_host") or "https://my.orq.ai")}">'
+                f'value="{esc(setting_value("orq_profile_host") or DEFAULT_ORQ_BASE_URL)}">'
             ),
         ),
     )

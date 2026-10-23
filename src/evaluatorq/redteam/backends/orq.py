@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import uuid
 from typing import Any, cast
 
 from loguru import logger
 
-from evaluatorq.redteam.backends.registry import ORQ_DEFAULT_BASE_URL
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 from evaluatorq.redteam.contracts import TargetKind
 from evaluatorq.redteam.exceptions import CredentialError
 
@@ -30,7 +29,7 @@ except ImportError:
 
 def _get_orq_api_key() -> str:
     """Read ORQ_API_KEY from environment."""
-    key = os.environ.get('ORQ_API_KEY', '')
+    key = env_raw('ORQ_API_KEY', '')
     if not key:
         msg = 'ORQ_API_KEY environment variable is not set'
         raise CredentialError(msg)
@@ -39,7 +38,7 @@ def _get_orq_api_key() -> str:
 
 def _get_orq_server_url() -> str:
     """Read ORQ_BASE_URL from environment and strip /v3/router for SDK use."""
-    url = os.environ.get('ORQ_BASE_URL', ORQ_DEFAULT_BASE_URL)
+    url = env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
     return url.rstrip('/').removesuffix('/v3/router')
 
 

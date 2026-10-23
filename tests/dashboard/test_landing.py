@@ -536,7 +536,7 @@ class TestLandingScreen:
         assert '<a class="nav-item active" href="/settings"' in r.text
 
     def test_mask_key_shows_only_suffix(self) -> None:
-        from evaluatorq.dashboard.app import _mask_key
+        from evaluatorq.common.env_config import mask_secret as _mask_key
 
         # Only the last 4 chars are revealed; the rest is starred out and capped.
         assert _mask_key('sk-proj-abcdEF1234wxyz') == '****************wxyz'
