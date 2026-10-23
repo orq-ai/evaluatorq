@@ -21,6 +21,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 
+def short_model(model: str) -> str:
+    """Return the readable final component of a provider-qualified model ID."""
+    return model.rsplit('/', 1)[-1]
+
+
 def _best_worst_cells(heatmap_data: dict[str, Any]) -> tuple[dict | None, dict | None]:
     """Best/worst persona x scenario cells by success_rate, excluding cells with
     no scored (non-errored) conversations."""

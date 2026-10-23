@@ -2960,6 +2960,13 @@ _RT_REPORT_CSS = """
 .rt-report .rt-verdict-safe { background: var(--green-50); }
 .rt-report .rt-verdict-error .rt-verdict-body { color: var(--red-600); }
 
+.rt-report .rt-jury { margin: 10px 0 14px; }
+.rt-report .rt-jury-votes {
+    list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px;
+}
+.rt-report .rt-jury-vote { font-size: 13px; overflow-wrap: anywhere; }
+.rt-report .rt-jury-error { color: var(--red-600); white-space: pre-wrap; }
+
 /* ---- Attacks evidence table (spec §Attacks, Task 14) ---- */
 .rt-report .rt-attacks-intro { color: var(--text-faint); font-size: 13px; margin-bottom: 12px; }
 .rt-report .rt-attack-table { padding: 0; overflow: hidden; }

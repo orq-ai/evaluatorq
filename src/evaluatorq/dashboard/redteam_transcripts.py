@@ -24,12 +24,13 @@ from evaluatorq.dashboard.redteam_charts import (
     fmt_category,
     fmt_vulnerability,
 )
-from evaluatorq.dashboard.report_kit import tag
+from evaluatorq.dashboard.report_kit import short_model, tag
 from evaluatorq.dashboard.trace_links import single_trace_url, thread_trace_url, trace_link_button
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 
 if TYPE_CHECKING:
+    from evaluatorq.contracts import JuryResult, JuryVote
     from evaluatorq.redteam.contracts import RedTeamReport, RedTeamResult
 
 _PAGE_SIZE = 10
@@ -42,6 +43,60 @@ _RT_ROLE_LABELS = {'user': 'USR', 'assistant': 'AGT', 'system': 'SYS', 'develope
 # ---------------------------------------------------------------------------
 # 3. Attack evidence fragment (spec §Attacks)
 # ---------------------------------------------------------------------------
+
+
+def _jury_vote_label(vote: JuryVote) -> str:
+    """One judge's outcome in words: a failure or abstention reads as such, so a
+    bare ``None`` value is never shown as if it were a verdict."""
+    if not vote.success:
+        return 'failed'
+    if vote.abstained:
+        return 'abstained'
+    if vote.value is None:
+        return 'no verdict'
+    if isinstance(vote.value, bool):
+        return 'RESISTANT' if vote.value else 'VULNERABLE'
+    return str(vote.value)
+
+
+def _jury_panel_health(jury: JuryResult | None) -> str:
+    """Per-result panel health: decisive votes over all attempted judges,
+    replacement/tie/inconclusive flags, then each judge's vote (model, outcome,
+    and any stand-in/failed-repetition status or failure reason), mirroring the
+    pairwise per-judge vote list (RES-1650).
+
+    Returns '' for a single-judge result (no jury ran), the same way the fragment
+    drops a trace button it has no link for.
+    """
+    if jury is None:
+        return ''
+
+    chips = [tag(f'{jury.judges_succeeded}/{jury.judges_configured + jury.replacements_used} decisive votes')]
+    if jury.judges_failed:
+        chips.append(tag(f'{jury.judges_failed} failed'))
+    if jury.replacements_used:
+        chips.append(tag(f'{jury.replacements_used} replacement{"s" if jury.replacements_used != 1 else ""}'))
+    if jury.tie:
+        chips.append(tag('tie'))
+    if jury.inconclusive:
+        chips.append(tag('inconclusive'))
+    summary = f'<div class="rt-attack-tags">{"".join(chips)}</div>'
+
+    votes = ''
+    if jury.votes:
+        items = []
+        for v in jury.votes:
+            vote_tags: list[str] = []
+            if v.replacement:
+                vote_tags.append(tag('stand-in'))
+            if v.repetitions_failed:
+                vote_tags.append(tag(f'{v.repetitions_failed} failed rep{"s" if v.repetitions_failed != 1 else ""}'))
+            head = f'<b>{esc(short_model(model=v.model))}</b> &rarr; {esc(_jury_vote_label(vote=v))}'
+            error = f'<div class="rt-jury-error">{esc(v.error)}</div>' if v.error else ''
+            items.append(f'<li class="rt-jury-vote">{head} {"".join(vote_tags)}{error}</li>')
+        votes = f'<ul class="rt-jury-votes">{"".join(items)}</ul>'
+
+    return f'<div class="rt-jury"><span class="rt-verdict-label">Jury panel health</span>{summary}{votes}</div>'
 
 
 def render_attack_fragment(r: RedTeamResult) -> str:
@@ -99,6 +154,8 @@ def render_attack_fragment(r: RedTeamResult) -> str:
             '</div>'
         )
 
+    jury_html = _jury_panel_health(jury=r.evaluation.jury if r.evaluation else None)
+
     transcript_html = render_message_list(r.messages, role_labels=_RT_ROLE_LABELS, class_prefix='rt')
     # Some older reports kept only the final response outside the message list.
     # Preserve it explicitly rather than inventing an extra conversation turn.
@@ -119,7 +176,7 @@ def render_attack_fragment(r: RedTeamResult) -> str:
     )
     trace_html = f'<div class="rt-conv-actions">{trace_btn}</div>' if trace_btn else ''
 
-    return f'{tags_html}{verdict_html}{trace_html}{transcript_html}'
+    return f'{tags_html}{verdict_html}{jury_html}{trace_html}{transcript_html}'
 
 
 # ---------------------------------------------------------------------------
