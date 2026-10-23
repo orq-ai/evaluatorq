@@ -12,14 +12,15 @@ store), otherwise ``.evaluatorq`` relative to the current working directory.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
+from evaluatorq.common.env_config import env_raw
 
 STORE_DIR_NAME = '.evaluatorq'
 
 
 def get_store_dir(subdir: str) -> Path:
     """Return ``<base>/<subdir>`` where base honors ``EVALUATORQ_DIR``."""
-    base = os.environ.get('EVALUATORQ_DIR') or None  # treat "" as unset
+    base = env_raw('EVALUATORQ_DIR') or None  # treat "" as unset
     root = Path(base) if base else Path.cwd() / STORE_DIR_NAME
     return root / subdir

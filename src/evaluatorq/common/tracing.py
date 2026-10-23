@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import functools
 import json
-import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.env_config import env_bool
+from evaluatorq.common.env_config import env_bool, env_raw
 from evaluatorq.common.fields import get_field as _field
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.tracing.setup import get_tracer
@@ -49,7 +48,7 @@ def _default_span_max_text_chars() -> int | None:
 
     Call _default_span_max_text_chars.cache_clear() in tests after changing the env var.
     """
-    raw = os.getenv('EVALUATORQ_SPAN_MAX_TEXT_CHARS')
+    raw = env_raw('EVALUATORQ_SPAN_MAX_TEXT_CHARS')
     if raw is None or raw == '':
         return None
     try:
@@ -106,7 +105,7 @@ def capture_message_content() -> bool:
     payloads. Public so domain span builders (redteam/openresponses) can gate
     input-message capture too.
     """
-    return env_bool('EVALUATORQ_CAPTURE_MESSAGE_CONTENT', default=True)
+    return env_bool('EVALUATORQ_CAPTURE_MESSAGE_CONTENT')
 
 
 # Back-compat private alias (pre-existing callers/tests import the underscored name).
@@ -626,7 +625,7 @@ def propagate_trace_context() -> bool:
     when the receiving side should trace independently, or when a gateway
     rejects an unexpected ``traceparent`` header.
     """
-    return env_bool('EVALUATORQ_PROPAGATE_TRACE_CONTEXT', default=True)
+    return env_bool('EVALUATORQ_PROPAGATE_TRACE_CONTEXT')
 
 
 async def get_trace_context_headers() -> dict[str, str]:  # noqa: RUF029

@@ -36,7 +36,8 @@ def test_taxonomies_have_expected_sizes() -> None:
     assert intent_criteria is not None
     assert failure_criteria is not None
     assert len(intent_criteria) == 10
-    assert len(failure_criteria) == 14
+    assert len(failure_criteria) == 15
+    assert 'No failure' in failure_criteria
 
 
 def test_label_name_rejects_reserved_match_key() -> None:

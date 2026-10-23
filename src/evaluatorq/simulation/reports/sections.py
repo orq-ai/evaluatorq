@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
-from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.messages import coerce_content_text, messages_to_text
 from evaluatorq.contracts import ReportSection, Usage
 from evaluatorq.simulation.contracts import CriteriaRow, SimulationEntry, TranscriptMessage, criterion_id_for
 from evaluatorq.simulation.evaluators.scorers import read_criteria_meta
@@ -307,6 +307,8 @@ def _build_persona_breakdown_section(results: list[SimulationResult]) -> ReportS
     rows: list[dict[str, Any]] = []
     for cohort_id, items in by_persona.items():
         total = len(items)
+        errored = sum(1 for r in items if _is_errored(r))
+        completed = total - errored
         achieved = sum(1 for r in items if r.goal_achieved and not _is_errored(r))
         avg_score = sum(r.goal_completion_score for r in items) / total
         tokens = sum(r.token_usage.total_tokens for r in items)
@@ -314,6 +316,8 @@ def _build_persona_breakdown_section(results: list[SimulationResult]) -> ReportS
             'id': cohort_id,
             'persona': _persona_name(items[0]),
             'conversations': total,
+            'completed_conversations': completed,
+            'errored_conversations': errored,
             'goals_achieved': achieved,
             'success_rate': achieved / total,
             'avg_goal_completion_score': avg_score,
@@ -335,6 +339,8 @@ def _build_scenario_breakdown_section(results: list[SimulationResult]) -> Report
     rows: list[dict[str, Any]] = []
     for cohort_id, items in by_scenario.items():
         total = len(items)
+        errored = sum(1 for r in items if _is_errored(r))
+        completed = total - errored
         achieved = sum(1 for r in items if r.goal_achieved and not _is_errored(r))
         avg_score = sum(r.goal_completion_score for r in items) / total
         avg_turns = sum(r.turn_count for r in items) / total
@@ -342,6 +348,8 @@ def _build_scenario_breakdown_section(results: list[SimulationResult]) -> Report
             'id': cohort_id,
             'scenario': _scenario_name(items[0]),
             'conversations': total,
+            'completed_conversations': completed,
+            'errored_conversations': errored,
             'goals_achieved': achieved,
             'success_rate': achieved / total,
             'avg_goal_completion_score': avg_score,
@@ -539,7 +547,13 @@ def individual_entries(results: list[SimulationResult]) -> list[SimulationEntry]
                 judge_reason=r.reason,
                 error=_error_message(r),
                 evaluator_scores=_evaluator_scores(r),
-                transcript=[TranscriptMessage(role=m.role, content=coerce_content_text(m.content)) for m in r.messages],
+                transcript=[
+                    TranscriptMessage(
+                        role=m.role,
+                        content=messages_to_text([m.model_dump()]) if m.tool_calls else coerce_content_text(m.content),
+                    )
+                    for m in r.messages
+                ],
                 thread_id=r.thread_id,
                 last_trace_id=r.last_trace_id,
             )
@@ -576,12 +590,14 @@ def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> 
     scenario_names: dict[str, str] = {}
     agg: dict[tuple[str, str], list[bool]] = defaultdict(list)
     scores: dict[tuple[str, str], list[float]] = defaultdict(list)
+    results_by_pair: dict[tuple[str, str], list[SimulationResult]] = defaultdict(list)
     for r in results:
         persona_id, scenario_id = _persona_cohort_id(r), _scenario_cohort_id(r)
         persona_names.setdefault(persona_id, _persona_name(r))
         scenario_names.setdefault(scenario_id, _scenario_name(r))
-        agg[persona_id, scenario_id].append(r.goal_achieved)
+        agg[persona_id, scenario_id].append(r.goal_achieved and not _is_errored(r))
         scores[persona_id, scenario_id].append(r.goal_completion_score)
+        results_by_pair[persona_id, scenario_id].append(r)
 
     def labels(names: dict[str, str]) -> dict[str, str]:
         raw_names = set(names.values())
@@ -609,10 +625,10 @@ def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> 
             'persona': persona_labels[persona_id],
             'scenario': scenario_labels[scenario_id],
             'success_rate': (sum(v) / len(v)) if v else 0.0,
-            # Continuous avg goal-completion score — the heatmap renders this so
-            # single-conversation cells show a gradient, not a 0/100 binary.
             'avg_score': (sum(sc) / len(sc)) if (sc := scores[persona_id, scenario_id]) else 0.0,
             'n': len(v),
+            'completed_conversations': sum(1 for r in results_by_pair[persona_id, scenario_id] if not _is_errored(r)),
+            'errored_conversations': sum(1 for r in results_by_pair[persona_id, scenario_id] if _is_errored(r)),
         }
         for (persona_id, scenario_id), v in agg.items()
     ]
@@ -624,10 +640,19 @@ def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> 
 
 
 def _build_score_distribution_section(results: list[SimulationResult]) -> ReportSection:
+    scores = [r.goal_completion_score for r in results]
+    measured_scores = [r.goal_completion_score for r in results if not _is_errored(r)]
+    errored = sum(1 for r in results if _is_errored(r))
     return ReportSection(
         kind='score_distribution',
         title='Goal Score Distribution',
-        data={'scores': [r.goal_completion_score for r in results]},
+        data={
+            'scores': scores,
+            'measured_scores': measured_scores,
+            'completed_conversations': len(measured_scores),
+            'errored_conversations': errored,
+            'total_conversations': len(results),
+        },
     )
 
 

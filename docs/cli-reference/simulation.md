@@ -69,7 +69,7 @@ eq sim simulate --input dp.jsonl --target agent:<key>
 
 Targets — same three flags as `eq sim run`. Provide exactly one input source: `--input` (`-i`), `--dataset-id`, `--experiment-id` (optionally narrowed by `--experiment-run-id`), `--from-run`, or inline `datapoints` (or `personas` with `scenarios`) in `--config`.
 
-There is no `--target-reasoning-effort` flag here — it is a `eq sim run` flag only. To pin the target's reasoning effort on a pre-built datapoint set, set `"target_reasoning_effort"` in `--config`, or call `simulate()` with `target_reasoning_effort=` from Python (see [Tuning](../tuning.md)).
+`--target-reasoning-effort` works here exactly as on `eq sim run` (see the flag table above), and `"target_reasoning_effort"` in `--config` sets the same value.
 
 | Flag | Type / Default | Description |
 |---|---|---|
@@ -265,6 +265,8 @@ eq sim export --input results.jsonl --output payload.json
 eq sim export --input sim-report.json --output report.html --format html --recommendations
 ```
 
+HTML exports use the dashboard's report layout with each available tab expanded into a section, embedded fonts and styles, and complete conversation evidence. Individual conversation transcripts are foldable and closed by default; the report sections stay expanded. They work offline. When the input is a full `SimulationRun` JSON file, the HTML preserves its saved run name, target configuration, agent snapshot, recommendations and whole-run usage. A results JSONL file contains conversation rows only, so those run-level details are unavailable.
+
 Markdown/HTML exports include remediation suggestions if the input run JSON already carries them (runs generate them by default — see `--no-recommendations`), or if `--recommendations` is passed here to generate them at export time for a run that has none stored.
 
 | Flag | Type / Default | Description |
@@ -274,7 +276,7 @@ Markdown/HTML exports include remediation suggestions if the input run JSON alre
 | `--format` | `str` / `openresponses` | Export format: `openresponses` (payload JSON), `md` (Markdown report), `html` (HTML report). |
 | `--recommendations` | `bool` / `False` | For `md`/`html`: generate LLM remediation suggestions at export time if none are stored. Extra LLM cost; uses `--sim-model`. |
 | `--sim-model` | `str \| None` / `None` | Model for `--recommendations` generation. Unset resolves the `fast` role (`openai/gpt-6-luna` by default). |
-| `--target-label` | `str` / `agent` | Target name shown in md/html report headers. |
+| `--target-label` | `str` / `agent` | Target name shown in md/html report headers. An explicit value overrides the saved target label; HTML otherwise keeps the saved target. |
 
 ---
 

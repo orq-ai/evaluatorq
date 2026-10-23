@@ -36,13 +36,12 @@ import asyncio
 import hashlib
 import inspect
 import math
-import os
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import httpx
 from loguru import logger
 
-from evaluatorq.common.env_config import env_float
+from evaluatorq.common.env_config import env_float, env_raw
 from evaluatorq.common.llm_client import MissingLLMCredentialsError, orq_base_url, resolve_results_base_url
 from evaluatorq.contracts import DEFAULT_CLASSIFIER_MODEL
 
@@ -153,7 +152,7 @@ _fetch_failures: dict[tuple[str, str], int] = {}
 _MAX_FETCH_FAILURES = 3
 # Env var rather than a parameter: `_load_catalogue` is called from pricing paths
 # with no config object to thread.
-_CATALOGUE_TIMEOUT_S = env_float('EVALUATORQ_CATALOGUE_TIMEOUT_S', 30.0, min_value=0.1)
+_CATALOGUE_TIMEOUT_S = env_float('EVALUATORQ_CATALOGUE_TIMEOUT_S')
 
 # Classify models by their fully qualified id, for the case where the catalogue is
 # empty or its fetch failed. Seating a judge is a construction-time decision, so
@@ -423,9 +422,9 @@ async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = F
         None
         if callable(oauth_fetch)
         else (
-            (getattr(client, 'api_key', None) or os.environ.get('ORQ_API_KEY'))
+            (getattr(client, 'api_key', None) or env_raw('ORQ_API_KEY'))
             if client is not None
-            else os.environ.get('ORQ_API_KEY')
+            else env_raw('ORQ_API_KEY')
         )
     )
     credential = (

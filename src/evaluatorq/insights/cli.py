@@ -19,8 +19,9 @@ from rich.table import Table
 
 from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY width side effect
 from evaluatorq.common.cli_errors import emit_error
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, resolve_orq_client
+from evaluatorq.common.orq_client import OrqProfile, close_orq_client, resolve_orq_client
 from evaluatorq.trace_finder.cli import _facets, resolve_cli_profile
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import NumericFilters
@@ -256,6 +257,8 @@ def _print_run(run: InsightsRun, run_path: Path | None, *, projection_already_sh
         if label.n_failed:
             table.add_row('Failed / unclassified', f'{label.n_failed:,}')
         console.print(table)
+        if label.counts_warning:
+            console.print(label.counts_warning, markup=False)
 
     failed = run.counts.get('n_failed_traces', 0)
     trace_count = len(run.traces)

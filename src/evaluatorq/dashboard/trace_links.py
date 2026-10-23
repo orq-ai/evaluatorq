@@ -24,11 +24,12 @@ Source of host + workspace:
 
 from __future__ import annotations
 
-import os
 import re
 from urllib.parse import quote
 
+from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.reports import esc
+from evaluatorq.common.reports.html_helpers import parse_http_url
 from evaluatorq.dashboard.orq_links import parse_experiment_url
 
 _LOCATOR_ID = re.compile(r'[A-Za-z0-9._~-]+\Z')
@@ -38,7 +39,7 @@ def ui_base_url() -> str:
     """Return the Orq UI base URL (no trailing slash)."""
     from evaluatorq.dashboard.orq_workspace import resolve_base_url
 
-    base = os.environ.get('ORQ_UI_BASE_URL') or resolve_base_url()
+    base = env_raw('ORQ_UI_BASE_URL') or resolve_base_url()
     return base.rstrip('/')
 
 
@@ -121,7 +122,7 @@ def trace_link_button(
     surrounding ``<details>``. ``extra_attributes`` adds escaped HTML
     attributes; use a ``None`` value for a boolean attribute.
     """
-    if not url:
+    if parse_http_url(url) is None:
         return ''
     onclick_attr = f' onclick="{esc(onclick)}"' if onclick else ''
     extra_attrs = ''.join(

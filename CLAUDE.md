@@ -141,6 +141,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Strict cross-process file locking | `common.file_lock.strict_file_lock` on a permanent sibling lock file | locks on atomically replaced data files or surface-local platform locking |
 | Applying recommendations to an agent | `common.apply.apply_recommendations` | surface-local merge logic |
 | Console / HTML / MD report output | `common/reports/` (`console`, `render`, `vega`, `palette`) | new renderer or colour set |
+| Optional external HTTP(S) links in reports | `common.reports.html_helpers.parse_http_url` before rendering; `None` means unavailable | unchecked `urlparse` / `urlsplit` on saved metadata, which can raise on malformed hosts or ports |
 | CLI output, errors, JSON, width | `common/cli_*.py` | bespoke `typer.echo` formatting |
 | Normalising agent output shapes | `common.output_adapters`, `common.messages` | per-surface `isinstance` ladders |
 | Turning message content or a tool result into text | `contracts.content_to_text` / `common.messages.tool_result_to_text` (`contracts.tool_result_to_text` stays the public alias; `common.messages` is the home) | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
@@ -213,22 +214,7 @@ These tests use fakes and do not require API credentials. The repository does no
 
 ### Environment Variables
 
-- `ORQ_API_KEY` — ORQ platform authentication
-- `ORQ_BASE_URL` — ORQ API base URL (optional override; default `https://my.orq.ai`)
-- `OPENAI_API_KEY` — for direct OpenAI backend or pipeline LLM calls
-- `ORQ_WORKSPACE` (or `ORQ_WORKSPACE_SLUG`) — workspace slug for dashboard→Orq trace deep-links; buttons hidden when unset
-- `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
-- `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` — `false`/`0` stops W3C `traceparent` injection on outgoing LLM/target calls (default on)
-- `EVALUATORQ_FAST_MODEL` — model for the fast role: simulated user, simulation generators, trace-finder compiler (default `openai/gpt-6-luna`, the `DEFAULT_PIPELINE_MODEL` alias)
-- `EVALUATORQ_SMART_MODEL` — model for the smart role: red-team attacks, every judge and evaluator, apply-recommendations, Insights summaries (default `openai/gpt-6-sol`)
-- `EVALUATORQ_APPLY_MODEL` — deprecated; pins the `apply` task. Use `--model-override apply=...`, the settings file's `model_overrides`, or `EVALUATORQ_SMART_MODEL`
-- `EVALUATORQ_DASHBOARD_SETTINGS` — path to the dashboard and trace-finder settings JSON (default `.evaluatorq/dashboard-settings.json`)
-- `EVALUATORQ_COMPILER_MODEL` — deprecated; pins the `finder.compiler` task. Use `--model-override finder.compiler=...` or `EVALUATORQ_FAST_MODEL`
-- `EVALUATORQ_CLASSIFIER_MODEL` — model for the classifier role: Ask AI, trace-finder classification, Insights labels, signals (default `typesafe/jev-latest`)
-- `EVALUATORQ_EMBEDDING_MODEL` — model for the embedding role: Insights embeddings (default `openai/text-embedding-3-small`)
-- `EVALUATORQ_FINDER_WINDOW_DAYS` — trace-finder lookback window in days (default `7`)
-- `EVALUATORQ_FINDER_LIMIT` — trace-finder population cap (default `500`)
-- `EVALUATORQ_FINDER_PARALLELISM` — concurrent trace-finder classify calls (default `100`)
+Every variable evaluatorq owns is an `EnvVar` row in `ENV_VARS` (`src/evaluatorq/common/env_config.py`), and the user-facing list with defaults is the reference tables in `docs/configuration.md`. Read a variable through the readers in that module (`env_raw`, `env_text`, `env_int`, `env_float`, `env_bool`); a new one needs a row in both places, which `tests/test_reuse_guardrails.py` and `tests/common/test_env_config.py` enforce.
 
 ### Code Style
 

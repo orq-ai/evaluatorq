@@ -19,6 +19,8 @@ The classifier and summary model read different inputs. The classifier reads its
 
 The built-in dimensions are `intent` (`request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). Requesting the `sentiment` dimension adds the sentiment label if you did not select it. Summaries use the detailed [conversation view](#the-conversation-view), including tool calls and the start and end of tool results.
 
+The `failure_taxonomy` label includes `No failure` for traces the classifier judges clean. A clean answer is a normal label value, not a failed classification. Reports saved with a taxonomy that did not offer this option keep their original answers and counts; the dashboard marks those counts as possibly including clean traces. The discovered `failure` dimension separately groups errors extracted by the summary step.
+
 The view is shortened from the middle when needed to fit the input cap. The summary model does not use the classifier's compact Jev state.
 
 Reports are written to `.evaluatorq/insights-runs/`, with manifests under `.evaluatorq/insights-runs/.manifests/`. Set `EVALUATORQ_DIR` to change the base directory. Run JSON does not contain message bodies or embedding vectors.
@@ -484,6 +486,8 @@ Open **Insights** in the dashboard navigation and select a saved run. The new re
 The four views use one shared set of filters. Selecting a theme, label value, map region, or Compare cell narrows the same trace list and updates counts and highlights. The address bar stores the view, dimension, filters, and selected detail; copy the URL to share the view, and use Back or Forward to restore earlier selections.
 
 The page validates restored values against the saved run and ignores selections the run does not contain. Search narrows the trace list without changing the shared population filters.
+
+The trace list has one column for every question the run asked on at least one trace: the built-in Task, Outcome, Frustration and flag columns, then a generic column for each remaining question, including your own. The `coding_agent` question gets no column: it only decides whether the coding questions run. Hover a column header to see the full question name.
 
 **Themes** groups traces by the selected discovered dimension and shows label distributions for the visible cohort. The Frustration score uses the saved 1–5 `user_frustration` answers: theme averages show one decimal place, trace answers show whole numbers, and `—` means there is no measured answer. Its tooltip gives the number of measured traces. A missing answer is not a score of zero.
 

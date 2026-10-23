@@ -55,6 +55,7 @@ from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 from evaluatorq.common.llm_limit import DEFAULT_LLM_PARALLELISM, check_llm_parallelism_option, llm_concurrency_limit
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
@@ -199,7 +200,7 @@ def _resolve_target(
         return VercelAISdkTarget(vercel_url)
 
     # openai_model
-    if not os.environ.get('OPENAI_API_KEY') and not os.environ.get('ORQ_API_KEY'):
+    if not env_raw('OPENAI_API_KEY') and not env_raw('ORQ_API_KEY'):
         raise typer.BadParameter(
             '--openai-model requires OPENAI_API_KEY (or ORQ_API_KEY for the AI Router) to be set in the environment.'
         )
@@ -211,7 +212,7 @@ def _resolve_target(
 
 
 def _require_orq_api_key(flag: str) -> None:
-    if not os.environ.get('ORQ_API_KEY'):
+    if not env_raw('ORQ_API_KEY'):
         raise typer.BadParameter(f'{flag} requires ORQ_API_KEY to be set in the environment.')
 
 
@@ -329,9 +330,9 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
 
 def _provider_label() -> str:
     """The provider branch the environment resolves to for generation LLM calls."""
-    if os.environ.get('ORQ_API_KEY'):
+    if env_raw('ORQ_API_KEY'):
         return 'Orq router'
-    if os.environ.get('OPENAI_API_KEY'):
+    if env_raw('OPENAI_API_KEY'):
         return 'OpenAI-compatible'
     return 'unresolved provider'
 
@@ -616,6 +617,7 @@ _SHARED_FLAGS: tuple[Flag, ...] = (
     Flag('max_turns'),
     Flag('datapoint_parallelism', replaces=('parallelism',)),
     Flag('llm_parallelism'),
+    Flag('target_reasoning_effort'),
     Flag('evaluator', 'evaluator_names'),
     Flag('save'),
     Flag('recommendations'),
@@ -653,7 +655,6 @@ _RUN_FLAGS: tuple[Flag, ...] = (
     Flag('persona_seed', 'persona_seeds'),
     Flag('scenario_seed', 'scenario_seeds'),
     Flag('generation_instructions'),
-    Flag('target_reasoning_effort'),
 )
 
 # Config fields the CLI consumes itself: ``target`` and ``memory_entity_id`` become the resolved target object
@@ -942,6 +943,13 @@ def simulate(
     llm_parallelism: Annotated[
         int | None,
         typer.Option('--llm-parallelism', callback=check_llm_parallelism_option, help=_LLM_PARALLELISM_HELP),
+    ] = None,
+    target_reasoning_effort: Annotated[
+        str | None,
+        typer.Option(
+            '--target-reasoning-effort',
+            help='Reasoning effort pinned on the target agent under test (agent:<key> targets only).',
+        ),
     ] = None,
     evaluator: Annotated[
         list[str] | None,
@@ -1874,6 +1882,7 @@ def _load_results_for_export(input_path: Path) -> tuple[list[Any], list[Any]]:
 
 @app.command(no_args_is_help=True)
 def export(
+    ctx: typer.Context,
     input_path: Annotated[
         Path,
         typer.Option(
@@ -1955,9 +1964,21 @@ def export(
 
         rendered = export_markdown(results, target=target, recommendations=recs)
     else:
+        from evaluatorq.simulation.contracts import SimulationRun
         from evaluatorq.simulation.reports import export_html
 
-        rendered = export_html(results, target=target, recommendations=recs)
+        content = input_path.read_text(encoding='utf-8')
+        try:
+            saved_run = SimulationRun.model_validate_json(content)
+        except ValueError:
+            saved_run = None
+        if saved_run is not None:
+            saved_run.recommendations = recs
+            if explicitly_set(ctx, 'target'):
+                saved_run.target = target
+            rendered = export_html(saved_run)
+        else:
+            rendered = export_html(results, target=target, recommendations=recs)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered, encoding='utf-8')
     typer.echo(f'Exported {len(results)} result(s) to {output}')
@@ -2087,7 +2108,7 @@ def upload_dataset(
         raise typer.BadParameter(f'No datapoints found in {input_path}')
 
     rows = to_orq_dataset_rows(datapoints)
-    client = setup_orq_client(os.environ['ORQ_API_KEY'])
+    client = setup_orq_client(env_raw('ORQ_API_KEY') or '')
 
     if dataset_id is None:
         # name is guaranteed non-None here (validated above); SDK expects a TypedDict.
@@ -2099,7 +2120,7 @@ def upload_dataset(
     # rows are plain dicts matching the SDK's CreateDatasetItem TypedDict shape.
     client.datasets.create_datapoint(dataset_id=dataset_id, request_body=cast('Any', rows))
 
-    base = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
+    base = env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL).rstrip('/')
     typer.echo(f'Uploaded {len(rows)} datapoint(s) -> dataset {dataset_id} ({base})')
     _echo_next(
         f'eq sim simulate --dataset-id {dataset_id} --target {_TARGET_PLACEHOLDER}',
@@ -2327,12 +2348,7 @@ def _export_report(run: Any, target: Path, *, fmt: str) -> None:
             recommendations=run.recommendations,
         )
     else:
-        content = export_html(
-            run.results,
-            run_date=run.created_at,
-            executive_summary=run.executive_summary,
-            recommendations=run.recommendations,
-        )
+        content = export_html(run)
     path = _resolve_report_target(target, ext=fmt, run=run)
     path.write_text(content, encoding='utf-8')
     typer.echo(f'Report written to {path}', err=True)

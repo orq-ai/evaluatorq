@@ -36,12 +36,11 @@ Provider lifecycle and batching:
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.env_config import env_bool, env_int
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_bool, env_int, env_raw
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
@@ -55,7 +54,7 @@ _initialization_attempted = False
 
 def _is_tracing_explicitly_disabled() -> bool:
     """Check if tracing is explicitly disabled via ORQ_DISABLE_TRACING."""
-    return env_bool('ORQ_DISABLE_TRACING', default=False)
+    return env_bool('ORQ_DISABLE_TRACING')
 
 
 def is_tracing_enabled() -> bool:
@@ -66,7 +65,7 @@ def is_tracing_enabled() -> bool:
     """
     if _is_tracing_explicitly_disabled():
         return False
-    return bool(os.environ.get('OTEL_EXPORTER_OTLP_ENDPOINT') or os.environ.get('ORQ_API_KEY'))
+    return bool(env_raw('OTEL_EXPORTER_OTLP_ENDPOINT') or env_raw('ORQ_API_KEY'))
 
 
 def _get_otlp_endpoint() -> str | None:
@@ -79,20 +78,20 @@ def _get_otlp_endpoint() -> str | None:
     3. Default to production my.orq.ai when only ORQ_API_KEY is set
     """
     # Explicit endpoint takes precedence
-    explicit_endpoint = os.environ.get('OTEL_EXPORTER_OTLP_ENDPOINT')
+    explicit_endpoint = env_raw('OTEL_EXPORTER_OTLP_ENDPOINT')
     if explicit_endpoint:
         return explicit_endpoint
 
     # If ORQ_API_KEY is set, use ORQ_BASE_URL or default endpoint
-    if os.environ.get('ORQ_API_KEY'):
-        base_url = os.environ.get('ORQ_BASE_URL')
+    if env_raw('ORQ_API_KEY'):
+        base_url = env_raw('ORQ_BASE_URL')
         if base_url:
             # Use ORQ_BASE_URL as-is; OTEL ingest is served on the same my.orq.ai
             # host as the rest of the Orq API (verified end-to-end: spans POSTed to
             # my.orq.ai/v2/otel return 200 and are queryable). No my.→api. rewrite.
             return f'{base_url.rstrip("/")}/v2/otel'
         # Default to production endpoint (unified my.orq.ai host).
-        return 'https://my.orq.ai/v2/otel'
+        return f'{DEFAULT_ORQ_BASE_URL}/v2/otel'
 
     return None
 
@@ -105,7 +104,7 @@ def _resolve_traces_endpoint(endpoint: str) -> str:
 def _resolve_exporter_headers(traces_endpoint: str) -> dict[str, str]:
     """Build headers for the OTLP exporter."""
     headers: dict[str, str] = {}
-    api_key = os.environ.get('ORQ_API_KEY')
+    api_key = env_raw('ORQ_API_KEY')
 
     # Add Authorization header only for verified orq.ai domains
     # Use proper domain validation to prevent leaking API keys to malicious endpoints
@@ -118,7 +117,7 @@ def _resolve_exporter_headers(traces_endpoint: str) -> dict[str, str]:
 
     # Parse OTEL_EXPORTER_OTLP_HEADERS if present
     # Format: "key1=value1,key2=value2" - values may contain "=" (e.g., JWT tokens)
-    env_headers = os.environ.get('OTEL_EXPORTER_OTLP_HEADERS')
+    env_headers = env_raw('OTEL_EXPORTER_OTLP_HEADERS')
     if env_headers:
         for pair in env_headers.split(','):
             eq_index = pair.find('=')
@@ -133,9 +132,9 @@ def _resolve_exporter_headers(traces_endpoint: str) -> dict[str, str]:
 
 def _debug_endpoint_source() -> str:
     """Return the environment source used to resolve the OTLP endpoint."""
-    if os.environ.get('OTEL_EXPORTER_OTLP_ENDPOINT'):
+    if env_raw('OTEL_EXPORTER_OTLP_ENDPOINT'):
         source = 'OTEL_EXPORTER_OTLP_ENDPOINT'
-    elif os.environ.get('ORQ_BASE_URL'):
+    elif env_raw('ORQ_BASE_URL'):
         source = 'ORQ_BASE_URL'
     else:
         source = 'default (ORQ_API_KEY)'
@@ -150,8 +149,8 @@ def _resolve_batch_settings() -> tuple[int, int]:
     A batch size larger than the queue is clamped to the queue size, with a
     warning naming both values.
     """
-    max_queue_size = env_int('ORQ_OTEL_MAX_QUEUE_SIZE', 4096, min_value=1)
-    requested_batch_size = env_int('ORQ_OTEL_MAX_BATCH_SIZE', 512, min_value=1)
+    max_queue_size = env_int('ORQ_OTEL_MAX_QUEUE_SIZE')
+    requested_batch_size = env_int('ORQ_OTEL_MAX_BATCH_SIZE')
     batch_size = min(requested_batch_size, max_queue_size)
     if batch_size != requested_batch_size:
         logger.warning(
@@ -177,7 +176,7 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         return _is_initialized
     _initialization_attempted = True
 
-    debug = os.environ.get('ORQ_DEBUG')
+    debug = env_raw('ORQ_DEBUG')
 
     if not is_tracing_enabled():
         if debug:
@@ -208,8 +207,8 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         headers = _resolve_exporter_headers(traces_endpoint)
 
         resource = Resource.create({
-            SERVICE_NAME: os.environ.get('OTEL_SERVICE_NAME', 'evaluatorq'),
-            SERVICE_VERSION: os.environ.get('OTEL_SERVICE_VERSION', '1.0.0'),
+            SERVICE_NAME: env_raw('OTEL_SERVICE_NAME', 'evaluatorq'),
+            SERVICE_VERSION: env_raw('OTEL_SERVICE_VERSION', '1.0.0'),
         })
 
         if debug:
@@ -231,7 +230,7 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         span_processor = BatchSpanProcessor(
             exporter,
             max_queue_size=max_queue_size,
-            schedule_delay_millis=env_int('ORQ_OTEL_SCHEDULE_DELAY_MS', 5000, min_value=1),
+            schedule_delay_millis=env_int('ORQ_OTEL_SCHEDULE_DELAY_MS'),
             max_export_batch_size=batch_size,
         )
 
@@ -284,7 +283,7 @@ async def flush_tracing() -> None:
     if _sdk is None:
         return
     provider = _sdk  # TracerProvider
-    timeout_ms = env_int('ORQ_OTEL_FLUSH_TIMEOUT_MS', 5000, min_value=1)
+    timeout_ms = env_int('ORQ_OTEL_FLUSH_TIMEOUT_MS')
     timed_out = 'OTEL span flush timed out after {}ms; some spans may not have been exported.'
     try:
         ok = await asyncio.wait_for(

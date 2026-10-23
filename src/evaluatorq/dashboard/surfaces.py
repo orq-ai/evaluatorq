@@ -136,14 +136,7 @@ def _sim_adapter() -> SurfaceAdapter:
             experiment_url=run.experiment_url,
             recommendations=run.recommendations,
         ),
-        export=lambda run: export_html(
-            run.results,
-            target=run.target_kind,
-            run_date=run.created_at,
-            executive_summary=run.executive_summary,
-            experiment_url=run.experiment_url,
-            recommendations=run.recommendations,
-        ),
+        export=export_html,
         name=lambda run: run.run_name,
         created_at=lambda run: run.created_at,
         # body_from_results deliberately omits recommendations: they index into

@@ -80,6 +80,7 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
             'criteria': result.spec.criteria,
             'instructions': result.spec.instructions,
             'counts': dict(result.counts),
+            'counts_warning': result.counts_warning,
             'n_failed': result.n_failed,
             'n_not_asked': result.n_not_asked,
             'mean_confidence': result.mean_confidence,
@@ -96,9 +97,11 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
             spec = label_specs.get(name)
             if answer.error:
                 question_errors[name] = answer.error
-            elif answer.value is not None and spec is not None:
+            elif answer.value is None:
+                question_errors[name] = 'The question returned no answer'
+            elif spec is not None:
                 answers[name] = [label_key(spec, answer.value)]
-            elif answer.value is not None:
+            else:
                 answers[name] = [answer.value]
 
         summary = trace.summary
