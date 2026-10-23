@@ -91,7 +91,7 @@ def _jury_panel_health(jury: JuryResult | None) -> str:
                 vote_tags.append(tag('stand-in'))
             if v.repetitions_failed:
                 vote_tags.append(tag(f'{v.repetitions_failed} failed rep{"s" if v.repetitions_failed != 1 else ""}'))
-            head = f'<b>{esc(short_model(v.model))}</b> &rarr; {esc(_jury_vote_label(v))}'
+            head = f'<b>{esc(short_model(model=v.model))}</b> &rarr; {esc(_jury_vote_label(vote=v))}'
             error = f'<div class="rt-jury-error">{esc(v.error)}</div>' if v.error else ''
             items.append(f'<li class="rt-jury-vote">{head} {"".join(vote_tags)}{error}</li>')
         votes = f'<ul class="rt-jury-votes">{"".join(items)}</ul>'
@@ -154,7 +154,7 @@ def render_attack_fragment(r: RedTeamResult) -> str:
             '</div>'
         )
 
-    jury_html = _jury_panel_health(r.evaluation.jury if r.evaluation else None)
+    jury_html = _jury_panel_health(jury=r.evaluation.jury if r.evaluation else None)
 
     transcript_html = render_message_list(r.messages, role_labels=_RT_ROLE_LABELS, class_prefix='rt')
     # Some older reports kept only the final response outside the message list.

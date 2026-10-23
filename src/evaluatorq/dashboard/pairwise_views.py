@@ -53,7 +53,7 @@ def _chips(entry: PairwiseEntry, run: PairwiseRun, judges: list[str]) -> str:
         cls = 'pw-vchip is-none' if value is None else 'pw-vchip'
         chips.append(
             f'<span class="{cls}" style="--c:{pw_side_colour(value)}" title="{esc(judge)}">'
-            f'{esc(short_model(judge))} → {esc(pw_side_label(value, run))}</span>'
+            f'{esc(short_model(model=judge))} → {esc(pw_side_label(value, run))}</span>'
         )
     return ''.join(chips)
 
@@ -265,7 +265,7 @@ def render_pairwise_comparisons(
 
 def _vote_item(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> str:
     value = vote.vote if vote else None
-    head = f'{esc(short_model(model))} → {esc(pw_side_label(value, run))}'
+    head = f'{esc(short_model(model=model))} → {esc(pw_side_label(value, run))}'
     tags = ''
     body = ''
     if vote is None:
