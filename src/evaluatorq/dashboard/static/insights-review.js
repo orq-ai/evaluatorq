@@ -82,7 +82,13 @@ function scoreKey(criteria, index) {
   const text = String(criteria[index] ?? '');
   return text.match(/^\s*(\d+)/)?.[1] || String(index);
 }
-function lvals(l) { return l.kind === 'noul' ? ['yes', 'no'] : l.kind === 'score' ? l.criteria.map((_, i) => scoreKey(l.criteria, i)) : Object.keys(l.criteria); }
+function lvals(l) {
+  if (l.kind === 'noul') return ['yes', 'no'];
+  if (l.kind === 'score') return l.criteria.map((_, i) => scoreKey(l.criteria, i));
+  return l.criteria && typeof l.criteria === 'object' && !Array.isArray(l.criteria)
+    ? Object.keys(l.criteria)
+    : Object.keys(l.counts || {});
+}
 function lval(t, name) {
   const a = t.l[name], l = LBY[name];
   if (!a || a[0] == null) return null;
