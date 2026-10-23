@@ -49,9 +49,21 @@ assert.ok(legacyHtml.indexOf('class="lh"') < legacyHtml.indexOf('role="status"')
 assert.ok(legacyHtml.indexOf('role="status"') < legacyHtml.indexOf('class="sbar"'));
 assert.match(context.labelBlock(legacy, []), /Counts may include &lt;clean&gt; &amp; ordinary traces\./);
 assert.match(legacyHtml, /data-v="Hallucination"/);
-assert.deepEqual(Array.from(context.lvals(legacy)), Object.keys(legacy.criteria));
+if (Object.keys(legacy.criteria || {}).length) {
+  assert.deepEqual(Array.from(context.lvals(legacy)), Object.keys(legacy.criteria));
+} else {
+  assert.deepEqual(Array.from(context.lvals(legacy)), Object.keys(legacy.counts));
+}
 assert.equal(context.decF('l:failure_taxonomy:Hallucination').v, 'Hallucination');
 assert.equal(context.decF('l:failure_taxonomy:No%20failure'), null, 'legacy counts must not invent a clean choice');
+const emptyCriteria = {...legacy, criteria: {}, counts: {'Hallucination': 1}};
+context.LBY.failure_taxonomy = emptyCriteria;
+assert.deepEqual(Array.from(context.lvals(emptyCriteria)), ['Hallucination']);
+assert.match(context.labelBlock(emptyCriteria, [trace]), /data-v="Hallucination"/);
+assert.equal(context.decF('l:failure_taxonomy:Hallucination').v, 'Hallucination');
+const emptyWithoutCounts = {...emptyCriteria, counts: {}};
+assert.deepEqual(Array.from(context.lvals(emptyWithoutCounts)), []);
+assert.doesNotMatch(context.labelBlock(emptyWithoutCounts, [trace]), /data-v=/);
 assert.deepEqual(Array.from(context.lvals({kind: 'noul'})), ['yes', 'no']);
 assert.deepEqual(Array.from(context.lvals({kind: 'score', criteria: ['1: Low', '2: High']})), ['1', '2']);
 

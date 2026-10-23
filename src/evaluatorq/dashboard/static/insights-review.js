@@ -85,9 +85,10 @@ function scoreKey(criteria, index) {
 function lvals(l) {
   if (l.kind === 'noul') return ['yes', 'no'];
   if (l.kind === 'score') return l.criteria.map((_, i) => scoreKey(l.criteria, i));
-  return l.criteria && typeof l.criteria === 'object' && !Array.isArray(l.criteria)
+  const choices = l.criteria && typeof l.criteria === 'object' && !Array.isArray(l.criteria)
     ? Object.keys(l.criteria)
-    : Object.keys(l.counts || {});
+    : [];
+  return choices.length ? choices : Object.keys(l.counts || {});
 }
 function lval(t, name) {
   const a = t.l[name], l = LBY[name];
