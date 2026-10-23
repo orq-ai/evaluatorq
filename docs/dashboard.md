@@ -204,6 +204,12 @@ The red team surface exposes four dashboard-only interactive panels alongside th
 3. **Conversation viewer** — drill into the full message-by-message transcript for any individual attack (system / user / assistant / tool messages plus evaluator explanation).
 4. **Disagreement viewer** — for multi-agent runs, select any agent pair and page through attacks where their results differ (side-by-side transcripts).
 
+### Per-attack jury panel health
+
+Open an attack in the red-team report's **Attacks** tab to inspect its **Jury panel health**, the recorded votes from its panel of model judges. The panel sits below the evaluator verdict and above the transcript. Boolean votes read **RESISTANT** or **VULNERABLE**; an abstention reads **abstained**, and a judge that failed reads **failed** with its recorded error. Failed repetitions and replacement judges carry their own tags.
+
+The summary counts decisive votes over all attempted judges, including replacements. For example, three configured judges and one replacement with two decisive votes read **2/4 decisive votes**. The **failed** count covers configured judges only; a failed replacement is visible in its own row. An abstention contributes no decisive vote, so read the per-judge rows before treating a small numerator as a mechanical failure. Ties and inconclusive panels are marked explicitly. A result with no recorded jury has no panel; reopening an older single-judge run cannot recover votes that were never saved.
+
 ### Apply recommendations to the agent
 
 On a single-agent run that produced recommendations, **Focus areas** and **Recommendations** can preview suggested instruction changes as a diff. Nothing is written until you confirm. Applying a recommendation creates a new minor agent version and marks the recommendation as applied on the run.

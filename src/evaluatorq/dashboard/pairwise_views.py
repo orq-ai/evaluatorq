@@ -21,7 +21,7 @@ from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
 from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 from evaluatorq.dashboard.pairwise_palette import pw_side_colour, pw_side_label
-from evaluatorq.dashboard.report_kit import panel
+from evaluatorq.dashboard.report_kit import panel, short_model
 from evaluatorq.dashboard.sim_compare import resolve_run
 from evaluatorq.dashboard.trace_links import single_trace_url, trace_link_button
 from evaluatorq.pairwise_reports.export_html import _classify_details
@@ -39,10 +39,6 @@ _SORTS = ('index', 'winner')
 _WINNER_ORDER = {'A': 0, 'B': 1, 'tie': 2, 'inconclusive': 3}
 
 
-def _short(model: str) -> str:
-    return model.split('/')[-1]
-
-
 # ---------------------------------------------------------------------------
 # Row list
 # ---------------------------------------------------------------------------
@@ -57,7 +53,7 @@ def _chips(entry: PairwiseEntry, run: PairwiseRun, judges: list[str]) -> str:
         cls = 'pw-vchip is-none' if value is None else 'pw-vchip'
         chips.append(
             f'<span class="{cls}" style="--c:{pw_side_colour(value)}" title="{esc(judge)}">'
-            f'{esc(_short(judge))} → {esc(pw_side_label(value, run))}</span>'
+            f'{esc(short_model(judge))} → {esc(pw_side_label(value, run))}</span>'
         )
     return ''.join(chips)
 
@@ -269,7 +265,7 @@ def render_pairwise_comparisons(
 
 def _vote_item(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> str:
     value = vote.vote if vote else None
-    head = f'{esc(_short(model))} → {esc(pw_side_label(value, run))}'
+    head = f'{esc(short_model(model))} → {esc(pw_side_label(value, run))}'
     tags = ''
     body = ''
     if vote is None:
