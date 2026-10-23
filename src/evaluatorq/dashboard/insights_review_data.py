@@ -80,6 +80,7 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
             'criteria': result.spec.criteria,
             'instructions': result.spec.instructions,
             'counts': dict(result.counts),
+            'counts_warning': result.counts_warning,
             'n_failed': result.n_failed,
             'n_not_asked': result.n_not_asked,
             'mean_confidence': result.mean_confidence,

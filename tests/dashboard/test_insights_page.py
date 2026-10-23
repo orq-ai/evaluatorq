@@ -34,7 +34,7 @@ from evaluatorq.insights.models import (
     TraceInsight,
     TraceSummary,
 )
-from evaluatorq.insights.presets import MADE_ERRORS, SENTIMENT
+from evaluatorq.insights.presets import FAILURE_TAXONOMY, MADE_ERRORS, SENTIMENT
 from evaluatorq.insights.usage import UsageLedger
 
 
@@ -98,6 +98,84 @@ def test_insights_review_reads_noul_answers_from_the_payload(minimal_run, tmp_pa
     payload_path.write_text(json.dumps(build_review_payload(run), default=str), encoding='utf-8')
     script = Path(__file__).with_name('insights_review_noul.cjs')
     subprocess.run(['node', str(script), str(payload_path)], check=True, cwd=Path(__file__).parents[2])
+
+
+def test_insights_review_renders_legacy_counts_warning(minimal_run, tmp_path) -> None:
+    if shutil.which('node') is None:
+        pytest.skip('Node.js is unavailable')
+    from evaluatorq.dashboard.insights_review_data import build_review_payload
+
+    assert isinstance(FAILURE_TAXONOMY.criteria, dict)
+    criteria = FAILURE_TAXONOMY.criteria.copy()
+    criteria.pop('No failure')
+    legacy = FAILURE_TAXONOMY.model_copy(update={'criteria': criteria})
+    warning = 'Counts may include <clean> & ordinary traces.'
+    result = LabelResult(
+        spec=legacy, counts={'Hallucination': 1}, mean_confidence=None, n_low_confidence=0, n_failed=0
+    )
+    run = minimal_run.model_copy(update={
+        'config': minimal_run.config.model_copy(update={'labels': [legacy]}),
+        'labels': {'failure_taxonomy': result},
+    })
+    payload = build_review_payload(run)
+    labels_payload = payload['labels']
+    assert isinstance(labels_payload, list)
+    labels_payload[0]['counts_warning'] = warning
+    payload_path = tmp_path / 'payload.json'
+    payload_path.write_text(json.dumps(payload, default=str), encoding='utf-8')
+    script = Path(__file__).with_name('insights_review_failure_taxonomy.cjs')
+    subprocess.run(['node', str(script), str(payload_path)], check=True, cwd=Path(__file__).parents[2])
+
+
+def test_failure_taxonomy_clean_answers_remain_filterable(minimal_run) -> None:
+    from evaluatorq.dashboard.insights_review_data import build_review_payload
+
+    trace_rows = [
+        trace.model_copy(update={'labels': {'failure_taxonomy': LabelAnswer(
+            value=value, confidence=0.9, probabilities=None, error=None
+        )}})
+        for trace, value in zip(minimal_run.traces, ['No failure', 'Hallucination'])
+    ]
+    result = LabelResult(
+        spec=FAILURE_TAXONOMY,
+        counts={'No failure': 1, 'Hallucination': 1},
+        mean_confidence=0.9,
+        n_low_confidence=0,
+        n_failed=0,
+    )
+    run = minimal_run.model_copy(update={
+        'config': minimal_run.config.model_copy(update={'labels': [FAILURE_TAXONOMY]}),
+        'traces': trace_rows,
+        'labels': {'failure_taxonomy': result},
+    })
+
+    label_payload = build_review_payload(run)['labels']
+    assert isinstance(label_payload, list)
+    assert label_payload[0]['counts'] == {'No failure': 1, 'Hallucination': 1}
+    assert label_payload[0]['counts_warning'] is None
+    rows = build_review_payload(run)['traces']
+    assert isinstance(rows, list)
+    assert rows[0]['l']['failure_taxonomy'] == ['No failure']
+    assert 'failure_taxonomy' not in rows[0]['label_errors']
+    filtered = traces(run, label='failure_taxonomy', value='No failure')
+    assert 'trace-1' in filtered
+    assert 'trace-2' not in filtered
+
+
+def test_python_labels_page_renders_legacy_counts_warning(minimal_run) -> None:
+    assert isinstance(FAILURE_TAXONOMY.criteria, dict)
+    criteria = FAILURE_TAXONOMY.criteria.copy()
+    criteria.pop('No failure')
+    legacy = FAILURE_TAXONOMY.model_copy(update={'criteria': criteria})
+    result = LabelResult(
+        spec=legacy, counts={'Hallucination': 2}, mean_confidence=None, n_low_confidence=0, n_failed=0
+    )
+    run = minimal_run.model_copy(update={'labels': {'failure_taxonomy': result}})
+
+    html = labels(run)
+
+    assert '<p class="insights-warning" role="status">This failure taxonomy did not offer &quot;No failure&quot;.' in html
+    assert html.index('insights-label-instructions') < html.index('insights-warning') < html.index('insights-label-row')
 
 
 def test_insights_header_marks_priced_and_missing_usage_calls_partial(minimal_run) -> None:

@@ -19,6 +19,8 @@ The classifier and summary model read different inputs. The classifier reads its
 
 The built-in dimensions are `intent` (`request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). Requesting the `sentiment` dimension adds the sentiment label if you did not select it. Summaries use the detailed [conversation view](#the-conversation-view), including tool calls and the start and end of tool results.
 
+The `failure_taxonomy` label includes `No failure` for traces the classifier judges clean. A clean answer is a normal label value, not a failed classification. Reports saved with a taxonomy that did not offer this option keep their original answers and counts; the dashboard marks those counts as possibly including clean traces. The discovered `failure` dimension separately groups errors extracted by the summary step.
+
 The view is shortened from the middle when needed to fit the input cap. The summary model does not use the classifier's compact Jev state.
 
 Reports are written to `.evaluatorq/insights-runs/`, with manifests under `.evaluatorq/insights-runs/.manifests/`. Set `EVALUATORQ_DIR` to change the base directory. Run JSON does not contain message bodies or embedding vectors.
