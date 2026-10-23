@@ -49,6 +49,7 @@ def _tabs(
     *,
     active: str | None = None,
     standalone: bool = False,
+    brief: str = '',
 ) -> str:
     """Render a CSS-only tab group.
 
@@ -66,7 +67,7 @@ def _tabs(
     if standalone:
         from evaluatorq.common.reports.standalone import expanded_sections
 
-        return expanded_sections(group, items)
+        return expanded_sections(group, items, brief=brief)
     live = [it for it in items if it[1] and it[1].strip()]
     if not live:
         return ''
@@ -181,6 +182,11 @@ def sim_report_tabs(
     recs_body = _sim_recommendations(rid, run, standalone=standalone)
     n_sim_recs = sum(len(r.suggestions) for r in run.recommendations or [])
 
+    brief = ''
+    if standalone:
+        from evaluatorq.common.reports.brief import simulation_brief
+
+        brief = simulation_brief(run, by_kind)
     tabs = _tabs(
         'simtab',
         [
@@ -205,6 +211,7 @@ def sim_report_tabs(
             ('Config', _sim_config(by_kind, run, entity_context, standalone=standalone) + render('token_usage')),
         ],
         standalone=standalone,
+        brief=brief,
     )
     return f'<div class="report-aligned sim-report">{hero}{tabs}{"" if standalone else _sim_entity_modal(entity_context)}</div>'
 
@@ -2764,6 +2771,11 @@ def redteam_report_tabs(rid: str, report: RedTeamReport, *, standalone: bool = F
     usage_tab = render('token_usage') or '<p class="rk-empty">No token usage data recorded for this run.</p>'
     config_tab = _rt_config(by_kind, report)
 
+    brief = ''
+    if standalone:
+        from evaluatorq.common.reports.brief import redteam_brief
+
+        brief = redteam_brief(report, by_kind)
     tabs = _tabs(
         'rttab',
         [
@@ -2776,6 +2788,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport, *, standalone: bool = F
             ('Config', config_tab),
         ],
         standalone=standalone,
+        brief=brief,
     )
     return f'<div class="report-aligned rt-report">{hero}{warnings}{tabs}</div>'
 

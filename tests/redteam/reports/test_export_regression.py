@@ -164,15 +164,15 @@ def test_redteam_html_preserves_resistant_vulnerable_and_pre_execution_failures(
     donut_values: list[int] = []
     original = kit.donut
 
-    def capture_donut(segments, center_text, center_sub):
+    def capture_donut(segments, *args, **kwargs):
         donut_values.extend(row['value'] for row in segments)
-        return original(segments, center_text, center_sub)
+        return original(segments, *args, **kwargs)
 
     monkeypatch.setattr(kit, 'donut', capture_donut)
 
     html = export_html(report)
 
-    assert donut_values == [1, 1, 0]
+    assert donut_values == [1, 1, 0, 1, 1, 0]  # Overview and compact brief use the same population.
     assert 'resistant-001' in html
     assert 'vulnerable-001' in html
     assert 'row failed before execution' in html

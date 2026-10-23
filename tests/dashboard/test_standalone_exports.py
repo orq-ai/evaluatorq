@@ -51,8 +51,14 @@ def test_exports_are_offline_and_have_no_server_controls(rt_report_multi):
         assert not any(tag in {'script', 'iframe', 'dialog', 'template', 'input', 'button'} for tag, _ in elements.tags)
         assert not any(key.startswith('hx-') for _, attrs in elements.tags for key in attrs)
         assert not any(a.get('href', '').startswith('/r/') for _, a in elements.tags)
-        assert 'Collapsed conversations and attacks are omitted from print' in document
-        assert all('open' not in a if 'export-evidence' in a.get('class', '').split() else 'open' in a for tag, a in elements.tags if tag == 'details')
+        assert 'Collapsed conversations, attacks, and appendix details are omitted from print' in document
+        assert all(
+            'open' not in attrs
+            if {'export-evidence', 'export-appendix-detail'} & set((attrs.get('class') or '').split())
+            else 'open' in attrs
+            for tag, attrs in elements.tags
+            if tag == 'details'
+        )
         ids = [a['id'] for _, a in elements.tags if 'id' in a]
         assert len(ids) == len(set(ids)), 'A section or chart id is duplicated.'
         for tag, attrs in elements.tags:
@@ -73,6 +79,32 @@ def test_saved_sim_run_keeps_config_usage_and_experiment():
     body = document.split('</style>', 1)[1]
     for text in ['Original saved name', 'saved-target', 'saved-model', '>17<', '12,345', run.experiment_url]:
         assert text in body
+
+
+def test_export_brief_and_appendix_layout_keeps_sections_and_data(rt_report_multi):
+    for document in [sim_html(_make_sim_run_with_transcript()), rt_html(rt_report_multi)]:
+        assert document.index('class="report-hero') < document.index('id="export-brief"')
+        assert document.index('id="export-brief"') < document.index('class="export-nav"')
+        assert 'Back to brief' in document
+        elements = Elements(document)
+        section_titles = [
+            attrs for tag, attrs in elements.tags if tag == 'h2' and 'export-section-title' in (attrs.get('class') or '')
+        ]
+        assert section_titles
+        assert all(attrs.get('id', '').endswith('-title') for attrs in section_titles)
+        appendices = [
+            attrs for tag, attrs in elements.tags if tag == 'details' and 'export-appendix-detail' in (attrs.get('class') or '')
+        ]
+        assert appendices
+        assert all('open' not in attrs for attrs in appendices)
+        assert 'Config · Appendix' in document
+        if 'rttab-usage' in document:
+            assert 'Usage · Appendix' in document
+        if 'id="simtab-overview"' in document:
+            assert 'Outcome shares use all conversations, including execution errors.' in document
+            assert 'Heatmap average scores are higher when better; binary pass rates are separate.' in document
+        else:
+            assert 'Attack success rate divides vulnerabilities by evaluated attacks; lower is better.' in document
 
 
 def test_sim_export_cli_preserves_saved_run_wrapper(tmp_path):
@@ -97,7 +129,7 @@ def test_sim_export_keeps_partial_transcript_on_error():
     document = sim_html(run)
     assert 'Partial transcript evidence' in document
     assert 'Synthetic target timeout' in document
-    cohort = document.split('href="#conv-1"', 1)[1].split('</a>', 1)[0]
+    cohort = document.split('Conversation 1 ·', 1)[1].split('</summary>', 1)[0]
     assert '>Error<' in cohort
     assert '>Failed<' not in cohort
 

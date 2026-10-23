@@ -7,6 +7,29 @@ body.standalone-report { margin:0; padding:32px 40px; background:var(--surface-a
 .export-nav { display:flex; flex-wrap:wrap; gap:8px 24px; padding:16px 0; border-block:1px solid var(--border-default); }
 .export-nav a { color:var(--teal-600); text-decoration:none; font-weight:600; font-size:13px; }
 .export-nav a:hover { text-decoration:underline; }
+.export-brief { margin:24px 0 32px; padding:24px; border:1px solid var(--border-default); border-radius:12px; background:var(--surface-card); }
+.export-brief h2 { margin:0 0 12px; font-family:var(--font-display); font-size:28px; font-weight:500; color:var(--text-strong); }
+.export-brief-overview { display:grid; grid-template-columns:minmax(0,1fr) minmax(180px,240px); align-items:start; gap:16px 24px; min-width:0; }
+.export-brief-overview > * { min-width:0; }
+.export-brief-overview .chart-card { width:100%; max-width:240px; margin:0; justify-self:end; }
+.export-brief nav { display:flex; flex-wrap:wrap; gap:8px 20px; margin-top:16px; }
+.export-brief nav a,.export-back-brief a { color:var(--teal-600); font-weight:600; text-decoration:none; }
+.export-brief nav a:hover,.export-back-brief a:hover { text-decoration:underline; }
+.export-reading-note { margin:0 0 16px; color:var(--text-muted); font-size:13px; line-height:1.5; }
+.export-takeaway { margin:0 0 12px; padding-left:20px; }
+.export-findings { width:100%; max-width:100%; min-width:0; overflow-x:auto; }
+.export-findings table { width:100%; table-layout:fixed; border-collapse:collapse; font-size:13px; }
+.standalone-report .report-aligned .export-findings tbody th,.standalone-report .report-aligned .export-findings tbody td { padding:10px 12px; border:1px solid var(--border-subtle); text-align:left; text-align-last:left; font-variant-numeric:normal; vertical-align:top; }
+.standalone-report .report-aligned .export-findings thead th:not(:first-child),.standalone-report .report-aligned .export-findings tbody td:not(:first-child) { text-align:left; text-align-last:left; font-variant-numeric:normal; }
+.export-findings thead th { color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+.export-findings tbody th { min-width:0; color:var(--text-strong); text-transform:none; letter-spacing:normal; font:inherit; font-weight:600; background:none; }
+.export-findings td { overflow-wrap:anywhere; }
+.export-finding-value { display:block; min-width:0; text-align:left; overflow-wrap:anywhere; word-break:normal; }
+.export-findings a { color:var(--teal-600); font-weight:600; }
+.export-back-brief { margin:24px 0 0; font-size:12px; }
+.export-appendix-detail { margin-top:4px; }
+.export-appendix-detail > summary { cursor:pointer; padding:10px 14px; color:var(--teal-600); font-weight:600; }
+.export-appendix-detail[open] > summary { border-bottom:1px solid var(--border-subtle); }
 .export-section { padding-top:28px; margin-top:20px; border-top:1px solid var(--border-default); scroll-margin-top:20px; }
 .export-section-title { margin:0 0 20px; font-family:var(--font-display); font-size:28px; font-weight:500; color:var(--text-strong); }
 .standalone-report .report-hero { margin:24px 0; }
@@ -29,6 +52,22 @@ body.standalone-report { margin:0; padding:32px 40px; background:var(--surface-a
   .standalone-report .report-aligned .kpi-card { min-width:0; padding:12px; }
   .standalone-report .report-aligned .kpi-value,.standalone-report .report-aligned .kpi-label { overflow-wrap:anywhere; }
   .export-section-title { font-size:24px; }
+  .export-brief { padding:16px; }
+  .export-brief h2 { font-size:24px; }
+  .export-brief-overview { grid-template-columns:minmax(0,1fr); }
+  .export-brief-overview .chart-card { max-width:220px; justify-self:start; }
+  .export-findings { overflow:visible; }
+  .export-findings table,.export-findings tbody { display:block; width:100%; }
+  .export-findings thead { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  .export-findings tr { display:block; margin:0 0 12px; padding:4px 10px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-card); }
+  .standalone-report .report-aligned .export-findings tbody th,.standalone-report .report-aligned .export-findings tbody td { display:grid; grid-template-columns:minmax(90px,30%) minmax(0,1fr); gap:8px; padding:8px 0; border:0; border-bottom:1px solid var(--border-subtle); text-align:left; text-align-last:left; font-variant-numeric:normal; }
+  .standalone-report .report-aligned .export-findings tbody td:not(:first-child) { text-align:left; text-align-last:left; font-variant-numeric:normal; }
+  .export-findings tr > :last-child { border-bottom:0; }
+  .standalone-report .report-aligned .export-findings tbody th::before,.standalone-report .report-aligned .export-findings tbody td::before { content:attr(data-label); grid-column:1; min-width:90px; color:var(--text-muted); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; white-space:normal; overflow-wrap:normal; word-break:normal; }
+  .standalone-report .report-aligned .export-findings .export-finding-value { grid-column:2; min-width:0; text-align:left; overflow-wrap:anywhere; }
+  .standalone-report .report-aligned .export-findings .export-finding-value > a { display:block; margin-top:4px; }
+  .export-findings tbody th { font-weight:600; }
+  .export-findings tbody th::before { font-weight:500; }
   .export-conversation .sim-transcript-detail { padding:12px; }
   .export-nav { gap:12px 18px; }
 }
@@ -36,6 +75,19 @@ body.standalone-report { margin:0; padding:32px 40px; background:var(--surface-a
   .export-print-note { display:block; max-width:1160px; margin:12px auto; color:#555; font-size:11px; }
   body.standalone-report { padding:0; background:white; print-color-adjust:exact; -webkit-print-color-adjust:exact; }
   .export-nav { display:none; }
+  .export-back-brief { display:none; }
+  .export-brief { margin:8px 0 16px; padding:12px; break-inside:auto; page-break-inside:auto; }
+  .export-brief h2 { margin-bottom:6px; font-size:20px; }
+  .export-brief-overview { grid-template-columns:minmax(0,1fr) 130px; gap:8px 12px; }
+  .export-brief-overview .chart-card { max-width:130px; }
+  .export-brief .export-reading-note { margin-bottom:8px; }
+  .export-findings { overflow:visible; }
+  .export-findings table { display:table; table-layout:auto; }
+  .export-findings tbody { display:table-row-group; }
+  .export-findings thead { position:static; width:auto; height:auto; padding:0; margin:0; overflow:visible; clip:auto; white-space:normal; border:0; }
+  .export-findings tr { display:table-row; margin:0; padding:0; border:0; border-radius:0; background:none; }
+  .standalone-report .report-aligned .export-findings tbody th,.standalone-report .report-aligned .export-findings tbody td { display:table-cell; padding:5px 6px; border:1px solid var(--border-subtle); text-align:left; }
+  .standalone-report .report-aligned .export-findings tbody th::before,.standalone-report .report-aligned .export-findings tbody td::before { content:none; }
   .export-section { break-before:auto; margin-top:20px; }
   .export-section:first-of-type { break-before:auto; }
   .export-section-title,h3,h4 { break-after:avoid; }
