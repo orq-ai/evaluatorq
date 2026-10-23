@@ -6,22 +6,23 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq.simulation.agents.base import LLMResult
-from evaluatorq.simulation.agents.judge import JUDGE_TOOLS, JudgeAgent, JudgeAgentConfig
+from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.simulation.agents.judge import JUDGE_TOOLS, JudgeAgent
 from evaluatorq.simulation.contracts import Criterion, Message
 
 
 @pytest.fixture
 def judge():
-    config = JudgeAgentConfig(
+    config = LLMCallConfig(client=MagicMock())
+    return JudgeAgent(
+        config,
         goal="Get a refund",
         criteria=[
             Criterion(description="Agent offers refund", type="must_happen"),
             Criterion(description="Agent is rude", type="must_not_happen"),
         ],
         ground_truth="Refund approved",
-        api_key="test-key",
     )
-    return JudgeAgent(config)
 
 
 class TestJudgeAgent:
@@ -32,7 +33,7 @@ class TestJudgeAgent:
     async def test_evaluate_sends_no_temperature(self):
         """The judge used to pin ``temperature=0.0``, which reasoning models reject.
 
-        Determinism is now the caller's to ask for via ``JudgeAgentConfig(temperature=...)``;
+        Determinism is now the caller's to ask for via ``LLMCallConfig(temperature=...)``;
         unset must reach the wire as an absent parameter, not as a value.
         """
         client = MagicMock()
@@ -41,7 +42,7 @@ class TestJudgeAgent:
         response.output = []
         response.usage = None
         client.responses.create = AsyncMock(return_value=response)
-        judge = JudgeAgent(JudgeAgentConfig(goal="Get a refund", client=client))
+        judge = JudgeAgent(LLMCallConfig(client=client), goal="Get a refund")
 
         await judge.evaluate([Message(role="user", content="hello")])
 

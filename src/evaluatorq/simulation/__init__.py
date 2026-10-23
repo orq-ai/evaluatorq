@@ -61,7 +61,7 @@ if TYPE_CHECKING:
         from_chat_completions,
         from_orq_deployment,
     )
-    from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent
+    from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.agents.judge import JudgeAgent
     from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
     from evaluatorq.simulation.contracts import (
@@ -156,7 +156,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str | None]] = {  # noqa: RUF067
     'LLMCallConfig': ('evaluatorq.contracts', 'LLMCallConfig'),
     'from_chat_completions': ('evaluatorq.simulation.adapters', 'from_chat_completions'),
     'from_orq_deployment': ('evaluatorq.simulation.adapters', 'from_orq_deployment'),
-    'AgentConfig': ('evaluatorq.simulation.agents.base', 'AgentConfig'),
     'BaseAgent': ('evaluatorq.simulation.agents.base', 'BaseAgent'),
     'OrqResponsesTarget': ('evaluatorq.openresponses.target', 'OrqResponsesTarget'),
     'JudgeAgent': ('evaluatorq.simulation.agents.judge', 'JudgeAgent'),
@@ -343,7 +342,6 @@ __all__ = [
     'SIMULATION_EVALUATORS',
     'SIM_RUNS_DIR_NAME',
     # Agents
-    'AgentConfig',
     'AgentTarget',
     'BaseAgent',
     'CallableTarget',
