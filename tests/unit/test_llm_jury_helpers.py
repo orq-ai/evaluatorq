@@ -128,6 +128,30 @@ def test_outcome_to_prediction_abstain():
     assert pred.abstained is True
 
 
+def test_outcome_to_prediction_bare_none_is_failure_not_abstention():
+    # value=None with abstain=False is a non-usable verdict, not a clean abstention
+    # (RES-1414): the Prediction is non-decisive and non-abstained, so the jury counts
+    # it as a failed repetition rather than a free abstention. Before this, llm_jury
+    # alone read it as a clean abstention, moving consistency the opposite way.
+    payload = EvaluatorResponsePayload(value=None, explanation="no verdict", abstain=False)
+    pred = _outcome_to_prediction(JudgeOutcome(payload=payload, raw_content='{}'))
+    assert pred.abstained is False
+    assert pred.value is None
+    assert pred.error is None
+    assert pred.decisive is False
+
+
+def test_outcome_to_prediction_flags_coerced_abstention():
+    # abstain=True WITH a value is coerced to an abstention by EvaluatorResponsePayload;
+    # the Prediction must carry verdict_coerced so the artifact can tell it apart from a
+    # clean abstention (RES-1414).
+    payload = EvaluatorResponsePayload(value=True, explanation="contradiction", abstain=True)
+    assert payload.coerced_abstain is True  # precondition: the coercion fired
+    pred = _outcome_to_prediction(JudgeOutcome(payload=payload, raw_content='{}'))
+    assert pred.abstained is True
+    assert pred.verdict_coerced is True
+
+
 def test_jury_vote_still_rejects_the_contradiction_the_payload_coerces():
     # EvaluatorResponsePayload coerces abstain=True + a value; JuryVote raises on it.
     # The two are deliberately different policies, so the backstop needs a test of its
@@ -135,6 +159,38 @@ def test_jury_vote_still_rejects_the_contradiction_the_payload_coerces():
     # built without a judge payload reintroduces the contradiction unnoticed.
     with pytest.raises(ValueError, match='abstained JuryVote must have a null value'):
         JuryVote(model='m', success=True, abstained=True, value=True)
+
+
+@pytest.mark.asyncio
+async def test_jury_vote_carries_the_coerced_count():
+    # A coerced abstention must reach the vote and its repetitions (RES-1414), so the
+    # run artifact can tell it from a clean abstention.
+    from evaluatorq.common.jury import Prediction, VerdictKind, run_jury
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(abstained=True, verdict_coerced=True, explanation='coerced')
+
+    delib = await run_jury(judge_fn=judge, panel=['j'], repetitions=1, verdict_kind=VerdictKind.CATEGORICAL, tie_break=None)
+    vote = delib.jury.votes[0]
+    assert vote.abstained is True
+    assert vote.verdicts_coerced == 1
+    assert vote.repetitions[0].verdict_coerced is True
+
+
+@pytest.mark.asyncio
+async def test_bare_none_pass_counts_as_a_failed_repetition():
+    # The jury layer already treats a non-decisive, non-abstained pass as failed; this
+    # pins that a value=None / abstain=False pass reaches it that way (RES-1414).
+    from evaluatorq.common.jury import Prediction, VerdictKind, run_jury
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=None, abstained=False, explanation='no verdict')
+
+    delib = await run_jury(judge_fn=judge, panel=['j'], repetitions=1, verdict_kind=VerdictKind.CATEGORICAL, tie_break=None)
+    vote = delib.jury.votes[0]
+    assert vote.repetitions_failed == 1
+    assert vote.abstained is False
+    assert vote.success is False
 
 
 # ---------------------------------------------------------------------------
