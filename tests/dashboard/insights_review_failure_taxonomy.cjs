@@ -28,7 +28,7 @@ const unrelated = {...legacy, name: 'other_choice', counts_warning: null};
 const trace = {l: {failure_taxonomy: ['Hallucination'], revised_taxonomy: ['No failure'], other_choice: ['yes']}};
 
 const legacyHtml = context.labelBlock(legacy, [trace]);
-assert.match(legacyHtml, /<p class="note" role="status">Counts may include &lt;clean&gt; &amp; ordinary traces\.<\/p>/);
+assert.match(legacyHtml, /<p class="note label-counts-warning" role="status">Counts may include &lt;clean&gt; &amp; ordinary traces\.<\/p>/);
 assert.ok(legacyHtml.indexOf('class="lh"') < legacyHtml.indexOf('role="status"'));
 assert.ok(legacyHtml.indexOf('role="status"') < legacyHtml.indexOf('class="sbar"'));
 assert.match(context.labelBlock(legacy, []), /Counts may include &lt;clean&gt; &amp; ordinary traces\./);
