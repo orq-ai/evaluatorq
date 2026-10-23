@@ -530,9 +530,14 @@ def labels(run: InsightsRun) -> str:
                 f'<a class="insights-label-row" href="{href}" hx-get="{href}" hx-target="#insights-content" hx-push-url="true"><span>{esc(_label_value_name(run, name, value))}</span><b>{pct}%</b>{_bar(count, total)}</a>'
             )
         row_html = ''.join(rows) or '<p class="insights-empty">No label values were recorded.</p>'
+        warning = (
+            f'<p class="insights-warning" role="status">{esc(result.counts_warning)}</p>'
+            if result.counts_warning
+            else ''
+        )
         card = (
             f'<article class="insights-label-card"><div class="insights-card-head"><h3>{esc(name)}</h3><span>{esc(result.spec.kind)}</span></div>'
-            f'<p class="insights-label-instructions">{esc(result.spec.instructions)}</p>{row_html}'
+            f'<p class="insights-label-instructions">{esc(result.spec.instructions)}</p>{warning}{row_html}'
         )
         failed = f'<p class="insights-muted">{result.n_failed} failed</p>' if result.n_failed else ''
         cards.append(card + failed + '</article>')

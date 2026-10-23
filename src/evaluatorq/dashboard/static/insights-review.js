@@ -955,6 +955,7 @@ function labelBlock(l, ts) {
   const failed = ts.length - answered;
   const vs = lvals(l).filter(v => counts[v]);
   return `<div class="lab"><div class="lh"><b>${esc(human(l.name))}</b><span>${answered ? '' : 'not answered'}${failed ? `${answered ? '' : ' · '}${failed} failed` : ''}</span></div>
+    ${l.counts_warning ? `<p class="note" role="status">${esc(l.counts_warning)}</p>` : ''}
     ${answered ? `<div class="sbar">${vs.map(v => `<button data-l="${esc(l.name)}" data-v="${esc(v)}" class="${isOn({t: 'l', name: l.name, v}) ? 'on' : ''}" style="flex:${counts[v]};background:${lcolor(l.name, v)}" title="${esc(ldisp(l.name, v))}: ${counts[v]}">${counts[v]}</button>`).join('')}</div>
     <div class="slegend">${vs.map(v => `<span><i style="background:${lcolor(l.name, v)}"></i>${esc(ldisp(l.name, v))}</span>`).join('')}</div>` : `<div class="note">No answers for these traces.</div>`}</div>`;
 }

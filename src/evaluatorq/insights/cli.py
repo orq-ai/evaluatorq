@@ -256,6 +256,8 @@ def _print_run(run: InsightsRun, run_path: Path | None, *, projection_already_sh
         if label.n_failed:
             table.add_row('Failed / unclassified', f'{label.n_failed:,}')
         console.print(table)
+        if label.counts_warning:
+            console.print(label.counts_warning, markup=False)
 
     failed = run.counts.get('n_failed_traces', 0)
     trace_count = len(run.traces)
