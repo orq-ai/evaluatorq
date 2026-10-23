@@ -82,7 +82,14 @@ function scoreKey(criteria, index) {
   const text = String(criteria[index] ?? '');
   return text.match(/^\s*(\d+)/)?.[1] || String(index);
 }
-function lvals(l) { return l.kind === 'noul' ? ['yes', 'no'] : l.kind === 'score' ? l.criteria.map((_, i) => scoreKey(l.criteria, i)) : Object.keys(l.criteria); }
+function lvals(l) {
+  if (l.kind === 'noul') return ['yes', 'no'];
+  if (l.kind === 'score') return l.criteria.map((_, i) => scoreKey(l.criteria, i));
+  const choices = l.criteria && typeof l.criteria === 'object' && !Array.isArray(l.criteria)
+    ? Object.keys(l.criteria)
+    : [];
+  return choices.length ? choices : Object.keys(l.counts || {});
+}
 function lval(t, name) {
   const a = t.l[name], l = LBY[name];
   if (!a || a[0] == null) return null;
@@ -955,6 +962,7 @@ function labelBlock(l, ts) {
   const failed = ts.length - answered;
   const vs = lvals(l).filter(v => counts[v]);
   return `<div class="lab"><div class="lh"><b>${esc(human(l.name))}</b><span>${answered ? '' : 'not answered'}${failed ? `${answered ? '' : ' · '}${failed} failed` : ''}</span></div>
+    ${l.counts_warning ? `<p class="note label-counts-warning" role="status">${esc(l.counts_warning)}</p>` : ''}
     ${answered ? `<div class="sbar">${vs.map(v => `<button data-l="${esc(l.name)}" data-v="${esc(v)}" class="${isOn({t: 'l', name: l.name, v}) ? 'on' : ''}" style="flex:${counts[v]};background:${lcolor(l.name, v)}" title="${esc(ldisp(l.name, v))}: ${counts[v]}">${counts[v]}</button>`).join('')}</div>
     <div class="slegend">${vs.map(v => `<span><i style="background:${lcolor(l.name, v)}"></i>${esc(ldisp(l.name, v))}</span>`).join('')}</div>` : `<div class="note">No answers for these traces.</div>`}</div>`;
 }
