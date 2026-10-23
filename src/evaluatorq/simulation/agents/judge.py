@@ -24,7 +24,7 @@ from pydantic import (
 )
 
 from evaluatorq.common.sanitize import delimit
-from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent, LLMResult
+from evaluatorq.simulation.agents.base import BaseAgent, LLMResult
 from evaluatorq.simulation.contracts import Criterion, CriterionVerdict, Judgment, Message, criterion_id_for
 
 if TYPE_CHECKING:
@@ -621,28 +621,6 @@ def _safety_terminate(reason: str) -> Judgment:
     )
 
 
-class JudgeAgentConfig(AgentConfig):
-    """Configuration for JudgeAgent."""
-
-    goal: str = ''
-    criteria: list[Criterion] | None = None
-    ground_truth: str = ''
-
-    def __init__(
-        self,
-        goal: str = '',
-        criteria: list[Criterion] | None = None,
-        ground_truth: str = '',
-        **kwargs: Any,
-    ) -> None:
-        # Also named here: _config_from_agent_config always writes `api`, so the base default cannot apply.
-        kwargs.setdefault('api', BaseAgent.DEFAULT_API)
-        super().__init__(**kwargs)
-        self.goal = goal
-        self.criteria = criteria
-        self.ground_truth = ground_truth
-
-
 class JudgeAgent(BaseAgent):
     """Agent that evaluates conversations and decides termination.
 
@@ -657,28 +635,17 @@ class JudgeAgent(BaseAgent):
 
     def __init__(
         self,
-        config: JudgeAgentConfig | AgentConfig | LLMCallConfig | None = None,
+        config: LLMCallConfig | None = None,
         *,
         goal: str | None = None,
         criteria: list[Criterion] | None = None,
         ground_truth: str | None = None,
     ) -> None:
-        """``config`` may be a `LLMCallConfig` with the scenario data beside it.
-
-        That is the shape the runner uses: converting a `LLMCallConfig` into
-        `JudgeAgentConfig` first only to have `BaseAgent` convert it straight
-        back loses an explicitly set ``temperature=None`` or
-        ``reasoning_effort=None``, because `AgentConfig` spells "unset" as
-        ``None`` and cannot tell the two apart (RES-1421). The same fields on a
-        `JudgeAgentConfig` still work and are used when the keyword is omitted.
-        """
+        """Configure the judge's LLM with ``config`` and scenario data separately."""
         super().__init__(config)
-        from_cfg = config if isinstance(config, JudgeAgentConfig) else None
-        self._goal = goal if goal is not None else (from_cfg.goal if from_cfg else '')
-        self._criteria: list[Criterion] = (
-            criteria if criteria is not None else ((from_cfg.criteria or []) if from_cfg else [])
-        )
-        self._ground_truth = ground_truth if ground_truth is not None else (from_cfg.ground_truth if from_cfg else '')
+        self._goal = goal if goal is not None else ''
+        self._criteria: list[Criterion] = criteria if criteria is not None else []
+        self._ground_truth = ground_truth if ground_truth is not None else ''
         self._settled: frozenset[str] = frozenset()
 
     @property

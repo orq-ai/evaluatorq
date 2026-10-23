@@ -6,6 +6,8 @@ Drive your agent through realistic multi-turn conversations without writing test
 - **User simulator** — plays a **persona** pursuing a **scenario** goal, turn by turn.
 - **Judge** — scores whether the goal was met and whether any rules were broken.
 
+Configure the simulator and judge with `LLMCallConfig`. The former `AgentConfig`, `JudgeAgentConfig` and `UserSimulatorAgentConfig` classes have been removed; pass judge scenario data through `goal=`, `criteria=` and `ground_truth=`, custom simulator instructions through `system_prompt=`, and authentication through `ORQ_API_KEY` or a preconfigured client in `LLMCallConfig(client=...)`.
+
 === "Orq agent"
 
     Requires the simulation extra and an `ORQ_API_KEY`:

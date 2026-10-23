@@ -389,10 +389,11 @@ class TestInjectedJudgeReceivesScenarioContext:
     def test_update_context_puts_the_criteria_in_the_system_prompt(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
-        from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
+        from evaluatorq.contracts import LLMCallConfig
+        from evaluatorq.simulation.agents.judge import JudgeAgent
         from evaluatorq.simulation.contracts import Criterion
 
-        judge = JudgeAgent(JudgeAgentConfig(model="test-model"))
+        judge = JudgeAgent(LLMCallConfig(model="test-model"))
         assert "No specific criteria defined" in judge.system_prompt
 
         criteria = [Criterion(description="Agent asks for order details", type="must_happen")]
@@ -411,7 +412,8 @@ class TestInjectedJudgeReceivesScenarioContext:
         """The per-simulation copy of an injected JudgeAgent carries the scenario."""
         monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
-        from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
+        from evaluatorq.contracts import LLMCallConfig
+        from evaluatorq.simulation.agents.judge import JudgeAgent
         from evaluatorq.simulation.contracts import Criterion
 
         judged: list[JudgeAgent] = []
@@ -423,7 +425,7 @@ class TestInjectedJudgeReceivesScenarioContext:
         monkeypatch.setattr(JudgeAgent, "evaluate", fake_evaluate)
 
         # Constructed with no goal and no criteria, exactly as a user would.
-        judge = JudgeAgent(JudgeAgentConfig(model="test-model"))
+        judge = JudgeAgent(LLMCallConfig(model="test-model"))
         scenario = Scenario(
             name="Refund",
             goal="Get a full refund",

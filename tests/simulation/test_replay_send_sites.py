@@ -15,7 +15,7 @@ import pytest
 from evaluatorq.common.target_call import call_target_with_retry
 from evaluatorq.contracts import AgentResponse, FunctionCall, LLMCallConfig, StrategyToolCall
 from evaluatorq.simulation.agents.base import BaseAgent
-from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
+from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.contracts import Criterion, Message
 from evaluatorq.simulation.runner.simulation import _invert_roles_for_simulator
 
@@ -96,12 +96,12 @@ async def test_agent_sends_no_unpaired_id_and_shows_the_attempt_as_text(api):
 async def test_judge_evaluate_sees_the_incomplete_call():
     client = _responses_client()
     judge = JudgeAgent(
-        JudgeAgentConfig(
+        LLMCallConfig(
             model='openai/gpt-4o',
             client=client,
-            goal='get a refund',
-            criteria=[Criterion(description='refunds', type='must_happen')],
-        )
+        ),
+        goal='get a refund',
+        criteria=[Criterion(description='refunds', type='must_happen')],
     )
 
     await judge.evaluate(_transcript())

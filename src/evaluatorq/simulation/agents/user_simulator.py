@@ -6,9 +6,9 @@ generating realistic user messages in conversations.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent
+from evaluatorq.simulation.agents.base import BaseAgent
 from evaluatorq.simulation.contracts import Message
 
 if TYPE_CHECKING:
@@ -33,18 +33,6 @@ Response format:
 - Keep responses natural and conversational"""
 
 
-class UserSimulatorAgentConfig(AgentConfig):
-    """Configuration for UserSimulatorAgent."""
-
-    system_prompt: str | None = None
-
-    def __init__(self, system_prompt: str | None = None, **kwargs: Any) -> None:
-        # Also named here: _config_from_agent_config always writes `api`, so the base default cannot apply.
-        kwargs.setdefault('api', BaseAgent.DEFAULT_API)
-        super().__init__(**kwargs)
-        self.system_prompt = system_prompt
-
-
 class UserSimulatorAgent(BaseAgent):
     """Agent that simulates user behavior.
 
@@ -54,24 +42,13 @@ class UserSimulatorAgent(BaseAgent):
 
     def __init__(
         self,
-        config: UserSimulatorAgentConfig | AgentConfig | LLMCallConfig | None = None,
+        config: LLMCallConfig | None = None,
         *,
         system_prompt: str | None = None,
     ) -> None:
-        """``config`` may be a `LLMCallConfig` with ``system_prompt`` beside it.
-
-        That is the shape the runner uses: converting a `LLMCallConfig` into
-        `UserSimulatorAgentConfig` first only to have `BaseAgent` convert it
-        straight back loses an explicitly set ``temperature=None`` or
-        ``reasoning_effort=None``, because `AgentConfig` spells "unset" as
-        ``None`` and cannot tell the two apart (RES-1421). ``system_prompt`` on
-        a `UserSimulatorAgentConfig` still works and is used when the keyword is
-        omitted.
-        """
+        """Configure the simulator's LLM with ``config`` and its prompt separately."""
         super().__init__(config)
         self._custom_system_prompt: str | None = system_prompt
-        if system_prompt is None and isinstance(config, UserSimulatorAgentConfig):
-            self._custom_system_prompt = config.system_prompt
 
     @property
     def name(self) -> str:

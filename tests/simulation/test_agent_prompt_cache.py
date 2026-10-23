@@ -21,7 +21,7 @@ import pytest
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.simulation.agents.base import BaseAgent
-from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
+from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.contracts import Criterion, Message
 
 _ORQ_ROUTER_BASE_URL = 'https://my.orq.ai/v3/router'
@@ -229,12 +229,12 @@ def _judge(client: MagicMock) -> JudgeAgent:
     """Always on Responses — `JudgeAgent.REQUIRED_API` pins it there whatever the
     config says, because its request shape is one chat completions rejects."""
     return JudgeAgent(
-        JudgeAgentConfig(
+        LLMCallConfig(
             model=_CACHED_MODEL,
             client=client,
-            goal=f'help the user. {_LONG}',
-            criteria=[Criterion(description='greets the user', type='must_happen')],
-        )
+        ),
+        goal=f'help the user. {_LONG}',
+        criteria=[Criterion(description='greets the user', type='must_happen')],
     )
 
 

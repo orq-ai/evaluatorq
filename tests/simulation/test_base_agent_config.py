@@ -15,9 +15,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq.contracts import LLMCallConfig
-from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent
-from evaluatorq.simulation.agents.judge import JudgeAgentConfig
-from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgentConfig
+from evaluatorq.simulation.agents.base import BaseAgent
+from evaluatorq.simulation.agents.judge import JudgeAgent
+from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
 from evaluatorq.simulation.contracts import Message
 
 
@@ -291,39 +291,31 @@ class TestResponsesConfigPropagation:
         assert kwargs["reasoning"] == {"effort": "low"}
 
 
-class TestLegacyAgentConfigThreading:
-    """AgentConfig subclasses (JudgeAgentConfig, UserSimulatorAgentConfig) must
-    also be able to express temperature/max_tokens/timeout_ms/reasoning_effort —
-    previously only model/client/api_key/api reached the built LLMCallConfig.
-    """
-
+class TestLLMCallConfigPropagation:
     @pytest.mark.asyncio
-    async def test_judge_agent_config_threads_max_tokens(self):
+    async def test_judge_uses_llm_config_and_keyword_scenario_data(self):
         client = _make_client()
         client.responses.create.return_value = _responses_response()
-        config = JudgeAgentConfig(client=client, max_tokens=15_000)
+        config = LLMCallConfig(model="gpt-4o", client=client, max_tokens=15_000)
+        judge = JudgeAgent(
+            config,
+            goal="Get a refund",
+            criteria=[],
+            ground_truth="The item never arrived",
+        )
 
-        assert config.max_tokens == 15_000
-        from evaluatorq.simulation.agents.judge import JudgeAgent
-
-        agent = JudgeAgent(config)
-        await agent._call_llm(_messages())
+        assert judge._goal == "Get a refund"
+        assert judge._ground_truth == "The item never arrived"
+        await judge._call_llm(_messages())
 
         kwargs = client.responses.create.await_args.kwargs
         assert kwargs["max_output_tokens"] == 15_000
 
-    def test_user_simulator_agent_config_threads_temperature(self):
+    def test_user_simulator_uses_llm_config_and_keyword_prompt(self):
         client = _make_client()
-        config = UserSimulatorAgentConfig(client=client, temperature=0.3)
-        assert config.temperature == 0.3
+        config = LLMCallConfig(model="gpt-4o", client=client, temperature=0.3)
 
-    def test_plain_agent_config_unset_fields_do_not_shadow_defaults(self):
-        """A field left untouched on AgentConfig must not leak LLMCallConfig's
-        own pydantic default into model_fields_set."""
-        from evaluatorq.simulation.agents.base import _config_from_agent_config
+        simulator = UserSimulatorAgent(config, system_prompt="from the keyword")
 
-        cfg, _ = _config_from_agent_config(AgentConfig())
-        assert "temperature" not in cfg.model_fields_set
-        assert "max_tokens" not in cfg.model_fields_set
-        assert "timeout_ms" not in cfg.model_fields_set
-        assert "reasoning_effort" not in cfg.model_fields_set
+        assert simulator.config.temperature == 0.3
+        assert simulator._custom_system_prompt == "from the keyword"

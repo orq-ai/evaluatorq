@@ -13,9 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, TokenUsage
+from evaluatorq.contracts import AgentResponse, LLMCallConfig, TokenUsage
 from evaluatorq.simulation.agents.base import LLMResult
-from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
+from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.evaluators.scorers import criteria_met_scorer
 from evaluatorq.simulation.runner.simulation import SimulationRunner, _CriteriaTracker
 from evaluatorq.simulation.contracts import (
@@ -159,7 +159,7 @@ def test_scenario_without_criteria_is_untouched():
 
 
 def _judge() -> JudgeAgent:
-    return JudgeAgent(JudgeAgentConfig(goal='g', criteria=CRITERIA, client=object()))
+    return JudgeAgent(LLMCallConfig(client=object()), goal='g', criteria=CRITERIA)
 
 
 def _llm_result(name: str, args: dict[str, object]) -> LLMResult:
