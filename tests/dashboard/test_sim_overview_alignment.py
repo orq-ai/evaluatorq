@@ -11,13 +11,15 @@ from evaluatorq.dashboard import metrics, view
 from evaluatorq.dashboard.app import build_app
 
 
-def _store(tmp_path: Path, results: list[dict]) -> list[Path]:
+def _store(tmp_path: Path, results: list[dict], *, run_fields: dict[str, object] | None = None) -> list[Path]:
     sim = tmp_path / 'sim-runs'
     sim.mkdir()
-    (sim / 'run.json').write_text(json.dumps({
+    payload: dict[str, object] = {
         'mode': 'run', 'run_name': 'Goal test', 'created_at': '2026-10-24T10:00:00',
         'total_results': len(results), 'scorer_averages': {'quality': 1.0}, 'results': results,
-    }))
+    }
+    payload.update(run_fields or {})
+    (sim / 'run.json').write_text(json.dumps(payload))
     return [sim]
 
 
@@ -30,10 +32,81 @@ def test_recorded_total_is_not_average_and_missing_cost_is_unknown(tmp_path: Pat
     data = metrics.sim_overview(roots)
     assert data.total_cost == pytest.approx(6.0)
     assert data.avg_cost == pytest.approx(3.0)
+    assert data.recent[0].cost == pytest.approx(6.0)
     html = view.sim_overview_body(data)
     assert 'Total spend' in html and '$6.00' in html
     assert '4 of 6 calls priced' in html
     assert 'Avg cost/sim' not in html
+
+
+def test_run_cost_round_trip_uses_whole_run_usage_for_spend_and_coverage(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
+    from evaluatorq.simulation.reports.sections import build_report_sections
+
+    result = SimulationResult(
+        messages=[],
+        terminated_by=TerminatedBy.judge,
+        reason='done',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        token_usage=TokenUsage(input_cost=0.1, output_cost=0.15, cost_usd=0.25, calls=1, priced_calls=1),
+        turn_metrics=[],
+    )
+    run = SimulationRun(
+        run_name='Generated simulation',
+        created_at=datetime(2026, 10, 24),
+        mode='run',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=1,
+        scorer_averages={},
+        results=[result],
+        token_usage_total=TokenUsage(input_cost=0.5, output_cost=0.75, cost_usd=1.25, calls=2, priced_calls=1),
+    )
+    saved = json.loads(run.model_dump_json())
+    roots = _store(tmp_path, saved['results'], run_fields={'token_usage_total': saved['token_usage_total']})
+
+    overview = metrics.sim_overview(roots)
+    report_sections = build_report_sections(run.results, run_token_usage_total=run.token_usage_total)
+    report_usage = next(section.data for section in report_sections if section.kind == 'token_usage')
+    html = view.sim_overview_body(overview)
+    landing = metrics.landing(roots)
+
+    assert report_usage['run_total_cost'] == pytest.approx(1.25)
+    assert (report_usage['run_total_priced_calls'], report_usage['run_total_calls']) == (1, 2)
+    assert overview.total_cost == pytest.approx(1.25)
+    assert overview.recent[0].cost == pytest.approx(1.25)
+    assert overview.avg_cost == pytest.approx(0.25)
+    assert overview.avg_input_cost == pytest.approx(0.1)
+    assert overview.avg_output_cost == pytest.approx(0.15)
+    assert (overview.priced_calls, overview.cost_calls) == (1, 2)
+    assert '1 of 2 calls priced' in html
+    assert landing.total_cost == pytest.approx(1.25)
+    assert landing.priced_calls == 1 and landing.cost_calls == 2
+
+
+@pytest.mark.parametrize(('run_cost', 'expected_total'), [(None, None), (0.0, 0.0)])
+def test_run_cost_distinguishes_unknown_from_zero_when_result_cost_is_known(
+    tmp_path: Path, run_cost: float | None, expected_total: float | None
+) -> None:
+    roots = _store(
+        tmp_path,
+        [{'goal_achieved': True, 'token_usage': {'cost_usd': 0.25, 'calls': 1, 'priced_calls': 1}}],
+        run_fields={
+            'token_usage_total': {'cost_usd': run_cost, 'calls': 1, 'priced_calls': int(run_cost is not None)}
+        },
+    )
+
+    overview = metrics.sim_overview(roots)
+
+    assert overview.total_cost == expected_total
+    assert overview.recent[0].cost == expected_total
+    assert overview.avg_cost == pytest.approx(0.25)
 
 
 def test_goal_rate_is_independent_of_scorer_average_and_retains_errors(tmp_path: Path) -> None:

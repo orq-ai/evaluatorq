@@ -538,9 +538,9 @@ def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
         tok = sum(_as_int(_result_tokens(res)) for res in results)
         tokens += tok
         usages = [res.get('token_usage') for res in results]
-        costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
-        if costs:
-            all_costs.extend(costs)
+        spend = _sim_spend(data, usages)
+        if spend.total is not None:
+            all_costs.append(spend.total)
             costed_runs += 1
         inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
         if inputs:
@@ -550,11 +550,9 @@ def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
         if outputs:
             all_output_costs.extend(outputs)
             has_output_cost = True
-        for u in usages:
-            res_priced, res_calls, res_unknown = _cost_calls(u)
-            priced_calls += res_priced
-            cost_calls += res_calls
-            unknown_calls += res_unknown
+        priced_calls += spend.priced_calls
+        cost_calls += spend.cost_calls
+        unknown_calls += spend.unknown_calls
     return _TileStats(
         tokens=tokens,
         cost=math.fsum(all_costs),
@@ -902,7 +900,7 @@ class SimRunRow:
     status: str  # 'passed' | 'warning' | 'failed'
     score: float | None  # run score (mean of scorer_averages), 0..1
     cases: int  # number of simulations in the run
-    cost: float | None  # summed cost_usd across the run's simulations; None if none recorded
+    cost: float | None  # saved whole-run cost, or legacy sum of result costs
     error: bool
     achieved: int = 0
     errors: int = 0
@@ -915,8 +913,8 @@ class SimOverview:
     ``avg_cost`` is the real per-sim dollar cost, averaged over only the sims
     that carry a ``token_usage.cost_usd`` (recorded upstream) — a missing cost is
     "unknown", not $0, so cost-less sims don't dilute the mean. ``None`` when no
-    sim has cost data. The overview displays ``total_cost`` and leaves missing
-    spend unavailable rather than substituting token usage.
+    sim has cost data. ``total_cost`` prefers the saved whole-run usage and falls
+    back to result sums for legacy reports; missing spend remains unavailable.
     ``avg_input_cost`` / ``avg_output_cost`` are the same averaging rule applied
     to the ``input_cost`` / ``output_cost`` components.
     """
@@ -963,7 +961,8 @@ class _SimRunStats:
     not_achieved: int
     turns: int
     tokens: int
-    cost: float | None  # run total; ``None`` when no result carried a cost
+    cost: float | None  # whole-run total when saved, else result sum; None when unknown
+    result_cost_total: float | None  # result-only sum for per-conversation averages
     costed: int  # per-result counts — the KPI averages divide by these
     input_cost: float
     input_costed: int
@@ -974,6 +973,40 @@ class _SimRunStats:
     unknown_calls: int
     score: float | None
     target: tuple[str, str]
+
+
+class _SimSpend(NamedTuple):
+    """One report's selected total spend and independent simulation-only basis."""
+
+    total: float | None
+    result_total: float | None
+    result_costed: int
+    priced_calls: int
+    cost_calls: int
+    unknown_calls: int
+
+
+def _sim_spend(data: dict[str, object], result_usages: list[object]) -> _SimSpend:
+    """Choose whole-run spend when recorded; otherwise sum legacy result costs.
+
+    Per-conversation averages always use result totals and result coverage is
+    the fallback for reports without a run-level usage record.
+    """
+    result_costs = [cost for usage in result_usages if (cost := _cost_usd(usage)) is not None]
+    result_total = math.fsum(result_costs) if result_costs else None
+    run_usage = data.get('token_usage_total')
+    if run_usage is not None:
+        total = _cost_usd(run_usage)
+        priced, calls, unknown = _cost_calls(run_usage)
+    else:
+        total = result_total
+        priced = calls = unknown = 0
+        for usage in result_usages:
+            result_priced, result_calls, result_unknown = _cost_calls(usage)
+            priced += result_priced
+            calls += result_calls
+            unknown += result_unknown
+    return _SimSpend(total, result_total, len(result_costs), priced, calls, unknown)
 
 
 @functools.lru_cache(maxsize=4096)
@@ -990,19 +1023,15 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
     except (OSError, ValueError):
         return None
     cases = errors = achieved = not_achieved = turns = tokens = 0
-    costed = input_costed = output_costed = 0
+    input_costed = output_costed = 0
     input_cost_total = output_cost_total = 0.0
-    priced = calls = unknown = 0
-    run_costs: list[float] = []
+    result_usages: list[object] = []
     for res in _results(data):
         cases += 1
         turns += _as_int(res.get('turn_count'))
         tokens += _result_tokens(res)
         usage = res.get('token_usage')
-        cost = _cost_usd(usage)
-        if cost is not None:
-            run_costs.append(cost)
-            costed += 1
+        result_usages.append(usage)
         input_cost = _input_cost(usage)
         if input_cost is not None:
             input_cost_total += input_cost
@@ -1011,10 +1040,6 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
         if output_cost is not None:
             output_cost_total += output_cost
             output_costed += 1
-        res_priced, res_calls, res_unknown = _cost_calls(usage)
-        priced += res_priced
-        calls += res_calls
-        unknown += res_unknown
         # Mirror the report's outcome classification, including metadata-only errors.
         if is_errored_result(res):
             errors += 1
@@ -1022,6 +1047,7 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
             achieved += 1
         else:
             not_achieved += 1
+    spend = _sim_spend(data, result_usages)
     return _SimRunStats(
         cases=cases,
         errors=errors,
@@ -1029,15 +1055,16 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
         not_achieved=not_achieved,
         turns=turns,
         tokens=tokens,
-        cost=sum(run_costs) if run_costs else None,
-        costed=costed,
+        cost=spend.total,
+        result_cost_total=spend.result_total,
+        costed=spend.result_costed,
         input_cost=input_cost_total,
         input_costed=input_costed,
         output_cost=output_cost_total,
         output_costed=output_costed,
-        priced_calls=priced,
-        cost_calls=calls,
-        unknown_calls=unknown,
+        priced_calls=spend.priced_calls,
+        cost_calls=spend.cost_calls,
+        unknown_calls=spend.unknown_calls,
         score=_sim_run_score(data),
         target=_sim_target(data),
     )
@@ -1061,6 +1088,8 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int, int]
     turns_total = 0
     tokens_total = 0
     cost_total = 0.0
+    run_costed = 0
+    result_cost_total = 0.0
     costed = 0  # sims that actually carry a known cost_usd — avg_cost divides by this, not total
     input_cost_total = 0.0
     input_costed = 0
@@ -1083,6 +1112,8 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int, int]
         turns_total += stats.turns
         tokens_total += stats.tokens
         costed += stats.costed
+        if stats.result_cost_total is not None:
+            result_cost_total += stats.result_cost_total
         input_cost_total += stats.input_cost
         input_costed += stats.input_costed
         output_cost_total += stats.output_cost
@@ -1095,6 +1126,7 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int, int]
         errors += stats.errors
         if stats.cost is not None:
             cost_total += stats.cost
+            run_costed += 1
 
         runs.append(
             SimRunRow(
@@ -1120,8 +1152,8 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int, int]
         goal_completion=(achieved / total) if total > errors else None,
         avg_turns=(turns_total / total) if total else None,
         avg_tokens=(tokens_total / total) if total else None,
-        total_cost=cost_total if costed else None,
-        avg_cost=(cost_total / costed) if costed else None,
+        total_cost=cost_total if run_costed else None,
+        avg_cost=(result_cost_total / costed) if costed else None,
         avg_input_cost=(input_cost_total / input_costed) if input_costed else None,
         avg_output_cost=(output_cost_total / output_costed) if output_costed else None,
         priced_calls=priced_calls_total,

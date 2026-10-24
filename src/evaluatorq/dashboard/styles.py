@@ -760,7 +760,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .run-overview .rg-score:is(.good, .pass) { background: var(--green-100); color: var(--teal-600); }
 .run-overview .rg-score:is(.mid, .warn) { background: var(--rt-amber-chip); color: var(--amber-ink); }
 .run-overview .rg-score:is(.high, .fail) { background: var(--red-50); color: var(--red-700); }
-.run-overview .rg-score.none { color: var(--text-faint); }
+.run-overview .rg-score:is(.none, .neutral) { color: var(--text-faint); }
 .run-overview .rg-targets { flex-wrap: nowrap; overflow: hidden; }
 .run-overview .rg-targets .target-pill { flex: 0 1 auto; min-width: 88px; white-space: nowrap; }
 .run-overview .target-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
