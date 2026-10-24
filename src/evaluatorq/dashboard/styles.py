@@ -792,7 +792,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     .run-overview .rg-cases { grid-area: cases; text-align: left; }
     .run-overview .rg-cost { grid-area: cost; }
     .sim-overview .rg-score::before { content: "Goal "; }
-    .sim-overview .rg-broke-n::after { content: " achieved"; }
+    .sim-overview .rg-broke-n:not(.is-none)::after { content: " achieved"; }
     .rt-overview .rg-score::before { content: "ASR "; font-family: var(--font-sans); font-weight: 400; color: var(--text-muted); }
     .rt-overview .rg-broke-n:not(.is-none)::after { content: " broke"; font-family: var(--font-sans); color: var(--text-muted); }
     .run-overview .rg-cases::after { content: " cases"; font-family: var(--font-sans); color: var(--text-muted); }

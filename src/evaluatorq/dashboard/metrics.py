@@ -28,6 +28,7 @@ from loguru import logger
 
 from evaluatorq.common.reports.palette import SEVERITY_ORDER
 from evaluatorq.dashboard import library
+from evaluatorq.simulation.metrics import is_errored_result
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -1014,8 +1015,8 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
         priced += res_priced
         calls += res_calls
         unknown += res_unknown
-        # Mirror the donut segments (goal_achieved / error) exactly.
-        if str(res.get('terminated_by') or '') == 'error':
+        # Mirror the report's outcome classification, including metadata-only errors.
+        if is_errored_result(res):
             errors += 1
         elif bool(res.get('goal_achieved')):
             achieved += 1

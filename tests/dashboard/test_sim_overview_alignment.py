@@ -65,6 +65,75 @@ def test_all_errors_have_no_goal_verdict_and_missing_spend_stays_unknown(tmp_pat
     assert '$0.00' not in html
 
 
+def test_all_error_row_label_names_missing_verdict_target_and_lifecycle() -> None:
+    from datetime import datetime
+
+    from evaluatorq.dashboard.metrics import SimRunRow
+
+    row = SimRunRow(
+        rid='sim-1',
+        name='Repeated run',
+        when=datetime(2026, 10, 24),
+        targets=[('Agent A', 'agent')],
+        status='error',
+        score=None,
+        cases=6,
+        cost=None,
+        error=False,
+        achieved=0,
+        errors=6,
+    )
+
+    html = view._sim_row(row)
+
+    assert 'target Agent A, status error, no goal verdict available' in html
+    assert '<span class="rg-broke-n is-none">—</span>' in html
+
+
+@pytest.mark.parametrize(
+    'error_metadata',
+    [
+        {'error': 'judge request timed out'},
+        {'criteria_errors': ['criterion judge failed']},
+    ],
+)
+def test_saved_metadata_errors_match_report_outcomes_after_round_trip(
+    tmp_path: Path, error_metadata: dict[str, object]
+) -> None:
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.dashboard.report_tabs import _sim_outcomes_donut
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
+    from evaluatorq.simulation.reports.sections import build_report_sections
+
+    result = SimulationResult(
+        messages=[],
+        terminated_by=TerminatedBy.judge,
+        reason='Judge finished the conversation.',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        turn_metrics=[],
+        metadata=error_metadata,
+    )
+    saved_result = json.loads(json.dumps(result.model_dump(mode='json')))
+    roots = _store(tmp_path, [saved_result])
+
+    overview = metrics.sim_overview(roots)
+    summary = next(section.data for section in build_report_sections([result]) if section.kind == 'summary')
+    donut = _sim_outcomes_donut([result])
+
+    assert overview.goal_completion is None
+    assert (overview.achieved, overview.not_achieved, overview.errors) == (0, 0, 1)
+    assert overview.recent[0].achieved == 0
+    assert overview.recent[0].errors == 1
+    assert summary['goals_achieved'] == 0
+    assert summary['errors'] == 1
+    assert 'Errors · 1' in donut
+    assert 'no goal verdict' in donut
+
+
 def test_zero_cost_is_known_and_out_of_range_page_keeps_rows(tmp_path: Path) -> None:
     roots = _store(tmp_path, [{'goal_achieved': True, 'token_usage': {'cost_usd': 0.0}}])
     data = metrics.sim_overview(roots, page=999)

@@ -520,18 +520,20 @@ def _sim_row(r: Any) -> str:
     outcome = f'{r.achieved:,}/{r.cases:,}' if rate is not None else '—'
     status = _run_status_pill(r.status) if r.status != 'finished' else ''
     error_note = f'<span class="rg-sub">{r.errors:,} errored</span>' if r.errors else ''
+    outcome_class = 'rg-broke-n' if rate is not None else 'rg-broke-n is-none'
+    outcome_label = f'{r.achieved} of {r.cases} achieved the goal' if rate is not None else 'no goal verdict available'
+    all_targets = ', '.join(t[0] for t in r.targets) or 'unknown target'
     label = (
-        f'{r.name}, {when_text}, {r.achieved} of {r.cases} achieved the goal, '
+        f'{r.name}, {when_text}, target {all_targets}, status {r.status}, {outcome_label}, '
         f'{r.errors} errored, goal completion {rate_text}, cost {_fmt_spend(r.cost)}'
     )
     targets = ''.join(_target_pill(*t, ellipsis=True) for t in r.targets)
-    all_targets = ', '.join(t[0] for t in r.targets)
     return (
         f'<a class="runs-grid-row" href="/r/{esc(r.rid)}" aria-label="{esc(label)}">'
         f'<span class="rg-job"><span class="rg-name" title="{esc(r.name)}">{esc(r.name)}{err}</span>'
         f'<span class="rg-sub"{when_attrs}>{esc(when_text)}</span></span>'
         f'<span class="rg-targets" title="{esc(all_targets)}">{targets}</span>'
-        f'<span class="rg-status">{status}<span class="rg-broke-n">{outcome}</span>{error_note}</span>'
+        f'<span class="rg-status">{status}<span class="{outcome_class}">{outcome}</span>{error_note}</span>'
         f'<span class="run-score rg-score {_goal_status(rate)}" '
         f'title="Goals achieved across all conversations, including errors; higher is better">{rate_text}</span>'
         f'<span class="rg-num rg-cases">{r.cases:,}</span>'

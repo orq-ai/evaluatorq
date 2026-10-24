@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.trace_links import run_trace_url, trace_link_button
-from evaluatorq.simulation.metrics import TURN_METRICS
+from evaluatorq.simulation.metrics import TURN_METRICS, is_errored_result
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1649,7 +1649,7 @@ def _sim_outcomes_donut(rows: list[Any]) -> str:
     """
     achieved = not_achieved = errors = 0
     for r in rows:
-        if getattr(r, 'error', None) or getattr(r, 'terminated_by', None) == 'error':
+        if is_errored_result(r):
             errors += 1
         elif getattr(r, 'goal_achieved', False):
             achieved += 1
