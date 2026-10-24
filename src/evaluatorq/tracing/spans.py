@@ -283,9 +283,12 @@ def set_evaluation_attributes(
     }
     if full_explanation is not None:
         verdict['reason'] = full_explanation
-    if raw_output is not None:
-        verdict['raw_output'] = raw_output
-    record_span_payload(span, key='orq.evaluation.output', payload=verdict)
+    record_span_payload(
+        span,
+        key='orq.evaluation.output',
+        payload=verdict,
+        optional_fields={'raw_output': raw_output} if raw_output is not None else None,
+    )
 
 
 def set_job_name_attribute(span: Span | None, job_name: str) -> None:

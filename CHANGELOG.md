@@ -6,6 +6,8 @@ All notable changes to `evaluatorq` are documented here.
 
 ## [Unreleased]
 
+- **Fixed: malformed optional evaluator diagnostics no longer hide the trace verdict.** Scores, pass/fail and explanations remain in the evaluator Output payload when `raw_output` contains circular or non-finite values; the invalid diagnostic field is omitted with a warning.
+
 - **Red-team report surfaces per-result jury panel health.** The attack drill-down renders each result's panel of judges below the verdict: decisive votes out of all attempted judges plus configured-judge failure, replacement, tie and inconclusive flags, then one row per judge with its model, readable verdict or abstention, failure reason, and stand-in/failed-repetition status. It mirrors the pairwise per-judge vote list; single-judge results are unchanged. (RES-1650)
 - **Insights review trace list shows a column for every question the run asked.** Custom questions and coding questions without a dedicated column, such as `scope_creep`, get a generic column after the built-in ones and before Errors, in the order the run defines them, using the same chip as the rest of the page. The `coding_agent` gate question gets no column, and a question that was never asked still gets none.
 - **Fixed: Insights review now reads yes/no answers correctly.** The page treated every yes/no answer as `no`, so headline numbers for yes/no questions were wrong on existing runs: the **Fix first** card never fired, unfixed-error shares were always 0, and yes/no filters, panel rows, `scope_creep` and custom yes/no questions all showed `no`. Reopening a run now shows the real counts.

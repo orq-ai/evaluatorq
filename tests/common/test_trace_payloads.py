@@ -246,3 +246,30 @@ async def test_nonfinite_payload_is_skipped_without_failing_job(spans: InMemoryS
     assert span.status.status_code == StatusCode.OK
     assert 'gen_ai.input' in (span.attributes or {})
     assert 'gen_ai.output' not in (span.attributes or {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad_detail', ['nan', 'inf', 'negative-inf', 'circular'])
+async def test_invalid_optional_diagnostics_preserve_verdict(
+    spans: InMemorySpanExporter, caplog: pytest.LogCaptureFixture, bad_detail: str,
+) -> None:
+    diagnostics: dict[str, Any] = {}
+    if bad_detail == 'circular':
+        diagnostics['self'] = diagnostics
+    else:
+        diagnostics['measurement'] = float({'nan': 'nan', 'inf': 'inf', 'negative-inf': '-inf'}[bad_detail])
+
+    async def scorer(_params: ScorerParameter) -> EvaluationResult:
+        return EvaluationResult(value=0.75, pass_=True, explanation='valid verdict', raw_output=diagnostics)
+
+    result = await process_evaluator({'name': 'diagnostics', 'scorer': scorer}, DataPoint(inputs={}), 'reply')
+
+    span = _span(spans, 'orq.evaluation diagnostics')
+    assert result.error is None
+    assert result.score.value == 0.75
+    assert _payload(span, 'orq.evaluation.output') == {
+        'passed': True, 'value': 0.75, 'type': 'python_eval', 'reason': 'valid verdict',
+    }
+    assert 'raw_output' in caplog.text
+    assert 'optional' in caplog.text
+    assert span.status.status_code == StatusCode.OK
