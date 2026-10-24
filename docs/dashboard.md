@@ -385,9 +385,9 @@ Zeros everywhere and an empty rail mean no report files were found, not that the
 
 ### 2. Agent Sim — pick a run { #sim-run-list }
 
-**Agent Sim** lists every simulation job with its target, goal-completion score, conversation count and cost. The picker above the list selects two runs to compare — see [Compare](#sim-compare).
+**Agent Sim** shows goal completion, simulations run, average turns and total recorded spend in one summary strip. Pricing coverage appears beneath the spend when some calls have no recorded cost. Each run lists its target, goals achieved over total conversations, goal-completion percentage, conversation count and cost. Errors are called out separately; a run where every conversation errored has no goal verdict. Goal completion includes errors in the total conversation count. Open a report and use **Compare with** to [compare two runs](#sim-compare).
 
-![The Agent Sim run list: simulations run, goal completion, average turns and cost per simulation.](assets/dashboard/sim-02-run-list.png){ .dashboard-shot }
+![The Agent Sim run list: goal completion, simulations run, average turns and total spend.](assets/dashboard/sim-02-run-list.png){ .dashboard-shot }
 
 ### 3. Overview — the headline { #sim-overview }
 

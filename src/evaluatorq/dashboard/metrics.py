@@ -903,6 +903,8 @@ class SimRunRow:
     cases: int  # number of simulations in the run
     cost: float | None  # summed cost_usd across the run's simulations; None if none recorded
     error: bool
+    achieved: int = 0
+    errors: int = 0
 
 
 @dataclass(frozen=True)
@@ -912,7 +914,8 @@ class SimOverview:
     ``avg_cost`` is the real per-sim dollar cost, averaged over only the sims
     that carry a ``token_usage.cost_usd`` (recorded upstream) — a missing cost is
     "unknown", not $0, so cost-less sims don't dilute the mean. ``None`` when no
-    sim has cost data, in which case the view falls back to avg tokens/sim.
+    sim has cost data. The overview displays ``total_cost`` and leaves missing
+    spend unavailable rather than substituting token usage.
     ``avg_input_cost`` / ``avg_output_cost`` are the same averaging rule applied
     to the ``input_cost`` / ``output_cost`` components.
     """
@@ -930,6 +933,7 @@ class SimOverview:
     achieved: int  # outcomes donut segments
     not_achieved: int
     errors: int
+    total_cost: float | None = None  # sum of recorded costs; missing costs stay unknown
     recent: list[SimRunRow] = field(default_factory=list)  # newest run first, current page
     total_runs: int = 0  # total runs before paging (for the pager)
     page: int = 1
@@ -1104,15 +1108,18 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int, int]
                 cases=stats.cases,
                 cost=stats.cost,
                 error=bool(card.error),
+                achieved=stats.achieved,
+                errors=stats.errors,
             )
         )
 
     runs.sort(key=lambda r: r.when, reverse=True)
     return SimOverview(
         simulations_run=total,
-        goal_completion=(achieved / total) if total else None,
+        goal_completion=(achieved / total) if total > errors else None,
         avg_turns=(turns_total / total) if total else None,
         avg_tokens=(tokens_total / total) if total else None,
+        total_cost=cost_total if costed else None,
         avg_cost=(cost_total / costed) if costed else None,
         avg_input_cost=(input_cost_total / input_costed) if input_costed else None,
         avg_output_cost=(output_cost_total / output_costed) if output_costed else None,
@@ -1131,8 +1138,8 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
     """Aggregate the sim run store into headline KPIs plus a run-level table
     (one row per full simulation run). Rows are newest-first, sliced to the
     requested page of ``per_page`` (``total_runs`` carries the full count)."""
-    page = max(1, page)
     agg = _sim_aggregate(_roots_key(roots), library.fingerprint(roots))
+    page = min(max(1, page), max(1, -(-agg.total_runs // per_page)))
     return replace(agg, recent=agg.recent[(page - 1) * per_page : page * per_page], page=page, per_page=per_page)
 
 
