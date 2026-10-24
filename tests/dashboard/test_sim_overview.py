@@ -212,10 +212,11 @@ class TestSimOverviewPaging:
         assert len(third.recent) == 4
         assert third.recent[0].name == 'Sim 3'
 
-    def test_page_out_of_range_is_empty(self, tmp_path: Path) -> None:
+    def test_page_out_of_range_lands_on_last_page(self, tmp_path: Path) -> None:
         roots = _seed_many_sim(tmp_path, 20)
         ov = metrics.sim_overview(roots, page=99, per_page=8)
-        assert ov.recent == []
+        assert ov.page == 3
+        assert len(ov.recent) == 4
         assert ov.total_runs == 20
 
     def test_pager_nav_links(self, tmp_path: Path) -> None:
@@ -233,7 +234,7 @@ class TestSimOverviewScreen:
         assert 'Simulations run' in r.text
         assert 'Goal completion' in r.text
         assert 'Avg turns' in r.text
-        assert 'Avg tokens/sim' in r.text  # cost stand-in
+        assert 'Total spend' in r.text  # missing cost remains unavailable
         assert 'Recent runs' in r.text
         # Run-level rows surface the run name + design columns.
         assert 'Support sim' in r.text
