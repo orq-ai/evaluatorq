@@ -130,7 +130,7 @@ _ROWS = (
         'EVALUATORQ_CAPTURE_MESSAGE_CONTENT',
         'bool',
         default=True,
-        description='Record LLM message content on spans.',
+        description='Record LLM messages, job payloads, and evaluator payloads on spans.',
     ),
     EnvVar(
         'EVALUATORQ_PROPAGATE_TRACE_CONTEXT',
