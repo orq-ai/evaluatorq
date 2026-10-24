@@ -1649,7 +1649,7 @@ def _sim_outcomes_donut(rows: list[Any]) -> str:
     """
     achieved = not_achieved = errors = 0
     for r in rows:
-        if is_errored_result(r):
+        if is_errored_result(result=r):
             errors += 1
         elif getattr(r, 'goal_achieved', False):
             achieved += 1

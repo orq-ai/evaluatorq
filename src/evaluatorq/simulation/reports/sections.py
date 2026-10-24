@@ -82,7 +82,7 @@ def _error_message(result: SimulationResult) -> str | None:
 
 def _is_errored(result: SimulationResult) -> bool:
     """Compatibility alias for the shared result classifier."""
-    return is_errored_result(result)
+    return is_errored_result(result=result)
 
 
 def _criteria_meta(result: SimulationResult) -> list[dict[str, Any]]:

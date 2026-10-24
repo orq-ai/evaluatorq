@@ -54,7 +54,16 @@ def test_run_cost_round_trip_uses_whole_run_usage_for_spend_and_coverage(tmp_pat
         goal_completion_score=1.0,
         rules_broken=[],
         turn_count=1,
-        token_usage=TokenUsage(input_cost=0.1, output_cost=0.15, cost_usd=0.25, calls=1, priced_calls=1),
+        token_usage=TokenUsage(
+            total_tokens=2,
+            input_tokens=1,
+            output_tokens=1,
+            input_cost=0.1,
+            output_cost=0.15,
+            cost_usd=0.25,
+            calls=1,
+            priced_calls=1,
+        ),
         turn_metrics=[],
     )
     run = SimulationRun(
@@ -66,7 +75,16 @@ def test_run_cost_round_trip_uses_whole_run_usage_for_spend_and_coverage(tmp_pat
         total_results=1,
         scorer_averages={},
         results=[result],
-        token_usage_total=TokenUsage(input_cost=0.5, output_cost=0.75, cost_usd=1.25, calls=2, priced_calls=1),
+        token_usage_total=TokenUsage(
+            total_tokens=10,
+            input_tokens=5,
+            output_tokens=5,
+            input_cost=0.5,
+            output_cost=0.75,
+            cost_usd=1.25,
+            calls=2,
+            priced_calls=1,
+        ),
     )
     saved = json.loads(run.model_dump_json())
     roots = _store(tmp_path, saved['results'], run_fields={'token_usage_total': saved['token_usage_total']})
@@ -79,6 +97,9 @@ def test_run_cost_round_trip_uses_whole_run_usage_for_spend_and_coverage(tmp_pat
 
     assert report_usage['run_total_cost'] == pytest.approx(1.25)
     assert (report_usage['run_total_priced_calls'], report_usage['run_total_calls']) == (1, 2)
+    assert report_usage['run_total_total_tokens'] == 10
+    assert report_usage['run_total_input_tokens'] == 5
+    assert report_usage['run_total_output_tokens'] == 5
     assert overview.total_cost == pytest.approx(1.25)
     assert overview.recent[0].cost == pytest.approx(1.25)
     assert overview.avg_cost == pytest.approx(0.25)
@@ -87,7 +108,68 @@ def test_run_cost_round_trip_uses_whole_run_usage_for_spend_and_coverage(tmp_pat
     assert (overview.priced_calls, overview.cost_calls) == (1, 2)
     assert '1 of 2 calls priced' in html
     assert landing.total_cost == pytest.approx(1.25)
+    assert landing.total_tokens == 10
+    assert landing.total_input_cost == pytest.approx(0.5)
+    assert landing.total_output_cost == pytest.approx(0.75)
     assert landing.priced_calls == 1 and landing.cost_calls == 2
+
+
+def test_landing_keeps_missing_whole_run_cost_components_unknown(tmp_path: Path) -> None:
+    roots = _store(
+        tmp_path,
+        [
+            {
+                'goal_achieved': True,
+                'token_usage': {'total_tokens': 2, 'input_cost': 0.1, 'output_cost': 0.15, 'cost_usd': 0.25},
+            }
+        ],
+        run_fields={
+            'token_usage_total': {'total_tokens': 10, 'input_cost': None, 'output_cost': 0.75, 'cost_usd': 1.25}
+        },
+    )
+
+    landing = metrics.landing(roots)
+
+    assert landing.total_tokens == 10
+    assert landing.total_input_cost is None
+    assert landing.total_output_cost == pytest.approx(0.75)
+
+
+def test_landing_legacy_sim_run_sums_result_tokens_and_cost_components(tmp_path: Path) -> None:
+    roots = _store(
+        tmp_path,
+        [
+            {
+                'goal_achieved': True,
+                'token_usage': {
+                    'total_tokens': 2,
+                    'input_cost': 0.1,
+                    'output_cost': 0.15,
+                    'cost_usd': 0.25,
+                    'calls': 1,
+                    'priced_calls': 1,
+                },
+            },
+            {
+                'goal_achieved': False,
+                'token_usage': {
+                    'total_tokens': 3,
+                    'input_cost': 0.2,
+                    'output_cost': 0.3,
+                    'cost_usd': 0.5,
+                    'calls': 2,
+                    'priced_calls': 1,
+                },
+            },
+        ],
+    )
+
+    landing = metrics.landing(roots)
+
+    assert landing.total_tokens == 5
+    assert landing.total_cost == pytest.approx(0.75)
+    assert landing.total_input_cost == pytest.approx(0.3)
+    assert landing.total_output_cost == pytest.approx(0.45)
 
 
 @pytest.mark.parametrize(('run_cost', 'expected_total'), [(None, None), (0.0, 0.0)])

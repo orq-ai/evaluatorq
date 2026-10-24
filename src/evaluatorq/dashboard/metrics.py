@@ -535,20 +535,16 @@ def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
     unknown_calls = 0
     for _card, data in _iter_report_data(manifests):
         results = _results(data)
-        tok = sum(_as_int(_result_tokens(res)) for res in results)
-        tokens += tok
-        usages = [res.get('token_usage') for res in results]
-        spend = _sim_spend(data, usages)
+        spend = _sim_spend(data=data, results=results)
+        tokens += spend.tokens
         if spend.total is not None:
             all_costs.append(spend.total)
             costed_runs += 1
-        inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
-        if inputs:
-            all_input_costs.extend(inputs)
+        if spend.input_cost is not None:
+            all_input_costs.append(spend.input_cost)
             has_input_cost = True
-        outputs = [c for c in (_output_cost(u) for u in usages) if c is not None]
-        if outputs:
-            all_output_costs.extend(outputs)
+        if spend.output_cost is not None:
+            all_output_costs.append(spend.output_cost)
             has_output_cost = True
         priced_calls += spend.priced_calls
         cost_calls += spend.cost_calls
@@ -976,9 +972,12 @@ class _SimRunStats:
 
 
 class _SimSpend(NamedTuple):
-    """One report's selected total spend and independent simulation-only basis."""
+    """One report's selected run usage and independent simulation-only basis."""
 
     total: float | None
+    tokens: int
+    input_cost: float | None
+    output_cost: float | None
     result_total: float | None
     result_costed: int
     priced_calls: int
@@ -986,27 +985,47 @@ class _SimSpend(NamedTuple):
     unknown_calls: int
 
 
-def _sim_spend(data: dict[str, object], result_usages: list[object]) -> _SimSpend:
-    """Choose whole-run spend when recorded; otherwise sum legacy result costs.
+def _sim_spend(data: dict[str, object], results: list[dict[str, object]]) -> _SimSpend:
+    """Choose whole-run usage when recorded; otherwise sum legacy result usage.
 
-    Per-conversation averages always use result totals and result coverage is
-    the fallback for reports without a run-level usage record.
+    Per-conversation cost averages always use result totals. Legacy reports use
+    result tokens, components and coverage as one consistent fallback.
     """
+    result_usages = [res.get('token_usage') for res in results]
     result_costs = [cost for usage in result_usages if (cost := _cost_usd(usage)) is not None]
     result_total = math.fsum(result_costs) if result_costs else None
+    result_tokens = sum(_result_tokens(res) for res in results)
+    result_input_costs = [cost for usage in result_usages if (cost := _input_cost(usage)) is not None]
+    result_output_costs = [cost for usage in result_usages if (cost := _output_cost(usage)) is not None]
     run_usage = data.get('token_usage_total')
     if run_usage is not None:
         total = _cost_usd(run_usage)
+        tokens = _tokens_total(run_usage)
+        input_cost = _input_cost(run_usage)
+        output_cost = _output_cost(run_usage)
         priced, calls, unknown = _cost_calls(run_usage)
     else:
         total = result_total
+        tokens = result_tokens
+        input_cost = math.fsum(result_input_costs) if result_input_costs else None
+        output_cost = math.fsum(result_output_costs) if result_output_costs else None
         priced = calls = unknown = 0
         for usage in result_usages:
             result_priced, result_calls, result_unknown = _cost_calls(usage)
             priced += result_priced
             calls += result_calls
             unknown += result_unknown
-    return _SimSpend(total, result_total, len(result_costs), priced, calls, unknown)
+    return _SimSpend(
+        total=total,
+        tokens=tokens,
+        input_cost=input_cost,
+        output_cost=output_cost,
+        result_total=result_total,
+        result_costed=len(result_costs),
+        priced_calls=priced,
+        cost_calls=calls,
+        unknown_calls=unknown,
+    )
 
 
 @functools.lru_cache(maxsize=4096)
@@ -1025,13 +1044,12 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
     cases = errors = achieved = not_achieved = turns = tokens = 0
     input_costed = output_costed = 0
     input_cost_total = output_cost_total = 0.0
-    result_usages: list[object] = []
-    for res in _results(data):
+    results = _results(data)
+    for res in results:
         cases += 1
         turns += _as_int(res.get('turn_count'))
         tokens += _result_tokens(res)
         usage = res.get('token_usage')
-        result_usages.append(usage)
         input_cost = _input_cost(usage)
         if input_cost is not None:
             input_cost_total += input_cost
@@ -1041,13 +1059,13 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
             output_cost_total += output_cost
             output_costed += 1
         # Mirror the report's outcome classification, including metadata-only errors.
-        if is_errored_result(res):
+        if is_errored_result(result=res):
             errors += 1
         elif bool(res.get('goal_achieved')):
             achieved += 1
         else:
             not_achieved += 1
-    spend = _sim_spend(data, result_usages)
+    spend = _sim_spend(data=data, results=results)
     return _SimRunStats(
         cases=cases,
         errors=errors,
