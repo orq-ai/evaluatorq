@@ -355,20 +355,20 @@ def test_compare_transcript_invalid_index_is_400(roots: list[Path]):
     assert resp.status_code == 400
 
 
-def test_compare_bar_defaults_to_two_different_runs(roots: list[Path]):
+def test_overview_drops_compare_selectors(roots: list[Path]):
     client = TestClient(build_app(roots))
     html = client.get('/?surface=sim').text
-    # both selects present, each with a different pre-selected option
-    assert html.count(' selected>') >= 2
+    assert 'Compare runs' not in html
+    assert 'name="a"' not in html and 'name="b"' not in html
 
 
-def test_compare_bar_on_sim_overview(roots: list[Path]):
+def test_compare_bar_absent_on_sim_overview(roots: list[Path]):
     client = TestClient(build_app(roots))
     resp = client.get('/?surface=sim')
     assert resp.status_code == 200
     html = resp.text
-    assert 'action="/compare/sim"' in html
-    assert 'name="a"' in html and 'name="b"' in html
+    assert 'action="/compare/sim"' not in html
+    assert 'Recent runs' in html
 
 
 def test_compare_control_on_sim_report(roots: list[Path]):

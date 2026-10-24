@@ -150,6 +150,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Rendering a whole message list as one text blob | `common.messages.messages_to_text` | `''.join(...)` over `content` — it glues turns into one word, drops `tool_calls` (so an agent that acted scores as silent) and lets tool JSON read as the agent's answer |
 | Turning a `TraceInput` or loaded traces into rows | `common.trace_input.load_traces` (fetch + one `partition_traces` log) | `fetch_traces` then a hand-rolled usable/failed split |
 | Computing trace signals | `evaluatorq.signals.compute_signals` | ad-hoc counting over trajectories |
+| Classifying agent simulation results as errored across saved reports and typed reports | `simulation.metrics.is_errored_result` | per-surface error checks |
 | Representing an Insights conversation with trace metadata | `common.trace_document.TraceDocument`; convert with `ensure_trace_document`, render with `to_chat_messages`, persist coverage with `source_coverage` | a second stored message list beside the ATIF trajectory, or unrestricted capture payloads in saved review data |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
 | Untrusted trace text (a shell command, tool arguments or output) going to an external classifier | `common.redact.scrub_known_secrets` (local, pure, no network) before the text is rendered or sent | an ad-hoc credential regex, or sending the raw text |
