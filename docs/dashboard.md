@@ -433,7 +433,17 @@ Click a row to open the conversation: required and prohibited criteria with thei
 
 ### 9. Compare — did the fix work { #sim-compare }
 
-Pick a second run in **Compare with** to diff two runs: KPI deltas, outcomes, per-scorer averages, and how conversations ended. Run-level KPIs always compare. For a per-conversation diff, the runs must share the same `(persona, scenario)` pairs. Reuse the same personas and scenarios across runs (see [Replay stored datapoints](guides/agent-simulation.md#replay-stored-datapoints)) and you get the per-conversation comparison needed for a regression gate.
+Pick a second run in **Compare with** to see what changed between two runs. The current run is A and the one you pick is B. Run A is drawn in grey and run B in dark ink; green and red always mean better and worse.
+
+The page opens on what changed: how many conversations regressed (goal met in A, missed in B), how many improved (missed in A, met in B), how many changed because one run errored and the other did not, how far the goal rate moved, and the scorer that moved most. Each line links to the matching conversations. Below it, number tiles show B's value with `A → B` and the change, and two panels show goal outcomes and how conversations ended as stacked bars per run, and each scorer and turn-quality mean side by side. A scorer only one run measured reads `n/a`, never zero, and a scorer that failed on every conversation of a run reads `failed`. Goal rate, average score and error counts are computed the same way as in each run's own report, so errored conversations count in the denominator.
+
+The conversation table pairs conversations by `(persona, scenario)` and opens on the changed ones, worst first: regressions, then error changes, then improvements. Switch to **Regressed**, **Improved**, **Errors** or **All**, sort by persona, scenario, score change, turn change or change, and click a row to read both transcripts side by side in the drawer. Use `j` and `k` to step through rows. Conversations found in only one run are listed below the table.
+
+The filter rail applies to the whole page. A pair stays when either run matches, and every number on the page is computed over the same conversations in both runs. The address bar always holds the current comparison, filters, segment, sort and page included, so you can share the URL and it opens the same view.
+
+Run-level numbers always compare. For a per-conversation diff, the runs must share the same `(persona, scenario)` pairs; a low match rate shows a warning in the header. Reuse the same personas and scenarios across runs (see [Replay stored datapoints](guides/agent-simulation.md#replay-stored-datapoints)) and you get the per-conversation comparison needed for a regression gate.
+
+![Comparing two runs of a refund agent: eight conversations regressed and one improved, the goal rate fell 14 points, with number tiles, outcome bars and scorer means for both runs, and the filter rail on the right.](assets/dashboard/sim-09-compare.png){ .dashboard-shot }
 
 !!! tip "Exports respect the filters"
     **Export** downloads the run as standalone HTML, Markdown or JSON (no CSV on this surface) — the JSON carries only the conversations your filters left visible, so filter first, then export. Formats per surface: [Downloads](#downloads).

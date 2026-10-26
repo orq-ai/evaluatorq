@@ -1,8 +1,8 @@
 """Side-by-side comparison of two sim runs.
 
-Covers the KPI delta math, (persona, scenario) matching incl. unmatched
-handling, the compare page + transcript routes, the graceful-error paths, and
-the compare picker on the sim overview.
+Covers the aggregate and pair-change math, (persona, scenario) matching incl.
+unmatched handling, the compare page, filter, conversation-table and transcript
+routes, the graceful-error paths, and the compare picker on the sim overview.
 """
 
 from __future__ import annotations
@@ -108,34 +108,131 @@ def _rids(roots: list[Path]) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Unit: KPI deltas
+# Unit: aggregates, pair changes, score rows
 # ---------------------------------------------------------------------------
 
 
-def test_compare_kpis_covers_aggregates_scorers_and_terminated():
-    from evaluatorq.dashboard.sim_compare import compare_kpis
-    from evaluatorq.simulation.reports.sections import individual_entries
+def _cmp(selections: dict[str, list[str]] | None = None):
+    from evaluatorq.dashboard.sim_compare import build_comparison
 
-    a, b = _run_a(), _run_b()
-    rows = compare_kpis(individual_entries(a.results), individual_entries(b.results), a, b)
-    by_label = {r.label: r for r in rows}
+    return build_comparison('ra', 'rb', _run_a(), _run_b(), selections or {})
 
-    assert by_label['Conversations'].a == 3.0
-    assert by_label['Conversations'].b == 3.0
-    # A: 2/3 achieved; B: 2/3 achieved.
-    assert by_label['Goal-achieved rate'].a == pytest.approx(2 / 3)
-    assert by_label['Goal-achieved rate'].b == pytest.approx(2 / 3)
-    # per-scorer union: goal_achieved (both), criteria_met (A only), safety (B only).
-    # A scorer only one run measured stays None (n/a) — never a fabricated 0.0 regression.
-    assert by_label['Scorer: criteria_met'].a == 0.5
-    assert by_label['Scorer: criteria_met'].b is None
-    assert by_label['Scorer: criteria_met'].delta is None
-    assert by_label['Scorer: safety'].a is None
-    assert by_label['Scorer: safety'].b == 1.0
-    # terminated-by distribution present
-    assert by_label['Terminated: judge'].a == 3.0  # A: all judge
-    assert by_label['Terminated: max_turns'].b == 1.0
-    assert by_label['Terminated: max_turns'].delta == 1.0
+
+def test_aggregates_per_run():
+    from evaluatorq.dashboard.sim_compare import aggregates
+
+    cmp = _cmp()
+    a, b = aggregates(cmp.a), aggregates(cmp.b)
+    assert (a.conversations, b.conversations) == (3, 3)
+    assert a.goal_rate == pytest.approx(2 / 3)
+    assert b.goal_rate == pytest.approx(2 / 3)
+    assert a.avg_turns == pytest.approx(4.0)
+    assert (a.errors, b.errors) == (0, 0)
+
+
+def test_pair_change_classifies_regressed_and_improved():
+    from evaluatorq.dashboard.sim_compare import pair_change
+
+    cmp = _cmp()
+    by_persona = {p.a.persona: pair_change(cmp.a, cmp.b, p) for p in cmp.matching.matched}
+    # alice: met -> missed; bob: missed -> met
+    assert by_persona == {'alice': 'regressed', 'bob': 'improved'}
+
+
+def test_score_rows_keep_one_sided_scorer_as_none():
+    from evaluatorq.dashboard.sim_compare import ScoreRow, score_rows
+
+    from evaluatorq.dashboard.sim_compare import build_comparison
+
+    run_a, run_b = _run_a(), _run_b()
+    run_a.results[0].metadata['evaluator_scores'] = {'shared': 0.5, 'only_a': 1.0}
+    run_b.results[0].metadata['evaluator_scores'] = {'shared': 0.75, 'only_b': 0.25}
+
+    rows = {r.label: r for r in score_rows(build_comparison('ra', 'rb', run_a, run_b, {}))}
+    assert rows['shared'].delta == pytest.approx(0.25)
+    # A scorer only one run measured stays None (n/a), never a fabricated 0.0 regression.
+    assert rows['only_a'] == ScoreRow('only_a', 1.0, None)
+    assert rows['only_b'].a is None
+    assert rows['only_b'].delta is None
+
+
+def test_filter_keeps_pair_when_either_side_matches():
+    # goal_outcome=Achieved: A's alice and carol and B's bob and dave match. Both pairs survive
+    # (alice, bob) plus both unmatched entries, and each side is described by its half of those rows.
+    from evaluatorq.dashboard.sim_compare import aggregates
+
+    cmp = _cmp({'goal_outcome': ['Achieved']})
+    assert {p.a.persona for p in cmp.matching.matched} == {'alice', 'bob'}
+    assert [e.persona for e in cmp.a.entries] == ['alice', 'bob', 'carol']
+    assert [e.persona for e in cmp.b.entries] == ['alice', 'bob', 'dave']
+    assert aggregates(cmp.a).goal_rate == pytest.approx(2 / 3)
+    assert aggregates(cmp.b).goal_rate == pytest.approx(2 / 3)
+    assert cmp.total_rows == 4
+
+
+def test_pair_change_missed_to_error_is_error_not_regressed():
+    from evaluatorq.dashboard.sim_compare import build_comparison, pair_change
+
+    run_a = _run('A', [_result('alice', 'billing', goal=False, score=0.1, turns=2)], {})
+    run_b = _run('B', [_result('alice', 'billing', goal=False, score=0.0, turns=1, terminated='error')], {})
+    cmp = build_comparison('ra', 'rb', run_a, run_b, {})
+    assert pair_change(cmp.a, cmp.b, cmp.matching.matched[0]) == 'error'
+    # the reverse direction is an error change too, not an improvement
+    cmp = build_comparison('rb', 'ra', run_b, run_a, {})
+    assert pair_change(cmp.a, cmp.b, cmp.matching.matched[0]) == 'error'
+
+
+def test_aggregates_count_errored_conversations_in_the_denominator():
+    from evaluatorq.dashboard.sim_compare import aggregates, build_comparison
+    from evaluatorq.simulation.reports.sections import _build_summary_section
+
+    run_a = _run(
+        'A',
+        [
+            _result('alice', 'billing', goal=True, score=1.0, turns=2),
+            _result('bob', 'refund', goal=False, score=0.0, turns=1, terminated='error'),
+        ],
+        {},
+    )
+    cmp = build_comparison('ra', 'rb', run_a, _run_b(), {})
+    agg = aggregates(cmp.a)
+    assert agg.goal_rate == pytest.approx(0.5)
+    assert agg.errors == 1
+    summary = _build_summary_section(run_a.results).data
+    assert agg.goal_rate == summary['success_rate']
+    assert agg.avg_score == summary['avg_goal_completion_score']
+
+
+def test_scorer_with_every_result_dropped_renders_as_failed():
+    from evaluatorq.dashboard.sim_compare import _scores_panel, build_comparison, score_rows
+
+    run_a, run_b = _run_a(), _run_b()
+    for r in run_a.results:
+        r.metadata['evaluator_scores'] = {'safety': 0.5}
+    for r in run_b.results:
+        r.metadata['evaluator_errors'] = {'safety': 'boom'}
+    rows = {r.label: r for r in score_rows(build_comparison('ra', 'rb', run_a, run_b, {}))}
+    assert rows['safety'].b is None and rows['safety'].dropped_b == 3
+    html = _scores_panel(list(rows.values()))
+    assert 'failed' in html
+    assert 'scorer failed on 3 conversations' in html
+
+
+def test_scores_panel_draws_tracks_only_within_unit_range():
+    from evaluatorq.dashboard.sim_compare import ScoreRow, _scores_panel
+
+    inside = _scores_panel([ScoreRow('ok', 0.2, 0.4)])
+    assert 'cmp-track-fill' in inside and 'Mean per conversation, 0 to 1' in inside
+    outside = _scores_panel([ScoreRow('big', 3.0, 5.0)])
+    assert 'cmp-track-fill' not in outside
+    assert '0 to 1' not in outside
+
+
+def test_default_sort_puts_regressed_first(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    html = client.get(f'/compare/sim/conversations?a={rid_a}&b={rid_b}&cmp_view=all').text
+    assert html.index('sim-conv-persona">alice<') < html.index('sim-conv-persona">bob<')
 
 
 # ---------------------------------------------------------------------------
@@ -170,24 +267,93 @@ def test_match_entries_pairs_and_flags_unmatched():
 # ---------------------------------------------------------------------------
 
 
-def test_compare_page_renders_kpis_diffs_and_flip(roots: list[Path]):
+def test_compare_page_renders_headlines_tiles_and_table(roots: list[Path]):
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)
     resp = client.get(f'/compare/sim?a={rid_a}&b={rid_b}')
     assert resp.status_code == 200
     html = resp.text
-    assert 'KPI deltas' in html
-    assert 'Outcome diffs' in html
     assert 'run-A' in html and 'run-B' in html
-    # alice/billing flips True->False → a flip marker is present
-    assert 'flip' in html
+    # "what changed" headlines: one regression, one improvement
+    assert 'Regressed in B' in html and 'Improved in B' in html
+    assert 'Goal rate held steady' in html
+    # tiles, panels, filter rail, drawer shell
+    for label in ('Conversations', 'Goal rate', 'Avg score', 'Avg turns', 'Errors'):
+        assert f'<div class="kpi-label">{label}</div>' in html
+    assert 'How conversations ended' in html
+    assert 'id="filter-form"' in html
+    assert 'sim-entity-dialog--wide' in html
+    # segment control defaults to changed conversations, with counts
+    assert re.search(r'aria-pressed="true" disabled>Changed<span class="cmp-seg-n">2</span>', html)
+    # rows open the paired transcript in the drawer
+    assert 'data-drawer-url="/compare/sim/transcript?' in html
     # unmatched conversations surfaced, not dropped
     assert 'Only in A' in html and 'Only in B' in html
     assert 'carol' in html and 'dave' in html
-    # inline-SVG charts render server-side (no JS/static dependency)
-    assert '<svg' in html
-    assert 'Outcomes' in html and 'Scorer averages' in html and 'How conversations ended' in html
-    assert 'Per-conversation score change' in html
+
+
+def test_compare_filter_route_narrows_table_and_tiles(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    resp = client.post(
+        f'/compare/sim/filter?a={rid_a}&b={rid_b}',
+        data={'persona': 'alice', 'cmp_view': 'all'},
+    )
+    assert resp.status_code == 200
+    html = resp.text
+    assert 'id="filter-swap"' in html
+    assert 'sim-conv-persona">alice<' in html
+    assert 'sim-conv-persona">bob<' not in html
+    # table state from the hidden inputs survives the filter post
+    assert re.search(r'aria-pressed="true" disabled>All<span class="cmp-seg-n">1</span>', html)
+
+
+def test_compare_conversations_route_switches_view(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    resp = client.get(f'/compare/sim/conversations?a={rid_a}&b={rid_b}&cmp_view=improved')
+    assert resp.status_code == 200
+    html = resp.text
+    assert 'id="cmp-conversations"' in html
+    assert 'sim-conv-persona">bob<' in html
+    assert 'sim-conv-persona">alice<' not in html
+
+
+def test_compare_conversations_route_clamps_bad_params(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    resp = client.get(
+        f'/compare/sim/conversations?a={rid_a}&b={rid_b}&cmp_view=nope&cmp_sort=x&cmp_page=-3&cmp_size=7'
+    )
+    assert resp.status_code == 200
+    html = resp.text
+    # bad view, sort, page and size fall back to the defaults
+    assert 'aria-pressed="true" disabled>Changed' in html
+    assert re.search(r'<th scope="col" aria-sort="ascending"><button[^>]*>Change', html)
+    assert 'cmp_page' not in html.split('id="cmp-table-state"')[1].split('</div>')[0]
+    assert 'name="cmp_size" value="10"' in html
+
+
+def test_filter_and_conversations_routes_push_a_canonical_url(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    filtered = client.post(
+        f'/compare/sim/filter?a={rid_a}&b={rid_b}', data={'persona': 'alice', 'cmp_view': 'all', 'cmp_size': '25'}
+    )
+    assert filtered.headers['HX-Push-Url'] == f'/compare/sim?a={rid_a}&b={rid_b}&persona=alice&cmp_view=all&cmp_size=25'
+    conv = client.get(f'/compare/sim/conversations?a={rid_a}&b={rid_b}&persona=alice&cmp_view=improved&cmp_page=2')
+    assert conv.headers['HX-Push-Url'] == (
+        f'/compare/sim?a={rid_a}&b={rid_b}&persona=alice&cmp_view=improved&cmp_page=2'
+    )
+
+
+def test_get_route_reproduces_the_pushed_view(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}&persona=alice&cmp_view=all').text
+    assert re.search(r'aria-pressed="true" disabled>All<span class="cmp-seg-n">1</span>', html)
+    assert 'sim-conv-persona">alice<' in html
+    assert 'sim-conv-persona">bob<' not in html
 
 
 def test_compare_transcript_route_shows_both_sides(roots: list[Path]):
@@ -199,6 +365,15 @@ def test_compare_transcript_route_shows_both_sides(roots: list[Path]):
     html = resp.text
     assert 'hello A' in html and 'hello B' in html
     assert 'cmp-transcript-grid' in html
+
+
+def test_compare_transcript_rejects_a_non_matched_pair(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    # A's alice (0) with B's bob (1) are both real conversations, but not a pair
+    resp = client.get(f'/compare/sim/transcript?a={rid_a}&b={rid_b}&ia=0&ib=1')
+    assert resp.status_code == 404
+    assert 'Not a matched pair.' in resp.text
 
 
 def test_compare_transcript_route_scopes_session_slug_to_one_response(
@@ -257,18 +432,7 @@ def test_compare_self_compare_is_400(roots: list[Path]):
     assert resp.status_code == 400
 
 
-def test_compare_absent_scorer_renders_na_not_zero(roots: list[Path]):
-    # criteria_met is measured by run A only; safety by run B only. Neither should
-    # render as a 0.00 with a red downward delta — they show n/a with no arrow.
-    client = TestClient(build_app(roots))
-    rid_a, rid_b = _rids(roots)
-    html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
-    assert 'n/a' in html
-    # the scorer chart only compares scorers both runs measured
-    assert 'shared scorers only' in html
-
-
-def test_compare_empty_runs_render_na_kpis_without_failure(tmp_path: Path):
+def test_compare_empty_runs_render_na_tiles_without_failure(tmp_path: Path):
     sim = tmp_path / 'sim-runs'
     sim.mkdir()
     (sim / 'a.json').write_text(_run('empty-A', [], {}).model_dump_json())
@@ -276,16 +440,12 @@ def test_compare_empty_runs_render_na_kpis_without_failure(tmp_path: Path):
     rid_a = report_id(sim / 'a.json')
     rid_b = report_id(sim / 'b.json')
 
-    html = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}').text
-
-    kpi_text = ' '.join(re.findall(r'<div class="kpi-(?:value|label)">([^<]*)</div>', html))
-    assert 'Goal-achieved · n/a vs A' in kpi_text
-    assert 'Mean score · n/a vs A' in kpi_text
-    assert 'Mean turns · n/a vs A' in kpi_text
-    assert '-100%' not in kpi_text
-    assert 'kpi-card kpi-card--fail' not in html
-    assert 'Outcomes' in html
-    assert 'No outcome data' in html
+    resp = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}')
+    assert resp.status_code == 200
+    html = resp.text
+    assert '<div class="kpi-value">n/a</div>' in html
+    assert 'No conversations' in html
+    assert 'No conversations matched' in html
 
 
 def test_compare_partially_empty_run_keeps_outcomes_panel(tmp_path: Path):
@@ -298,23 +458,10 @@ def test_compare_partially_empty_run_keeps_outcomes_panel(tmp_path: Path):
     rid_a = report_id(sim / 'a.json')
     rid_b = report_id(sim / 'b.json')
 
-    html = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}').text
-
-    assert 'Outcomes' in html
-    assert 'Outcome data requires entries from both runs' in html
-
-
-def test_compare_disjoint_scorers_render_measured_by_one_run_note(tmp_path: Path):
-    sim = tmp_path / 'sim-runs'
-    sim.mkdir()
-    (sim / 'a.json').write_text(_run('only-A', [], {'criteria_met': 0.5}).model_dump_json())
-    (sim / 'b.json').write_text(_run('only-B', [], {'safety': 1.0}).model_dump_json())
-    rid_a = report_id(sim / 'a.json')
-    rid_b = report_id(sim / 'b.json')
-
-    html = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}').text
-
-    assert 'measured by one run only' in html
+    resp = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}')
+    assert resp.status_code == 200
+    assert 'Goal outcome' in resp.text or 'goal outcome' in resp.text.lower()
+    assert 'Only in B' in resp.text
 
 
 def test_compare_corrupt_report_is_422(tmp_path: Path):

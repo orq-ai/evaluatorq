@@ -1622,8 +1622,16 @@ def _render_sim_filter_rail(
     *,
     shown: int | None,
     total: int | None,
+    post_url: str | None = None,
+    include: str | None = None,
+    counter_note: str = '',
 ) -> str:
     """Render the right-side sim filter rail: chips + dropdowns + counter.
+
+    *post_url* overrides the ``/r/{rid}/filter`` target (the run comparison
+    posts to its own route), *include* adds an ``hx-include`` selector so extra
+    page state rides along with the filter POST, and *counter_note* is a short
+    line under the shown/total counter.
 
     Goal outcome / Terminated by render as chip toggles; Persona / Scenario
     render as ``<details>`` dropdowns with stable ids (``filter-dd-persona``,
@@ -1763,12 +1771,15 @@ def _render_sim_filter_rail(
         f'{min_turns_ctrl}'
         f'<div class="filter-group" data-dim="persona">{persona_dd}</div>'
         f'<div class="filter-group" data-dim="scenario">{scenario_dd}</div>'
-        f'<div class="filter-rail-footer">{esc(counter)}</div>'
+        f'<div class="filter-rail-footer">{esc(counter)}'
+        + (f'<span class="filter-rail-note">{esc(counter_note)}</span>' if counter_note else '')
+        + '</div>'
         + (f'<div class="filter-group filter-group--more" data-dim="more">{more_dd}</div>' if more_dd else '')
     )
+    include_attr = f' hx-include="{esc(include)}"' if include else ''
     return (
         f'<form id="filter-form" class="filter-form filter-form--sim"'
-        f' hx-post="/r/{esc(rid)}/filter"'
+        f' hx-post="{esc(post_url or f"/r/{rid}/filter")}"{include_attr}'
         f' hx-trigger="change"'
         f' hx-target="#filter-swap"'
         f' hx-swap="outerHTML">'
