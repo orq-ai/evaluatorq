@@ -855,14 +855,14 @@
       var back = dialog.querySelector('[data-sim-entity-back]');
       var prev = dialog.querySelector('[data-sim-entity-prev]');
       var next = dialog.querySelector('[data-sim-entity-next]');
-      var position = dialog.querySelector('[data-sim-entity-position]');
-      var triggers = matchingTriggers();
-      var canStep = triggers.length > 1;
+      const position = dialog.querySelector('[data-sim-entity-position]');
+      const triggers = matchingTriggers();
+      const canStep = triggers.length > 1;
       if (back) back.hidden = drawerDepth <= 1;
       if (prev) prev.disabled = !canStep;
       if (next) next.disabled = !canStep;
       if (position) {
-        var current = canStep ? activeIndex(triggers) : -1;
+        const current = canStep ? activeIndex(triggers) : -1;
         position.hidden = current < 0;
         position.textContent = current < 0 ? '' : (current + 1) + ' / ' + triggers.length;
       }
