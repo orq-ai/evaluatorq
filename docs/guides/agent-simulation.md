@@ -842,7 +842,7 @@ flowchart TD
     I --> J["Write the opening message<br/>from that persona and scenario<br/>--replay-first-message reuses<br/>the recorded one"]
     J --> K["SimulationDatapoint<br/>id = trace-{trace_id}"]
 
-    H --> L["REDUCE: 1 call over up to 50 summaries<br/>repeat intents collapsed, not double-counted"]
+    H --> L["REDUCE: 1 call over up to max_reduce_summaries (default 50)<br/>repeat intents collapsed, not double-counted"]
     L --> M["Traffic profile prose:<br/>intent mix and shares, tone and<br/>patience ranges, edge cases"]
     M --> N["DatapointGenerator<br/>personas x scenarios<br/>grounded in that profile"]
     N --> O["N new SimulationDatapoints<br/>synthetic, not replayed"]
@@ -876,7 +876,7 @@ Generation runs before a simulation exists, so its spend has no field on any *re
 
 ##### What lands in the generated dataset
 
-Trace-derived datapoints are built from real conversations, and a persona background or scenario context written straight from one carries whatever was in it — names, order numbers, emails — into a JSONL that then gets committed and shared. By default both the summarize and the persona/scenario prompts are instructed to redact as they write, replacing identifying values with placeholders (`[CUSTOMER_NAME]`, `[ORDER_ID]`) that keep the meaning; the profile prompt is told to carry placeholders through rather than invent concrete values.
+Trace-derived datapoints are built from real conversations, and a persona background or scenario context written straight from one carries whatever was in it — names, order numbers, emails — into a JSONL that then gets committed and shared. By default only the summarize prompt, the one step that reads a raw transcript, is instructed to redact as it writes, replacing identifying values with placeholders (`[CUSTOMER_NAME]`, `[ORDER_ID]`) that keep the meaning; the persona/scenario inference and traffic-profile prompts see only summaries and are told to carry those placeholders through rather than invent concrete values.
 
 `--no-redact-pii` (or `TraceAnalysisConfig(redact_pii=False)`) turns it off, for when the concrete values are the point — reproducing a specific incident, or a fixture where a changed order number breaks the comparison — and the dataset stays somewhere the raw traffic could already go. With it off the profile prompt also drops its "keep the placeholders" line, since telling a model to preserve placeholders that were never introduced invites it to invent them, and invented placeholders read as redaction that did not happen.
 
