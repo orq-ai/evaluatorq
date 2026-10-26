@@ -292,6 +292,33 @@ def test_sim_breakdown_has_heatmap_and_histogram(sim_run) -> None:
     assert 'class="rk-histogram"' in html
 
 
+def test_sim_heatmap_cells_open_their_conversations() -> None:
+    import re
+
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.reports.sections import _persona_cohort_id, _scenario_cohort_id
+
+    # alice has two conversations in one cell: a pass (idx 0) and a fail (idx 1).
+    sim_run = _make_sim_run(personas=['alice', 'alice', 'bob'], goal_achieved_flags=[True, False, True])
+    html = sim_report_tabs('rid', sim_run)
+    heatmap = html.split('class="rk-heatmap"', 1)[1].split('</table>', 1)[0]
+    cells = re.findall(r'<td class="rk-heat-cell[^>]*>(.*?)</td>', heatmap)
+    triggered = [re.findall(r'sim/transcript\?idx=(\d+)', c) for c in cells if 'rk-heat-trigger' in c]
+    # Every conversation is reachable from exactly one cell.
+    assert sorted(int(i) for idxs in triggered for i in idxs) == list(range(len(sim_run.results)))
+    for idxs in triggered:
+        results = [sim_run.results[int(i)] for i in idxs]
+        # One cell = one persona × scenario pair, lowest score opens first.
+        assert len({(_persona_cohort_id(r), _scenario_cohort_id(r)) for r in results}) == 1
+        assert [r.goal_completion_score for r in results] == sorted(r.goal_completion_score for r in results)
+    # Only the first trigger per cell is visible; the rest are j/k siblings.
+    assert all(c.count('<button') - c.count(' hidden ') == 1 for c in cells if 'rk-heat-trigger' in c)
+    assert ['1', '0'] in triggered  # alice's cell opens on the failure
+
+    standalone = sim_report_tabs('rid', sim_run, standalone=True)
+    assert 'rk-heat-trigger' not in standalone
+
+
 def test_sim_breakdown_no_vlconvert_heatmap_or_histogram(sim_run) -> None:
     """The Breakdown tab must use report_kit's SVG/HTML charts, never vl-convert."""
     from evaluatorq.dashboard.report_tabs import sim_report_tabs

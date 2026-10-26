@@ -247,7 +247,7 @@ def render_sim_row_list(
     if not entries:
         return '<section class="sim-row-list"><p class="sim-empty">No conversations found.</p></section>'
 
-    from evaluatorq.common.reports import status_badge
+    from evaluatorq.common.reports.html_helpers import entry_outcome, status_badge
 
     if sort not in _SORT_KEYS:
         sort = _DEFAULT_SORT
@@ -267,16 +267,9 @@ def render_sim_row_list(
     rows_html: list[str] = []
     for e in visible:
         idx = e.index
-        is_error = e.terminated_by == 'error'
-        if is_error:
-            badge = status_badge('Error', 'warn')
-            row_status = 'error'
-        elif e.goal_achieved:
-            badge = status_badge('Goal met', 'pass')
-            row_status = 'pass'
-        else:
-            badge = status_badge('Goal missed', 'fail')
-            row_status = 'fail'
+        label, status = entry_outcome(e)
+        badge = status_badge(label, status)
+        row_status = 'error' if status == 'warn' else status
 
         # Prefer a direct link to the last successful target-agent trace; fall back
         # to the thread filter for older runs that only stored a thread id.

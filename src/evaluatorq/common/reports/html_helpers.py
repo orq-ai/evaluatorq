@@ -23,6 +23,8 @@ from loguru import logger
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from evaluatorq.simulation.contracts import SimulationEntry
+
 from evaluatorq.common.reports.palette import COLORS
 
 # ---------------------------------------------------------------------------
@@ -440,6 +442,13 @@ def status_badge(text: str, status: str) -> str:
     """Semantic pill. ``status`` in {pass, fail, warn, neutral}."""
     safe_status = status if status in {'pass', 'fail', 'warn', 'neutral'} else 'neutral'
     return f'<span class="status-badge status-badge--{safe_status}">{esc(text)}</span>'
+
+
+def entry_outcome(entry: SimulationEntry) -> tuple[str, str]:
+    """``(label, status)`` for a simulation conversation's outcome pill, for ``status_badge``."""
+    if entry.error or entry.terminated_by == 'error':
+        return 'Error', 'warn'
+    return ('Goal met', 'pass') if entry.goal_achieved else ('Goal missed', 'fail')
 
 
 def kpi_cards(cards: list[dict[str, str]], modifier: str = '') -> str:
