@@ -33,8 +33,9 @@ import asyncio
 from evaluatorq import DataPoint, EvaluationResult, evaluatorq
 from evaluatorq.simulation import (
     CommunicationStyle,
-    Criterion,
     Message,
+    MustHappenCriterion,
+    MustNotHappenCriterion,
     Persona,
     Scenario,
     wrap_simulation_agent,
@@ -96,8 +97,8 @@ async def main() -> None:
         name="Wrong Item Refund",
         goal="Get a refund for the wrong item",
         criteria=[
-            Criterion(description="Agent asks for order details", type="must_happen"),
-            Criterion(description="Agent blames the customer", type="must_not_happen"),
+            MustHappenCriterion("Agent asks for order details"),
+            MustNotHappenCriterion("Agent blames the customer"),
         ],
     )
 

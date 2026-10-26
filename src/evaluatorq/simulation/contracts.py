@@ -317,11 +317,49 @@ class Criterion(BaseModel):
         Criterion(description="Agent blames the customer", type="must_not_happen"),
     ]
     ```
+
+    `MustHappenCriterion` and `MustNotHappenCriterion` fix the type for you.
     """
 
     description: str
     type: Literal['must_happen', 'must_not_happen']
     evaluator: str | None = None
+
+
+class MustHappenCriterion(Criterion):
+    """A `Criterion` that passes when the described behaviour occurs.
+
+    Usage:
+
+    ```python
+    from evaluatorq.simulation import MustHappenCriterion
+
+    criterion = MustHappenCriterion("Agent asks for order details")
+    ```
+    """
+
+    type: Literal['must_happen'] = 'must_happen'
+
+    def __init__(self, description: str, /, **data: Any) -> None:
+        super().__init__(description=description, **data)
+
+
+class MustNotHappenCriterion(Criterion):
+    """A `Criterion` that passes when the described behaviour does not occur.
+
+    Usage:
+
+    ```python
+    from evaluatorq.simulation import MustNotHappenCriterion
+
+    criterion = MustNotHappenCriterion("Agent blames the customer")
+    ```
+    """
+
+    type: Literal['must_not_happen'] = 'must_not_happen'
+
+    def __init__(self, description: str, /, **data: Any) -> None:
+        super().__init__(description=description, **data)
 
 
 # ---------------------------------------------------------------------------
