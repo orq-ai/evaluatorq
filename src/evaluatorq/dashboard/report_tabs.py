@@ -287,13 +287,17 @@ def _section_rows(by_kind: dict[str, Any], section_kind: str, key: str) -> list[
 
 def _group_entries_by_cohort(
     entries: list[Any], rows: list[Any], personas: list[dict[str, Any]], scenarios: list[dict[str, Any]]
-) -> dict[str, dict[str, list[Any]]]:
-    """Associate transcript entries with Task 1's collision-safe cohort IDs."""
+) -> dict[str, dict[Any, list[Any]]]:
+    """Associate transcript entries with Task 1's collision-safe cohort IDs.
+
+    ``pair`` keys on ``(persona_id, scenario_id)`` — one Breakdown heatmap cell.
+    """
     from evaluatorq.simulation.reports.sections import _persona_cohort_id, _scenario_cohort_id
 
-    cohorts = {
+    cohorts: dict[str, dict[Any, list[Any]]] = {
         'persona': {str(row['id']): [] for row in personas},
         'scenario': {str(row['id']): [] for row in scenarios},
+        'pair': {},
     }
     for entry, result in zip(entries, rows, strict=True):
         persona_id = _persona_cohort_id(result)
@@ -302,6 +306,7 @@ def _group_entries_by_cohort(
             cohorts['persona'][persona_id].append(entry)
         if scenario_id in cohorts['scenario']:
             cohorts['scenario'][scenario_id].append(entry)
+        cohorts['pair'].setdefault((persona_id, scenario_id), []).append(entry)
     return cohorts
 
 
@@ -891,6 +896,35 @@ def _sim_breakdown_table(
     return panel(title, f'<div class="sim-bd-table">{table}</div>', sub=denominator_note)
 
 
+def _sim_heat_cell_trigger(rid: str, entity_context: dict[str, Any]) -> Callable[[dict, str], str]:
+    """Heatmap cell renderer: the value opens the cell's conversations in the drawer.
+
+    Lowest score first, so a red cell opens on a failure. The rest are hidden
+    sibling triggers in the same cell, which is the set the drawer's j/k steps through.
+    """
+    pairs: dict[tuple[str, str], list[Any]] = entity_context.get('cohorts', {}).get('pair', {})
+
+    def render(cell: dict, text: str) -> str:
+        entries = sorted(
+            pairs.get((str(cell.get('persona_id')), str(cell.get('scenario_id'))), []),
+            key=lambda e: (e.goal_completion_score, e.index),
+        )
+        if not entries:
+            return text
+        n = len(entries)
+        label = f'Open {n} conversation{"s" if n != 1 else ""}: {cell.get("persona")} × {cell.get("scenario")}'  # noqa: RUF001
+        buttons = [
+            f'<button type="button" class="rk-heat-trigger" data-sim-entity-trigger data-entity-kind="conversation" '
+            f'data-drawer-url="/r/{esc(rid)}/sim/transcript?idx={int(e.index)}"'
+            + (f' aria-label="{esc(label)}">{text}' if i == 0 else ' hidden tabindex="-1">')
+            + '</button>'
+            for i, e in enumerate(entries)
+        ]
+        return ''.join(buttons)
+
+    return render
+
+
 def _sim_breakdown(
     by_kind: dict[str, Any],
     rid: str,
@@ -913,8 +947,14 @@ def _sim_breakdown(
         d = heatmap_section.data
         heatmap_html = panel(
             'Goal completion — persona × scenario',  # noqa: RUF001 (mockup wording — spec §Breakdown.1)
-            heatmap(d.get('personas', []), d.get('scenarios', []), d.get('cells', []), value_key='avg_score'),
-            sub='Red → yellow → green as the average goal-completion score rises',
+            heatmap(
+                d.get('personas', []),
+                d.get('scenarios', []),
+                d.get('cells', []),
+                value_key='avg_score',
+                render_value=None if standalone else _sim_heat_cell_trigger(rid, entity_context),
+            ),
+            sub='Red → yellow → green as the average goal-completion score rises. Click a cell to read its conversations.',
             info=(
                 'Each cell is the average goal-completion score (0–100%) the judge gave the '  # noqa: RUF001
                 "agent across that persona × scenario's conversations — a continuous measure of "  # noqa: RUF001

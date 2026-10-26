@@ -1971,6 +1971,18 @@ _SIM_REPORT_OVERRIDES_CSS = """
     font-family: var(--font-sans); font-size: 16px; font-weight: 400;
     text-align: center; vertical-align: middle;
 }
+/* Heatmap cell as a drawer trigger: the button takes over the cell's padding so
+   the whole tile is clickable, and keeps the cell's colour, ink and alignment. */
+.sim-report .rk-heat-cell:has(.rk-heat-trigger) { padding: 0; }
+.sim-report .rk-heat-trigger {
+    all: unset; box-sizing: border-box; display: block; width: 100%;
+    padding: 12px 16px; border-radius: 5px; cursor: pointer;
+}
+/* `all: unset` above also drops the UA `[hidden]` rule, so restore it for the
+   cell's sibling conversations (reached with j/k, never shown). */
+.sim-report .rk-heat-trigger[hidden] { display: none; }
+.sim-report .rk-heat-trigger:hover { box-shadow: inset 0 0 0 2px var(--ink-900); }
+.sim-report .rk-heat-trigger:focus-visible { outline: 2px solid var(--teal-600); outline-offset: 2px; }
 
 /* Data tables — exclude the heatmap (.rk-heatmap has its own cell styling; the
    generic thead rule was bleeding uppercase + sunken bg onto its headers). */
