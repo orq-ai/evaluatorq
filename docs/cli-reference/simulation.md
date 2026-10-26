@@ -246,7 +246,7 @@ Fetches recent traces from the Orq traces API (requires `ORQ_API_KEY`) and build
 | `--output` / `-o` | `Path` (required) | Path to write generated datapoints JSONL. |
 | `--limit` | `int` / `20` | Maximum number of traces to fetch. |
 | `--lookback-hours` | `float \| None` | Only fetch traces from the last N hours — a week is `168`. Default: no time filter. |
-| `--search` | `str \| None` | Free-text search applied to the trace list. |
+| `--search` | `str` / `""` | Free-text search applied to the trace list. Empty means no search. |
 | `--extend` | `int` / `0` | Also generate N distribution-matched datapoints on top of the direct per-trace ones (extra LLM calls). `0` disables extension. |
 | `--agent-description` | `str \| None` | Agent description used for `--extend` generation. Optional; inferred from the traffic profile if omitted. Read only with `--extend`. |
 | `--sim-model` | `str \| None` / `None` | Model for persona/scenario inference and extension generation. Unset resolves the `fast` role (`openai/gpt-6-luna` by default). |
@@ -259,7 +259,13 @@ Fetches recent traces from the Orq traces API (requires `ORQ_API_KEY`) and build
 
 `--agent-description` and `--max-summaries` are accepted and then ignored on a run without `--extend`, and nothing is logged when they are. `--max-summaries` also only bites when more conversations were fetched than its value, so at the default `--limit` of 20 it never does.
 
-**Redaction has a gap the flag cannot close.** A recorded opening never reaches the summarize prompt, which is the only step told to redact. `--replay-first-message` writes that recorded text into every datapoint, and on the default a first-message generation that fails falls back to the same recorded opening with a warning rather than dropping the datapoint. Either way the output file can carry a real user's words into a file you commit.
+**Redaction has a gap the flag cannot close.** The recorded opening is copied from the trace itself, not from the summary, so the redaction instruction never touches it. `--replay-first-message` writes that recorded text into every datapoint, and on the default a first-message generation that fails falls back to the same recorded opening with a warning rather than dropping the datapoint. Either way the output file can carry a real user's words into a file you commit.
+
+**Which datapoint fields can hold real text.** Each JSONL row is a `SimulationDatapoint`: `id` (`trace-<trace_id>`), `persona` (its `name` and free-text `background`), `scenario` (`name`, `goal`, and optional `context`, `criteria` and `ground_truth`), `user_system_prompt` (built from the persona and scenario), and `first_message`. The model writes the persona and scenario from the summary, so redaction covers them. `first_message` is the one field that holds recorded text, and only under `--replay-first-message` or after the fallback above.
+
+**Cost scales with traces.** Each fetched trace costs one summarize call and one persona/scenario inference call, plus one first-message call on the default. `--extend N` adds one traffic-profile call and the generation of the `N` new datapoints. `--limit` is therefore the spend control, and `--max-summaries` is not. `--lookback-hours 168` with `--limit 100` is a week capped at 100 traces. Which traces fill the limit is decided by the traces API: the command sends no sort, so "the first N in fetch order" means the order the API returned them in.
+
+**Exit codes and the output file.** The command exits `0` when at least one datapoint was built, even if some traces were dropped: dropped traces are logged as warnings, with one aggregate line such as `3 of 20 trace conversation(s) produced no datapoint`. It exits `1` on a runtime error, which covers a missing `ORQ_API_KEY`, no usable traces in the window, a failed traffic-profile call, and a run in which every trace was dropped. It exits `2` on a usage error such as `--limit 0`, and `130` on Ctrl-C. The file is written once, at the end, so none of these leaves a partial file; an existing file at `--output` is overwritten in place (not through a temporary file) and missing parent directories are created. The command ends with a stderr line `Built N datapoint(s) from M trace(s) -> <output>`; compare `N` with `M` if a CI step must fail on a run that dropped many traces, since the exit code will not.
 
 Three of the flags set a field on `TraceAnalysisConfig`, which `datapoints_from_traces()` and `extend_from_traces()` take as `config=`. One of the three is spelled differently there:
 
