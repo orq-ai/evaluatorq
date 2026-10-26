@@ -51,6 +51,11 @@ def _scenario_name(result: SimulationResult) -> str:
     return str(result.metadata.get('scenario', 'unknown'))
 
 
+def _scenario_goal(result: SimulationResult) -> str | None:
+    goal = result.metadata.get('scenario_goal')
+    return str(goal) if goal else None
+
+
 def _model_name(result: SimulationResult) -> str:
     return str(result.metadata.get('model', 'unknown'))
 
@@ -241,7 +246,7 @@ def _build_overview_section(results: list[SimulationResult]) -> ReportSection:
             scenarios[cohort_id] = {
                 'id': cohort_id,
                 'name': name,
-                'goal': r.metadata.get('scenario_goal'),
+                'goal': _scenario_goal(r),
                 'context': r.metadata.get('scenario_context'),
                 'criteria': [{'description': c['description'], 'type': c['type']} for c in _criteria_rows(r)],
             }
@@ -553,7 +558,7 @@ def individual_entries(results: list[SimulationResult]) -> list[SimulationEntry]
                 ],
                 thread_id=r.thread_id,
                 last_trace_id=r.last_trace_id,
-                goal=str(r.metadata.get('scenario_goal') or '') or None,
+                goal=_scenario_goal(r),
             )
         )
     return entries
