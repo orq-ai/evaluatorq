@@ -597,8 +597,16 @@ def _sim_entity_modal(entity_context: dict[str, Any], *, standalone: bool = Fals
 
     if standalone:
         return ''.join(templates)
+    return sim_entity_dialog() + f'<div class="sim-entity-templates" hidden>{"".join(templates)}</div>'
+
+
+def sim_entity_dialog(extra_cls: str = '') -> str:
+    """The drawer ``<dialog>`` shell that dashboard.js fills for every
+    ``[data-sim-entity-trigger]`` (conversation transcripts, persona and
+    scenario cards). The run comparison reuses it with a wide modifier."""
+    cls = f'sim-entity-dialog {extra_cls}'.strip()
     return (
-        '<dialog class="sim-entity-dialog" aria-label="Simulation entity detail">'
+        f'<dialog class="{cls}" aria-label="Simulation entity detail">'
         '<div class="sim-entity-modal-shell">'
         '<div class="sim-entity-modal-content" data-sim-entity-content></div>'
         '<div class="sim-entity-modal-actions">'
@@ -609,7 +617,6 @@ def _sim_entity_modal(entity_context: dict[str, Any], *, standalone: bool = Fals
         '</div>'
         '</div>'
         '</dialog>'
-        f'<div class="sim-entity-templates" hidden>{"".join(templates)}</div>'
     )
 
 

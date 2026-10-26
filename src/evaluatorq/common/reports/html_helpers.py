@@ -443,7 +443,9 @@ def status_badge(text: str, status: str) -> str:
 
 
 def kpi_cards(cards: list[dict[str, str]], modifier: str = '') -> str:
-    """Render a KPI scorecard band. Each card: {label, value, status?, sub?}.
+    """Render a KPI scorecard band. Each card: {label, value, status?, sub?, sub_html?}.
+
+    ``sub`` is escaped; ``sub_html`` is trusted markup rendered as-is and wins when both are set.
 
     ``modifier`` adds a ``kpi-band--<modifier>`` class so one surface can restyle
     the band without touching the others.
@@ -454,7 +456,10 @@ def kpi_cards(cards: list[dict[str, str]], modifier: str = '') -> str:
     for c in cards:
         status = c.get('status', 'neutral')
         safe_status = status if status in {'pass', 'fail', 'warn', 'neutral'} else 'neutral'
-        sub = f'<div class="kpi-sub">{esc(c["sub"])}</div>' if c.get('sub') else ''
+        if c.get('sub_html'):
+            sub = f'<div class="kpi-sub">{c["sub_html"]}</div>'
+        else:
+            sub = f'<div class="kpi-sub">{esc(c["sub"])}</div>' if c.get('sub') else ''
         items.append(
             f'<div class="kpi-card kpi-card--{safe_status}">'
             f'<div class="kpi-value">{esc(c["value"])}</div>'

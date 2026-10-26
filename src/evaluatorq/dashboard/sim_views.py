@@ -26,6 +26,7 @@ from evaluatorq.dashboard.trace_links import single_trace_url, thread_trace_url,
 from evaluatorq.dashboard.view import _sim_rowlist_wrapper
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
     from evaluatorq.simulation.contracts import SimulationEntry
@@ -75,6 +76,15 @@ def _entries_from_run(run: Any) -> list[SimulationEntry]:
     from evaluatorq.simulation.reports.sections import individual_entries
 
     return individual_entries(run.results)
+
+
+def filtered_entries(run: Any, selections: dict[str, list[str]]) -> list[SimulationEntry]:
+    """Entries of *run* that pass *selections*, each keeping its ORIGINAL index.
+
+    Filtering hides rows, it does not renumber them, so drawer links stay stable.
+    """
+    kept = {id(r) for r in apply_or_all(run, 'sim', selections)}
+    return [e for e, r in zip(_entries_from_run(run), run.results, strict=True) if id(r) in kept]
 
 
 def _entity_dom_ids(run: Any, idx: int) -> tuple[str | None, str | None]:
@@ -152,10 +162,21 @@ def _hx_control(rid: str, sort: str, direction: str, page: int, size: int) -> st
     )
 
 
-def _sim_header_row(rid: str, sort: str, direction: str, size: int) -> str:
-    """Build the sortable ``<thead>`` row. Clicking a header toggles direction."""
+def _sim_header_row(
+    control: Callable[[str, str, int, int], str],
+    sort: str,
+    direction: str,
+    size: int,
+    columns: Sequence[tuple[str, str, Any]] = tuple(_SIM_COLUMNS),
+    trailing: tuple[str, ...] = ('Status', 'Traces'),
+) -> str:
+    """Build the sortable ``<thead>`` row. Clicking a header toggles direction.
+
+    *control* returns the HTMX attributes for a (sort, dir, page, size) request;
+    *trailing* are the non-sortable column labels after the sortable ones.
+    """
     cells: list[str] = []
-    for param, label, _key in _SIM_COLUMNS:
+    for param, label, _key in columns:
         active = param == sort
         # Toggle direction on the active column; a fresh column starts ascending.
         next_dir = 'desc' if (active and direction == 'asc') else 'asc'
@@ -171,46 +192,61 @@ def _sim_header_row(rid: str, sort: str, direction: str, size: int) -> str:
             caret_cls = 'sim-th-caret'
         cells.append(
             f'<th scope="col" aria-sort="{aria}">'
-            f'<button type="button" class="sim-th-sort" {_hx_control(rid, param, next_dir, 1, size)}>'
+            f'<button type="button" class="sim-th-sort" {control(param, next_dir, 1, size)}>'
             f'{esc(label)}<span class="{caret_cls}">{caret}</span>'
             f'</button></th>'
         )
-    # Non-sortable action columns.
-    cells.extend(('<th scope="col">Status</th>', '<th scope="col">Traces</th>'))
+    cells.extend(f'<th scope="col">{esc(label)}</th>' for label in trailing)
     return f'<thead><tr>{"".join(cells)}</tr></thead>'
 
 
-def _sim_size_selector(rid: str, sort: str, direction: str, size: int) -> str:
-    """Rows-per-page selector (5/10/25). Changing size resets to page 1."""
+def _sim_size_selector(
+    control: Callable[[str, str, int, int], str],
+    sort: str,
+    direction: str,
+    size: int,
+    sizes: tuple[int, ...] = _PAGE_SIZES,
+) -> str:
+    """Rows-per-page selector over *sizes*. Changing size resets to page 1."""
     opts = ''.join(
         (
             f'<button type="button" class="sim-size-btn" disabled aria-current="true">{n}</button>'
             if n == size
-            else f'<button type="button" class="sim-size-btn" {_hx_control(rid, sort, direction, 1, n)}>{n}</button>'
+            else f'<button type="button" class="sim-size-btn" {control(sort, direction, 1, n)}>{n}</button>'
         )
-        for n in _PAGE_SIZES
+        for n in sizes
     )
     return f'<div class="sim-size" role="group" aria-label="Rows per page"><span class="sim-size-label">Show</span>{opts}</div>'
 
 
-def _sim_pager(rid: str, sort: str, direction: str, page: int, pages: int, total: int, size: int) -> str:
+def _sim_pager(
+    control: Callable[[str, str, int, int], str],
+    sort: str,
+    direction: str,
+    page: int,
+    pages: int,
+    total: int,
+    size: int,
+    noun: str = 'conversations',
+    sizes: tuple[int, ...] = _PAGE_SIZES,
+) -> str:
     """Render the pager nav + rows-per-page selector; buttons carry sort + filter state."""
-    selector = _sim_size_selector(rid, sort, direction, size)
+    selector = _sim_size_selector(control, sort, direction, size, sizes)
     # 3-column grid centres the pager group (col 2) while the selector stays
     # pinned right (col 3); col 1 is an empty spacer that balances the selector.
     if pages <= 1:
-        nav = f'<div class="sim-pager-nav"><span class="sim-pager-info">{total} conversations</span></div>'
+        nav = f'<div class="sim-pager-nav"><span class="sim-pager-info">{total} {noun}</span></div>'
         return f'<nav class="sim-pager">{nav}{selector}</nav>'
 
     def btn(label: str, target_page: int, *, disabled: bool) -> str:
         if disabled:
             return f'<button type="button" class="sim-pager-btn" disabled>{label}</button>'
-        return f'<button type="button" class="sim-pager-btn" {_hx_control(rid, sort, direction, target_page, size)}>{label}</button>'
+        return f'<button type="button" class="sim-pager-btn" {control(sort, direction, target_page, size)}>{label}</button>'
 
     nav = (
         '<div class="sim-pager-nav">'
         f'{btn("&#x2039; Prev", page - 1, disabled=page <= 1)}'
-        f'<span class="sim-pager-info">Page {page} of {pages} &middot; {total} conversations</span>'
+        f'<span class="sim-pager-info">Page {page} of {pages} &middot; {total} {noun}</span>'
         f'{btn("Next &#x203A;", page + 1, disabled=page >= pages)}'
         '</div>'
     )
@@ -303,8 +339,11 @@ def render_sim_row_list(
             '</tr>'
         )
 
-    header = _sim_header_row(rid, sort, direction, page_size)
-    pager = _sim_pager(rid, sort, direction, page, pages, total, page_size)
+    def control(s: str, d: str, p: int, z: int) -> str:
+        return _hx_control(rid, s, d, p, z)
+
+    header = _sim_header_row(control, sort, direction, page_size)
+    pager = _sim_pager(control, sort, direction, page, pages, total, page_size)
     return (
         f'<section class="sim-row-list">'
         f'<div class="sim-conv-table-shell">'
@@ -355,14 +394,7 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
             return Response('Report not found.', status_code=404, media_type='text/html')
 
         selections = parse_selections(req, 'sim')
-        filtered_results = apply_or_all(run, 'sim', selections)
-        from evaluatorq.simulation.reports.sections import individual_entries
-
-        # Keep each surviving conversation's ORIGINAL index (its position in the
-        # full run) so drill-down links stay stable under filtering — filtering
-        # hides rows, it does not renumber them.
-        kept = {id(r) for r in filtered_results}
-        entries = [e for e, r in zip(individual_entries(run.results), run.results, strict=True) if id(r) in kept]
+        entries = filtered_entries(run, selections)
 
         sort = req.query_params.get('sort', _DEFAULT_SORT)
         direction = req.query_params.get('dir', 'asc')
