@@ -803,3 +803,5 @@ class SimulationEntry(BaseModel):
     transcript: list[TranscriptMessage]
     thread_id: str | None = None
     last_trace_id: str | None = None
+    goal: str | None = None
+    """The scenario goal the judge scored against. ``None`` on runs saved before the field."""

@@ -2569,6 +2569,18 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 }
 .sim-report .sim-criteria-verdict--pass { color: var(--green-600); }
 .sim-report .sim-criteria-verdict--fail { color: var(--red-600); }
+.sim-report .sim-criteria-verdict--error { color: var(--amber-600); }
+/* Goal block above the criteria: what the persona was after, then whether it got there. */
+.sim-report .sim-goal {
+    margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle);
+}
+.sim-report .sim-goal .sim-criteria-head { align-items: center; }
+.sim-report .sim-goal .sim-criteria-verdict { font-size: 13px; padding: 3px 10px; border-radius: 999px; }
+.sim-report .sim-goal .sim-criteria-verdict--pass { background: var(--green-100); }
+.sim-report .sim-goal .sim-criteria-verdict--fail { background: var(--red-100); }
+.sim-report .sim-goal .sim-criteria-verdict--error { background: var(--amber-100); }
+.sim-report .sim-goal-text { margin: 0; font-size: 14px; line-height: 1.5; color: var(--text-strong); }
+.sim-report .sim-goal-text--missing { color: var(--text-faint); font-style: italic; }
 .sim-report .sim-criteria-count {
     font-family: var(--font-sans); font-size: 12px; color: var(--text-faint); white-space: nowrap;
 }

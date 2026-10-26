@@ -553,6 +553,7 @@ def individual_entries(results: list[SimulationResult]) -> list[SimulationEntry]
                 ],
                 thread_id=r.thread_id,
                 last_trace_id=r.last_trace_id,
+                goal=str(r.metadata.get('scenario_goal') or '') or None,
             )
         )
     return entries

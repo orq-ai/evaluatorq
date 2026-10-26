@@ -789,6 +789,21 @@ class TestTranscriptFragmentRewrite:
         assert 'Goal met' in html
         assert '1/2 criteria met' in html
 
+    def test_transcript_fragment_states_goal_above_criteria(self) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        entry = _entry(goal_achieved=False).model_copy(update={'goal': 'Get a <b>refund</b>'})
+        html = render_transcript_fragment(entry)
+        assert 'Get a &lt;b&gt;refund&lt;/b&gt;' in html
+        assert 'Goal missed' in html
+        # Goal and its verdict come before the criteria list.
+        assert html.index('GOAL') < html.index('refund') < html.index('CRITERIA')
+        assert html.index('Goal missed') < html.index('CRITERIA')
+
+        legacy = render_transcript_fragment(_entry(criteria=[]))
+        assert 'Goal not recorded for this run.' in legacy
+        assert 'Goal met' in legacy
+
     def test_transcript_fragment_bubbles_present(self, sim_entry_with_transcript) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 
