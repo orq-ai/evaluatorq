@@ -774,7 +774,7 @@ Pass one `trace_id` instead once you already have a specific conversation to gro
 datapoints = await datapoints_from_traces(source=TraceInput(trace_id='trace_123'))
 ```
 
-This call bills: unlike `redteam.datapoints_from_traces`, which is pure and free, this one makes one summarize call and one persona/scenario-inference call per trace, so cost and latency scale with how many conversations you fetch. Share the summarize step with `extend_from_traces` by calling `summarize_conversations` yourself once and passing the result to both as `summaries=` — the pattern is below, under "The same thing is available from Python".
+This call bills: unlike `redteam.datapoints_from_traces`, which is pure and free, this one makes one summarize call and one persona/scenario-inference call per trace, plus one first-message call on the default (`generate_first_message=True`), so cost and latency scale with how many conversations you fetch. Share the summarize step with `extend_from_traces` by calling `summarize_conversations` yourself once and passing the result to both as `summaries=` — the pattern is below, under "The same thing is available from Python".
 
 The trace is source material for a new simulation, not a scored result. Simulation infers a persona and scenario from each conversation and writes a fresh opening message by default. The trace analysis and simulation calls use their own budgets; `max_turns` applies to the generated conversation and does not count trace analysis.
 
@@ -878,7 +878,7 @@ Generation runs before a simulation exists, so its spend has no field on any *re
 
 Trace-derived datapoints are built from real conversations, and a persona background or scenario context written straight from one carries whatever was in it — names, order numbers, emails — into a JSONL that then gets committed and shared. By default only the summarize prompt, the one step that reads a raw transcript, is instructed to redact as it writes, replacing identifying values with placeholders (`[CUSTOMER_NAME]`, `[ORDER_ID]`) that keep the meaning; the persona/scenario inference and traffic-profile prompts see only summaries and are told to carry those placeholders through rather than invent concrete values.
 
-`--no-redact-pii` (or `TraceAnalysisConfig(redact_pii=False)`) turns it off, for when the concrete values are the point — reproducing a specific incident, or a fixture where a changed order number breaks the comparison — and the dataset stays somewhere the raw traffic could already go. With it off the profile prompt also drops its "keep the placeholders" line, since telling a model to preserve placeholders that were never introduced invites it to invent them, and invented placeholders read as redaction that did not happen.
+`--no-redact-pii` (or `TraceAnalysisConfig(redact_pii=False)`) turns it off, for when the concrete values are the point — reproducing a specific incident, or a fixture where a changed order number breaks the comparison — and the dataset stays somewhere the raw traffic could already go. With it off the persona/scenario inference and traffic-profile prompts both drop their "keep the placeholders" line, since telling a model to preserve placeholders that were never introduced invites it to invent them, and invented placeholders read as redaction that did not happen.
 
 Either way this is an instruction to a model, not a guarantee. Treat a generated dataset from production traffic as needing the same review any export of that traffic would.
 

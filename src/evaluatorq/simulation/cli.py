@@ -1671,7 +1671,7 @@ def from_traces(
         typer.Option(
             '--sim-model',
             help=(
-                'Model for persona/scenario inference and extension generation. '
+                'Model for every LLM call: summarize, persona/scenario inference, first-message generation and --extend generation. '
                 f'Default: the fast model role. {MODEL_OPTION_NOTE}'
             ),
             show_default=False,
