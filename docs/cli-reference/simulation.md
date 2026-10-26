@@ -239,20 +239,45 @@ eq sim from-traces --output dp.jsonl --limit 50 --lookback-hours 24
 eq sim from-traces --output dp.jsonl --extend 20 --agent-description "..."
 ```
 
-Fetches recent traces from the Orq traces API (requires `ORQ_API_KEY`) and builds one datapoint per trace conversation: persona and scenario are inferred from the transcript, and the first message is the real user's opening message verbatim. Pass `--extend N` to additionally generate `N` new datapoints matching the traffic distribution of the fetched traces (extra LLM calls). Feed the output file to `eq sim simulate --input` to run it.
+Fetches recent traces from the Orq traces API (requires `ORQ_API_KEY`) and builds one datapoint per trace conversation: the persona and scenario are inferred from the conversation, and the opening message is written from them rather than replayed. Pass `--extend N` to additionally generate `N` new datapoints matching the traffic distribution of the fetched traces (extra LLM calls). Feed the output file to `eq sim simulate --input` to run it. Why the opening is generated, and what redaction covers, are the guide's: [Why the opening message is generated, not replayed](../guides/agent-simulation.md#why-the-opening-message-is-generated-not-replayed) and [What lands in the generated dataset](../guides/agent-simulation.md#what-lands-in-the-generated-dataset).
 
 | Flag | Type / Default | Description |
 |---|---|---|
 | `--output` / `-o` | `Path` (required) | Path to write generated datapoints JSONL. |
 | `--limit` | `int` / `20` | Maximum number of traces to fetch. |
-| `--lookback-hours` | `float \| None` | Only fetch traces from the last N hours. Default: no time filter. |
+| `--lookback-hours` | `float \| None` | Only fetch traces from the last N hours — a week is `168`. Default: no time filter. |
 | `--search` | `str \| None` | Free-text search applied to the trace list. |
 | `--extend` | `int` / `0` | Also generate N distribution-matched datapoints on top of the direct per-trace ones (extra LLM calls). `0` disables extension. |
-| `--agent-description` | `str \| None` | Agent description used for `--extend` generation. Optional; inferred from the traffic profile if omitted. |
+| `--agent-description` | `str \| None` | Agent description used for `--extend` generation. Optional; inferred from the traffic profile if omitted. Read only with `--extend`. |
 | `--sim-model` | `str \| None` / `None` | Model for persona/scenario inference and extension generation. Unset resolves the `fast` role (`openai/gpt-6-luna` by default). |
+| `--generate-first-message` / `--replay-first-message` | `bool` / `True` | Write each conversation's opening message from the inferred persona and scenario. `--replay-first-message` reuses the real user's recorded opening instead, verbatim — it never passes through the summarize step, so `--redact-pii` does not rewrite it. Sets `TraceAnalysisConfig.generate_first_message`. |
+| `--redact-pii` / `--no-redact-pii` | `bool` / `True` | Instruct the summarize prompt — the only step that reads a raw transcript — to replace identifying values such as names, emails and order numbers with placeholders like `[CUSTOMER_NAME]`. Every later step sees only the summary, and is told to carry those placeholders through rather than invent concrete values. An instruction to a model, not a guarantee. `--no-redact-pii` turns it off. Sets `TraceAnalysisConfig.redact_pii`. |
+| `--max-summaries` | `int` / `50` | How many of the trace summaries the `--extend` traffic-profile call carries — the first N in fetch order, not a sample, with the rest dropped from the profile and a warning naming the counts. Read only with `--extend`, and it does not lower spend: every fetched trace is summarized before extension is considered. Sets `TraceAnalysisConfig.max_reduce_summaries`. |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests while building datapoints. `-1` disables it. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
+
+`--agent-description` and `--max-summaries` are accepted and then ignored on a run without `--extend`, and nothing is logged when they are. `--max-summaries` also only bites when more conversations were fetched than its value, so at the default `--limit` of 20 it never does.
+
+**Redaction has a gap the flag cannot close.** A recorded opening never reaches the summarize prompt, which is the only step told to redact. `--replay-first-message` writes that recorded text into every datapoint, and on the default a first-message generation that fails falls back to the same recorded opening with a warning rather than dropping the datapoint. Either way the output file can carry a real user's words into a file you commit.
+
+Three of the flags set a field on `TraceAnalysisConfig`, which `datapoints_from_traces()` and `extend_from_traces()` take as `config=`. One of the three is spelled differently there:
+
+```python
+from evaluatorq.simulation import TraceAnalysisConfig
+
+# The Python equivalent of --replay-first-message --no-redact-pii --max-summaries 200.
+config = TraceAnalysisConfig(generate_first_message=False, redact_pii=False, max_reduce_summaries=200)
+print(config.generate_first_message, config.redact_pii, config.max_reduce_summaries)
+
+# The field is max_reduce_summaries; the flag's own spelling is not a field.
+try:
+    TraceAnalysisConfig(max_summaries=200)
+except Exception as exc:
+    print(type(exc).__name__)
+```
+
+`TraceAnalysisConfig` forbids unknown fields, so a misspelled one raises instead of being dropped in silence. Its remaining fields have no CLI flag; the guide tabulates them under [What happens between a trace and a datapoint](../guides/agent-simulation.md#what-happens-between-a-trace-and-a-datapoint).
 
 ---
 
