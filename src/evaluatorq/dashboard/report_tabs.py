@@ -847,7 +847,7 @@ def _sim_failures_table(section: Any, rid: str, *, standalone: bool = False, err
         if errored_count
         else ''
     )
-    return f'<section class="report-card"><h2>Failures</h2>{html_table(headers, table_rows, row_attrs)}{error_note}</section>'
+    return f'<section class="report-card sim-failures"><h2>Failures</h2>{html_table(headers, table_rows, row_attrs)}{error_note}</section>'
 
 
 def _sim_breakdown_table(

@@ -1995,6 +1995,14 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report table:not(.rk-heatmap) tbody td:not(:first-child) {
     text-align: right; font-variant-numeric: tabular-nums;
 }
+/* Failures table: Persona and Why are text, so they read left-aligned under their headers. */
+.sim-report .sim-failures table thead th:nth-child(2),
+.sim-report .sim-failures table thead th:nth-child(3),
+.sim-report .sim-failures table tbody td:nth-child(2),
+.sim-report .sim-failures table tbody td:nth-child(3) { text-align: left; }
+/* The dashboard's Why cell is a span; inline boxes ignore max-width/overflow, so the
+   nowrap text would stretch the table past its card. Block lets the ellipsis apply. */
+.sim-report .sim-failures span.fail-why { display: block; }
 
 /* Failures table: collapsed pass/fail dots that unfold to full criteria text.
    Height animates both ways via ::details-content + interpolate-size where
