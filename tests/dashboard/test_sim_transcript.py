@@ -636,8 +636,8 @@ class TestConversationRows:
         html = render_sim_row_list('rid', sim_entries)
         assert '#1' in html
         assert 'alice' in html
-        assert '<td class="sim-conv-turns">3</td>' in html
-        assert '<td class="sim-conv-score">0.82</td>' in html
+        assert '<td class="sim-conv-turns num">3</td>' in html
+        assert '<td class="sim-conv-score num">0.82</td>' in html
         assert 'Goal met' in html
         assert 'Goal missed' in html
         assert 'Error' in html

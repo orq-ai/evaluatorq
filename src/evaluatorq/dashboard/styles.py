@@ -1700,6 +1700,7 @@ _SIM_TRANSCRIPT_CSS = """
     padding: 10px 12px; background: none; border: 0; cursor: pointer;
     font: inherit; font-weight: 600; color: var(--text-strong); text-align: left;
 }
+.sim-report th.num .sim-th-sort { justify-content: flex-end; }
 .sim-report .sim-th-sort:hover { color: var(--teal-600); }
 /* Inactive sortable columns show a faint ⇅; it strengthens on hover so the
    header reads as clickable. The active column's ▲/▼ is always full-strength. */
@@ -1987,22 +1988,15 @@ _SIM_REPORT_OVERRIDES_CSS = """
     padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--border-subtle);
 }
 .sim-report table:not(.rk-heatmap) tbody td {
-    font-size: 13px; padding: 12px 16px; border-bottom: none;
+    font-size: 13px; padding: 12px 16px; border-bottom: none; text-align: left;
 }
 .sim-report table:not(.rk-heatmap) tbody tr,
 .sim-report table:not(.rk-heatmap) tbody tr:nth-child(even) { background: transparent; }
-.sim-report table:not(.rk-heatmap) thead th:not(:first-child),
-.sim-report table:not(.rk-heatmap) tbody td:not(:first-child) {
+.sim-report table:not(.rk-heatmap) thead th.num,
+.sim-report table:not(.rk-heatmap) tbody td.num {
     text-align: right; font-variant-numeric: tabular-nums;
 }
-/* Failures table: Persona and Why are text, so they read left-aligned under their headers. */
-.sim-report .sim-failures table thead th:nth-child(2),
-.sim-report .sim-failures table thead th:nth-child(3),
-.sim-report .sim-failures table tbody td:nth-child(2),
-.sim-report .sim-failures table tbody td:nth-child(3) { text-align: left; }
-/* The dashboard's Why cell is a span; inline boxes ignore max-width/overflow, so the
-   nowrap text would stretch the table past its card. Block lets the ellipsis apply. */
-.sim-report .sim-failures span.fail-why { display: block; }
+.sim-report .report-card:has(> table .fail-why) { overflow-x: auto; }
 
 /* Failures table: collapsed pass/fail dots that unfold to full criteria text.
    Height animates both ways via ::details-content + interpolate-size where

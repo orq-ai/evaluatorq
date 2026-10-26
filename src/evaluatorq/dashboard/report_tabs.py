@@ -817,12 +817,13 @@ def _sim_failures_table(section: Any, rid: str, *, standalone: bool = False, err
             f'<p>No completed conversations failed their goal.{error_note}</p></section>'
         )
     headers = ['Scenario', 'Persona', 'Why', 'Criteria', 'Score']
+    col_classes = ['', '', 'fail-why', 'num', 'num']
     table_rows = [
         [
             esc(str(row['scenario'])),
             esc(str(row['persona'])),
             (
-                f'<span class="fail-why" data-no-drawer title="{esc(str(row.get("reason", "")))}">'
+                f'<span data-no-drawer title="{esc(str(row.get("reason", "")))}">'
                 f'{esc(_cap(str(row.get("reason", ""))))}</span>'
             ),
             # data-no-drawer so unfolding the dots foldout doesn't open the drawer.
@@ -847,7 +848,7 @@ def _sim_failures_table(section: Any, rid: str, *, standalone: bool = False, err
         if errored_count
         else ''
     )
-    return f'<section class="report-card sim-failures"><h2>Failures</h2>{html_table(headers, table_rows, row_attrs)}{error_note}</section>'
+    return f'<section class="report-card"><h2>Failures</h2>{html_table(headers, table_rows, row_attrs, col_classes)}{error_note}</section>'
 
 
 def _sim_breakdown_table(
@@ -882,7 +883,7 @@ def _sim_breakdown_table(
             anchor = entity_ids.get(str(source.get('id', '')))
             if anchor:
                 cells[0] = f'<a href="#{esc(anchor)}">{cells[0]}</a>'
-    table = html_table(headers, table_rows, row_attrs)
+    table = html_table(headers, table_rows, row_attrs, ['', *['num'] * (len(headers) - 1)])
     denominator_note = (
         'Rates and averages use all cohort conversations, including errors. n/a means no conversation completed.'
         if any(row.get('errored_conversations', 0) for row in rows)

@@ -444,3 +444,14 @@ def test_md_helpers_bold_bar_none_does_not_crash_and_is_not_bolded():
     out = md_helpers.bold_bar(None)
     assert 'n/a' in out
     assert '**' not in out
+
+
+def test_html_table_col_classes_apply_to_header_and_every_cell() -> None:
+    out = h.html_table(['A', 'B'], [['1', '2'], ['3', '4']], col_classes=['', 'col-text'])
+    assert out.count('class="col-text"') == 3
+    assert '<th>A</th>' in out
+
+
+def test_html_table_col_classes_must_match_headers() -> None:
+    with pytest.raises(ValueError, match='col_classes'):
+        h.html_table(['A', 'B'], [['1', '2']], col_classes=['x'])
