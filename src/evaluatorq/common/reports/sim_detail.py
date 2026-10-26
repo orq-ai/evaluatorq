@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc
+from evaluatorq.common.reports.html_helpers import entry_outcome, status_badge
 from evaluatorq.common.reports.messages import render_message_list
 
 if TYPE_CHECKING:
@@ -65,26 +66,16 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
 
     # Goal outcome and criteria-met count are two different facts: an agent can
     # miss the goal while still satisfying every criterion (and vice versa), so
-    # "FAIL · 4/4 met" reads as a contradiction. The goal gets its own block —
-    # the goal itself, then whether it was reached — and the criteria header
-    # carries only the neutral tally.
-    passed = entry.goal_achieved
-    verdict_class = 'sim-criteria-verdict--pass' if passed else 'sim-criteria-verdict--fail'
-    verdict_word = '&#x2713; Goal met' if passed else '&#x2717; Goal missed'
-    if entry.error or entry.terminated_by == 'error':
-        verdict_word = 'Execution error'
-        verdict_class = 'sim-criteria-verdict--error'
+    # the criteria header carries only the neutral tally.
+    verdict_html = status_badge(*entry_outcome(entry))
     goal_text = (
         f'<p class="sim-goal-text">{esc(entry.goal)}</p>'
         if entry.goal
-        else '<p class="sim-goal-text sim-goal-text--missing">Goal not recorded for this run.</p>'
+        else '<p class="sim-goal-text sim-goal-text--missing">The goal text was not saved with this run.</p>'
     )
     goal_html = (
         f'<div class="sim-goal">'
-        f'<div class="sim-criteria-head">'
-        f'<span class="sim-criteria-header">GOAL</span>'
-        f'<span class="sim-criteria-verdict {verdict_class}">{verdict_word}</span>'
-        f'</div>'
+        f'<div class="sim-goal-head"><span class="sim-goal-label">GOAL</span>{verdict_html}</div>'
         f'{goal_text}'
         f'</div>'
     )

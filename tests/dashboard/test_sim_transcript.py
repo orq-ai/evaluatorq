@@ -785,7 +785,7 @@ class TestTranscriptFragmentRewrite:
         html = render_transcript_fragment(sim_entry_with_safety_criterion)
         # goal_achieved defaults True, one of two criteria passed. Goal outcome and
         # criteria tally are shown as separate spans (not "PASS · 1/2 met").
-        assert 'sim-criteria-verdict--pass' in html
+        assert 'status-badge--pass' in html
         assert 'Goal met' in html
         assert '1/2 criteria met' in html
 
@@ -801,8 +801,16 @@ class TestTranscriptFragmentRewrite:
         assert html.index('Goal missed') < html.index('CRITERIA')
 
         legacy = render_transcript_fragment(_entry(criteria=[]))
-        assert 'Goal not recorded for this run.' in legacy
+        assert 'The goal text was not saved with this run.' in legacy
         assert 'Goal met' in legacy
+
+    def test_transcript_fragment_error_without_criteria_shows_error_pill(self) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        html = render_transcript_fragment(_entry(criteria=[], error='target timed out', terminated_by='error'))
+        assert 'status-badge--warn">Error<' in html
+        assert 'Goal met' not in html and 'Goal missed' not in html
+        assert 'No criteria defined for this scenario.' in html
 
     def test_transcript_fragment_bubbles_present(self, sim_entry_with_transcript) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment

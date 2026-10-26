@@ -287,17 +287,13 @@ def _section_rows(by_kind: dict[str, Any], section_kind: str, key: str) -> list[
 
 def _group_entries_by_cohort(
     entries: list[Any], rows: list[Any], personas: list[dict[str, Any]], scenarios: list[dict[str, Any]]
-) -> dict[str, dict[Any, list[Any]]]:
-    """Associate transcript entries with Task 1's collision-safe cohort IDs.
-
-    ``pair`` keys on ``(persona_id, scenario_id)`` — one Breakdown heatmap cell.
-    """
+) -> dict[str, dict[str, list[Any]]]:
+    """Associate transcript entries with Task 1's collision-safe cohort IDs."""
     from evaluatorq.simulation.reports.sections import _persona_cohort_id, _scenario_cohort_id
 
-    cohorts: dict[str, dict[Any, list[Any]]] = {
+    cohorts = {
         'persona': {str(row['id']): [] for row in personas},
         'scenario': {str(row['id']): [] for row in scenarios},
-        'pair': {},
     }
     for entry, result in zip(entries, rows, strict=True):
         persona_id = _persona_cohort_id(result)
@@ -306,8 +302,17 @@ def _group_entries_by_cohort(
             cohorts['persona'][persona_id].append(entry)
         if scenario_id in cohorts['scenario']:
             cohorts['scenario'][scenario_id].append(entry)
-        cohorts['pair'].setdefault((persona_id, scenario_id), []).append(entry)
     return cohorts
+
+
+def _group_entries_by_pair(entries: list[Any], rows: list[Any]) -> dict[tuple[str, str], list[Any]]:
+    """Entries per ``(persona_id, scenario_id)`` — one Breakdown heatmap cell."""
+    from evaluatorq.simulation.reports.sections import _persona_cohort_id, _scenario_cohort_id
+
+    pairs: dict[tuple[str, str], list[Any]] = {}
+    for entry, result in zip(entries, rows, strict=True):
+        pairs.setdefault((_persona_cohort_id(result), _scenario_cohort_id(result)), []).append(entry)
+    return pairs
 
 
 def _sim_entity_context(
@@ -326,6 +331,7 @@ def _sim_entity_context(
         'persona_stats': {str(row['id']): row for row in persona_rows},
         'scenario_stats': {str(row['id']): row for row in scenario_rows},
         'cohorts': _group_entries_by_cohort(entries, rows, personas, scenarios),
+        'pairs': _group_entries_by_pair(entries, rows),
         'persona_dom_ids': {str(row['id']): f'persona-{index}' for index, row in enumerate(personas)},
         'scenario_dom_ids': {str(row['id']): f'scenario-{index}' for index, row in enumerate(scenarios)},
     }
@@ -609,6 +615,7 @@ def _sim_entity_modal(entity_context: dict[str, Any], *, standalone: bool = Fals
         '<div class="sim-entity-modal-actions">'
         '<button type="button" class="sim-entity-back" data-sim-entity-back hidden aria-label="Back to cohort">&larr; Back</button>'
         '<button type="button" class="sim-entity-nav" data-sim-entity-prev aria-label="Previous entity (k)" title="Previous entity (k)">&larr;<kbd class="sim-entity-kbd">k</kbd></button>'
+        '<span class="sim-entity-position" data-sim-entity-position hidden aria-live="polite"></span>'
         '<button type="button" class="sim-entity-nav" data-sim-entity-next aria-label="Next entity (j)" title="Next entity (j)">&rarr;<kbd class="sim-entity-kbd">j</kbd></button>'
         '<button type="button" class="sim-entity-close" data-sim-entity-close>Close</button>'
         '</div>'
@@ -740,16 +747,11 @@ def _sim_cohort_list(entries: list[Any], rid: str) -> str:
     if not entries:
         return '<p class="sim-cohort-empty">No conversations.</p>'
 
-    from evaluatorq.common.reports.html_helpers import status_badge
+    from evaluatorq.common.reports.html_helpers import entry_outcome, status_badge
 
     items: list[str] = []
     for entry in entries:
-        if entry.error or entry.terminated_by == 'error':
-            outcome = status_badge('Error', 'warn')
-        else:
-            outcome = status_badge(
-                'Passed' if entry.goal_achieved else 'Failed', 'pass' if entry.goal_achieved else 'fail'
-            )
+        outcome = status_badge(*entry_outcome(entry))
         if not rid:
             items.append(
                 f'<a class="sim-cohort-conversation" href="#conv-{entry.index + 1}">#{entry.index + 1} · {esc(entry.persona)} · {esc(entry.scenario)} {outcome}</a>'
@@ -902,7 +904,7 @@ def _sim_heat_cell_trigger(rid: str, entity_context: dict[str, Any]) -> Callable
     Lowest score first, so a red cell opens on a failure. The rest are hidden
     sibling triggers in the same cell, which is the set the drawer's j/k steps through.
     """
-    pairs: dict[tuple[str, str], list[Any]] = entity_context.get('cohorts', {}).get('pair', {})
+    pairs: dict[tuple[str, str], list[Any]] = entity_context.get('pairs', {})
 
     def render(cell: dict, text: str) -> str:
         entries = sorted(
@@ -2943,16 +2945,11 @@ def _sim_transcripts(rid: str, entries: list[Any], *, standalone: bool = False) 
 
     if not entries:
         return '<p class="rk-empty">No conversations recorded for this run.</p>'
-    from evaluatorq.common.reports.html_helpers import status_badge
+    from evaluatorq.common.reports.html_helpers import entry_outcome, status_badge
 
     conversations: list[str] = []
     for entry in entries:
-        if entry.error or entry.terminated_by == 'error':
-            outcome = status_badge('Error', 'warn')
-        else:
-            outcome = status_badge(
-                'Goal met' if entry.goal_achieved else 'Goal missed', 'pass' if entry.goal_achieved else 'fail'
-            )
+        outcome = status_badge(*entry_outcome(entry))
         conversations.append(
             f'<details class="rk-panel export-conversation export-evidence" id="conv-{entry.index + 1}">'
             f'<summary class="export-conversation-summary">'

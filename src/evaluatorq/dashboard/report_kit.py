@@ -545,15 +545,8 @@ def heatmap(
                 tds.append('<td class="rk-heat-cell rk-heat-empty">—</td>')
                 continue
             rate = cell.get(value_key, 0.0)
-            if cell.get('completed_conversations') == 0 and cell.get('errored_conversations', 0) > 0:
-                errored = cell['errored_conversations']
-                title = f'No completed conversations; {errored} errored.'
-                tds.append(
-                    f'<td class="rk-heat-cell rk-heat-no-verdict" title="{esc(title)}" '
-                    f'aria-label="{esc(title)}">{value_html(cell, "n/a")}</td>'
-                )
-                continue
-            if rate is None:
+            no_completed = cell.get('completed_conversations') == 0 and cell.get('errored_conversations', 0) > 0
+            if rate is None or no_completed:
                 errored = cell.get('errored_conversations', 0)
                 title = f'No completed conversations; {errored} errored.'
                 tds.append(
