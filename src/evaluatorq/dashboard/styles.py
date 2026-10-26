@@ -3133,6 +3133,7 @@ button.cmp-head:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(-
 .sim-report.cmp-report table.cmp-conv-table thead th:not(:first-child),
 .sim-report.cmp-report table.cmp-conv-table tbody td:not(:first-child) { text-align: left; vertical-align: middle; }
 .sim-report.cmp-report table.cmp-conv-table tbody td { padding: 10px; }
+.sim-report.cmp-report .cmp-conv-row { box-shadow: none; }
 .sim-report.cmp-report table.cmp-conv-table .sim-th-sort { padding: 10px; }
 .cmp-conv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .cmp-seg { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--surface-sunken); }
@@ -3151,9 +3152,6 @@ button.cmp-head:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(-
 .cmp-change--good { background: var(--green-100); color: var(--teal-600); }
 .cmp-change--flat { background: var(--surface-sunken); color: var(--text-body); }
 .cmp-change--warn { background: color-mix(in srgb, #c9a13f 16%, transparent); color: var(--amber-ink); }
-.sim-report .cmp-conv-row--regressed { box-shadow: inset 3px 0 0 var(--red-600); }
-.sim-report .cmp-conv-row--improved { box-shadow: inset 3px 0 0 var(--green-600); }
-.sim-report .cmp-conv-row--error { box-shadow: inset 3px 0 0 var(--amber-ink); }
 .cmp-unmatched { margin-top: 12px; font-size: 12px; color: var(--text-muted); }
 .cmp-unmatched summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 .cmp-unmatched ul { margin: 6px 0 0; padding-left: 22px; columns: 2; }

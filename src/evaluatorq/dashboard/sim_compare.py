@@ -745,7 +745,7 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
         d_turns = b.turn_count - a.turn_count
         url = f'/compare/sim/transcript?{_qs(cmp, ia=a.index, ib=b.index)}'
         rows.append(
-            f'<tr class="sim-conv-row cmp-conv-row cmp-conv-row--{change}" role="button" tabindex="0" '
+            f'<tr class="sim-conv-row cmp-conv-row" role="button" tabindex="0" '
             f'data-sim-entity-trigger data-entity-kind="conversation" data-drawer-url="{esc(url)}">'
             f'<td class="sim-conv-persona">{esc(a.persona)}</td>'
             f'<td class="sim-conv-scenario">{esc(a.scenario)}</td>'
