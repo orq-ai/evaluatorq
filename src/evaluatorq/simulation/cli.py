@@ -1661,8 +1661,8 @@ def from_traces(
         typer.Option(
             '--agent-description',
             help=(
-                'Agent description used by --extend generation. Optional; '
-                'inferred from the traffic profile when omitted.'
+                'Agent description used by --extend generation. Optional; when omitted, a generic '
+                'placeholder is used and the traffic profile alone steers generation.'
             ),
         ),
     ] = None,
@@ -1671,7 +1671,8 @@ def from_traces(
         typer.Option(
             '--sim-model',
             help=(
-                'Model for every LLM call: summarize, persona/scenario inference, first-message generation and --extend generation. '
+                'Model for every LLM call: summarize, persona/scenario inference, first-message generation '
+                'and --extend generation. '
                 f'Default: the fast model role. {MODEL_OPTION_NOTE}'
             ),
             show_default=False,
