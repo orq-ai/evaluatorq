@@ -1482,6 +1482,9 @@ _FILTER_CHEVRON = (
 
 # Goal-outcome chip dot colors (spec: Achieved green-600, Not achieved red-600).
 _GOAL_OUTCOME_DOT_CLASS: dict[str, str] = {'Achieved': 'chip-dot-green', 'Not achieved': 'chip-dot-red'}
+# Visible chip text: the submitted values stay Achieved / Not achieved (URLs and
+# saved links use them), the label matches the "Goal met / missed" badges.
+GOAL_OUTCOME_LABEL: dict[str, str] = {'Achieved': 'Goal met', 'Not achieved': 'Goal missed'}
 
 
 def _filter_input_id(name: str, value: str) -> str:
@@ -1647,7 +1650,14 @@ def _render_sim_filter_rail(
     goal_opts = [o for o in opts.get('goal_outcome', []) if o in _GOAL_OUTCOME_DOT_CLASS]
     goal_sel = set(selections.get('goal_outcome', []))
     goal_chips = ''.join(
-        _chip('goal_outcome', opt, checked=(opt in goal_sel), dot_cls=_GOAL_OUTCOME_DOT_CLASS[opt]) for opt in goal_opts
+        _chip(
+            'goal_outcome',
+            opt,
+            checked=(opt in goal_sel),
+            dot_cls=_GOAL_OUTCOME_DOT_CLASS[opt],
+            label=GOAL_OUTCOME_LABEL[opt],
+        )
+        for opt in goal_opts
     )
 
     term_opts = opts.get('terminated_by', [])

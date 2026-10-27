@@ -149,11 +149,46 @@ class Comparison:
     """Surviving rows: a pair stays when either side passes the filter, an unmatched entry when it passes."""
     full: Matching
     """The unfiltered matching, for the status line and the rail's shown/total counter."""
+    narrowing: dict[str, list[str]]
+    """The filter selections that drop at least one conversation, in rail order."""
 
     @property
     def total_rows(self) -> int:
         """Rows (pairs + unmatched) before filtering."""
         return len(self.full.matched) + len(self.full.a_only) + len(self.full.b_only)
+
+    @property
+    def shown_rows(self) -> int:
+        return len(self.matching.matched) + len(self.matching.a_only) + len(self.matching.b_only)
+
+    @property
+    def outcome_filtered(self) -> bool:
+        """A filter picks conversations by the outcome being compared, so the
+        goal rate and goal score can no longer be compared between runs."""
+        return bool(_OUTCOME_DIMS & self.narrowing.keys())
+
+
+# Filters that select on the goal outcome itself (directly or through the score).
+_OUTCOME_DIMS = frozenset({'goal_outcome', 'max_goal_score'})
+
+
+def narrowing_selections(
+    run_a: SimulationRun, run_b: SimulationRun, selections: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    """The selections that drop a conversation in either run, in rail order.
+
+    The rail posts every control, defaults included, so a selection is only a
+    real filter when applying it alone removes something.
+    """
+    from evaluatorq.dashboard.filters import FILTERS
+
+    sim = FILTERS['sim']
+    return {
+        dim: selections[dim]
+        for dim in sim.dimensions
+        if selections.get(dim)
+        and any(len(sim.apply(run, {dim: selections[dim]})) < len(run.results) for run in (run_a, run_b))
+    }
 
 
 def _side(rid: str, run: SimulationRun, entries: list[SimulationEntry]) -> Side:
@@ -175,7 +210,7 @@ def build_comparison(
     )
     side_a = _side(rid_a, run_a, [*(p.a for p in matching.matched), *matching.a_only])
     side_b = _side(rid_b, run_b, [*(p.b for p in matching.matched), *matching.b_only])
-    return Comparison(side_a, side_b, matching, full)
+    return Comparison(side_a, side_b, matching, full, narrowing_selections(run_a, run_b, selections))
 
 
 def pair_change(a: Side, b: Side, pair: MatchedPair) -> str:
@@ -322,6 +357,11 @@ def _change_pill(change: str) -> str:
     return f'<span class="cmp-change cmp-change--{tone}">{text}</span>'
 
 
+def _tone(delta: float) -> str:
+    """good / bad / flat for a higher-is-better delta."""
+    return 'flat' if abs(delta) < 0.005 else 'good' if delta > 0 else 'bad'
+
+
 def _fmt_rate(v: float | None) -> str:
     return 'n/a' if v is None else f'{v:.0%}'
 
@@ -381,26 +421,44 @@ def _view_attrs(cmp: Comparison, view: str) -> str:
     )
 
 
-def _headlines(cmp: Comparison, scores: list[ScoreRow]) -> str:
+# Scorers that restate the goal rate; the "biggest score move" headline skips them.
+_GOAL_SCORERS = frozenset({'goal_achieved'})
+
+
+def _headlines(cmp: Comparison, scores: list[ScoreRow], view: str, *, oob: bool = False) -> str:
     """Insights-style "what changed" rows: a big number, a one-line finding with
-    its reason, and an action that narrows the conversation table."""
+    its reason, and an action that narrows the conversation table to *view*.
+    The row whose view is showing reads "Showing these" and clicking it again
+    returns the table to its default view. The table route re-renders this
+    block out of band so the pressed row follows the segment control."""
     changes = [(p, pair_change(cmp.a, cmp.b, p)) for p in cmp.matching.matched]
     regressed = [p for p, c in changes if c == 'regressed']
     improved = [p for p, c in changes if c == 'improved']
     errored = [p for p, c in changes if c == 'error']
     rows: list[str] = []
 
-    def row(number: str, finding: str, why: str, *, tone: str = '', view: str | None = None, go: str = '') -> str:
+    def row(number: str, finding: str, why: str, *, tone: str = '', target: str | None = None, go: str = '') -> str:
         tone_cls = f' cmp-head--{tone}' if tone else ''
-        go_html = f'<span class="cmp-head-go">{esc(go)} &rarr;</span>' if go else '<span></span>'
+        on = target is not None and target == view
+        if on:
+            go_html = '<span class="cmp-head-go">Showing these &#x2713;</span>'
+        elif go:
+            go_html = f'<span class="cmp-head-go">{esc(go)} &rarr;</span>'
+        else:
+            go_html = '<span></span>'
         inner = (
             f'<span class="cmp-head-number">{esc(number)}</span>'
             f'<span><span class="cmp-head-finding">{esc(finding)}</span>'
             f'<span class="cmp-head-why">{esc(why)}</span></span>{go_html}'
         )
-        if view is None:
+        if target is None:
             return f'<div class="cmp-head{tone_cls}">{inner}</div>'
-        return f'<button type="button" class="cmp-head{tone_cls}" {_view_attrs(cmp, view)}>{inner}</button>'
+        # Pressing the showing row again goes back to the default view ('' = changed, or all).
+        attrs = _view_attrs(cmp, '' if on else target)
+        return (
+            f'<button type="button" class="cmp-head{tone_cls}{" is-on" if on else ""}" '
+            f'aria-pressed="{"true" if on else "false"}" {attrs}>{inner}</button>'
+        )
 
     def where(pairs: list[MatchedPair]) -> str:
         scenario, count = Counter(p.a.scenario for p in pairs).most_common(1)[0]
@@ -416,7 +474,7 @@ def _headlines(cmp: Comparison, scores: list[ScoreRow]) -> str:
                 'Regressed in B',
                 'Goal met in A, missed in B' + where(regressed),
                 tone='bad',
-                view='regressed',
+                target='regressed',
                 go='Review regressions',
             )
         )
@@ -427,7 +485,7 @@ def _headlines(cmp: Comparison, scores: list[ScoreRow]) -> str:
                 'Improved in B',
                 'Goal missed in A, met in B' + where(improved),
                 tone='good',
-                view='improved',
+                target='improved',
                 go='Review improvements',
             )
         )
@@ -438,12 +496,22 @@ def _headlines(cmp: Comparison, scores: list[ScoreRow]) -> str:
                 'Error changes',
                 'A conversation errored in one run and not the other' + where(errored),
                 tone='warn',
-                view='error',
+                target='error',
                 go='Review errors',
             )
         )
     agg_a, agg_b = aggregates(cmp.a), aggregates(cmp.b)
-    if agg_a.goal_rate is not None and agg_b.goal_rate is not None:
+    if cmp.outcome_filtered:
+        rows.append(
+            row(
+                'n/a',
+                'Goal rate not comparable',
+                'A filter picks conversations by their goal outcome, so the rate measures the filter, not the runs',
+                target='all',
+                go='All conversations',
+            )
+        )
+    elif agg_a.goal_rate is not None and agg_b.goal_rate is not None:
         pts = (agg_b.goal_rate - agg_a.goal_rate) * 100
         verb = 'held steady' if abs(pts) < 0.5 else ('rose' if pts > 0 else 'fell')
         rows.append(
@@ -451,11 +519,11 @@ def _headlines(cmp: Comparison, scores: list[ScoreRow]) -> str:
                 f'{pts:+.0f} pts',
                 f'Goal rate {verb}',
                 f'{agg_a.goal_rate:.0%} in A, {agg_b.goal_rate:.0%} in B',
-                view='all',
+                target='all',
                 go='All conversations',
             )
         )
-    moved = [r for r in scores if r.delta is not None and abs(r.delta) >= 0.01]
+    moved = [r for r in scores if r.label not in _GOAL_SCORERS and r.delta is not None and abs(r.delta) >= 0.01]
     if moved:
         top = max(moved, key=lambda r: abs(r.delta or 0.0))
         delta = top.delta or 0.0
@@ -469,18 +537,92 @@ def _headlines(cmp: Comparison, scores: list[ScoreRow]) -> str:
         )
     if not regressed and not improved and not errored and cmp.matching.matched:
         rows.insert(0, row('0', 'No outcome changes', 'Every matched conversation kept its goal outcome'))
-    if not rows:
-        return ''
-    return f'<section class="cmp-heads" aria-label="What changed">{"".join(rows)}</section>'
+    oob_attr = ' hx-swap-oob="true"' if oob else ''
+    return f'<section id="cmp-heads" class="cmp-heads" aria-label="What changed"{oob_attr}>{"".join(rows)}</section>'
+
+
+_FILTER_LABELS = {
+    'persona': 'Persona',
+    'scenario': 'Scenario',
+    'terminated_by': 'Ended by',
+    'goal_outcome': 'Goal outcome',
+    'rule_broken': 'Rule broken',
+    'max_goal_score': 'Goal score',
+    'min_turns': 'Turns',
+    'min_total_tokens': 'Tokens',
+}
+_COPY_LINK_JS = (
+    'navigator.clipboard&&navigator.clipboard.writeText(location.href);'
+    "this.textContent='Link copied';setTimeout(()=>{this.textContent='Copy link to this view'},2000)"
+)
+
+
+def _filter_label(dim: str) -> str:
+    if dim in _FILTER_LABELS:
+        return _FILTER_LABELS[dim]
+    metric = next((m for m in TURN_METRICS if dim in (f'min_{m.key}', f'max_{m.key}')), None)
+    return metric.label if metric else dim.replace('_', ' ').capitalize()
+
+
+def _filter_value_text(dim: str, values: list[str]) -> str:
+    from evaluatorq.dashboard.view import GOAL_OUTCOME_LABEL
+
+    if dim == 'goal_outcome':
+        return ', '.join(GOAL_OUTCOME_LABEL.get(v, v) for v in values)
+    if dim.startswith('max_'):
+        return f'≤ {values[0]}'
+    if dim.startswith('min_'):
+        return f'≥ {values[0]}'
+    if dim == 'rule_broken':
+        return 'yes'
+    shown = ', '.join(values[:2])
+    return shown + (f' +{len(values) - 2}' if len(values) > 2 else '')
+
+
+def _filter_strip(cmp: Comparison, state: TableState) -> str:
+    """Insights-style filter bar: how many rows the filters keep, one removable
+    chip per active filter, clear all, and a copy-link button (the URL holds
+    the filters, segment and sort). Chips are plain links to the same view
+    without that filter, so they work without the rail."""
+    full = cmp.full
+    noun = 'rows' if full.a_only or full.b_only else 'pairs'
+    count = f'<span class="cmp-fbar-count">Showing <b>{cmp.shown_rows}</b> of <b>{cmp.total_rows}</b> {noun}</span>'
+    base = TableState(state.view, state.sort, state.direction, 1, state.size)
+    if cmp.narrowing:
+        chips = ''.join(
+            f'<span class="cmp-fchip"><span class="cmp-fchip-dim">{esc(_filter_label(dim))}</span>'
+            f'{esc(_filter_value_text(dim, values))}'
+            f'<a class="cmp-fchip-x" href="{esc(_compare_url(cmp, {k: v for k, v in cmp.narrowing.items() if k != dim}, base))}" '
+            f'aria-label="Remove the {esc(dim.replace("_", " "))} filter">&times;</a></span>'
+            for dim, values in cmp.narrowing.items()
+        )
+        rest = f'{chips}<a class="cmp-fbar-clear" href="{esc(_compare_url(cmp, {}, base))}">Clear all</a>'
+    else:
+        rest = '<span class="cmp-fbar-hint">Use the filters to narrow both runs to the same conversations.</span>'
+    copy = f'<button type="button" class="cmp-fbar-copy" onclick="{esc(_COPY_LINK_JS)}">Copy link to this view</button>'
+    return f'<div class="cmp-fbar" role="status">{count}{rest}{copy}</div>'
 
 
 def _tiles(cmp: Comparison) -> str:
-    """Single-run style number tiles: B's value large, then ``A → B`` and a delta pill."""
+    """Single-run style number tiles: B's value large, then ``A → B`` and a delta
+    pill. Under an outcome filter the goal tiles say "not comparable" instead."""
     a, b = aggregates(cmp.a), aggregates(cmp.b)
 
-    def tile(label: str, va: float | None, vb: float | None, fmt: Any, delta_text: Any, *, higher: bool | None) -> dict:
+    def tile(
+        label: str,
+        va: float | None,
+        vb: float | None,
+        fmt: Any,
+        delta_text: Any,
+        *,
+        higher: bool | None,
+        outcome: bool = False,
+    ) -> dict:
         d = None if va is None or vb is None else vb - va
-        pill = _delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
+        if outcome and cmp.outcome_filtered:
+            pill = '<span class="cmp-delta cmp-delta--flat" title="A filter picks conversations by goal outcome">not comparable</span>'
+        else:
+            pill = _delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
         return {
             'label': label,
             'value': fmt(vb),
@@ -497,8 +639,24 @@ def _tiles(cmp: Comparison) -> str:
                 lambda d: f'{d:+.0f}',
                 higher=None,
             ),
-            tile('Goal rate', a.goal_rate, b.goal_rate, _fmt_rate, lambda d: f'{d * 100:+.0f} pts', higher=True),
-            tile('Avg score', a.avg_score, b.avg_score, _fmt_num, lambda d: f'{d:+.2f}', higher=True),
+            tile(
+                'Goal rate',
+                a.goal_rate,
+                b.goal_rate,
+                _fmt_rate,
+                lambda d: f'{d * 100:+.0f} pts',
+                higher=True,
+                outcome=True,
+            ),
+            tile(
+                'Avg goal score',
+                a.avg_score,
+                b.avg_score,
+                _fmt_num,
+                lambda d: f'{d:+.2f}',
+                higher=True,
+                outcome=True,
+            ),
             tile('Avg turns', a.avg_turns, b.avg_turns, lambda v: _fmt_num(v, 1), lambda d: f'{d:+.1f}', higher=None),
             tile('Errors', a.errors, b.errors, lambda v: f'{v:.0f}', lambda d: f'{d:+.0f}', higher=False),
         ],
@@ -506,18 +664,20 @@ def _tiles(cmp: Comparison) -> str:
     )
 
 
-def _stack_rows(cmp: Comparison, segments_for: Any, legend: list[tuple[str, str]]) -> str:
-    """Two stacked 100% bars (A, B) plus a dot legend — the Insights "at a glance" bar."""
+def _stack_rows(cmp: Comparison, segments_for: Any) -> str:
+    """Two stacked 100% bars (A, B) plus a legend that carries each category's
+    ``A → B`` count — the Insights "at a glance" bar. Counts live in the legend,
+    not on the segments, where small text over the fills fails contrast."""
+    segs_a: list[tuple[str, str, int]] = segments_for(cmp.a)
+    segs_b: list[tuple[str, str, int]] = segments_for(cmp.b)
 
-    def bar(which: str, side: Side) -> str:
-        counts: list[tuple[str, str, int]] = segments_for(side)
+    def bar(which: str, counts: list[tuple[str, str, int]]) -> str:
         total = sum(n for _, _, n in counts)
         if not total:
             body = '<span class="cmp-stack-empty">No conversations</span>'
         else:
             body = ''.join(
-                f'<i style="flex-grow:{n};background:{color}" title="{esc(label)}: {n}">'
-                f'{n if n / total >= 0.07 else ""}</i>'
+                f'<i style="flex-grow:{n};background:{color}" title="{esc(label)}: {n} of {total}"></i>'
                 for label, color, n in counts
                 if n
             )
@@ -526,8 +686,14 @@ def _stack_rows(cmp: Comparison, segments_for: Any, legend: list[tuple[str, str]
             f'<div class="cmp-stack-bar">{body}</div><span class="cmp-stack-total">{total}</span></div>'
         )
 
-    legend_html = ''.join(f'<span><i style="background:{color}"></i>{esc(label)}</span>' for label, color in legend)
-    return f'<div class="cmp-stack">{bar("A", cmp.a)}{bar("B", cmp.b)}</div><div class="cmp-legend">{legend_html}</div>'
+    legend_html = ''.join(
+        f'<span><i style="background:{color}"></i>{esc(label)}<b class="cmp-legend-n">{na} &rarr; {nb}</b></span>'
+        for (label, color, na), (_, _, nb) in zip(segs_a, segs_b, strict=True)
+        if na or nb
+    )
+    return (
+        f'<div class="cmp-stack">{bar("A", segs_a)}{bar("B", segs_b)}</div><div class="cmp-legend">{legend_html}</div>'
+    )
 
 
 _OUTCOME_SEGMENTS = (
@@ -536,7 +702,7 @@ _OUTCOME_SEGMENTS = (
     ('error', 'Error', 'var(--outcome-error)'),
 )
 # Termination reasons are categories, not verdicts — neutral inks, except the
-# error reason, which keeps the error amber. All are dark enough for the white count labels.
+# error reason, which keeps the error amber.
 _TERMINATION_INKS = ('var(--ink-900)', 'var(--text-muted)', 'var(--teal-600)', 'var(--text-body)')
 
 
@@ -557,8 +723,9 @@ def _outcomes_panel(cmp: Comparison) -> str:
         counts = Counter(e.terminated_by for e in side.entries)
         return [(reason, colors[reason], counts[reason]) for reason in reasons]
 
-    outcomes = _stack_rows(cmp, segments, [(label, color) for _, label, color in _OUTCOME_SEGMENTS])
-    ended = _stack_rows(cmp, term_segments, [(r, colors[r]) for r in reasons]) if reasons else ''
+    outcomes = _stack_rows(cmp, segments)
+    # One termination reason is a 100% bar that says nothing; leave it out.
+    ended = _stack_rows(cmp, term_segments) if len(reasons) > 1 else ''
     body = f'<div class="cmp-subhead">Goal outcome</div>{outcomes}' + (
         f'<div class="cmp-subhead">How conversations ended</div>{ended}' if ended else ''
     )
@@ -647,7 +814,7 @@ _SEVERITY = {'regressed': 0, 'error': 1, 'improved': 2, 'same': 3}
 _COLUMNS: list[tuple[str, str, Any]] = [
     ('persona', 'Persona', lambda pc: pc[0].a.persona.lower()),
     ('scenario', 'Scenario', lambda pc: pc[0].a.scenario.lower()),
-    ('score', 'Score A → B', lambda pc: pc[0].b.goal_completion_score - pc[0].a.goal_completion_score),
+    ('score', 'Goal score A → B', lambda pc: pc[0].b.goal_completion_score - pc[0].a.goal_completion_score),
     ('turns', 'Turns A → B', lambda pc: pc[0].b.turn_count - pc[0].a.turn_count),
     (
         'change',
@@ -657,6 +824,7 @@ _COLUMNS: list[tuple[str, str, Any]] = [
 ]
 _SORT_KEYS = {param: key for param, _, key in _COLUMNS}
 _DEFAULT_SORT = 'change'  # regressions first, then by the biggest score drop
+_DIRECTION_LABELS = {'change': ('worst first', 'best first')}
 _PAGE_SIZES = (10, 25, 50)
 _DEFAULT_SIZE = 10
 
@@ -700,14 +868,21 @@ def _in_view(change: str, view: str) -> bool:
     return change == view
 
 
+def resolve_view(cmp: Comparison, state: TableState) -> str:
+    """The segment the table shows. Defaults to the changed conversations — the
+    reason to open a comparison — unless nothing changed, then everything."""
+    if state.view:
+        return state.view
+    changed = any(pair_change(cmp.a, cmp.b, p) != 'same' for p in cmp.matching.matched)
+    return 'changed' if changed else 'all'
+
+
 def render_conversations(cmp: Comparison, state: TableState) -> str:
     """The conversation section: segment control, sortable/paged table whose
     rows open the paired transcript in the drawer, and the unmatched lists."""
     changes = [(p, pair_change(cmp.a, cmp.b, p)) for p in cmp.matching.matched]
     counts = {key: sum(1 for _, c in changes if _in_view(c, key)) for key, _ in _VIEWS}
-    # Default to the changed conversations — the reason to open a comparison —
-    # unless nothing changed, in which case show everything rather than nothing.
-    view = state.view or ('changed' if counts['changed'] else 'all')
+    view = resolve_view(cmp, state)
 
     def control(sort: str, direction: str, page: int, size: int, *, v: str = view) -> str:
         qs = _qs(cmp, cmp_view=v, cmp_sort=sort, cmp_dir=direction, cmp_page=page, cmp_size=size)
@@ -718,7 +893,7 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
 
     seg = ''.join(
         (
-            f'<button type="button" class="cmp-seg-btn" aria-pressed="true" disabled>{label}'
+            f'<button type="button" class="cmp-seg-btn" aria-pressed="true">{label}'
             f'<span class="cmp-seg-n">{counts[key]}</span></button>'
             if key == view
             else f'<button type="button" class="cmp-seg-btn" aria-pressed="false" '
@@ -750,7 +925,7 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
             f'<td class="sim-conv-persona">{esc(a.persona)}</td>'
             f'<td class="sim-conv-scenario">{esc(a.scenario)}</td>'
             f'<td class="cmp-num">{a.goal_completion_score:.2f} &rarr; {b.goal_completion_score:.2f}'
-            f' <span class="cmp-num-d">{d_score:+.2f}</span></td>'
+            f' <span class="cmp-num-d cmp-num-d--{_tone(d_score)}">{d_score:+.2f}</span></td>'
             f'<td class="cmp-num">{a.turn_count} &rarr; {b.turn_count} <span class="cmp-num-d">{d_turns:+d}</span></td>'
             f'<td>{_change_pill(change)}</td>'
             f'<td class="cmp-outcome">{_badge(cmp.a.status(a))}<span class="cmp-arrow">&rarr;</span>{_badge(cmp.b.status(b))}</td>'
@@ -759,7 +934,13 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
 
     if rows:
         header = _sim_header_row(
-            control, state.sort, state.direction, state.size, columns=_COLUMNS, trailing=('Outcome A → B',)
+            control,
+            state.sort,
+            state.direction,
+            state.size,
+            columns=_COLUMNS,
+            trailing=('Outcome A → B',),
+            direction_labels=_DIRECTION_LABELS,
         )
         table = (
             '<div class="sim-conv-table-shell">'
@@ -815,7 +996,8 @@ def render_compare_body(cmp: Comparison, state: TableState) -> str:
     scores = score_rows(cmp)
     return (
         f'{_hero(cmp)}'
-        f'{_headlines(cmp, scores)}'
+        f'{_filter_strip(cmp, state)}'
+        f'{_headlines(cmp, scores, resolve_view(cmp, state))}'
         f'{_tiles(cmp)}'
         f'<div class="cmp-grid">{_outcomes_panel(cmp)}{_scores_panel(scores)}</div>'
         f'{render_conversations(cmp, state)}'
@@ -837,7 +1019,7 @@ def render_filter_rail(cmp: Comparison, selections: dict[str, list[str]]) -> str
         total=cmp.total_rows,
         post_url=f'/compare/sim/filter?{_qs(cmp)}',
         include='#cmp-table-state',
-        counter_note='A pair shows when either run matches.',
+        counter_note="A pair stays when either run's conversation matches.",
     )
 
 
@@ -854,19 +1036,12 @@ def canonical_url(cmp: Comparison, selections: dict[str, list[str]], state: Tabl
     reads, limited to filters that drop a conversation; table params equal to
     their defaults are left out.
     """
-    from evaluatorq.dashboard.filters import FILTERS
+    return _compare_url(cmp, narrowing_selections(cmp.a.run, cmp.b.run, selections), state)
 
-    sim = FILTERS['sim']
 
-    def narrows(dim: str) -> bool:
-        # The rail posts every control, defaults included; keep only the ones that drop a conversation.
-        picked = {dim: selections[dim]}
-        return any(len(sim.apply(run, picked)) < len(run.results) for run in (cmp.a.run, cmp.b.run))
-
+def _compare_url(cmp: Comparison, narrowing: dict[str, list[str]], state: TableState) -> str:
     params: list[tuple[str, str]] = [('a', cmp.a.rid), ('b', cmp.b.rid)]
-    params.extend(
-        (dim, value) for dim in sim.dimensions if selections.get(dim) and narrows(dim) for value in selections[dim]
-    )
+    params.extend((dim, value) for dim, values in narrowing.items() for value in values)
     table = (
         ('cmp_view', state.view, ''),
         ('cmp_sort', state.sort, _DEFAULT_SORT),
@@ -903,25 +1078,111 @@ def render_compare_page(
     )
 
 
+def first_divergence(entry_a: SimulationEntry, entry_b: SimulationEntry) -> int | None:
+    """Index of the first message that differs between the two transcripts
+    (role or text), the shorter length when one is a prefix of the other, or
+    ``None`` when they are identical."""
+    from evaluatorq.common.messages import coerce_content_text
+
+    msgs_a, msgs_b = entry_a.transcript or [], entry_b.transcript or []
+    for i, (ma, mb) in enumerate(zip(msgs_a, msgs_b, strict=False)):
+        if ma.role != mb.role or coerce_content_text(ma.content) != coerce_content_text(mb.content):
+            return i
+    return None if len(msgs_a) == len(msgs_b) else min(len(msgs_a), len(msgs_b))
+
+
+def _flipped_criteria(entry_a: SimulationEntry, entry_b: SimulationEntry) -> list[tuple[str, str, str]]:
+    """(description, state in A, state in B) for criteria whose verdict differs,
+    matched by description; a criterion only one run has counts as changed."""
+    states_a = {c.description: c.state for c in entry_a.criteria or []}
+    states_b = {c.description: c.state for c in entry_b.criteria or []}
+    return [
+        (desc, states_a.get(desc, 'absent'), states_b.get(desc, 'absent'))
+        for desc in dict.fromkeys([*states_a, *states_b])
+        if states_a.get(desc) != states_b.get(desc)
+    ]
+
+
+_CRITERION_GLYPH = {'pass': '&#x2713;', 'fail': '&#x2717;', 'unknown': '?', 'absent': '&ndash;'}
+
+
+def _differences(entry_a: SimulationEntry, entry_b: SimulationEntry, side_a: Side, side_b: Side) -> str:
+    """What changed for this pair, above the transcripts: verdict, goal score,
+    turns, the criteria that flipped and where the transcripts part ways. Judge
+    reasons stay in each column, beside the criteria they explain."""
+
+    def ab(va: str, vb: str) -> str:
+        return f'<span class="cmp-diff-ab">{va} <span class="cmp-arrow">&rarr;</span> {vb}</span>'
+
+    d_score = entry_b.goal_completion_score - entry_a.goal_completion_score
+    rows = [
+        ('Outcome', ab(_badge(side_a.status(entry_a)), _badge(side_b.status(entry_b)))),
+        (
+            'Goal score',
+            ab(f'{entry_a.goal_completion_score:.2f}', f'{entry_b.goal_completion_score:.2f}')
+            + f' <span class="cmp-num-d cmp-num-d--{_tone(d_score)}">{d_score:+.2f}</span>',
+        ),
+        ('Turns', ab(str(entry_a.turn_count), str(entry_b.turn_count))),
+    ]
+    flipped = _flipped_criteria(entry_a, entry_b)
+    if flipped:
+        items = ''.join(
+            f'<li><span class="cmp-diff-crit cmp-diff-crit--{sa}">{_CRITERION_GLYPH.get(sa, "?")}</span>'
+            f'<span class="cmp-arrow">&rarr;</span>'
+            f'<span class="cmp-diff-crit cmp-diff-crit--{sb}">{_CRITERION_GLYPH.get(sb, "?")}</span>'
+            f'<span>{esc(desc)}</span></li>'
+            for desc, sa, sb in flipped
+        )
+        rows.append(('Criteria', f'<ul class="cmp-diff-crits">{items}</ul>'))
+    elif entry_a.criteria or entry_b.criteria:
+        rows.append(('Criteria', '<span class="cmp-diff-same">Same verdict on every criterion</span>'))
+    split = first_divergence(entry_a, entry_b)
+    rows.append((
+        'Transcript',
+        '<span class="cmp-diff-same">Identical in both runs</span>'
+        if split is None
+        else f'First differs at message {split + 1}, marked below',
+    ))
+    body = ''.join(f'<dt>{label}</dt><dd>{value}</dd>' for label, value in rows)
+    return f'<section class="cmp-diff" aria-label="Differences"><dl class="cmp-diff-list">{body}</dl></section>'
+
+
 def render_compare_transcript(entry_a: SimulationEntry, entry_b: SimulationEntry, side_a: Side, side_b: Side) -> str:
-    """Paired transcript for the drawer: a header naming the pair and its
-    change, then the two single-run transcript fragments side by side."""
+    """Paired transcript for the drawer: the pair named once, a Differences
+    block, then both runs' criteria and transcripts side by side. The columns
+    share one scroll container, so they scroll together. The first message
+    where the transcripts differ is marked in both columns."""
 
     def column(which: str, entry: SimulationEntry, side: Side) -> str:
         return (
             '<div class="cmp-side">'
             f'<div class="cmp-side-title">{_run_key(which)}<span class="cmp-side-name">{esc(side.name)}</span>'
-            f'{_badge(side.status(entry))}</div>'
-            f'{render_transcript_fragment(entry)}</div>'
+            f'<span class="cmp-side-id">#{entry.index}</span>{_badge(side.status(entry))}</div>'
+            f'{render_transcript_fragment(entry, summary=False)}</div>'
         )
 
     change = pair_change(side_a, side_b, MatchedPair(entry_a, entry_b))
     head = (
         '<header class="cmp-pair-head">'
-        f'<div class="cmp-pair-title">{esc(entry_a.persona)} <span class="cmp-vs">·</span> {esc(entry_a.scenario)}</div>'
+        f'<div class="cmp-pair-title">{esc(entry_a.persona)} <span class="cmp-pair-sep">·</span> {esc(entry_a.scenario)}</div>'
         f'{_change_pill(change)}</header>'
     )
-    return f'{head}<div class="cmp-transcript-grid">{column("A", entry_a, side_a)}{column("B", entry_b, side_b)}</div>'
+    split = first_divergence(entry_a, entry_b)
+    # The bubbles come from the shared message renderer, so the marker is a
+    # positional rule scoped to this drawer's grid rather than a class on the message.
+    msg = f'.cmp-transcript-grid .sim-transcript-bubbles > .sim-msg:nth-child({(split or 0) + 1})'
+    marker = (
+        ''
+        if split is None
+        else f'<style>{msg}{{position:relative;margin-top:26px;outline:2px dashed var(--amber-600);'
+        'outline-offset:4px;border-radius:8px}'
+        f'{msg}::before{{content:"First difference";position:absolute;top:-24px;left:0;'
+        'font:600 10.5px/1 var(--font-mono);color:var(--amber-ink)}</style>'
+    )
+    return (
+        f'{head}{_differences(entry_a, entry_b, side_a, side_b)}{marker}'
+        f'<div class="cmp-transcript-grid">{column("A", entry_a, side_a)}{column("B", entry_b, side_b)}</div>'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1072,8 +1333,10 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
         selections = parse_selections(req, 'sim')
         state = TableState.parse(req.query_params)
         cmp = build_comparison(rid_a, rid_b, run_a, run_b, selections)
+        heads = _headlines(cmp, score_rows(cmp), resolve_view(cmp, state), oob=True)
         return _push(
-            Response(render_conversations(cmp, state), media_type='text/html'), canonical_url(cmp, selections, state)
+            Response(render_conversations(cmp, state) + heads, media_type='text/html'),
+            canonical_url(cmp, selections, state),
         )
 
     @app.get('/compare/sim/transcript')

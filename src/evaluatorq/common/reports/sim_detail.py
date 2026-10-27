@@ -203,6 +203,8 @@ def render_transcript_fragment(
     entry: SimulationEntry,
     persona_entity_id: str | None = None,
     scenario_entity_id: str | None = None,
+    *,
+    summary: bool = True,
 ) -> str:
     """Render the drill-down transcript fragment for a single sim result entry.
 
@@ -222,6 +224,8 @@ def render_transcript_fragment(
 
     Args:
         entry: A typed ``SimulationEntry`` from ``individual_entries``.
+        summary: Include the persona/scenario header. The run comparison names
+            the pair once above both columns and turns it off.
 
     Returns:
         An HTML fragment (no full-page shell).
@@ -229,7 +233,7 @@ def render_transcript_fragment(
     error = entry.error
 
     criteria_col = _render_criteria_column(entry)
-    summary_html = _render_conversation_summary(entry, persona_entity_id, scenario_entity_id)
+    summary_html = _render_conversation_summary(entry, persona_entity_id, scenario_entity_id) if summary else ''
 
     error_html = f'<div class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</div>' if error else ''
 

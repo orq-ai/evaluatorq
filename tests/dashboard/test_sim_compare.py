@@ -278,13 +278,13 @@ def test_compare_page_renders_headlines_tiles_and_table(roots: list[Path]):
     assert 'Regressed in B' in html and 'Improved in B' in html
     assert 'Goal rate held steady' in html
     # tiles, panels, filter rail, drawer shell
-    for label in ('Conversations', 'Goal rate', 'Avg score', 'Avg turns', 'Errors'):
+    for label in ('Conversations', 'Goal rate', 'Avg goal score', 'Avg turns', 'Errors'):
         assert f'<div class="kpi-label">{label}</div>' in html
     assert 'How conversations ended' in html
     assert 'id="filter-form"' in html
     assert 'sim-entity-dialog--wide' in html
     # segment control defaults to changed conversations, with counts
-    assert re.search(r'aria-pressed="true" disabled>Changed<span class="cmp-seg-n">2</span>', html)
+    assert re.search(r'aria-pressed="true">Changed<span class="cmp-seg-n">2</span>', html)
     # rows open the paired transcript in the drawer
     assert 'data-drawer-url="/compare/sim/transcript?' in html
     # unmatched conversations surfaced, not dropped
@@ -305,7 +305,7 @@ def test_compare_filter_route_narrows_table_and_tiles(roots: list[Path]):
     assert 'sim-conv-persona">alice<' in html
     assert 'sim-conv-persona">bob<' not in html
     # table state from the hidden inputs survives the filter post
-    assert re.search(r'aria-pressed="true" disabled>All<span class="cmp-seg-n">1</span>', html)
+    assert re.search(r'aria-pressed="true">All<span class="cmp-seg-n">1</span>', html)
 
 
 def test_compare_conversations_route_switches_view(roots: list[Path]):
@@ -328,7 +328,7 @@ def test_compare_conversations_route_clamps_bad_params(roots: list[Path]):
     assert resp.status_code == 200
     html = resp.text
     # bad view, sort, page and size fall back to the defaults
-    assert 'aria-pressed="true" disabled>Changed' in html
+    assert 'aria-pressed="true">Changed' in html
     assert re.search(r'<th scope="col" aria-sort="ascending"><button[^>]*>Change', html)
     assert 'cmp_page' not in html.split('id="cmp-table-state"')[1].split('</div>')[0]
     assert 'name="cmp_size" value="10"' in html
@@ -351,7 +351,7 @@ def test_get_route_reproduces_the_pushed_view(roots: list[Path]):
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)
     html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}&persona=alice&cmp_view=all').text
-    assert re.search(r'aria-pressed="true" disabled>All<span class="cmp-seg-n">1</span>', html)
+    assert re.search(r'aria-pressed="true">All<span class="cmp-seg-n">1</span>', html)
     assert 'sim-conv-persona">alice<' in html
     assert 'sim-conv-persona">bob<' not in html
 
@@ -397,7 +397,7 @@ def test_compare_transcript_route_scopes_session_slug_to_one_response(
 
     monkeypatch.setattr(orq_scope, 'discover_orq_scope', discover)
     monkeypatch.setattr(
-        sim_compare, 'render_transcript_fragment', lambda entry: thread_trace_url(str(entry.index)) or ''
+        sim_compare, 'render_transcript_fragment', lambda entry, **_kw: thread_trace_url(str(entry.index)) or ''
     )
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)
@@ -527,3 +527,108 @@ def test_compare_control_on_sim_report(roots: list[Path]):
     assert f'name="a" value="{rid_a}"' in html
     assert f'<option value="{rid_b}"' in html
     assert f'<option value="{rid_a}"' not in html
+
+
+# ---------------------------------------------------------------------------
+# Critique follow-ups: honest goal rate, filter bar, headline toggle, drawer diff
+# ---------------------------------------------------------------------------
+
+
+def test_outcome_filter_makes_goal_rate_not_comparable():
+    from evaluatorq.dashboard.sim_compare import _headlines, _tiles, score_rows
+
+    cmp = _cmp({'goal_outcome': ['Achieved']})
+    assert cmp.outcome_filtered
+    heads = _headlines(cmp, score_rows(cmp), 'all')
+    assert 'Goal rate not comparable' in heads
+    assert 'Goal rate held steady' not in heads and 'Goal rate rose' not in heads
+    assert _tiles(cmp).count('not comparable') == 2
+    # a persona filter selects on something else, so the rate stays comparable
+    assert not _cmp({'persona': ['alice']}).outcome_filtered
+
+
+def test_biggest_score_move_skips_the_goal_scorer():
+    from evaluatorq.dashboard.sim_compare import ScoreRow, _headlines
+
+    cmp = _cmp()
+    rows = [ScoreRow('goal_achieved', 1.0, 0.2), ScoreRow('criteria_met', 0.5, 0.4)]
+    heads = _headlines(cmp, rows, 'changed')
+    assert 'Biggest score move: criteria_met worsened' in heads
+    assert 'goal_achieved' not in heads
+
+
+def test_filter_bar_lists_active_filters_with_remove_links(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}&persona=alice&goal_outcome=Achieved').text
+    bar = html.split('class="cmp-fbar"')[1].split('</div>')[0]
+    assert 'Showing <b>1</b> of <b>4</b> rows' in bar
+    assert 'Persona</span>alice' in bar and 'Goal outcome</span>Goal met' in bar
+    # removing the persona chip keeps the goal-outcome filter, and clear all drops both
+    assert f'href="/compare/sim?a={rid_a}&amp;b={rid_b}&amp;goal_outcome=Achieved"' in bar
+    assert f'href="/compare/sim?a={rid_a}&amp;b={rid_b}">Clear all' in bar
+    unfiltered = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
+    assert 'Clear all' not in unfiltered.split('class="cmp-fbar"')[1].split('</div>')[0]
+
+
+def test_headline_row_toggles_and_follows_the_table(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    page = client.get(f'/compare/sim?a={rid_a}&b={rid_b}&cmp_view=regressed').text
+    pressed = re.search(r'<button type="button" class="cmp-head cmp-head--bad is-on" aria-pressed="true" ([^>]*)>', page)
+    assert pressed and 'Showing these' in page
+    # pressing the showing row again returns the table to its default view
+    assert 'cmp_view="' in pressed.group(1)
+    conv = client.get(f'/compare/sim/conversations?a={rid_a}&b={rid_b}&cmp_view=improved').text
+    oob = conv.split('id="cmp-heads"')[1]
+    assert 'hx-swap-oob="true"' in oob.split('>')[0]
+    assert re.search(r'class="cmp-head cmp-head--good is-on" aria-pressed="true"', oob)
+
+
+def test_single_termination_reason_hides_the_ended_bar():
+    from evaluatorq.dashboard.sim_compare import _outcomes_panel
+
+    assert 'How conversations ended' in _outcomes_panel(_cmp())
+    assert 'How conversations ended' not in _outcomes_panel(_cmp({'persona': ['alice']}))
+
+
+def test_drawer_names_the_pair_once_and_lists_differences(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    html = client.get(f'/compare/sim/transcript?a={rid_a}&b={rid_b}&ia=0&ib=0').text
+    assert html.count('alice') == 1
+    assert 'sim-conv-summary' not in html
+    assert 'aria-label="Differences"' in html
+    assert 'First differs at message 1' in html
+    assert 'nth-child(1)' in html
+
+
+def test_first_divergence_and_flipped_criteria():
+    from evaluatorq.dashboard.sim_compare import _flipped_criteria, first_divergence
+    from evaluatorq.dashboard.sim_views import _entries_from_run
+
+    a = _entries_from_run(_run_a())[0]
+    b = _entries_from_run(_run_b())[0]
+    assert first_divergence(a, a) is None
+    assert first_divergence(a, b) == 0
+    longer = a.model_copy(update={'transcript': [*a.transcript, a.transcript[0]]})
+    assert first_divergence(a, longer) == len(a.transcript)
+
+    row = a.criteria[0] if a.criteria else None
+    if row is None:
+        from evaluatorq.simulation.contracts import CriteriaRow
+
+        row = CriteriaRow(id='c0', description='asks for order id', type='must_happen', passed=True, safety=False)
+    flipped = row.model_copy(update={'passed': not row.passed})
+    assert _flipped_criteria(a.model_copy(update={'criteria': [row]}), b.model_copy(update={'criteria': [row]})) == []
+    assert _flipped_criteria(a.model_copy(update={'criteria': [row]}), b.model_copy(update={'criteria': [flipped]})) == [
+        (row.description, row.state, flipped.state)
+    ]
+
+
+def test_rail_goal_outcome_chips_read_goal_met_and_missed(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
+    rail = html.split('id="filter-form"')[1]
+    assert 'value="Achieved"' in rail and 'Goal met' in rail and '>Achieved<' not in rail

@@ -26,7 +26,7 @@ from evaluatorq.dashboard.trace_links import single_trace_url, thread_trace_url,
 from evaluatorq.dashboard.view import _sim_rowlist_wrapper
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
 
     from evaluatorq.simulation.contracts import SimulationEntry
@@ -169,11 +169,15 @@ def _sim_header_row(
     size: int,
     columns: Sequence[tuple[str, str, Any]] = tuple(_SIM_COLUMNS),
     trailing: tuple[str, ...] = ('Status', 'Traces'),
+    direction_labels: Mapping[str, tuple[str, str]] | None = None,
 ) -> str:
     """Build the sortable ``<thead>`` row. Clicking a header toggles direction.
 
     *control* returns the HTMX attributes for a (sort, dir, page, size) request;
     *trailing* are the non-sortable column labels after the sortable ones.
+    *direction_labels* maps a column to (asc, desc) words shown instead of the
+    arrow when that column is active, for orders that are not low-to-high
+    (a severity sort reads "worst first", not "ascending").
     """
     cells: list[str] = []
     for param, label, _key in columns:
@@ -184,7 +188,10 @@ def _sim_header_row(
         # Active column shows its direction (▲/▼); inactive sortable columns show
         # a faint up-down glyph (⇅) so the "click to sort" affordance is always
         # visible, not only after the first click.
-        if active:
+        if active and direction_labels and param in direction_labels:
+            caret = esc(direction_labels[param][0 if direction == 'asc' else 1])
+            caret_cls = 'sim-th-caret sim-th-caret-active sim-th-caret-word'
+        elif active:
             caret = '&#x25B2;' if direction == 'asc' else '&#x25BC;'
             caret_cls = 'sim-th-caret sim-th-caret-active'
         else:
@@ -210,7 +217,7 @@ def _sim_size_selector(
     """Rows-per-page selector over *sizes*. Changing size resets to page 1."""
     opts = ''.join(
         (
-            f'<button type="button" class="sim-size-btn" disabled aria-current="true">{n}</button>'
+            f'<button type="button" class="sim-size-btn" aria-current="true" aria-pressed="true">{n}</button>'
             if n == size
             else f'<button type="button" class="sim-size-btn" {control(sort, direction, 1, n)}>{n}</button>'
         )

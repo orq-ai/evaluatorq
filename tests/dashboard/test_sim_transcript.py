@@ -720,7 +720,7 @@ class TestConversationRows:
         assert html.count('<tr class="sim-conv-row') == 10
         assert 'Page 1 of 3' in html
         # Active option (10) is disabled + aria-current; others link with size=.
-        assert 'aria-current="true">10<' in html
+        assert 'aria-current="true" aria-pressed="true">10<' in html
         assert 'size=5&' not in html  # size is the last query param, no trailing &
         assert 'page=1&size=5"' in html
         assert 'page=1&size=25"' in html
