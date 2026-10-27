@@ -252,7 +252,8 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
 
     from evaluatorq.simulation import simulate
     from evaluatorq.simulation.contracts import (
-        CommunicationStyle, Criterion, EmotionalArc, Persona, Scenario, StartingEmotion,
+        CommunicationStyle, EmotionalArc, MustHappenCriterion, MustNotHappenCriterion, Persona,
+        Scenario, StartingEmotion,
     )
 
 
@@ -270,9 +271,9 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
             context="Ordered headphones but received a phone case instead",
             starting_emotion=StartingEmotion.frustrated,
             criteria=[
-                Criterion(description="Agent asks for order details", type="must_happen"),
-                Criterion(description="Agent acknowledges the mistake", type="must_happen"),
-                Criterion(description="Agent blames the customer", type="must_not_happen"),
+                MustHappenCriterion("Agent asks for order details"),
+                MustHappenCriterion("Agent acknowledges the mistake"),
+                MustNotHappenCriterion("Agent blames the customer"),
             ],
         )
 
@@ -310,7 +311,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
 
     from evaluatorq.contracts import LLMCallConfig, Message
     from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.contracts import CommunicationStyle, Criterion, Persona, Scenario
+    from evaluatorq.simulation.contracts import CommunicationStyle, MustHappenCriterion, Persona, Scenario
 
     client = AsyncOpenAI()
 
@@ -336,7 +337,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
             name="Wrong Item Refund",
             goal="Get a full refund for the wrong item received",
             criteria=[
-                Criterion(description="Agent asks for order details", type="must_happen"),
+                MustHappenCriterion("Agent asks for order details"),
             ],
         )
 
@@ -363,6 +364,8 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
 One persona × one scenario yields one `SimulationResult` with `goal_achieved`, `goal_completion_score`, `turn_count`, `rules_broken`, and the full message transcript. Every field, and the saved `SimulationRun` file, is in the [output reference](agent-simulation-output.md).
 
 ### How criteria are scored
+
+`MustHappenCriterion("...")` and `MustNotHappenCriterion("...")` are shorthand for `Criterion(description="...", type="must_happen")` and `Criterion(description="...", type="must_not_happen")`; both forms are interchangeable and save as the same plain criterion.
 
 The judge audits every `Criterion` on every turn and the runner folds those verdicts over the whole conversation, so a violation on turn 2 still shows up in a run that ends on turn 6:
 

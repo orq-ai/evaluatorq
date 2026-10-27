@@ -6,6 +6,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ## [Unreleased]
 
+- **Added: `MustHappenCriterion` and `MustNotHappenCriterion` for simulation scenarios.** `MustHappenCriterion("Agent asks for order details")` is a `Criterion` with `type` fixed to `must_happen`, and `MustNotHappenCriterion("Agent blames the customer")` fixes `must_not_happen`; the description is positional and `evaluator` is still optional. They save and reload as a plain `Criterion`, so reports and existing scenarios are unchanged, and criterion ids stay positional (`criteria_0`, `criteria_1`).
 - **Fixed: malformed optional evaluator diagnostics no longer hide the trace verdict.** Scores, pass/fail and explanations remain in the evaluator Output payload when `raw_output` contains circular or non-finite values; the invalid diagnostic field is omitted with a warning.
 
 - **Red-team report surfaces per-result jury panel health.** The attack drill-down renders each result's panel of judges below the verdict: decisive votes out of all attempted judges plus configured-judge failure, replacement, tie and inconclusive flags, then one row per judge with its model, readable verdict or abstention, failure reason, and stand-in/failed-repetition status. It mirrors the pairwise per-judge vote list; single-judge results are unchanged. (RES-1650)
