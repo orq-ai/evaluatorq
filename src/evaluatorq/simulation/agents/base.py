@@ -24,7 +24,7 @@ from evaluatorq.common.prompt_cache import (
     mark_responses_input,
     responses_volatile_items,
 )
-from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
+from evaluatorq.common.responses import chat_response_format, first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_input
@@ -43,6 +43,7 @@ from evaluatorq.simulation.tracing import span_message_text, with_llm_span
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
+    from pydantic import BaseModel
 
     from evaluatorq.simulation.contracts import Message
 
@@ -315,6 +316,7 @@ class BaseAgent(UsageTracking, ABC):
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
         volatile_tail: int = 0,
+        response_format: type[BaseModel] | None = None,
     ) -> LLMResult:
         """Call the LLM with retry logic, dispatching to chat or responses API.
 
@@ -327,6 +329,10 @@ class BaseAgent(UsageTracking, ABC):
         breakpoint off them on both paths — see `common.prompt_cache`:
         `apply_cache_breakpoints` on the chat path, `mark_responses_input` on the
         Responses path (which is the judge's default).
+
+        ``response_format`` asks for a reply that is a JSON object matching that
+        model, as a strict schema on either API. The reply comes back as text in
+        ``LLMResult.content``; validating it is the caller's job.
         """
         messages = drop_unreplayable_tool_records(messages, incomplete_as_text=True)
         if self.config.api == 'responses':
@@ -338,6 +344,7 @@ class BaseAgent(UsageTracking, ABC):
                 tools=tools,
                 llm_purpose=llm_purpose,
                 volatile_tail=volatile_tail,
+                response_format=response_format,
             )
         return await self._call_chat_completions(
             messages,
@@ -347,6 +354,7 @@ class BaseAgent(UsageTracking, ABC):
             tools=tools,
             llm_purpose=llm_purpose,
             volatile_tail=volatile_tail,
+            response_format=response_format,
         )
 
     async def _call_chat_completions(
@@ -359,6 +367,7 @@ class BaseAgent(UsageTracking, ABC):
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
         volatile_tail: int = 0,
+        response_format: type[BaseModel] | None = None,
     ) -> LLMResult:
         """Call the LLM via the Chat Completions API with retry logic.
 
@@ -413,6 +422,7 @@ class BaseAgent(UsageTracking, ABC):
                         temperature=temp,
                         max_tokens=max_tok,
                         tools=tools,
+                        response_format=chat_response_format(response_format) if response_format else None,
                         extra_body=self.config.extra_body or None,
                         extra_kwargs=reasoning_kwargs,
                     )
@@ -463,6 +473,7 @@ class BaseAgent(UsageTracking, ABC):
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
         volatile_tail: int = 0,
+        response_format: type[BaseModel] | None = None,
     ) -> LLMResult:
         """Call the LLM via the OpenAI Responses API with retry logic.
 
@@ -541,6 +552,7 @@ class BaseAgent(UsageTracking, ABC):
                     reasoning_effort=reasoning_effort,
                     instructions=self.system_prompt,
                     tools=[_responses_tool_schema(tool) for tool in tools] if tools else None,
+                    response_text_format=response_format,
                     record_input=False,
                     extra_body=extra_body or None,
                     extra_kwargs=self.config.extra_kwargs or None,

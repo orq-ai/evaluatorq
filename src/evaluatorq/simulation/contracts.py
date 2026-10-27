@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, computed_field
 from typing_extensions import TypedDict
 
+from evaluatorq.common.responses import drop_class_description
 from evaluatorq.contracts import (
     DEFAULT_PIPELINE_MODEL,
     Message,
@@ -428,6 +429,10 @@ class CriterionVerdict(BaseModel):
     marked a satisfied `must_happen` as unmet while its own reason said otherwise.
     The type-to-verdict mapping lives in code, where it cannot be confused.
     """
+
+    # The judge's response schema embeds this model; its docstring is maintainer
+    # rationale, not something to show the judge.
+    model_config = ConfigDict(json_schema_extra=drop_class_description)
 
     criterion_id: str = Field(
         pattern=CRITERION_ID_PATTERN,

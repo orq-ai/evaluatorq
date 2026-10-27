@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from openai import BadRequestError
+from pydantic import BaseModel
 
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.agents.base import BaseAgent, LLMResult
@@ -413,3 +414,40 @@ class TestResponsesSpanInput:
 
         assert "input_image" in text
         assert any("input_image" in m for m in messages)
+
+
+class _Verdict(BaseModel):
+    ok: bool
+
+
+class TestResponseFormat:
+    """`response_format` reaches the wire as a strict schema on either API."""
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_sends_a_strict_json_schema(self):
+        client = _make_client()
+        client.chat.completions.create = AsyncMock(return_value=_chat_response('{"ok": true}'))
+        agent = _ConcreteAgent(LLMCallConfig(model="gpt-4o", api="chat_completions", client=client))
+
+        result = await agent._call_llm(_make_messages(), response_format=_Verdict)
+
+        call = client.chat.completions.create.await_args
+        assert call is not None
+        sent = call.kwargs["response_format"]
+        assert sent["type"] == "json_schema"
+        assert sent["json_schema"]["name"] == "_Verdict"
+        assert sent["json_schema"]["strict"] is True
+        assert sent["json_schema"]["schema"]["required"] == ["ok"]
+        assert result.content == '{"ok": true}'
+
+    @pytest.mark.asyncio
+    async def test_no_response_format_sends_none(self):
+        client = _make_client()
+        client.chat.completions.create = AsyncMock(return_value=_chat_response("hello"))
+        agent = _ConcreteAgent(LLMCallConfig(model="gpt-4o", api="chat_completions", client=client))
+
+        await agent._call_llm(_make_messages())
+
+        call = client.chat.completions.create.await_args
+        assert call is not None
+        assert "response_format" not in call.kwargs
