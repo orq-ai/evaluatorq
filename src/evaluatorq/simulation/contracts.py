@@ -340,7 +340,7 @@ class MustHappenCriterion(Criterion):
 
     type: Literal['must_happen'] = 'must_happen'
 
-    def __init__(self, description: str, /, **data: Any) -> None:
+    def __init__(self, description: str, **data: Any) -> None:
         super().__init__(description=description, **data)
 
 
@@ -358,7 +358,7 @@ class MustNotHappenCriterion(Criterion):
 
     type: Literal['must_not_happen'] = 'must_not_happen'
 
-    def __init__(self, description: str, /, **data: Any) -> None:
+    def __init__(self, description: str, **data: Any) -> None:
         super().__init__(description=description, **data)
 
 

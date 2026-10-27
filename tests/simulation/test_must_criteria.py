@@ -18,6 +18,11 @@ def test_type_is_fixed_and_description_is_positional() -> None:
     assert isinstance(must, Criterion)
 
 
+def test_description_also_binds_as_a_keyword() -> None:
+    assert MustHappenCriterion(description='Agent refunds').description == 'Agent refunds'
+    assert MustNotHappenCriterion(description='Agent blames').type == 'must_not_happen'
+
+
 def test_evaluator_is_still_settable() -> None:
     assert MustHappenCriterion('Agent refunds', evaluator='task_achieved').evaluator == 'task_achieved'
 
