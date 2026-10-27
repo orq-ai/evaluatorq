@@ -1700,6 +1700,7 @@ _SIM_TRANSCRIPT_CSS = """
     padding: 10px 12px; background: none; border: 0; cursor: pointer;
     font: inherit; font-weight: 600; color: var(--text-strong); text-align: left;
 }
+.sim-report th.num .sim-th-sort { justify-content: flex-end; }
 .sim-report .sim-th-sort:hover { color: var(--teal-600); }
 /* Inactive sortable columns show a faint ⇅; it strengthens on hover so the
    header reads as clickable. The active column's ▲/▼ is always full-strength. */
@@ -1997,14 +1998,15 @@ _SIM_REPORT_OVERRIDES_CSS = """
     padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--border-subtle);
 }
 .sim-report table:not(.rk-heatmap) tbody td {
-    font-size: 13px; padding: 12px 16px; border-bottom: none;
+    font-size: 13px; padding: 12px 16px; border-bottom: none; text-align: left;
 }
 .sim-report table:not(.rk-heatmap) tbody tr,
 .sim-report table:not(.rk-heatmap) tbody tr:nth-child(even) { background: transparent; }
-.sim-report table:not(.rk-heatmap) thead th:not(:first-child),
-.sim-report table:not(.rk-heatmap) tbody td:not(:first-child) {
+.sim-report table:not(.rk-heatmap) thead th.num,
+.sim-report table:not(.rk-heatmap) tbody td.num {
     text-align: right; font-variant-numeric: tabular-nums;
 }
+.sim-report .report-card:has(> table .fail-why) { overflow-x: auto; }
 
 /* Failures table: collapsed pass/fail dots that unfold to full criteria text.
    Height animates both ways via ::details-content + interpolate-size where

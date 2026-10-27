@@ -47,7 +47,7 @@ def _headers(html: str) -> list[str]:
     import re
 
     header_row = html.split('</tr>', 1)[0]
-    return re.findall(r'<th>([^<]+)</th>', header_row)
+    return re.findall(r'<th(?: [^>]*)?>([^<]+)</th>', header_row)
 
 
 def _template(html: str, prefix: str) -> str:
@@ -335,7 +335,7 @@ def test_sim_breakdown_scenario_table_has_tokens_column(sim_run) -> None:
 
     html = sim_report_tabs('rid', sim_run)
     scenario_html = html.split('Per-scenario')[-1].split('Transcripts')[0]
-    assert '<th>Tokens</th>' in scenario_html
+    assert '<th class="num">Tokens</th>' in scenario_html
     # sim_run fixture: two results, each with total_tokens=15 -> scenario sum 30.
     assert 'data-label="Tokens">30<' in scenario_html
 
@@ -1425,3 +1425,18 @@ def test_agent_key_prefers_captured_then_target(sim_run) -> None:
 
     assert rt._agent_key_for(sim_run.model_copy(update={'agent_info': {'key': 'k1'}, 'target': 'agent:k2'})) == 'k1'
     assert rt._agent_key_for(sim_run.model_copy(update={'agent_info': None, 'target': 'agent:k2'})) == 'k2'
+
+
+def test_sim_failures_table_marks_numeric_columns_and_sizes_the_why_cell() -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard.report_tabs import _sim_failures_table
+
+    section = SimpleNamespace(
+        data={'rows': [{'index': 1, 'scenario': 's', 'persona': 'p', 'reason': 'r', 'criteria': [], 'score': 0.5}]}
+    )
+    html = _sim_failures_table(section, 'rid')
+    assert '<th>Persona</th>' in html
+    assert '<th class="fail-why">Why</th>' in html
+    assert '<td class="fail-why" data-label="Why"><span data-no-drawer title="r">' in html
+    assert '<th class="num">Score</th>' in html
