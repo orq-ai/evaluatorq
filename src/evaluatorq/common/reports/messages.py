@@ -14,6 +14,7 @@ def render_message_list(
     *,
     role_labels: dict[str, str],
     class_prefix: str,
+    mark_index: int | None = None,
 ) -> str:
     """Render a role-labeled message list as a series of chat-bubble ``<div>``s.
 
@@ -49,6 +50,7 @@ def render_message_list(
         role_labels:  Mapping from role name → display label.  Falls back to
                       the raw role string when a role is not in the map.
         class_prefix: CSS class namespace (e.g. ``"sim"`` → ``sim-msg``).
+        mark_index:   Position of a message to flag with ``{class_prefix}-msg--marked``.
 
     Returns:
         Concatenated HTML string (empty string when *messages* is empty).
@@ -56,7 +58,7 @@ def render_message_list(
     known_roles = frozenset({'user', 'assistant', 'system', 'tool'})
 
     parts: list[str] = []
-    for msg in messages:
+    for i, msg in enumerate(messages):
         # Support both dict-style and attribute-style message objects.
         if isinstance(msg, dict):
             role = str(msg.get('role', 'unknown'))
@@ -74,9 +76,10 @@ def render_message_list(
         safe_content = esc(content_text)
         css_role = role if role in known_roles else 'unknown'
         safe_label = esc(label)
+        marked = f' {class_prefix}-msg--marked' if i == mark_index else ''
 
         parts.append(
-            f'<div class="{class_prefix}-msg {class_prefix}-msg-{esc(css_role)}">'
+            f'<div class="{class_prefix}-msg {class_prefix}-msg-{esc(css_role)}{marked}">'
             f'<span class="{class_prefix}-msg-avatar">{safe_label}</span>'
             f'<div class="{class_prefix}-msg-bubble">'
             f'<span class="{class_prefix}-msg-role">{safe_label}</span>'

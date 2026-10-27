@@ -3210,6 +3210,8 @@ button.cmp-head.is-on .cmp-head-go { color: var(--teal-600); }
 .cmp-diff-crit--pass { color: var(--teal-600); }
 .cmp-diff-crit--fail { color: var(--red-700); }
 .cmp-diff-crits .cmp-arrow { margin: 0 4px; }
+.cmp-transcript-grid .sim-msg--marked { position: relative; margin-top: 26px; outline: 2px dashed var(--amber-600); outline-offset: 4px; border-radius: 8px; }
+.cmp-transcript-grid .sim-msg--marked::before { content: "First difference"; position: absolute; top: -24px; left: 0; font: 600 10.5px/1 var(--font-mono); color: var(--amber-ink); }
 @media (max-width: 900px) { .cmp-diff-list { grid-template-columns: 1fr; gap: 2px; } .cmp-diff-list dd { margin-bottom: 8px; } }
 .cmp-transcript-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .cmp-side { min-width: 0; }

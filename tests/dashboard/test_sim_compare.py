@@ -535,11 +535,11 @@ def test_compare_control_on_sim_report(roots: list[Path]):
 
 
 def test_outcome_filter_makes_goal_rate_not_comparable():
-    from evaluatorq.dashboard.sim_compare import _headlines, _tiles, score_rows
+    from evaluatorq.dashboard.sim_compare import _headlines, _tiles
 
     cmp = _cmp({'goal_outcome': ['Achieved']})
     assert cmp.outcome_filtered
-    heads = _headlines(cmp, score_rows(cmp), 'all')
+    heads = _headlines(cmp, 'all')
     assert 'Goal rate not comparable' in heads
     assert 'Goal rate held steady' not in heads and 'Goal rate rose' not in heads
     assert _tiles(cmp).count('not comparable') == 2
@@ -551,10 +551,14 @@ def test_biggest_score_move_skips_the_goal_scorer():
     from evaluatorq.dashboard.sim_compare import ScoreRow, _headlines
 
     cmp = _cmp()
-    rows = [ScoreRow('goal_achieved', 1.0, 0.2), ScoreRow('criteria_met', 0.5, 0.4)]
-    heads = _headlines(cmp, rows, 'changed')
+    cmp.__dict__['scores'] = [
+        ScoreRow('goal_achieved', 1.0, 0.2),
+        ScoreRow('criteria_met', 0.5, 0.4),
+        ScoreRow('Turns', 4.0, 9.0, higher_better=False),
+    ]
+    heads = _headlines(cmp, 'changed')
     assert 'Biggest score move: criteria_met worsened' in heads
-    assert 'goal_achieved' not in heads
+    assert 'goal_achieved' not in heads and 'Turns' not in heads
 
 
 def test_filter_bar_lists_active_filters_with_remove_links(roots: list[Path]):
@@ -566,7 +570,9 @@ def test_filter_bar_lists_active_filters_with_remove_links(roots: list[Path]):
     assert 'Persona</span>alice' in bar and 'Goal outcome</span>Goal met' in bar
     # removing the persona chip keeps the goal-outcome filter, and clear all drops both
     assert f'href="/compare/sim?a={rid_a}&amp;b={rid_b}&amp;goal_outcome=Achieved"' in bar
-    assert f'href="/compare/sim?a={rid_a}&amp;b={rid_b}">Clear all' in bar
+    assert f'hx-get="/compare/sim/filter?a={rid_a}&amp;b={rid_b}&amp;goal_outcome=Achieved"' in bar
+    assert f'href="/compare/sim?a={rid_a}&amp;b={rid_b}" hx-get="/compare/sim/filter?a={rid_a}&amp;b={rid_b}"' in bar
+    assert 'aria-label="Remove the Persona filter"' in bar
     unfiltered = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
     assert 'Clear all' not in unfiltered.split('class="cmp-fbar"')[1].split('</div>')[0]
 
@@ -600,7 +606,45 @@ def test_drawer_names_the_pair_once_and_lists_differences(roots: list[Path]):
     assert 'sim-conv-summary' not in html
     assert 'aria-label="Differences"' in html
     assert 'First differs at message 1' in html
-    assert 'nth-child(1)' in html
+    assert html.count('sim-msg--marked') == 2
+
+
+def test_message_list_marks_only_the_given_position():
+    from evaluatorq.common.reports.messages import render_message_list
+
+    msgs = [{'role': 'user', 'content': 'hi'}, {'role': 'assistant', 'content': 'hello'}]
+    html = render_message_list(msgs, role_labels={}, class_prefix='sim', mark_index=1)
+    assert html.count('sim-msg--marked') == 1
+    assert html.index('sim-msg--marked') > html.index('hi')
+    assert 'sim-msg--marked' not in render_message_list(msgs, role_labels={}, class_prefix='sim')
+
+
+def test_filter_chip_links_follow_the_table_and_swap_through_the_filter_route(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    conv = client.get(f'/compare/sim/conversations?a={rid_a}&b={rid_b}&persona=alice&cmp_view=all').text
+    bar = conv.split('id="cmp-fbar"')[1].split('</div>')[0]
+    assert 'hx-swap-oob="true"' in bar.split('>')[0]
+    assert f'hx-get="/compare/sim/filter?a={rid_a}&amp;b={rid_b}&amp;cmp_view=all"' in bar
+    resp = client.get(f'/compare/sim/filter?a={rid_a}&b={rid_b}&cmp_view=all')
+    assert resp.status_code == 200 and 'id="filter-swap"' in resp.text
+    assert resp.headers['HX-Push-Url'] == f'/compare/sim?a={rid_a}&b={rid_b}&cmp_view=all'
+
+
+def test_copy_link_reports_failure_instead_of_claiming_success():
+    js = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    handler = js.split("closest('[data-copy-link]')")[1].split('});')[0]
+    assert '.then(' in handler and 'Copy failed' in handler
+
+
+def test_compare_params_split_filters_from_table_state_and_drop_unknown_keys():
+    from evaluatorq.dashboard.sim_compare import parse_compare_params
+
+    selections, state = parse_compare_params(
+        [('a', 'x'), ('persona', 'alice'), ('persona', 'bob'), ('cmp_view', 'all'), ('bogus', '1')]
+    )
+    assert selections == {'persona': ['alice', 'bob']}
+    assert state.view == 'all'
 
 
 def test_first_divergence_and_flipped_criteria():

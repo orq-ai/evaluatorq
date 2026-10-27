@@ -38,8 +38,10 @@ Everything renders as server-side HTML and CSS — no chart library.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import Counter
 from dataclasses import dataclass
+from functools import cached_property
 from itertools import cycle
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
@@ -49,7 +51,13 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects at r
 from starlette.responses import Response
 
 from evaluatorq.common.matching import pair_indices_by_key
+from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc, kpi_cards, status_badge
+from evaluatorq.dashboard import library
+from evaluatorq.dashboard.filters import FILTERS, _sim_options_from_results
+from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
+from evaluatorq.dashboard.report_kit import panel
+from evaluatorq.dashboard.report_tabs import sim_entity_dialog
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_views import (
     _entries_from_run,
@@ -58,15 +66,21 @@ from evaluatorq.dashboard.sim_views import (
     filtered_entries,
     render_transcript_fragment,
 )
-from evaluatorq.dashboard.view import report_back_link
+from evaluatorq.dashboard.view import GOAL_OUTCOME_LABEL, _render_sim_filter_rail, filter_fragment, report_back_link
 from evaluatorq.simulation.metrics import TURN_METRICS, is_errored_result
+from evaluatorq.simulation.reports.sections import (
+    _build_evaluator_scores_section,
+    _build_summary_section,
+    _build_turn_metrics_section,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from evaluatorq.simulation.contracts import SimulationEntry, SimulationResult, SimulationRun
 
-_EPS = 1e-9
+# A change smaller than the two-decimal display precision reads as no change.
+_FLAT = 0.005
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +181,18 @@ class Comparison:
         goal rate and goal score can no longer be compared between runs."""
         return bool(_OUTCOME_DIMS & self.narrowing.keys())
 
+    @cached_property
+    def aggregates(self) -> tuple[Aggregates, Aggregates]:
+        return aggregates(self.a), aggregates(self.b)
+
+    @cached_property
+    def scores(self) -> list[ScoreRow]:
+        return score_rows(self)
+
+    @cached_property
+    def changes(self) -> list[tuple[MatchedPair, str]]:
+        return [(p, pair_change(self.a, self.b, p)) for p in self.matching.matched]
+
 
 # Filters that select on the goal outcome itself (directly or through the score).
 _OUTCOME_DIMS = frozenset({'goal_outcome', 'max_goal_score'})
@@ -180,8 +206,6 @@ def narrowing_selections(
     The rail posts every control, defaults included, so a selection is only a
     real filter when applying it alone removes something.
     """
-    from evaluatorq.dashboard.filters import FILTERS
-
     sim = FILTERS['sim']
     return {
         dim: selections[dim]
@@ -238,8 +262,6 @@ def aggregates(side: Side) -> Aggregates:
     single-run summary section so they match the run's own report by
     construction: errored conversations count in the denominator of the goal
     rate and the average score. An empty side has no rates (n/a)."""
-    from evaluatorq.simulation.reports.sections import _build_summary_section
-
     if not side.results:
         return Aggregates(0, None, None, None, 0)
     data = _build_summary_section(side.results).data
@@ -276,8 +298,6 @@ class ScoreRow:
 
 def _scorer_stats(side: Side) -> dict[str, tuple[float | None, int]]:
     """Scorer name -> (mean score, dropped count) over the side's results."""
-    from evaluatorq.simulation.reports.sections import _build_evaluator_scores_section
-
     section = _build_evaluator_scores_section(side.results)
     if section is None:
         return {}
@@ -285,8 +305,6 @@ def _scorer_stats(side: Side) -> dict[str, tuple[float | None, int]]:
 
 
 def _quality_means(side: Side) -> dict[str, float]:
-    from evaluatorq.simulation.reports.sections import _build_turn_metrics_section
-
     return dict(_build_turn_metrics_section(side.results).data['avg_quality_metrics'])
 
 
@@ -320,7 +338,7 @@ def _delta_pill(delta: float | None, text: str, *, higher_better: bool | None = 
     ``higher_better=None`` keeps it neutral (e.g. conversation count, turns)."""
     if delta is None:
         return '<span class="cmp-delta cmp-delta--flat">n/a</span>'
-    if abs(delta) < _EPS:
+    if abs(delta) < _FLAT:
         return '<span class="cmp-delta cmp-delta--flat">no change</span>'
     arrow = '&#x25B2;' if delta > 0 else '&#x25BC;'
     tone = 'flat' if higher_better is None else 'good' if (delta > 0) == higher_better else 'bad'
@@ -359,7 +377,7 @@ def _change_pill(change: str) -> str:
 
 def _tone(delta: float) -> str:
     """good / bad / flat for a higher-is-better delta."""
-    return 'flat' if abs(delta) < 0.005 else 'good' if delta > 0 else 'bad'
+    return 'flat' if abs(delta) < _FLAT else 'good' if delta > 0 else 'bad'
 
 
 def _fmt_rate(v: float | None) -> str:
@@ -425,13 +443,13 @@ def _view_attrs(cmp: Comparison, view: str) -> str:
 _GOAL_SCORERS = frozenset({'goal_achieved'})
 
 
-def _headlines(cmp: Comparison, scores: list[ScoreRow], view: str, *, oob: bool = False) -> str:
+def _headlines(cmp: Comparison, view: str, *, oob: bool = False) -> str:
     """Insights-style "what changed" rows: a big number, a one-line finding with
     its reason, and an action that narrows the conversation table to *view*.
     The row whose view is showing reads "Showing these" and clicking it again
     returns the table to its default view. The table route re-renders this
     block out of band so the pressed row follows the segment control."""
-    changes = [(p, pair_change(cmp.a, cmp.b, p)) for p in cmp.matching.matched]
+    changes = cmp.changes
     regressed = [p for p, c in changes if c == 'regressed']
     improved = [p for p, c in changes if c == 'improved']
     errored = [p for p, c in changes if c == 'error']
@@ -500,7 +518,7 @@ def _headlines(cmp: Comparison, scores: list[ScoreRow], view: str, *, oob: bool 
                 go='Review errors',
             )
         )
-    agg_a, agg_b = aggregates(cmp.a), aggregates(cmp.b)
+    agg_a, agg_b = cmp.aggregates
     if cmp.outcome_filtered:
         rows.append(
             row(
@@ -523,7 +541,12 @@ def _headlines(cmp: Comparison, scores: list[ScoreRow], view: str, *, oob: bool 
                 go='All conversations',
             )
         )
-    moved = [r for r in scores if r.label not in _GOAL_SCORERS and r.delta is not None and abs(r.delta) >= 0.01]
+    # Only 0-1 rows: a turn count or token mean would outrank every scorer by scale alone.
+    moved = [
+        r
+        for r in cmp.scores
+        if r.in_unit_range and r.label not in _GOAL_SCORERS and r.delta is not None and abs(r.delta) >= _FLAT
+    ]
     if moved:
         top = max(moved, key=lambda r: abs(r.delta or 0.0))
         delta = top.delta or 0.0
@@ -551,10 +574,6 @@ _FILTER_LABELS = {
     'min_turns': 'Turns',
     'min_total_tokens': 'Tokens',
 }
-_COPY_LINK_JS = (
-    'navigator.clipboard&&navigator.clipboard.writeText(location.href);'
-    "this.textContent='Link copied';setTimeout(()=>{this.textContent='Copy link to this view'},2000)"
-)
 
 
 def _filter_label(dim: str) -> str:
@@ -565,8 +584,6 @@ def _filter_label(dim: str) -> str:
 
 
 def _filter_value_text(dim: str, values: list[str]) -> str:
-    from evaluatorq.dashboard.view import GOAL_OUTCOME_LABEL
-
     if dim == 'goal_outcome':
         return ', '.join(GOAL_OUTCOME_LABEL.get(v, v) for v in values)
     if dim.startswith('max_'):
@@ -579,11 +596,12 @@ def _filter_value_text(dim: str, values: list[str]) -> str:
     return shown + (f' +{len(values) - 2}' if len(values) > 2 else '')
 
 
-def _filter_strip(cmp: Comparison, state: TableState) -> str:
+def _filter_strip(cmp: Comparison, state: TableState, *, oob: bool = False) -> str:
     """Insights-style filter bar: how many rows the filters keep, one removable
     chip per active filter, clear all, and a copy-link button (the URL holds
-    the filters, segment and sort). Chips are plain links to the same view
-    without that filter, so they work without the rail."""
+    the filters, segment and sort). Chips swap the page like the rail does and
+    stay plain links without JavaScript; the table route re-renders this bar
+    out of band so the links carry the current segment and sort."""
     full = cmp.full
     noun = 'rows' if full.a_only or full.b_only else 'pairs'
     count = f'<span class="cmp-fbar-count">Showing <b>{cmp.shown_rows}</b> of <b>{cmp.total_rows}</b> {noun}</span>'
@@ -592,21 +610,30 @@ def _filter_strip(cmp: Comparison, state: TableState) -> str:
         chips = ''.join(
             f'<span class="cmp-fchip"><span class="cmp-fchip-dim">{esc(_filter_label(dim))}</span>'
             f'{esc(_filter_value_text(dim, values))}'
-            f'<a class="cmp-fchip-x" href="{esc(_compare_url(cmp, {k: v for k, v in cmp.narrowing.items() if k != dim}, base))}" '
-            f'aria-label="Remove the {esc(dim.replace("_", " "))} filter">&times;</a></span>'
+            f'<a class="cmp-fchip-x" {_swap_link(cmp, {k: v for k, v in cmp.narrowing.items() if k != dim}, base)} '
+            f'aria-label="Remove the {esc(_filter_label(dim))} filter">&times;</a></span>'
             for dim, values in cmp.narrowing.items()
         )
-        rest = f'{chips}<a class="cmp-fbar-clear" href="{esc(_compare_url(cmp, {}, base))}">Clear all</a>'
+        rest = f'{chips}<a class="cmp-fbar-clear" {_swap_link(cmp, {}, base)}>Clear all</a>'
     else:
         rest = '<span class="cmp-fbar-hint">Use the filters to narrow both runs to the same conversations.</span>'
-    copy = f'<button type="button" class="cmp-fbar-copy" onclick="{esc(_COPY_LINK_JS)}">Copy link to this view</button>'
-    return f'<div class="cmp-fbar" role="status">{count}{rest}{copy}</div>'
+    copy = '<button type="button" class="cmp-fbar-copy" data-copy-link>Copy link to this view</button>'
+    oob_attr = ' hx-swap-oob="true"' if oob else ''
+    return f'<div id="cmp-fbar" class="cmp-fbar" role="status"{oob_attr}>{count}{rest}{copy}</div>'
+
+
+def _swap_link(cmp: Comparison, narrowing: dict[str, list[str]], state: TableState) -> str:
+    """``href`` + HTMX attributes that load the compare view for *narrowing*
+    through the filter route, swapping the page and rail like a rail change."""
+    url = _compare_url(cmp, narrowing, state)
+    query = url.partition('?')[2]
+    return f'href="{esc(url)}" hx-get="/compare/sim/filter?{esc(query)}" hx-target="#filter-swap" hx-swap="outerHTML"'
 
 
 def _tiles(cmp: Comparison) -> str:
     """Single-run style number tiles: B's value large, then ``A → B`` and a delta
     pill. Under an outcome filter the goal tiles say "not comparable" instead."""
-    a, b = aggregates(cmp.a), aggregates(cmp.b)
+    a, b = cmp.aggregates
 
     def tile(
         label: str,
@@ -707,8 +734,6 @@ _TERMINATION_INKS = ('var(--ink-900)', 'var(--text-muted)', 'var(--teal-600)', '
 
 
 def _outcomes_panel(cmp: Comparison) -> str:
-    from evaluatorq.dashboard.report_kit import panel
-
     def segments(side: Side) -> list[tuple[str, str, int]]:
         counts = Counter(side.status(e) for e in side.entries)
         return [(label, color, counts[key]) for key, label, color in _OUTCOME_SEGMENTS]
@@ -735,8 +760,6 @@ def _outcomes_panel(cmp: Comparison) -> str:
 def _scores_panel(rows: list[ScoreRow]) -> str:
     """Scorer and turn-quality means: A and B as numbers, on a shared 0..1 track
     where the row fits it, plus the delta."""
-    from evaluatorq.dashboard.report_kit import panel
-
     if not rows:
         return panel('Scores', '<p class="sim-empty">Neither run recorded scorer or turn-quality data.</p>')
 
@@ -873,18 +896,18 @@ def resolve_view(cmp: Comparison, state: TableState) -> str:
     reason to open a comparison — unless nothing changed, then everything."""
     if state.view:
         return state.view
-    changed = any(pair_change(cmp.a, cmp.b, p) != 'same' for p in cmp.matching.matched)
+    changed = any(c != 'same' for _, c in cmp.changes)
     return 'changed' if changed else 'all'
 
 
 def render_conversations(cmp: Comparison, state: TableState) -> str:
     """The conversation section: segment control, sortable/paged table whose
     rows open the paired transcript in the drawer, and the unmatched lists."""
-    changes = [(p, pair_change(cmp.a, cmp.b, p)) for p in cmp.matching.matched]
+    changes = cmp.changes
     counts = {key: sum(1 for _, c in changes if _in_view(c, key)) for key, _ in _VIEWS}
     view = resolve_view(cmp, state)
 
-    def control(sort: str, direction: str, page: int, size: int, *, v: str = view) -> str:
+    def control(sort: str, direction: str, page: int, size: int, *, v: str = state.view) -> str:
         qs = _qs(cmp, cmp_view=v, cmp_sort=sort, cmp_dir=direction, cmp_page=page, cmp_size=size)
         return (
             f'hx-get="/compare/sim/conversations?{esc(qs)}" hx-include="#filter-form" '
@@ -967,7 +990,7 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
     state_inputs = ''.join(
         f'<input type="hidden" name="{name}" value="{esc(str(value))}">'
         for name, value in (
-            ('cmp_view', view),
+            ('cmp_view', state.view),
             ('cmp_sort', state.sort),
             ('cmp_dir', state.direction),
             ('cmp_size', state.size),
@@ -993,22 +1016,18 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
 
 def render_compare_body(cmp: Comparison, state: TableState) -> str:
     """Everything left of the filter rail."""
-    scores = score_rows(cmp)
     return (
         f'{_hero(cmp)}'
         f'{_filter_strip(cmp, state)}'
-        f'{_headlines(cmp, scores, resolve_view(cmp, state))}'
+        f'{_headlines(cmp, resolve_view(cmp, state))}'
         f'{_tiles(cmp)}'
-        f'<div class="cmp-grid">{_outcomes_panel(cmp)}{_scores_panel(scores)}</div>'
+        f'<div class="cmp-grid">{_outcomes_panel(cmp)}{_scores_panel(cmp.scores)}</div>'
         f'{render_conversations(cmp, state)}'
     )
 
 
 def render_filter_rail(cmp: Comparison, selections: dict[str, list[str]]) -> str:
     """The sim filter rail, posting to the compare filter route; options cover both runs."""
-    from evaluatorq.dashboard.filters import _sim_options_from_results
-    from evaluatorq.dashboard.view import _render_sim_filter_rail
-
     opts = _sim_options_from_results([*cmp.a.run.results, *cmp.b.run.results])
     m = cmp.matching
     return _render_sim_filter_rail(
@@ -1024,8 +1043,6 @@ def render_filter_rail(cmp: Comparison, selections: dict[str, list[str]]) -> str
 
 
 def _swap(cmp: Comparison, selections: dict[str, list[str]], state: TableState) -> str:
-    from evaluatorq.dashboard.view import filter_fragment
-
     return filter_fragment(cmp.a.rid, 'sim', render_compare_body(cmp, state), render_filter_rail(cmp, selections))
 
 
@@ -1066,8 +1083,6 @@ def render_compare_page(
     The dialog sits outside ``#filter-swap`` so a filter change does not tear
     down an open drawer; both live inside ``.sim-report`` for the drawer styles.
     """
-    from evaluatorq.dashboard.report_tabs import sim_entity_dialog
-
     selections = selections or {}
     cmp = build_comparison(rid_a, rid_b, run_a, run_b, selections)
     return (
@@ -1082,8 +1097,6 @@ def first_divergence(entry_a: SimulationEntry, entry_b: SimulationEntry) -> int 
     """Index of the first message that differs between the two transcripts
     (role or text), the shorter length when one is a prefix of the other, or
     ``None`` when they are identical."""
-    from evaluatorq.common.messages import coerce_content_text
-
     msgs_a, msgs_b = entry_a.transcript or [], entry_b.transcript or []
     for i, (ma, mb) in enumerate(zip(msgs_a, msgs_b, strict=False)):
         if ma.role != mb.role or coerce_content_text(ma.content) != coerce_content_text(mb.content):
@@ -1158,29 +1171,18 @@ def render_compare_transcript(entry_a: SimulationEntry, entry_b: SimulationEntry
             '<div class="cmp-side">'
             f'<div class="cmp-side-title">{_run_key(which)}<span class="cmp-side-name">{esc(side.name)}</span>'
             f'<span class="cmp-side-id">#{entry.index}</span>{_badge(side.status(entry))}</div>'
-            f'{render_transcript_fragment(entry, summary=False)}</div>'
+            f'{render_transcript_fragment(entry, summary=False, mark_index=split)}</div>'
         )
 
+    split = first_divergence(entry_a, entry_b)
     change = pair_change(side_a, side_b, MatchedPair(entry_a, entry_b))
     head = (
         '<header class="cmp-pair-head">'
         f'<div class="cmp-pair-title">{esc(entry_a.persona)} <span class="cmp-pair-sep">·</span> {esc(entry_a.scenario)}</div>'
         f'{_change_pill(change)}</header>'
     )
-    split = first_divergence(entry_a, entry_b)
-    # The bubbles come from the shared message renderer, so the marker is a
-    # positional rule scoped to this drawer's grid rather than a class on the message.
-    msg = f'.cmp-transcript-grid .sim-transcript-bubbles > .sim-msg:nth-child({(split or 0) + 1})'
-    marker = (
-        ''
-        if split is None
-        else f'<style>{msg}{{position:relative;margin-top:26px;outline:2px dashed var(--amber-600);'
-        'outline-offset:4px;border-radius:8px}'
-        f'{msg}::before{{content:"First difference";position:absolute;top:-24px;left:0;'
-        'font:600 10.5px/1 var(--font-mono);color:var(--amber-ink)}</style>'
-    )
     return (
-        f'{head}{_differences(entry_a, entry_b, side_a, side_b)}{marker}'
+        f'{head}{_differences(entry_a, entry_b, side_a, side_b)}'
         f'<div class="cmp-transcript-grid">{column("A", entry_a, side_a)}{column("B", entry_b, side_b)}</div>'
     )
 
@@ -1199,9 +1201,7 @@ def resolve_run(rid: str, roots: list[Path] | None, surface: str) -> tuple[str, 
     is reported as corrupt (422) rather than "not found" (404). The error case is
     logged with a stack so a corrupt report is debuggable.
     """
-    import json
-
-    from evaluatorq.dashboard import library
+    # Local: surfaces -> pairwise_tabs -> pairwise_views imports this module.
     from evaluatorq.dashboard.surfaces import ADAPTERS
 
     path = library.resolve(rid, roots)
@@ -1268,6 +1268,23 @@ def _push(response: Response, url: str) -> Response:
     return response
 
 
+def parse_compare_params(items: list[tuple[str, str]]) -> tuple[dict[str, list[str]], TableState]:
+    """Split request parameters into the sim filter selections and the table state.
+
+    Every compare route reads its parameters here, from the query string or the
+    rail form alike, so a parameter means the same thing on each.
+    """
+    dims = set(FILTERS['sim'].dimensions)
+    selections: dict[str, list[str]] = {}
+    table: dict[str, str] = {}
+    for key, value in items:
+        if key.startswith('cmp_'):
+            table[key] = value
+        elif key in dims:
+            selections.setdefault(key, []).append(value)
+    return selections, TableState.parse(table)
+
+
 def _filter_response(roots: list[Path] | None, rid_a: str, rid_b: str, items: list[tuple[str, str]]) -> Response:
     """Blocking half of the filter route (disk loads and rendering), run off the event loop."""
     loaded = _load_pair(rid_a, rid_b, roots)
@@ -1275,14 +1292,7 @@ def _filter_response(roots: list[Path] | None, rid_a: str, rid_b: str, items: li
         message, status = loaded
         return _fragment_error(str(message), int(status))
     run_a, run_b = loaded
-    selections: dict[str, list[str]] = {}
-    table: dict[str, str] = {}
-    for key, value in items:
-        if key.startswith('cmp_'):
-            table[key] = value
-        else:
-            selections.setdefault(key, []).append(value)
-    state = TableState.parse(table)
+    selections, state = parse_compare_params(items)
     cmp = build_comparison(rid_a, rid_b, run_a, run_b, selections)
     return _push(Response(_swap(cmp, selections, state), media_type='text/html'), canonical_url(cmp, selections, state))
 
@@ -1294,11 +1304,12 @@ def _filter_response(roots: list[Path] | None, rid_a: str, rid_b: str, items: li
 
 def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> None:
     """Register the compare routes on *app* (called from ``build_app``)."""
-    from evaluatorq.dashboard.filter_request import parse_selections
-    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
     def _ids(req: Request) -> tuple[str, str]:
         return req.query_params.get('a') or '', req.query_params.get('b') or ''
+
+    def _items(req: Request) -> list[tuple[str, str]]:
+        return list(req.query_params.multi_items())
 
     @app.get('/compare/sim')
     def compare_sim(req: Request) -> Response:
@@ -1308,9 +1319,7 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
             message, status = loaded
             return error_page(str(message), int(status), 'sim')
         run_a, run_b = loaded
-        body = render_compare_page(
-            rid_a, rid_b, run_a, run_b, parse_selections(req, 'sim'), TableState.parse(req.query_params)
-        )
+        body = render_compare_page(rid_a, rid_b, run_a, run_b, *parse_compare_params(_items(req)))
         return Response(
             page('Compare', body, active_surface='sim', back_html=report_back_link('sim')), media_type='text/html'
         )
@@ -1322,6 +1331,12 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
         items = [(key, str(value)) for key, value in form.multi_items()]
         return await asyncio.to_thread(_filter_response, roots, rid_a, rid_b, items)
 
+    @app.get('/compare/sim/filter')
+    async def compare_sim_filter_link(req: Request) -> Response:
+        """The filter-bar chips: the same swap as the rail, with the selection in the query string."""
+        rid_a, rid_b = _ids(req)
+        return await asyncio.to_thread(_filter_response, roots, rid_a, rid_b, _items(req))
+
     @app.get('/compare/sim/conversations')
     def compare_sim_conversations(req: Request) -> Response:
         rid_a, rid_b = _ids(req)
@@ -1330,12 +1345,11 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
             message, status = loaded
             return _fragment_error(str(message), int(status))
         run_a, run_b = loaded
-        selections = parse_selections(req, 'sim')
-        state = TableState.parse(req.query_params)
+        selections, state = parse_compare_params(_items(req))
         cmp = build_comparison(rid_a, rid_b, run_a, run_b, selections)
-        heads = _headlines(cmp, score_rows(cmp), resolve_view(cmp, state), oob=True)
+        oob = _headlines(cmp, resolve_view(cmp, state), oob=True) + _filter_strip(cmp, state, oob=True)
         return _push(
-            Response(render_conversations(cmp, state) + heads, media_type='text/html'),
+            Response(render_conversations(cmp, state) + oob, media_type='text/html'),
             canonical_url(cmp, selections, state),
         )
 

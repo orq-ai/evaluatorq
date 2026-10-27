@@ -205,6 +205,7 @@ def render_transcript_fragment(
     scenario_entity_id: str | None = None,
     *,
     summary: bool = True,
+    mark_index: int | None = None,
 ) -> str:
     """Render the drill-down transcript fragment for a single sim result entry.
 
@@ -226,6 +227,7 @@ def render_transcript_fragment(
         entry: A typed ``SimulationEntry`` from ``individual_entries``.
         summary: Include the persona/scenario header. The run comparison names
             the pair once above both columns and turns it off.
+        mark_index: Transcript position to flag as the first difference.
 
     Returns:
         An HTML fragment (no full-page shell).
@@ -248,7 +250,7 @@ def render_transcript_fragment(
 
     bubbles_html = (
         f'<div class="sim-transcript-bubbles">'
-        f'{render_message_list(normalised_msgs, role_labels=_ROLE_LABELS, class_prefix="sim")}'
+        f'{render_message_list(normalised_msgs, role_labels=_ROLE_LABELS, class_prefix="sim", mark_index=mark_index)}'
         f'</div>'
     )
     # Criteria above the conversation: the outcome verdict frames the
