@@ -23,7 +23,7 @@ from pydantic import (
 from pydantic.json_schema import SkipJsonSchema  # noqa: TC002 - pydantic resolves the annotation at runtime
 
 from evaluatorq.common.extract_json import extract_json_from_response
-from evaluatorq.common.responses import drop_class_description
+from evaluatorq.common.responses import scrub_wire_schema
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.agents.base import BaseAgent, LLMResult
 from evaluatorq.simulation.contracts import Criterion, CriterionVerdict, Judgment, Message, criterion_id_for
@@ -63,16 +63,17 @@ class JudgeDecision(BaseModel):
     it to not-observed and says so — while losing the whole turn's audit is what
     marks a run unverified.
 
-    The response schema is strict, so every field is required on the wire even
-    though each has a parser-side default; the defaults only matter to a provider
-    that does not enforce the schema.
+    The response schema is strict, so every field is required on the wire. Every
+    field but ``should_terminate`` also has a parser-side default, which only
+    matters to a provider that does not enforce the schema. The decision itself
+    has none: a reply without it fails validation and takes the safety-terminate
+    path, as a missing tool call did when the tool name carried the decision.
     """
 
-    model_config = ConfigDict(extra='ignore', json_schema_extra=drop_class_description)
+    model_config = ConfigDict(extra='ignore', json_schema_extra=scrub_wire_schema)
 
     reason: str = Field(default='', description='Brief explanation of the decision')
     should_terminate: bool = Field(
-        default=False,
         description='true to end the conversation: the goal is achieved or a must_not_happen criterion has '
         'occurred. false to let it continue.',
     )

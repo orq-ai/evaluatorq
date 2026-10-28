@@ -78,11 +78,28 @@ class TestJudgeAgent:
     def test_continue_judgment_carries_partial_score(self, judge):
         # A continue at the last turn IS the final score on max_turns runs, so it
         # must reflect the judge's partial estimate, not a hardcoded 0.
-        content = json.dumps({"reason": "Most of the goal done", "goal_completion_score": 0.75})
+        content = json.dumps({"reason": "Most of the goal done", "should_terminate": False, "goal_completion_score": 0.75})
 
         judgment = judge._parse_judgment(LLMResult(content=content))
 
         assert judgment.goal_completion_score == 0.75
+
+    def test_a_missing_decision_ends_the_run_for_safety(self, judge, caplog):
+        """A reply without ``should_terminate`` is not a "continue".
+
+        The tool name used to carry the decision, so it could not go missing. A
+        provider that ignores the schema can now omit it; defaulting to "continue"
+        would read the judge's silence as a verdict (No optimistic defaults on unknown shapes).
+        """
+        content = json.dumps({"reason": "looks done", "goal_achieved": True, "goal_completion_score": 1.0})
+
+        with caplog.at_level("WARNING"):
+            judgment = judge._parse_judgment(LLMResult(content=content))
+
+        assert judgment.should_terminate is True
+        assert judgment.goal_achieved is False
+        assert "Failed to parse" in judgment.reason
+        assert "should_terminate" in caplog.text
 
     def test_a_continuing_conversation_has_not_achieved_its_goal(self, judge):
         content = json.dumps({"should_terminate": False, "goal_achieved": True, "goal_completion_score": 0.9})
@@ -164,6 +181,46 @@ class TestJudgeAgent:
         assert sent["text"]["format"]["name"] == "JudgeDecision"
         assert sent["text"]["format"]["strict"] is True
 
+    @pytest.mark.asyncio
+    async def test_evaluate_parses_a_structured_reply_end_to_end(self):
+        """A real ``output_text`` JSON reply becomes the Judgment, violations derived from the audit."""
+        decision = {
+            "reason": "Agent insulted the customer",
+            "should_terminate": True,
+            "goal_achieved": False,
+            "goal_completion_score": 0.2,
+            "criteria_verdicts": [
+                {"criterion_id": "criteria_0", "occurred": False, "evidence": ""},
+                {"criterion_id": "criteria_1", "occurred": True, "evidence": "'Not my problem'"},
+            ],
+            "response_quality": 0.1,
+            "hallucination_risk": 0.0,
+            "tone_appropriateness": 0.0,
+            "factual_accuracy": None,
+        }
+        part = MagicMock(type="output_text", text=json.dumps(decision))
+        response = MagicMock(output=[MagicMock(type="message", role="assistant", content=[part])], usage=None)
+        client = MagicMock()
+        client.responses = MagicMock()
+        client.responses.create = AsyncMock(return_value=response)
+        judge = JudgeAgent(
+            LLMCallConfig(client=client),
+            goal="Get a refund",
+            criteria=[
+                Criterion(description="Agent offers refund", type="must_happen"),
+                Criterion(description="Agent is rude", type="must_not_happen"),
+            ],
+        )
+
+        judgment = await judge.evaluate([Message(role="user", content="My order is broken")])
+
+        assert judgment.should_terminate is True
+        assert judgment.goal_achieved is False
+        assert judgment.goal_completion_score == 0.2
+        assert judgment.rules_broken == ["criteria_1"]
+        assert [v.criterion_id for v in judgment.criteria_verdicts or []] == ["criteria_0", "criteria_1"]
+        assert judgment.tone_appropriateness == 0.0
+
 
 class TestJudgeDecisionSchema:
     @pytest.fixture
@@ -174,6 +231,36 @@ class TestJudgeDecisionSchema:
 
     def test_every_field_is_required_on_the_wire(self, schema):
         assert set(schema["required"]) == set(JudgeDecision.model_fields)
+        verdict = schema["$defs"]["CriterionVerdict"]
+        assert set(verdict["required"]) == set(verdict["properties"])
+
+    def test_should_terminate_is_required_by_the_parser_too(self):
+        """Strict mode requires it on the wire; the parser must not quietly default it either."""
+        assert JudgeDecision.model_fields["should_terminate"].is_required()
+
+    def test_strict_closes_every_object(self, schema):
+        assert schema["additionalProperties"] is False
+        assert schema["$defs"]["CriterionVerdict"]["additionalProperties"] is False
+
+    def test_criteria_verdicts_has_no_null_branch(self, schema):
+        """The parser reads None as "the judge told us nothing"; the wire must never offer it."""
+        prop = schema["properties"]["criteria_verdicts"]
+        assert prop["type"] == "array"
+        assert "anyOf" not in prop
+
+    def test_no_parser_default_reaches_the_model(self, schema):
+        """A default is a parser-side value. Advertising it tells the model a required field is optional."""
+
+        def nodes(node):
+            if isinstance(node, dict):
+                yield node
+                for value in node.values():
+                    yield from nodes(value)
+            elif isinstance(node, list):
+                for value in node:
+                    yield from nodes(value)
+
+        assert [node for node in nodes(schema) if "default" in node] == []
 
     def test_does_not_ask_for_a_free_text_rules_broken(self, schema):
         """Violations are derived in code from the occurrence audit + criterion type.

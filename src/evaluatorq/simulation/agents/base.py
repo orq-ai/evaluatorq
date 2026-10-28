@@ -24,7 +24,7 @@ from evaluatorq.common.prompt_cache import (
     mark_responses_input,
     responses_volatile_items,
 )
-from evaluatorq.common.responses import chat_response_format, first_responses_refusal, responses_stop_reason
+from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_input
@@ -331,10 +331,15 @@ class BaseAgent(UsageTracking, ABC):
         Responses path (which is the judge's default).
 
         ``response_format`` asks for a reply that is a JSON object matching that
-        model, as a strict schema on either API. The reply comes back as text in
-        ``LLMResult.content``; validating it is the caller's job.
+        model, as a strict ``text.format`` schema on the Responses API. The reply
+        comes back as text in ``LLMResult.content``; validating it is the caller's
+        job. The chat path has no caller for it and refuses rather than guessing.
         """
         messages = drop_unreplayable_tool_records(messages, incomplete_as_text=True)
+        if response_format is not None and self.config.api != 'responses':
+            raise ValueError(
+                f'{self.name}: response_format is only supported on the Responses API (config.api={self.config.api!r})'
+            )
         if self.config.api == 'responses':
             return await self._call_responses(
                 messages,
@@ -354,7 +359,6 @@ class BaseAgent(UsageTracking, ABC):
             tools=tools,
             llm_purpose=llm_purpose,
             volatile_tail=volatile_tail,
-            response_format=response_format,
         )
 
     async def _call_chat_completions(
@@ -367,7 +371,6 @@ class BaseAgent(UsageTracking, ABC):
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
         volatile_tail: int = 0,
-        response_format: type[BaseModel] | None = None,
     ) -> LLMResult:
         """Call the LLM via the Chat Completions API with retry logic.
 
@@ -422,7 +425,6 @@ class BaseAgent(UsageTracking, ABC):
                         temperature=temp,
                         max_tokens=max_tok,
                         tools=tools,
-                        response_format=chat_response_format(response_format) if response_format else None,
                         extra_body=self.config.extra_body or None,
                         extra_kwargs=reasoning_kwargs,
                     )

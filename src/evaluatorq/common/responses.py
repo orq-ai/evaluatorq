@@ -34,24 +34,22 @@ def responses_text_config(response_model: type[BaseModel]) -> dict[str, Any]:
     }
 
 
-def drop_class_description(schema: dict[str, Any], _model: type[BaseModel] | None = None) -> None:
-    """``json_schema_extra`` hook: keep a model's class docstring out of its JSON schema.
+def scrub_wire_schema(schema: dict[str, Any], _model: type[BaseModel] | None = None) -> None:
+    """``json_schema_extra`` hook: strip what a model must not read from a response schema.
 
     Pydantic copies a class docstring into the schema as ``description``. When the
     schema is sent to a model as a response format, only the *field* descriptions
     are written for it; a class docstring is maintainer rationale (why a field
     exists, which model got it wrong before) and would be read as prompt text.
+
+    A field ``default`` is a *parser-side* value: the parser survives the field's
+    absence, while the strict schema still requires it on the wire. Advertising
+    the default tells the model the opposite. The OpenAI strict helper drops only
+    ``None`` defaults, so ``false``, ``0.0`` and ``""`` would otherwise reach it.
     """
     schema.pop('description', None)
-
-
-def chat_response_format(response_model: type[BaseModel]) -> dict[str, Any]:
-    """Build the strict ``response_format`` for ``chat.completions.create``.
-
-    The same strict schema as `responses_text_config`, in the Chat Completions envelope.
-    """
-    spec = responses_text_config(response_model)['format']
-    return {'type': 'json_schema', 'json_schema': {key: spec[key] for key in ('name', 'strict', 'schema')}}
+    for prop in schema.get('properties', {}).values():
+        prop.pop('default', None)
 
 
 def first_responses_refusal(response: Any) -> str | None:
