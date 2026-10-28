@@ -342,7 +342,7 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
     return _ResolvedEvaluationInputs(
         data=data,
         inference=inference,
-        jobs=cast('list[Job]', jobs),
+        jobs=jobs,
         evaluators_list=evaluators_list,
         datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,

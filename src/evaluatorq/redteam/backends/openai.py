@@ -214,7 +214,7 @@ class OpenAIModelTarget(AgentTarget):
             if choices:
                 finish_reason = getattr(choices[0], 'finish_reason', None)
 
-        output: list[OutputMessage] = cast('list[OutputMessage]', list(tool_call_items))
+        output: list[OutputMessage] = list(tool_call_items)
         output.append(TextOutputItem(text=content, annotations=[]))
         return AgentResponse(
             output=output,

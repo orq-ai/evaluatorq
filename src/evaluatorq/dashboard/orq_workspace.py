@@ -23,7 +23,7 @@ from loguru import logger
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw, env_text
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
 # Retained for backward-compatible imports; the canonical value lives in common.env_config.
 DEFAULT_BASE_URL = DEFAULT_ORQ_BASE_URL
@@ -34,7 +34,7 @@ _render_cli_slug_cache: ContextVar[dict[tuple[str | None, str | None], str | Non
 
 
 @contextmanager
-def cli_slug_render_scope() -> Iterator[None]:
+def cli_slug_render_scope() -> Generator[None, None, None]:
     """Reuse CLI-session slug discovery for one render, then discard it."""
     token = _render_cli_slug_cache.set({})
     try:

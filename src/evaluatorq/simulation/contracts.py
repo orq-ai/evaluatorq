@@ -338,7 +338,7 @@ class MustHappenCriterion(Criterion):
     ```
     """
 
-    type: Literal['must_happen'] = 'must_happen'
+    type: Literal['must_happen'] = 'must_happen'  # ty: ignore[invalid-mutable-override] -- pins the parent's type
 
     def __init__(self, description: str, **data: Any) -> None:
         super().__init__(description=description, **data)
@@ -356,7 +356,7 @@ class MustNotHappenCriterion(Criterion):
     ```
     """
 
-    type: Literal['must_not_happen'] = 'must_not_happen'
+    type: Literal['must_not_happen'] = 'must_not_happen'  # ty: ignore[invalid-mutable-override] -- pins the parent's type
 
     def __init__(self, description: str, **data: Any) -> None:
         super().__init__(description=description, **data)

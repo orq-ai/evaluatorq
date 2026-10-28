@@ -636,7 +636,7 @@ class EvaluatorConfig(LLMCallConfig):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra='forbid')
 
-    model: str | None = Field(
+    model: str | None = Field(  # ty: ignore[invalid-attribute-override] -- deliberate, see docstring
         default=None,
         exclude=True,
         description='Primary judge model shorthand; normalized to judges[0].',
