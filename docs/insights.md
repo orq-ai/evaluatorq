@@ -98,6 +98,23 @@ The `eq insights` command accepts population filters, label presets or JSON file
 eq insights --query "customers asking about refunds" --agent support-bot --label sentiment --label customer_satisfaction --dimension intent --dimension failure --limit 500 --json refunds-insights.json
 ```
 
+Population filters narrow which Orq traces are loaded. They work with or without `--query`; without a query, the newest traces that pass the filters are analyzed, up to `--limit` (default 500, or `EVALUATORQ_FINDER_LIMIT`) within the time window (default 7 days, or `EVALUATORQ_FINDER_WINDOW_DAYS`). They share their names and meaning with `eq find`, whose [option table](trace-finder.md#cli-reference) has the full list.
+
+| Option | Meaning |
+|---|---|
+| `--project`, `--model`, `--provider`, `--status`, `--product`, `--trace-type`, `--agent`, `--tool` | Facet filters. Each takes one value and can be repeated. |
+| `--tokens-min`, `--tokens-max` | Inclusive bounds on total tokens, `>= 0`. |
+| `--duration-ms-min`, `--duration-ms-max` | Inclusive bounds on trace duration in milliseconds, `>= 0`. |
+| `--window-days` | How many recent days to search, `1`–`90`. |
+
+`--model` and `--provider` drop the base filter that hides bare model calls (`generate_content`), so traces that include evaluatorq's own router calls can enter the population; see [Ask AI](trace-finder.md#ask-ai-within-results-or-as-a-new-search).
+
+A minimum above its maximum is rejected before any trace loads. `--from-finder`, `--from-snapshot` and `--sessions` fix the population themselves, so combining any of these options with them exits with status 2 and names the conflicting option. This example analyzes slow, token-heavy traces from two agents over the last 14 days:
+
+```bash
+eq insights --agent support-bot --agent billing-bot --tokens-min 20000 --duration-ms-min 30000 --window-days 14 --dimension failure
+```
+
 For query-based population selection, `--filter-selection llm|llm+jev` overrides the saved dashboard mode (default `llm+jev`) and requires `--query`. `llm` uses the configured fast `finder.filters` task for facets, numeric bounds and time bounds; `llm+jev` uses the configured `finder.classifier` for facets while the shared compiler supplies numeric and time bounds in both modes. The compiler runs before facet selection. Each catalogue request supplies up to 50 values per facet for its actual time window. Candidate extraction is limited to eight values from `model`, `provider`, `agent`, `tool`, or `project` mentions, slash-qualified model names, and quoted strings up to 100 characters; a candidate outside the catalogue is used only after exact trace confirmation. Generated calendar dates may narrow or replace the configured default window; explicitly supplied windows keep their bounds. The mode and generated-window behavior are the same whether or not you pass `--filter-selection`.
 
 The five-minute facet-catalogue cache is scoped to the Orq host, credentials, workspace/project scope and limit. Exact time bounds distinguish explicit-window entries; default-window entries are grouped by window duration.

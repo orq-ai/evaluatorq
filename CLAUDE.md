@@ -133,6 +133,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Replaying a recorded transcript to a simulation agent or the in-loop judge | `BaseAgent._call_llm`: it shows an unpaired call as text and replays the rest | passing the raw transcript to `to_chat_completion()` or `messages_to_responses_input` for a replay. The recorded transcript is evidence and keeps incomplete calls; scorer inputs (`evaluators.py`, the red-team seed context in `redteam/adaptive/pipeline.py`) filter with `incomplete_as_text=True` before rendering |
 | LLM-as-judge | `common.judge.run_judge`; multi-judge via `common.jury` | new judge prompt + parse loop |
 | OTel spans, token usage, cost | `common.tracing` (`with_llm_span`, `record_token_usage`, `record_llm_response`) | `get_tracer` / `start_as_current_span` outside a `tracing.py` module |
+| Structured job/evaluator span payloads | `common.tracing.record_span_payload`; jobs use `gen_ai.input/output`, evaluators use `orq.evaluation.input/output` | bare `input/output` attributes or Python repr payloads for these panels |
 | Surface-specific span naming | `redteam/tracing.py`, `simulation/tracing.py` — thin wrappers that delegate | new span vocabulary |
 | Prompt caching on a replayed conversation | `common.prompt_cache` (`apply_cache_breakpoints` for chat, `mark_responses_input` for Responses), gated on `caching_applies(client, model)` | hand-placed `cache_control`, a `prompt_cache_key` (OpenAI caches automatically; it needs none), or a bare `client_routes_through_orq` gate |
 | Prompt templating | `common.template_engine.render_template` | f-string prompt assembly |
@@ -149,6 +150,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Rendering a whole message list as one text blob | `common.messages.messages_to_text` | `''.join(...)` over `content` — it glues turns into one word, drops `tool_calls` (so an agent that acted scores as silent) and lets tool JSON read as the agent's answer |
 | Turning a `TraceInput` or loaded traces into rows | `common.trace_input.load_traces` (fetch + one `partition_traces` log) | `fetch_traces` then a hand-rolled usable/failed split |
 | Computing trace signals | `evaluatorq.signals.compute_signals` | ad-hoc counting over trajectories |
+| Classifying agent simulation results as errored across saved reports and typed reports | `simulation.metrics.is_errored_result` | per-surface error checks |
 | Representing an Insights conversation with trace metadata | `common.trace_document.TraceDocument`; convert with `ensure_trace_document`, render with `to_chat_messages`, persist coverage with `source_coverage` | a second stored message list beside the ATIF trajectory, or unrestricted capture payloads in saved review data |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
 | Untrusted trace text (a shell command, tool arguments or output) going to an external classifier | `common.redact.scrub_known_secrets` (local, pure, no network) before the text is rendered or sent | an ad-hoc credential regex, or sending the raw text |

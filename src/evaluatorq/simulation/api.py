@@ -2706,9 +2706,9 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
 
     This is the machine-readable half of what `_sim_evaluation_details` renders as prose: it lands on
     ``EvaluationResult.raw_output``, so anything reading the live score object gets JSON rather than a
-    joined string it would have to re-parse. Like the red-team path's use of the same field, it stays
-    local — `evaluatorq.send_results` strips ``raw_output`` at the upload boundary, and the evaluator
-    span carries only value, explanation and pass.
+    joined string it would have to re-parse. `evaluatorq.send_results` strips ``raw_output`` at the
+    experiment upload boundary. The evaluator trace's Output panel includes it when span content
+    capture is enabled.
 
     ``criteria_met`` returns its per-criterion `CriteriaMeta` records — dumped in JSON mode — with an
     ``audited`` label. The run-level ``criteria_verified`` and ``unverified_reason`` fields explain

@@ -1071,7 +1071,7 @@ class TestDashboardCostCoverage:
 
         ov = metrics.sim_overview([rt, sim])
         assert (ov.priced_calls, ov.cost_calls) == (1, 2)
-        assert '(1 of 2 calls)' in view.sim_overview_body(ov)
+        assert '1 of 2 calls priced' in view.sim_overview_body(ov)
 
     def test_legacy_report_does_not_inflate_the_coverage_denominator(self, tmp_path: Path) -> None:
         """A report predating priced_calls has *unknown* coverage, not zero coverage.

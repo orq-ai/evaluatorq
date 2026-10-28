@@ -695,12 +695,12 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     margin-top: 4px;
 }
 /* Red team overview, styled after the Insights review: a KPI strip (one white card split by hairlines) over a run
-   grid with tinted chips. Everything is scoped to .rt-overview so the other pages keep their look. */
-.dash-wrap.rt-overview {
+   grid with tinted chips. Overview layout is shared by Red Team and Agent Sim. */
+.dash-wrap.run-overview {
     --radius-lg: 14px; --rt-amber-chip: color-mix(in srgb, #c9a13f 16%, transparent);
     margin-inline: auto; width: 100%;
 }
-.rt-overview .rt-scope { margin: 0 0 -6px; line-height: 16px; padding-left: 2px; font-size: 12px; color: var(--text-muted); }
+.run-overview .rt-scope { margin: 0 0 -6px; line-height: 16px; padding-left: 2px; font-size: 12px; color: var(--text-muted); }
 .kpi-band.kpi-band--strip {
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin: 0;
     align-items: stretch;
@@ -729,74 +729,75 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     .kpi-band--strip .kpi-card:nth-child(n+3) { border-top: 1px solid var(--border-subtle); padding-top: 14px; }
 }
 
-/* Run grid: right-aligned numbers, one-chip targets, keyboard focus, and a stacked layout on narrow screens.
-   The Agent Sim grid is untouched. The panel pads 16px so rows and the title share one left edge. */
-.rt-overview .panel { padding-inline: 16px; overflow: hidden; }
-.rt-overview .panel--flush { padding-bottom: 0; }
-.rt-overview .panel-title { margin-bottom: 14px; }
-.rt-overview .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.rt-overview .runs-grid { margin-inline: -16px; }
-.rt-overview .runs-grid-head, .rt-overview .runs-grid-row { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) 72px 64px 56px 88px 18px; padding-inline: 16px; }
+/* Run grid: shared alignment, targets, focus, and narrow-screen layout. The panel pads 16px so rows and the title share one left edge. */
+.run-overview .panel { padding-inline: 16px; overflow: hidden; }
+.run-overview .panel--flush { padding-bottom: 0; }
+.run-overview .panel-title { margin-bottom: 14px; }
+.run-overview .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.run-overview .runs-grid { margin-inline: -16px; }
+.run-overview .runs-grid-head, .run-overview .runs-grid-row { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) 72px 64px 56px 88px 18px; padding-inline: 16px; }
 @media (min-width: 901px) and (max-width: 1279px) {
-    .rt-overview .runs-grid-head, .rt-overview .runs-grid-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) 72px 64px 56px 88px 18px; }
+    .run-overview .runs-grid-head, .run-overview .runs-grid-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) 72px 64px 56px 88px 18px; }
 }
 /* Same head and row treatment as the Insights trace table: small caps head over a rule, ruled rows. */
-.rt-overview .runs-grid-head {
+.run-overview .runs-grid-head {
     padding-block: 8px; font-family: var(--font-sans); font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em;
     color: var(--text-muted); border-bottom: 1px solid var(--border-default);
 }
-.rt-overview .runs-grid-row { padding-block: 10px; border-top: 0; border-bottom: 1px solid var(--border-subtle); }
-.rt-overview .runs-grid-row:last-child { border-bottom: 0; }
-.rt-overview .rg-job { gap: 0; }
-.rt-overview .rg-name, .rt-overview .rg-sub { line-height: 1.35; }
-.rt-overview .runs-grid-head span:nth-child(n+3):nth-child(-n+6) { text-align: right; }
-.rt-overview .rg-status { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.rt-overview .rg-broke-n { font-family: var(--font-mono); font-size: 13px; color: var(--text-body); }
-.rt-overview .rg-broke-n.is-none { color: var(--text-faint); }
-/* ASR chip: the Insights .fr box, coloured by band. */
-.rt-overview .rg-score.good, .rt-overview .rg-score.mid, .rt-overview .rg-score.high {
+.run-overview .runs-grid-row { padding-block: 10px; border-top: 0; border-bottom: 1px solid var(--border-subtle); }
+.run-overview .runs-grid-row:last-child { border-bottom: 0; }
+.run-overview .rg-job { gap: 0; }
+.run-overview .rg-name, .run-overview .rg-sub { line-height: 1.35; }
+.run-overview .runs-grid-head span:nth-child(n+3):nth-child(-n+6) { text-align: right; white-space: nowrap; }
+.run-overview .rg-status { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.run-overview .rg-broke-n { font-family: var(--font-mono); font-size: 13px; color: var(--text-body); }
+.run-overview .rg-broke-n.is-none { color: var(--text-faint); }
+/* Rate chips share the Insights palette; each surface owns its success bands. */
+.run-overview .rg-score:is(.good, .mid, .high, .pass, .warn, .fail) {
     display: inline-grid; place-items: center; justify-self: end; min-width: 36px; height: 24px; padding: 0 5px;
     border-radius: 5px; font: 600 12px/1 var(--font-mono); font-variant-numeric: tabular-nums;
 }
-.rt-overview .rg-score.good { background: var(--green-100); color: var(--teal-600); }
-.rt-overview .rg-score.mid { background: var(--rt-amber-chip); color: var(--amber-ink); }
-.rt-overview .rg-score.high { background: var(--red-50); color: var(--red-700); }
-.rt-overview .rg-score.none { color: var(--text-faint); }
-.rt-overview .rg-targets { flex-wrap: nowrap; overflow: hidden; }
-.rt-overview .rg-targets .target-pill { flex: 0 1 auto; min-width: 88px; white-space: nowrap; }
-.rt-overview .target-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rt-overview .target-more {
+.run-overview .rg-score:is(.good, .pass) { background: var(--green-100); color: var(--teal-600); }
+.run-overview .rg-score:is(.mid, .warn) { background: var(--rt-amber-chip); color: var(--amber-ink); }
+.run-overview .rg-score:is(.high, .fail) { background: var(--red-50); color: var(--red-700); }
+.run-overview .rg-score:is(.none, .neutral) { color: var(--text-faint); }
+.run-overview .rg-targets { flex-wrap: nowrap; overflow: hidden; }
+.run-overview .rg-targets .target-pill { flex: 0 1 auto; min-width: 88px; white-space: nowrap; }
+.run-overview .target-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-overview .target-more {
     flex: 0 0 auto; font-size: 12px; font-weight: 500; color: var(--text-muted);
     padding: 2px 7px; border: 1px solid var(--border-subtle); border-radius: 999px;
 }
-.rt-overview .runs-grid-row:focus-visible,
-.rt-overview .runs-pager-link:focus-visible { outline: 2px solid var(--teal-600); outline-offset: -2px; }
+.run-overview .runs-grid-row:focus-visible,
+.run-overview .runs-pager-link:focus-visible { outline: 2px solid var(--teal-600); outline-offset: -2px; }
 /* The pager is a footer under the last row, so it carries its own rule and breathing room. */
-.rt-overview .runs-pager { margin-inline: -16px; padding: 10px 16px 0; border-top: 1px solid var(--border-subtle); }
-.rt-overview .runs-pager-link { display: inline-grid; place-items: center; min-width: 32px; min-height: 32px; padding: 0 8px; }
-.rt-overview .runs-pager-link.is-active { text-decoration: underline; text-underline-offset: 4px; }
-.rt-overview .runs-pager-link.is-disabled { opacity: 1; color: var(--text-muted); cursor: default; }
-.rt-overview .runs-pager-link.is-disabled:hover { background: none; }
+.run-overview .runs-pager { margin-inline: -16px; padding: 10px 16px 0; border-top: 1px solid var(--border-subtle); }
+.run-overview .runs-pager-link { display: inline-grid; place-items: center; min-width: 32px; min-height: 32px; padding: 0 8px; }
+.run-overview .runs-pager-link.is-active { text-decoration: underline; text-underline-offset: 4px; }
+.run-overview .runs-pager-link.is-disabled { opacity: 1; color: var(--text-muted); cursor: default; }
+.run-overview .runs-pager-link.is-disabled:hover { background: none; }
 @media (max-width: 900px) {
-    .rt-overview .runs-grid-head { display: none; }
-    .rt-overview .runs-grid-row {
+    .run-overview .runs-grid-head { display: none; }
+    .run-overview .runs-grid-row {
         grid-template-columns: auto auto 1fr auto;
         grid-template-areas: "job job job job" "targets targets targets targets" "broke score cases cost";
         row-gap: 8px; column-gap: 16px;
     }
-    .rt-overview .rg-job { grid-area: job; }
-    .rt-overview .rg-targets { grid-area: targets; }
-    .rt-overview .rg-status { grid-area: broke; flex-direction: row; align-items: center; gap: 8px; }
-    .rt-overview .rg-score, .rt-overview .rg-score:is(.good, .mid, .high) {
+    .run-overview .rg-job { grid-area: job; }
+    .run-overview .rg-targets { grid-area: targets; }
+    .run-overview .rg-status { grid-area: broke; flex-direction: row; align-items: center; gap: 8px; }
+    .run-overview .rg-score, .run-overview .rg-score:is(.good, .mid, .high) {
         grid-area: score; text-align: left; justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px;
     }
-    .rt-overview .rg-cases { grid-area: cases; text-align: left; }
-    .rt-overview .rg-cost { grid-area: cost; }
+    .run-overview .rg-cases { grid-area: cases; text-align: left; }
+    .run-overview .rg-cost { grid-area: cost; }
+    .sim-overview .rg-score::before { content: "Goal "; }
+    .sim-overview .rg-broke-n:not(.is-none)::after { content: " achieved"; }
     .rt-overview .rg-score::before { content: "ASR "; font-family: var(--font-sans); font-weight: 400; color: var(--text-muted); }
     .rt-overview .rg-broke-n:not(.is-none)::after { content: " broke"; font-family: var(--font-sans); color: var(--text-muted); }
-    .rt-overview .rg-cases::after { content: " cases"; font-family: var(--font-sans); color: var(--text-muted); }
-    .rt-overview .runs-grid-row .row-chevron { display: none; }
-    .rt-overview .runs-pager { flex-wrap: wrap; row-gap: 8px; }
+    .run-overview .rg-cases::after { content: " cases"; font-family: var(--font-sans); color: var(--text-muted); }
+    .run-overview .runs-grid-row .row-chevron { display: none; }
+    .run-overview .runs-pager { flex-wrap: wrap; row-gap: 8px; }
 }
 .dash-row2 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; }
 .dash-row-eq { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -1699,6 +1700,7 @@ _SIM_TRANSCRIPT_CSS = """
     padding: 10px 12px; background: none; border: 0; cursor: pointer;
     font: inherit; font-weight: 600; color: var(--text-strong); text-align: left;
 }
+.sim-report th.num .sim-th-sort { justify-content: flex-end; }
 .sim-report .sim-th-sort:hover { color: var(--teal-600); }
 /* Inactive sortable columns show a faint ⇅; it strengthens on hover so the
    header reads as clickable. The active column's ▲/▼ is always full-strength. */
@@ -1970,6 +1972,16 @@ _SIM_REPORT_OVERRIDES_CSS = """
     font-family: var(--font-sans); font-size: 16px; font-weight: 400;
     text-align: center; vertical-align: middle;
 }
+/* Heatmap cell as a drawer trigger: the button takes over the cell's padding so
+   the whole tile is clickable, and keeps the cell's colour, ink and alignment. */
+.sim-report .rk-heat-cell:has(.rk-heat-trigger) { padding: 0; }
+.sim-report .rk-heat-trigger {
+    box-sizing: border-box; width: 100%; padding: 12px 16px;
+    border: 0; border-radius: 5px; background: none; color: inherit;
+    font: inherit; text-align: inherit; cursor: pointer;
+}
+.sim-report .rk-heat-trigger:hover { box-shadow: inset 0 0 0 2px var(--ink-900); }
+.sim-report .rk-heat-trigger:focus-visible { outline: 2px solid var(--teal-600); outline-offset: 2px; }
 
 /* Data tables — exclude the heatmap (.rk-heatmap has its own cell styling; the
    generic thead rule was bleeding uppercase + sunken bg onto its headers). */
@@ -1986,14 +1998,15 @@ _SIM_REPORT_OVERRIDES_CSS = """
     padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--border-subtle);
 }
 .sim-report table:not(.rk-heatmap) tbody td {
-    font-size: 13px; padding: 12px 16px; border-bottom: none;
+    font-size: 13px; padding: 12px 16px; border-bottom: none; text-align: left;
 }
 .sim-report table:not(.rk-heatmap) tbody tr,
 .sim-report table:not(.rk-heatmap) tbody tr:nth-child(even) { background: transparent; }
-.sim-report table:not(.rk-heatmap) thead th:not(:first-child),
-.sim-report table:not(.rk-heatmap) tbody td:not(:first-child) {
+.sim-report table:not(.rk-heatmap) thead th.num,
+.sim-report table:not(.rk-heatmap) tbody td.num {
     text-align: right; font-variant-numeric: tabular-nums;
 }
+.sim-report .report-card:has(> table .fail-why) { overflow-x: auto; }
 
 /* Failures table: collapsed pass/fail dots that unfold to full criteria text.
    Height animates both ways via ::details-content + interpolate-size where
@@ -2327,6 +2340,10 @@ _SIM_REPORT_OVERRIDES_CSS = """
     font-family: var(--font-mono); min-width: 32px;
     display: inline-flex; align-items: center; gap: 6px;
 }
+.sim-report .sim-entity-position:not([hidden]) {
+    align-self: center; font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+}
 /* j/k hotkey hint on the modal prev/next buttons. */
 .sim-report .sim-entity-kbd {
     font-family: var(--font-mono); font-size: 10px; line-height: 1;
@@ -2568,6 +2585,19 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 }
 .sim-report .sim-criteria-verdict--pass { color: var(--green-600); }
 .sim-report .sim-criteria-verdict--fail { color: var(--red-600); }
+/* Goal block above the criteria: what the persona was after, then whether it got there. */
+.sim-report .sim-goal {
+    margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle);
+}
+.sim-report .sim-goal-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px;
+}
+.sim-report .sim-goal-label {
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; color: var(--text-faint);
+}
+.sim-report .sim-goal-text { margin: 0; font-size: 14px; line-height: 1.5; color: var(--text-strong); }
+.sim-report .sim-goal-text--missing { color: var(--text-faint); font-style: italic; }
 .sim-report .sim-criteria-count {
     font-family: var(--font-sans); font-size: 12px; color: var(--text-faint); white-space: nowrap;
 }

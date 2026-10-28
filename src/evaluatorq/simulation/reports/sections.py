@@ -32,7 +32,7 @@ from evaluatorq.common.messages import coerce_content_text, messages_to_text
 from evaluatorq.contracts import ReportSection, Usage
 from evaluatorq.simulation.contracts import CriteriaRow, SimulationEntry, TranscriptMessage, criterion_id_for
 from evaluatorq.simulation.evaluators.scorers import read_criteria_meta
-from evaluatorq.simulation.metrics import TURN_METRICS
+from evaluatorq.simulation.metrics import TURN_METRICS, is_errored_result
 
 if TYPE_CHECKING:
     from evaluatorq.simulation.contracts import SimulationRecommendation, SimulationResult
@@ -49,6 +49,11 @@ def _persona_name(result: SimulationResult) -> str:
 
 def _scenario_name(result: SimulationResult) -> str:
     return str(result.metadata.get('scenario', 'unknown'))
+
+
+def _scenario_goal(result: SimulationResult) -> str | None:
+    goal = result.metadata.get('scenario_goal')
+    return str(goal) if goal else None
 
 
 def _model_name(result: SimulationResult) -> str:
@@ -81,11 +86,8 @@ def _error_message(result: SimulationResult) -> str | None:
 
 
 def _is_errored(result: SimulationResult) -> bool:
-    """A run is errored if it has an error metadata key or the judge terminated
-    it due to an error. Shared between the summary and errors sections so the
-    "errors" counts agree across the report.
-    """
-    return bool(_error_message(result)) or result.terminated_by.value == 'error'
+    """Compatibility alias for the shared result classifier."""
+    return is_errored_result(result=result)
 
 
 def _criteria_meta(result: SimulationResult) -> list[dict[str, Any]]:
@@ -244,7 +246,7 @@ def _build_overview_section(results: list[SimulationResult]) -> ReportSection:
             scenarios[cohort_id] = {
                 'id': cohort_id,
                 'name': name,
-                'goal': r.metadata.get('scenario_goal'),
+                'goal': _scenario_goal(r),
                 'context': r.metadata.get('scenario_context'),
                 'criteria': [{'description': c['description'], 'type': c['type']} for c in _criteria_rows(r)],
             }
@@ -556,6 +558,7 @@ def individual_entries(results: list[SimulationResult]) -> list[SimulationEntry]
                 ],
                 thread_id=r.thread_id,
                 last_trace_id=r.last_trace_id,
+                goal=_scenario_goal(r),
             )
         )
     return entries

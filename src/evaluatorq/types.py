@@ -203,10 +203,9 @@ class Evaluator(TypedDict):
 
     name: str
     scorer: Scorer
-    # Optional evaluator kind (e.g. "code_eval"). When set, the tracing layer
-    # emits the flat gen_ai.evaluation.* / orq.evaluator.* attributes the Orq
-    # trace UI uses to classify + render an evaluator span. Absent for evaluators
-    # (e.g. red-team) that should keep the legacy orq.score-only span shape.
+    # Optional Orq evaluator kind (e.g. "llm_eval"). The core runner defaults
+    # Python scorers to "python_eval" so their input and verdict render in the
+    # evaluator panel; provider-backed scorers can supply their own kind.
     evaluator_type: NotRequired[str]
 
 

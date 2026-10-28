@@ -123,6 +123,7 @@ _SIM_COLUMNS: list[tuple[str, str, Any]] = [
     ('terminated_by', 'Terminated by', lambda e: e.terminated_by),
 ]
 _SORT_KEYS: dict[str, Any] = {param: key for param, _, key in _SIM_COLUMNS}
+_NUMERIC_COLUMNS = frozenset({'turn_count', 'goal_completion_score'})
 _DEFAULT_SORT = 'index'
 _PAGE_SIZE = 5  # default rows-per-page
 _PAGE_SIZES = (5, 10, 25)  # selectable rows-per-page options
@@ -169,8 +170,9 @@ def _sim_header_row(rid: str, sort: str, direction: str, size: int) -> str:
         else:
             caret = '&#x21C5;'
             caret_cls = 'sim-th-caret'
+        num = ' class="num"' if param in _NUMERIC_COLUMNS else ''
         cells.append(
-            f'<th scope="col" aria-sort="{aria}">'
+            f'<th scope="col" aria-sort="{aria}"{num}>'
             f'<button type="button" class="sim-th-sort" {_hx_control(rid, param, next_dir, 1, size)}>'
             f'{esc(label)}<span class="{caret_cls}">{caret}</span>'
             f'</button></th>'
@@ -247,7 +249,7 @@ def render_sim_row_list(
     if not entries:
         return '<section class="sim-row-list"><p class="sim-empty">No conversations found.</p></section>'
 
-    from evaluatorq.common.reports import status_badge
+    from evaluatorq.common.reports.html_helpers import entry_outcome, status_badge
 
     if sort not in _SORT_KEYS:
         sort = _DEFAULT_SORT
@@ -267,16 +269,9 @@ def render_sim_row_list(
     rows_html: list[str] = []
     for e in visible:
         idx = e.index
-        is_error = e.terminated_by == 'error'
-        if is_error:
-            badge = status_badge('Error', 'warn')
-            row_status = 'error'
-        elif e.goal_achieved:
-            badge = status_badge('Goal met', 'pass')
-            row_status = 'pass'
-        else:
-            badge = status_badge('Goal missed', 'fail')
-            row_status = 'fail'
+        label, status = entry_outcome(e)
+        badge = status_badge(label, status)
+        row_status = 'error' if status == 'warn' else status
 
         # Prefer a direct link to the last successful target-agent trace; fall back
         # to the thread filter for older runs that only stored a thread id.
@@ -295,8 +290,8 @@ def render_sim_row_list(
             f'<td class="sim-conv-idx">#{idx + 1}</td>'
             f'<td class="sim-conv-persona">{esc(e.persona)}</td>'
             f'<td class="sim-conv-scenario">{esc(e.scenario)}</td>'
-            f'<td class="sim-conv-turns">{e.turn_count}</td>'
-            f'<td class="sim-conv-score">{e.goal_completion_score:.2f}</td>'
+            f'<td class="sim-conv-turns num">{e.turn_count}</td>'
+            f'<td class="sim-conv-score num">{e.goal_completion_score:.2f}</td>'
             f'<td class="sim-conv-term">{esc(e.terminated_by)}</td>'
             f'<td class="sim-conv-status">{badge}</td>'
             f'<td class="sim-conv-trace">{trace_btn}</td>'
