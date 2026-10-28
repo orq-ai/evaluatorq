@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, computed_field
 from typing_extensions import TypedDict
 
-from evaluatorq.common.responses import drop_class_description
+from evaluatorq.common.responses import scrub_wire_schema
 from evaluatorq.contracts import (
     DEFAULT_PIPELINE_MODEL,
     Message,
@@ -432,7 +432,7 @@ class CriterionVerdict(BaseModel):
 
     # The judge's response schema embeds this model; its docstring is maintainer
     # rationale, not something to show the judge.
-    model_config = ConfigDict(json_schema_extra=drop_class_description)
+    model_config = ConfigDict(json_schema_extra=scrub_wire_schema)
 
     criterion_id: str = Field(
         pattern=CRITERION_ID_PATTERN,
