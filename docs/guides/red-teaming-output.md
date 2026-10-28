@@ -21,6 +21,26 @@ In `detail` mode, `03` is written before recommendations and the executive summa
 
 `red_team()` returns one `RedTeamReport` object, and a report JSON file contains that object's fields. Its `summary` field is one `ReportSummary` object for the whole run. Its `results` field is a list of `RedTeamResult` objects, one per attack that ran. Saved run files can also carry the extra top-level keys listed in [Where the report lands](#where-the-report-lands).
 
+```mermaid
+flowchart TD
+    R["RedTeamReport<br/>one run"]
+    S["summary: ReportSummary<br/>rates, counts, by_* breakdowns"]
+    RS["results: list of RedTeamResult<br/>one per attack"]
+    E["errors: list of RunError<br/>failed before an attack ran"]
+    A["attack: AttackInfo<br/>what was tried"]
+    G["agent: AgentInfo<br/>who was tested"]
+    M["messages<br/>the transcript"]
+    V["vulnerable + evaluation<br/>the judge's verdict"]
+
+    R --> S
+    R --> RS
+    R --> E
+    RS --> A
+    RS --> G
+    RS --> M
+    RS --> V
+```
+
 The Python declarations below describe field types, not sample values. Each class name labels a type; it is not an extra key in the saved JSON. `list[T]` means a list of objects of type `T`, `dict[str, T]` means a mapping from string keys to values of type `T`, and `T | None` means the value can be `None`. Python's `None` is written as `null` in JSON. Definitions of the named types are in the [Python API reference](../reference/evaluatorq/redteam.md). The map covers the fields used on this page, not every nested model.
 
 ### RedTeamReport: the whole run
