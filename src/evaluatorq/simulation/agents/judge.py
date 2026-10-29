@@ -6,43 +6,47 @@ goal achievement or rule violations.
 
 from __future__ import annotations
 
-import inspect
 import logging
 import math
-from itertools import starmap
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    TypeAdapter,
     ValidationError,
     ValidationInfo,
-    ValidatorFunctionWrapHandler,
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema  # noqa: TC002 - pydantic resolves the annotation at runtime
 
+from evaluatorq.common.extract_json import extract_json_from_response
+from evaluatorq.common.responses import scrub_wire_schema
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.agents.base import BaseAgent, LLMResult
 from evaluatorq.simulation.contracts import Criterion, CriterionVerdict, Judgment, Message, criterion_id_for
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Iterable
 
     from evaluatorq.contracts import LLMCallConfig
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Tool argument models
+# Decision model
 #
-# The judge's tool schemas are GENERATED from these models, never hand-written.
-# A hand-maintained JSON-schema dict and the parser that reads its output drift
+# The judge's response schema is GENERATED from this model, never hand-written:
+# a hand-maintained JSON-schema dict and the parser that reads its output drift
 # the moment one is edited alone — and the parser is the half nobody notices is
 # stale, because a field it stopped reading just looks like one the judge chose
 # not to report.
 # ---------------------------------------------------------------------------
+
+
+_VERDICT_LIST = TypeAdapter(list[CriterionVerdict])
 
 
 def _score(description: str) -> Any:
@@ -50,50 +54,39 @@ def _score(description: str) -> Any:
     return Field(default=None, description=description)
 
 
-class _JudgeToolArgs(BaseModel):
-    """Fields both judge tools share.
+class JudgeDecision(BaseModel):
+    """What the judge returns each turn: whether to stop, and the evidence behind it.
 
     Tolerant by design, at one specific granularity: a malformed *entry* is
     dropped with a warning and the rest of the turn survives, because losing one
     criterion's evidence for one turn is recoverable — the run-level fold defaults
     it to not-observed and says so — while losing the whole turn's audit is what
     marks a run unverified.
+
+    The response schema is strict, so every field is required on the wire. Every
+    field but ``should_terminate`` also has a parser-side default, which only
+    matters to a provider that does not enforce the schema. The decision itself
+    has none: a reply without it fails validation and takes the safety-terminate
+    path, as a missing tool call did when the tool name carried the decision.
     """
 
-    model_config = ConfigDict(extra='ignore')
-
-    WIRE_REQUIRED: ClassVar[frozenset[str]] = frozenset({
-        'reason',
-        'goal_completion_score',
-        'criteria_verdicts',
-    })
-    """Fields the judge must send.
-
-    Deliberately NOT pydantic's own `required`. Every field here also has a
-    parser-side default, so pydantic would emit an empty `required` and the audit
-    this class exists to collect would become optional again — which is RES-1308.
-    Asked-for and relied-on are different contracts; `_wire_schema` uses this one
-    and `_assert_wire_fields_exist` keeps it honest.
-    """
-
-    WIRE_NON_NULLABLE: ClassVar[frozenset[str]] = frozenset({'criteria_verdicts'})
-    """Fields whose ``X | None`` annotation loses its ``null`` branch on the wire.
-
-    ``None`` for `criteria_verdicts` means "the judge told us nothing", which is
-    what decides whether a run is scored or marked unverified. Offering an
-    explicit ``null`` gives the model a cheap way to produce that state on purpose,
-    indistinguishable from a broken payload. The quality scores are deliberately
-    absent from this set: for them ``null`` is a real answer ("no ground truth, not
-    scored"), and forcing a number would make the model invent one.
-    """
+    model_config = ConfigDict(extra='ignore', json_schema_extra=scrub_wire_schema)
 
     reason: str = Field(default='', description='Brief explanation of the decision')
+    should_terminate: bool = Field(
+        description='true to end the conversation: the goal is achieved or a must_not_happen criterion has '
+        'occurred. false to let it continue.',
+    )
+    goal_achieved: bool = Field(
+        default=False,
+        description="Whether the user's goal was successfully achieved. false unless should_terminate is true.",
+    )
     goal_completion_score: float = Field(
         default=0.0,
         description='How much of the goal is achieved SO FAR, 0.0 (none) to 1.0 (fully). Assess every turn — '
         'if the run hits max turns this is the final score.',
     )
-    criteria_verdicts: list[CriterionVerdict] | None = Field(
+    criteria_verdicts: list[CriterionVerdict] | SkipJsonSchema[None] = Field(
         default=None,
         description='Occurrence audit. One entry for every criterion listed under EVALUATION CRITERIA, no '
         'omissions. Skip any criterion listed as ALREADY CONFIRMED in the final user message — those are '
@@ -184,18 +177,13 @@ class _JudgeToolArgs(BaseModel):
             return 0.0
         return score
 
-    @field_validator('criteria_verdicts', mode='wrap')
+    @field_validator('criteria_verdicts', mode='before')
     @classmethod
-    def _keep_usable_verdicts(
-        cls,
-        value: object,
-        handler: ValidatorFunctionWrapHandler,
-        info: ValidationInfo,
-    ) -> list[CriterionVerdict] | None:
+    def _keep_usable_verdicts(cls, value: object, info: ValidationInfo) -> list[CriterionVerdict] | None:
         """Drop entries that cannot be trusted; keep the rest of the turn.
 
         What counts as malformed is defined by `CriterionVerdict` itself — the
-        handler validates and the failing list indices come back in the
+        list adapter validates and the failing list indices come back in the
         `ValidationError`'s ``loc``. Adding a constraint to that model therefore
         becomes a drop-with-warning for free, where an isinstance ladder here
         would have to be edited to match and could silently fall behind.
@@ -207,7 +195,7 @@ class _JudgeToolArgs(BaseModel):
         if value is None:
             return None
         try:
-            verdicts = handler(value)
+            verdicts = _VERDICT_LIST.validate_python(value)
         except ValidationError as err:
             bad = {loc[0] for e in err.errors() if (loc := e['loc']) and isinstance(loc[0], int)}
             if not isinstance(value, list) or not bad:
@@ -225,7 +213,9 @@ class _JudgeToolArgs(BaseModel):
                 _first_error(err),
             )
             try:
-                verdicts = handler([v for i, v in enumerate(cast('list[object]', value)) if i not in bad])
+                verdicts = _VERDICT_LIST.validate_python([
+                    v for i, v in enumerate(cast('list[object]', value)) if i not in bad
+                ])
             except ValidationError as second:
                 logger.warning(
                     'JudgeAgent: criteria_verdicts still unusable after dropping malformed entries (%s); '
@@ -245,7 +235,7 @@ class _JudgeToolArgs(BaseModel):
                 return None
         if verdicts is None:
             return None
-        return _resolve_against_scenario(cast('list[CriterionVerdict]', verdicts), info)
+        return _resolve_against_scenario(verdicts, info)
 
 
 def _as_unit_interval(value: object) -> float | None:
@@ -334,220 +324,6 @@ def _resolve_against_scenario(
     return [kept[index] for index in sorted(kept)]
 
 
-class ContinueConversation(_JudgeToolArgs):
-    """Allow the conversation to continue. Use when the goal is not yet achieved and no rules are broken."""
-
-    # `reason` is re-declared only to carry this tool's own wording: field
-    # descriptions are prompt text the judge reads, and "the decision" says less
-    # than naming which decision it just made.
-    reason: str = Field(default='', description='Brief explanation of why the conversation should continue')
-
-    # No `rules_broken` here either — see `FinishConversation`.
-
-
-class FinishConversation(_JudgeToolArgs):
-    """Terminate the conversation. Use when the goal is achieved OR a rule is broken."""
-
-    WIRE_REQUIRED: ClassVar[frozenset[str]] = _JudgeToolArgs.WIRE_REQUIRED | {'goal_achieved'}
-
-    reason: str = Field(default='', description='Explanation of why the conversation should end')
-    # The base wording ("SO FAR … if the run hits max turns this is the final
-    # score") is written for a turn that continues; on the call that ends the run
-    # there is no "so far".
-    goal_completion_score: float = Field(
-        default=0.0,
-        description='How much of the goal was achieved, from 0.0 (none) to 1.0 (fully achieved). Use '
-        'intermediate values for partial completion.',
-    )
-    goal_achieved: bool = Field(default=False, description="Whether the user's goal was successfully achieved")
-
-    # No `rules_broken`. The judge is asked what OCCURRED; which occurrences count
-    # as violations is derived in code from `Criterion.type`. Asking for both gave
-    # them something to disagree about, and the free-text list is the channel that
-    # could not fail a `must_happen` criterion in the first place (RES-1308).
-
-
-# ---------------------------------------------------------------------------
-# Model -> wire schema
-# ---------------------------------------------------------------------------
-
-_NESTED_WIRE_REQUIRED: dict[type[BaseModel], frozenset[str]] = {
-    CriterionVerdict: frozenset({'criterion_id', 'occurred', 'evidence'}),
-}
-"""`WIRE_REQUIRED`, one nesting level down.
-
-`_JudgeToolArgs.WIRE_REQUIRED` governs the top-level object only; a nested model
-gets pydantic's own ``required``, which omits every field that has a parser-side
-default — exactly the "generated schema quietly un-requires a field" defect
-`WIRE_REQUIRED` exists to prevent, reproduced inside the item schema. `evidence`
-defaults to ``''`` in the parser and would drop out of the item's ``required``,
-so the evidence capture the audit depends on would become optional on the wire.
-"""
-
-_STRIPPED_SCHEMA_KEYS = ('title', 'default')
-"""Dropped from every node of a generated schema.
-
-``title`` is noise. ``default`` is the harmful one: it is a *parser-side* value,
-and the whole point of the parser's defaults is that a field can be mandatory on
-the wire while the parser still survives its absence. Advertising the default
-tells the model the opposite of what `WIRE_REQUIRED` does.
-"""
-
-
-def _walk(node: object, fn: Callable[[dict[str, Any]], None]) -> None:
-    """Apply `fn` to every dict in a JSON-schema tree."""
-    if isinstance(node, dict):
-        fn(cast('dict[str, Any]', node))
-        for value in list(cast('dict[str, Any]', node).values()):
-            _walk(value, fn)
-    elif isinstance(node, list):
-        for value in cast('list[object]', node):
-            _walk(value, fn)
-
-
-def _strip_node(node: dict[str, Any]) -> None:
-    """Remove everything from one schema node that must not reach the model."""
-    for key in _STRIPPED_SCHEMA_KEYS:
-        node.pop(key, None)
-    if 'properties' in node:
-        # A model-derived object node carries its class docstring as `description`,
-        # and those docstrings are maintainer-facing rationale (why a field exists,
-        # which model got it wrong before). The judge reads every byte of this
-        # schema as prompt, so only *field* descriptions — written for it — survive.
-        node.pop('description', None)
-
-
-def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
-    """Resolve ``$ref``/``$defs`` into a self-contained schema.
-
-    Pydantic factors nested models (here `CriterionVerdict`) out into ``$defs``.
-    OpenAI itself resolves refs fine; this is for the other providers behind the
-    Orq router, whose schema dialects are narrower — and a dropped item schema
-    fails as an unaudited run rather than as an error, so it would not be obvious.
-    """
-    defs = cast('dict[str, Any]', schema.pop('$defs', {}))
-
-    def resolve(node: object) -> object:
-        if isinstance(node, dict):
-            node = cast('dict[str, Any]', node)
-            ref = node.get('$ref')
-            if isinstance(ref, str) and ref.startswith('#/$defs/'):
-                definition = defs.get(ref.rsplit('/', 1)[-1])
-                if definition is None:
-                    # Cannot happen with a schema pydantic just generated, so if it
-                    # does the generator changed under us — and the consequence is a
-                    # shapeless node the model can fill with anything, which shows up
-                    # as an unaudited run rather than as an error.
-                    logger.warning(
-                        'JudgeAgent: unresolvable %s in the generated tool schema; that node reaches the '
-                        'model with no shape.',
-                        ref,
-                    )
-                    definition = {}
-                target = {**cast('dict[str, Any]', definition), **{k: v for k, v in node.items() if k != '$ref'}}
-                return resolve(target)
-            return {key: resolve(value) for key, value in node.items()}
-        if isinstance(node, list):
-            return [resolve(value) for value in cast('list[object]', node)]
-        return node
-
-    return cast('dict[str, Any]', resolve(schema))
-
-
-def _drop_null_branch(name: str, prop: dict[str, Any]) -> dict[str, Any]:
-    """Collapse the ``anyOf: [X, null]`` pydantic emits for ``X | None`` down to ``X``.
-
-    See `_JudgeToolArgs.WIRE_NON_NULLABLE` for why one field must not be nullable
-    on the wire even though it is optional in the parser.
-    """
-    branches = [b for b in cast('list[dict[str, Any]]', prop.get('anyOf', [])) if b.get('type') != 'null']
-    if len(branches) != 1:
-        logger.warning(
-            'JudgeAgent: %s is listed in WIRE_NON_NULLABLE but its schema has %d non-null branch(es), not '
-            'one; leaving it nullable on the wire, so the model can send null deliberately.',
-            name,
-            len(branches),
-        )
-        return prop
-    return {**{k: v for k, v in prop.items() if k != 'anyOf'}, **branches[0]}
-
-
-def _wire_schema(model: type[_JudgeToolArgs]) -> dict[str, Any]:
-    """The ``parameters`` object of `model`'s function tool.
-
-    Three deliberate departures from `model_json_schema()`, because the wire
-    contract and the parser contract are not the same contract: ``required`` comes
-    from `WIRE_REQUIRED` (and, one level down, `_NESTED_WIRE_REQUIRED`),
-    ``default`` is stripped, and `WIRE_NON_NULLABLE` fields lose their null branch.
-    """
-    raw = model.model_json_schema()
-    # Before inlining: while the nested models still live in `$defs` under their
-    # class name, which is the one place their `required` can be reached by name.
-    defs = cast('dict[str, Any]', raw.get('$defs') or {})
-    for nested, required in _NESTED_WIRE_REQUIRED.items():
-        node = cast('dict[str, Any] | None', defs.get(nested.__name__))
-        if node is not None:
-            node['required'] = sorted(required)
-    schema = _inline_refs(raw)
-    _walk(schema, _strip_node)
-    properties = cast('dict[str, Any]', schema.get('properties', {}))
-    for name in model.WIRE_NON_NULLABLE:
-        if name in properties:
-            properties[name] = _drop_null_branch(name, properties[name])
-    schema['required'] = sorted(model.WIRE_REQUIRED)
-    return schema
-
-
-def _tool_schema(name: str, model: type[_JudgeToolArgs]) -> dict[str, Any]:
-    """Wrap `model`'s wire schema in the OpenAI function-tool envelope.
-
-    The tool description is the first paragraph of the class docstring, so the
-    model and the thing that describes it cannot drift.
-    """
-    return {
-        'type': 'function',
-        'function': {
-            'name': name,
-            'description': inspect.cleandoc(model.__doc__ or '').split('\n\n')[0],
-            'parameters': _wire_schema(model),
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# Judge tools for structured decision making
-# ---------------------------------------------------------------------------
-
-_TOOL_MODELS: dict[str, type[_JudgeToolArgs]] = {
-    'continue_conversation': ContinueConversation,
-    'finish_conversation': FinishConversation,
-}
-
-
-def _assert_wire_fields_exist() -> None:
-    """Fail at import if `WIRE_REQUIRED` names a field the model does not have.
-
-    `WIRE_REQUIRED` is written by hand because pydantic's own ``required`` cannot
-    express it. This is the mechanical check that a rename cannot land on only one
-    of the two — otherwise the tool would keep demanding a field that no longer
-    exists, and the parser would never see it. The nested models in
-    `_NESTED_WIRE_REQUIRED` are checked the same way: a rename inside
-    `CriterionVerdict` must not half-land either.
-    """
-    hand_written: list[tuple[type[BaseModel], frozenset[str]]] = [
-        *((model, model.WIRE_REQUIRED) for model in _TOOL_MODELS.values()),
-        *_NESTED_WIRE_REQUIRED.items(),
-    ]
-    for model, required in hand_written:
-        missing = required - set(model.model_fields)
-        if missing:
-            raise RuntimeError(f'{model.__name__} wire-required names unknown field(s): {sorted(missing)}')
-
-
-_assert_wire_fields_exist()
-
-JUDGE_TOOLS: list[dict[str, Any]] = list(starmap(_tool_schema, _TOOL_MODELS.items()))
-
 # ---------------------------------------------------------------------------
 # Default judge system prompt
 # ---------------------------------------------------------------------------
@@ -568,14 +344,14 @@ IMPORTANT: Each criterion has a unique ID (e.g., "criteria_0", "criteria_1").
 When reporting criteria_verdicts, copy the criterion ID exactly as listed in `criterion_id`.
 Never paraphrase the description, renumber the IDs, or invent one that is not listed.
 
-Decision rules:
-1. FINISH if the user's goal is clearly achieved
-2. FINISH if any "must_not_happen" criteria are violated
-3. CONTINUE if the goal is not yet achieved and no rules are broken
-4. CONTINUE if progress is being made toward the goal
-5. An unmet "must_happen" criterion is NOT a reason to finish early — it may still happen later
+Decision rules (should_terminate):
+1. true if the user's goal is clearly achieved
+2. true if any "must_not_happen" criteria are violated
+3. false if the goal is not yet achieved and no rules are broken
+4. false if progress is being made toward the goal
+5. An unmet "must_happen" criterion is NOT a reason to end early — it may still happen later
 
-CRITERIA AUDIT (every evaluation, continue or finish):
+CRITERIA AUDIT (every evaluation, whether or not you end the conversation):
 You MUST return criteria_verdicts with exactly one entry for every criterion ID listed
 below — no omissions, even when nothing has changed since the last turn. The only
 exception is a criterion the final user message lists as ALREADY CONFIRMED: those are
@@ -591,13 +367,13 @@ This is an OCCURRENCE report, not a verdict. For each criterion answer one quest
 - Judge the literal transcript. Do not credit intent, plans, or things the agent looks
   likely to do next.
 
-For EVERY evaluation (continue or finish), also assess the agent's LAST response:
+For EVERY evaluation, also assess the agent's LAST response:
 - response_quality: How helpful, accurate, and complete was the response? (0.0=poor, 1.0=excellent)
 - hallucination_risk: Did the agent make up information not grounded in the conversation? (0.0=none, 1.0=high risk)
 - tone_appropriateness: Was the agent's tone appropriate for the situation? (0.0=inappropriate, 1.0=perfect)
 - factual_accuracy: If GROUND TRUTH is provided below, score how accurate the agent's response is against it (0.0=wrong, 1.0=correct). Skip if no ground truth.
 
-You MUST call one of the provided tools to make your decision."""
+Respond with the JSON decision."""
 
 # ---------------------------------------------------------------------------
 # Safety termination
@@ -624,12 +400,12 @@ def _safety_terminate(reason: str) -> Judgment:
 class JudgeAgent(BaseAgent):
     """Agent that evaluates conversations and decides termination.
 
-    Uses tool calling to make structured decisions about whether a conversation
-    should continue or end.
+    Returns a `JudgeDecision` as strict structured output on every turn: whether
+    the conversation should end, plus the per-criterion occurrence audit.
     """
 
-    # Function tools plus reasoning_effort in one request, which chat completions answers
-    # with a 400 on models like gpt-5.4-mini. Not a preference the caller can hold.
+    # Responses is the endpoint the Orq router prices, so usage and cost arrive
+    # filled in (see `common.llm_call.execute_response`). Not a preference the caller can hold.
     REQUIRED_API: ClassVar[Literal['chat_completions', 'responses']] = 'responses'
     MODEL_TASK: ClassVar[str] = 'sim.judge'
 
@@ -716,15 +492,16 @@ class JudgeAgent(BaseAgent):
             *messages,
             Message(
                 role='user',
-                content='Evaluate the conversation above. Should it continue or end? Use the appropriate tool.'
-                + self._settled_note(),
+                content='Evaluate the conversation above and return your decision.' + self._settled_note(),
             ),
         ]
 
         # volatile_tail=1: the instruction above is rebuilt every turn, so it is not
         # part of the cacheable prefix. Marking it would cost a full-transcript write
         # per judgement and read none of it back (see common.prompt_cache).
-        result = await self._call_llm(eval_messages, tools=JUDGE_TOOLS, llm_purpose='judge', volatile_tail=1)
+        result = await self._call_llm(
+            eval_messages, response_format=JudgeDecision, llm_purpose='judge', volatile_tail=1
+        )
         return self._parse_judgment(result)
 
     # ---------------------------------------------------------------------------
@@ -732,25 +509,8 @@ class JudgeAgent(BaseAgent):
     # ---------------------------------------------------------------------------
 
     def _parse_judgment(self, result: LLMResult) -> Judgment:
-        tool_calls = result.tool_calls
-
-        if not tool_calls:
-            content = (result.content or '')[:200]
-            logger.warning(
-                'JudgeAgent: No tool call in response. Content: %s. Defaulting to TERMINATE.',
-                content,
-            )
-            return _safety_terminate('Judge failed to make explicit decision - terminating for safety')
-
-        tool_call = tool_calls[0]
-        function_name = tool_call.function.name
-        model = _TOOL_MODELS.get(function_name)
-        if model is None:
-            logger.warning('JudgeAgent: Unknown function %s - terminating for safety', function_name)
-            return _safety_terminate(f"Unknown function '{function_name}' - terminating for safety")
-
-        args = self._parse_tool_args(model, tool_call.function.arguments)
-        if args is None:
+        decision = self._parse_decision(result)
+        if decision is None:
             return _safety_terminate('Failed to parse judgment decision - terminating for safety')
 
         # Settled criteria are excluded from the audit on purpose, so an empty
@@ -761,86 +521,60 @@ class JudgeAgent(BaseAgent):
         # Neither marks the run verified: `_CriteriaTracker.observe` ignores an
         # empty list.
         unsettled = len(self._criteria) - len(self._settled)
-        if unsettled > 0 and not args.criteria_verdicts:
+        if unsettled > 0 and not decision.criteria_verdicts:
             logger.warning(
                 'JudgeAgent: %s for %d unsettled criteria; this turn contributes no criteria '
                 'evidence and must_happen cannot be scored from it.',
                 'no criteria_verdicts returned'
-                if args.criteria_verdicts is None
+                if decision.criteria_verdicts is None
                 else 'an empty criteria_verdicts list',
                 unsettled,
             )
-        # Derived from the audit for BOTH tools: neither asks for a free-text
-        # rules_broken, and hardcoding [] on continue erased every mid-conversation
-        # violation.
-        violated = self._violated_ids(args.criteria_verdicts)
 
-        if isinstance(args, FinishConversation):
-            # A finish that omits the score entirely still has an obvious reading,
-            # and 0.0 is not it.
-            score = args.goal_completion_score
-            if args.goal_achieved and 'goal_completion_score' not in args.model_fields_set:
-                score = 1.0
-            return Judgment(
-                should_terminate=True,
-                reason=args.reason,
-                goal_achieved=args.goal_achieved,
-                rules_broken=violated,
-                goal_completion_score=score,
-                criteria_verdicts=args.criteria_verdicts,
-                response_quality=args.response_quality,
-                hallucination_risk=args.hallucination_risk,
-                tone_appropriateness=args.tone_appropriateness,
-                factual_accuracy=args.factual_accuracy,
-            )
-
+        # Only an ending conversation can have achieved its goal; a continuing one
+        # keeps its partial-progress score so max_turns runs get a real number.
+        goal_achieved = decision.should_terminate and decision.goal_achieved
+        score = decision.goal_completion_score
+        if goal_achieved and 'goal_completion_score' not in decision.model_fields_set:
+            # An ending run that omits the score entirely still has an obvious
+            # reading, and 0.0 is not it.
+            score = 1.0
         return Judgment(
-            should_terminate=False,
-            reason=args.reason,
-            goal_achieved=False,
-            rules_broken=violated,
-            # Partial progress, so max_turns runs get a real score instead of a
-            # hardcoded 0 (the judge never reaches finish_conversation there).
-            goal_completion_score=args.goal_completion_score,
-            criteria_verdicts=args.criteria_verdicts,
-            response_quality=args.response_quality,
-            hallucination_risk=args.hallucination_risk,
-            tone_appropriateness=args.tone_appropriateness,
-            factual_accuracy=args.factual_accuracy,
+            should_terminate=decision.should_terminate,
+            reason=decision.reason,
+            goal_achieved=goal_achieved,
+            # Derived from the audit: the judge is asked what OCCURRED, and which
+            # occurrences count as violations follows from `Criterion.type`. A free-text
+            # rules_broken list is the channel that could not fail a `must_happen`
+            # criterion in the first place (RES-1308).
+            rules_broken=self._violated_ids(decision.criteria_verdicts),
+            goal_completion_score=score,
+            criteria_verdicts=decision.criteria_verdicts,
+            response_quality=decision.response_quality,
+            hallucination_risk=decision.hallucination_risk,
+            tone_appropriateness=decision.tone_appropriateness,
+            factual_accuracy=decision.factual_accuracy,
         )
 
-    def _parse_tool_args(self, model: type[_JudgeToolArgs], arguments: str) -> _JudgeToolArgs | None:
-        """Validate one tool call's arguments through its model.
+    def _parse_decision(self, result: LLMResult) -> JudgeDecision | None:
+        """Validate the judge's reply through `JudgeDecision`.
 
-        The single place the scenario context is attached, so it cannot be
-        forgotten on one of the two tool branches — without it `criterion_id`s
-        outside the scenario are well-formed and match nothing.
+        The single place the scenario context is attached — without it
+        `criterion_id`s outside the scenario are well-formed and match nothing.
 
-        Returns ``None`` when the payload cannot be salvaged at all; the caller
+        Returns ``None`` when the reply cannot be salvaged at all; the caller
         safety-terminates. Per-entry tolerance lives in the model's validators.
         """
-        if not isinstance(arguments, str):
-            # Some SDK shapes hand back None for a tool call with no arguments.
-            logger.warning(
-                'JudgeAgent: %s tool call carried no arguments string (got %s).',
-                model.__name__,
-                type(arguments).__name__,
-            )
+        if result.refusal:
+            logger.warning('JudgeAgent: the model refused to judge (%s).', result.refusal[:200])
             return None
+        content = extract_json_from_response(result.content or '')
         try:
-            return model.model_validate_json(
-                arguments,
-                context={'criteria_count': len(self._criteria)},
-            )
+            return JudgeDecision.model_validate_json(content, context={'criteria_count': len(self._criteria)})
         except ValidationError as err:
             # warning, not exception: a model emitting bad JSON is an expected
             # failure mode with a documented fallback, not a bug in this process.
-            logger.warning(
-                'JudgeAgent: Failed to parse %s arguments: %s (raw: %s)',
-                model.__name__,
-                _first_error(err),
-                arguments[:200],
-            )
+            logger.warning('JudgeAgent: Failed to parse the decision: %s (raw: %s)', _first_error(err), content[:200])
             return None
 
     def _violated_ids(self, verdicts: list[CriterionVerdict] | None) -> list[str]:
