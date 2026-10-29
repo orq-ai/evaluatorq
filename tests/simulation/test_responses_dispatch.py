@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from openai import BadRequestError
+from pydantic import BaseModel
 
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.agents.base import BaseAgent, LLMResult
@@ -413,3 +414,21 @@ class TestResponsesSpanInput:
 
         assert "input_image" in text
         assert any("input_image" in m for m in messages)
+
+
+class _Verdict(BaseModel):
+    ok: bool
+
+
+class TestResponseFormat:
+    """`response_format` is a Responses-only feature; the chat path refuses it instead of guessing."""
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_refuses_a_response_format(self):
+        client = _make_client()
+        agent = _ConcreteAgent(LLMCallConfig(model="gpt-4o", api="chat_completions", client=client))
+
+        with pytest.raises(ValueError, match="response_format"):
+            await agent._call_llm(_make_messages(), response_format=_Verdict)
+
+        client.chat.completions.create.assert_not_awaited()

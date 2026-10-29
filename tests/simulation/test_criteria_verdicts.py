@@ -162,16 +162,15 @@ def _judge() -> JudgeAgent:
     return JudgeAgent(LLMCallConfig(client=object()), goal='g', criteria=CRITERIA)
 
 
-def _llm_result(name: str, args: dict[str, object]) -> LLMResult:
-    call = SimpleNamespace(function=SimpleNamespace(name=name, arguments=json.dumps(args)))
-    return LLMResult(content='', tool_calls=[call])
+def _llm_result(decision: typing.Literal['continue', 'finish'], args: dict[str, object]) -> LLMResult:
+    return LLMResult(content=json.dumps({'should_terminate': decision == 'finish', **args}))
 
 
 def test_continue_conversation_reports_mid_run_violation():
     """The continue tool has no rules_broken field; it used to hardcode []."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {
             'reason': 'r',
             'goal_completion_score': 0.2,
@@ -193,14 +192,14 @@ def test_continue_conversation_reports_mid_run_violation():
 @pytest.mark.parametrize(
     'result',
     [
-        LLMResult(content='I think it should stop.', tool_calls=[]),
-        LLMResult(content='', tool_calls=[SimpleNamespace(function=SimpleNamespace(name='finish_conversation', arguments='{not json'))]),
-        LLMResult(content='', tool_calls=[SimpleNamespace(function=SimpleNamespace(name='invent_a_tool', arguments='{}'))]),
+        LLMResult(content='I think it should stop.'),
+        LLMResult(content='{not json'),
+        LLMResult(content='', refusal='I cannot help with that.'),
     ],
-    ids=['no-tool-call', 'unparseable-arguments', 'unknown-tool'],
+    ids=['not-json', 'unparseable-json', 'refusal'],
 )
 def test_judge_safety_terminate_carries_no_audit(result: LLMResult):
-    """The three safety-terminate paths return ``rules_broken=[]``, which passes every
+    """The safety-terminate paths return ``rules_broken=[]``, which passes every
     criterion. They must leave ``criteria_verdicts`` at ``None`` so the runner marks
     the run unverified — a malfunctioning judge scoring a perfect 1.0 is the
     RES-1308 bug wearing a different hat."""
@@ -216,7 +215,7 @@ def test_finish_conversation_derives_rules_broken_from_the_audit_alone():
     ignored — otherwise the two channels have something to disagree about."""
     judge = _judge()
     result = _llm_result(
-        'finish_conversation',
+        'finish',
         {
             'reason': 'r',
             'goal_achieved': False,
@@ -232,7 +231,7 @@ def test_finish_conversation_derives_rules_broken_from_the_audit_alone():
 
 def test_missing_verdicts_parse_to_none_not_empty(caplog):
     judge = _judge()
-    result = _llm_result('finish_conversation', {'reason': 'r', 'goal_achieved': True, 'rules_broken': [], 'goal_completion_score': 1.0})
+    result = _llm_result('finish', {'reason': 'r', 'goal_achieved': True, 'rules_broken': [], 'goal_completion_score': 1.0})
     with caplog.at_level('WARNING'):
 
         judgment = judge._parse_judgment(result)
@@ -245,7 +244,7 @@ def test_malformed_verdict_entries_are_dropped_with_a_warning(caplog):
     the run-level fold only complains about ids missing from EVERY turn."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {
             'reason': 'r',
             'goal_completion_score': 0.0,
@@ -269,7 +268,7 @@ def test_a_wholly_unusable_verdicts_payload_is_unknown_not_empty(caplog):
     judge audited and found nothing, which is the RES-1308 flattering silence."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {'reason': 'r', 'goal_completion_score': 0.0, 'criteria_verdicts': 'all fine'},
     )
     with caplog.at_level('WARNING'):
@@ -284,7 +283,7 @@ def test_an_empty_audit_survives_as_audited_and_does_not_become_none():
     distinguishable from a judge that reported nothing at all."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {'reason': 'r', 'goal_completion_score': 0.5, 'criteria_verdicts': []},
     )
 
@@ -297,7 +296,7 @@ def test_verdicts_outside_the_scenario_criteria_are_dropped_at_parse_time(caplog
     matches nothing, so only the scenario context can catch it."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {
             'reason': 'r',
             'goal_completion_score': 0.0,
@@ -318,7 +317,7 @@ def test_duplicate_verdict_ids_are_collapsed_with_a_warning(caplog):
     """Left alone the last entry silently wins, and nothing says two arrived."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {
             'reason': 'r',
             'goal_completion_score': 0.0,
@@ -339,7 +338,7 @@ def test_verdicts_come_back_sorted_by_criterion_index():
     """Nothing downstream should depend on the order the model happened to emit."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {
             'reason': 'r',
             'goal_completion_score': 0.0,
@@ -359,7 +358,7 @@ def test_unusable_goal_completion_score_falls_back_to_zero_and_keeps_the_audit(c
     throw away the criteria audit with it — a far worse trade."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {
             'reason': 'r',
             'goal_completion_score': 'high',
@@ -380,7 +379,7 @@ def test_a_salvage_that_saves_nothing_is_unknown_not_an_empty_audit(caplog):
     Nothing salvageable is *unknown*, so the run is marked unverified."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {
             'reason': 'r',
             'goal_completion_score': 0.0,
@@ -403,7 +402,7 @@ def test_a_non_string_reason_is_coerced_instead_of_discarding_the_audit(caplog):
     trade `goal_completion_score` already makes."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {
             'reason': 42,
             'goal_completion_score': 0.5,
@@ -433,20 +432,20 @@ def test_an_achieved_finish_without_a_score_reads_as_complete(payload: dict[str,
     and score an achieved goal 0.0."""
     judge = _judge()
 
-    judgment = judge._parse_judgment(_llm_result('finish_conversation', payload))
+    judgment = judge._parse_judgment(_llm_result('finish', payload))
     assert judgment.goal_achieved is True
     assert judgment.goal_completion_score == 1.0
 
 
 def test_the_criterion_verdict_item_schema_requires_evidence():
-    """`WIRE_REQUIRED` governs the top-level object only, and pydantic's own
-    ``required`` drops `evidence` because the parser defaults it to ''. The evidence
-    capture the audit depends on must not be optional on the wire."""
-    from evaluatorq.simulation.agents.judge import JUDGE_TOOLS
+    """Pydantic's own ``required`` would drop `evidence` because the parser defaults it
+    to ''; the strict response schema must still demand it, or the evidence capture the
+    audit depends on becomes optional on the wire."""
+    from evaluatorq.common.responses import responses_text_config
+    from evaluatorq.simulation.agents.judge import JudgeDecision
 
-    for tool in JUDGE_TOOLS:
-        items = tool['function']['parameters']['properties']['criteria_verdicts']['items']
-        assert items['required'] == ['criterion_id', 'evidence', 'occurred'], tool['function']['name']
+    schema = responses_text_config(JudgeDecision)['format']['schema']
+    assert sorted(schema['$defs']['CriterionVerdict']['required']) == ['criterion_id', 'evidence', 'occurred']
 
 
 def test_a_boolean_score_is_not_read_as_a_number():
@@ -454,7 +453,7 @@ def test_a_boolean_score_is_not_read_as_a_number():
     from a judge that answered the wrong type entirely."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {'reason': 'r', 'goal_completion_score': 0.5, 'response_quality': True},
     )
 
@@ -469,13 +468,16 @@ def test_tracker_keeps_the_evidence_from_the_turn_occurrence_first_flipped():
     assert t.evidence == {'criteria_0': 'BANANA'}
 
 
-def test_both_judge_tools_require_criteria_verdicts():
-    from evaluatorq.simulation.agents.judge import JUDGE_TOOLS
+def test_the_judge_decision_requires_criteria_verdicts_and_cannot_send_null_for_them():
+    """RES-1308: an audit the judge may omit or null is an audit that quietly goes missing."""
+    from evaluatorq.common.responses import responses_text_config
+    from evaluatorq.simulation.agents.judge import JudgeDecision
 
-    for tool in JUDGE_TOOLS:
-        params = tool['function']['parameters']
-        assert 'criteria_verdicts' in params['properties'], tool['function']['name']
-        assert 'criteria_verdicts' in params['required'], tool['function']['name']
+    schema = responses_text_config(JudgeDecision)['format']['schema']
+    assert 'criteria_verdicts' in schema['required']
+    prop = schema['properties']['criteria_verdicts']
+    assert prop['type'] == 'array'
+    assert 'anyOf' not in prop
 
 
 # ---------------------------------------------------------------------------
@@ -741,7 +743,7 @@ def test_empty_audit_is_silent_once_every_criterion_is_settled(caplog):
     'no criteria_verdicts' warning must not cry wolf on it."""
     judge = _judge()
     judge.mark_settled({'criteria_0', 'criteria_1'})
-    result = _llm_result('continue_conversation', {'reason': 'r', 'goal_completion_score': 0.5})
+    result = _llm_result('continue', {'reason': 'r', 'goal_completion_score': 0.5})
     with caplog.at_level('WARNING'):
 
         judge._parse_judgment(result)
@@ -809,7 +811,7 @@ def test_an_empty_audit_while_criteria_are_unsettled_warns(caplog):
     branches differing in whether they log."""
     judge = _judge()  # nothing marked settled
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {'reason': 'r', 'goal_completion_score': 0.5, 'criteria_verdicts': []},
     )
     with caplog.at_level('WARNING'):
@@ -836,7 +838,7 @@ def test_every_verdict_dropped_against_the_scenario_is_unknown_not_empty(caplog)
     the judge audited and found nothing."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {
             'reason': 'r',
             'goal_completion_score': 0.0,
@@ -861,7 +863,7 @@ def test_a_non_canonical_criterion_id_is_dropped_at_parse_time(caplog):
     verified while every criterion kept its not-observed default."""
     judge = _judge()
     result = _llm_result(
-        'continue_conversation',
+        'continue',
         {
             'reason': 'r',
             'goal_completion_score': 0.0,

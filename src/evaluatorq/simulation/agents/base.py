@@ -43,6 +43,7 @@ from evaluatorq.simulation.tracing import span_message_text, with_llm_span
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
+    from pydantic import BaseModel
 
     from evaluatorq.simulation.contracts import Message
 
@@ -315,6 +316,7 @@ class BaseAgent(UsageTracking, ABC):
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
         volatile_tail: int = 0,
+        response_format: type[BaseModel] | None = None,
     ) -> LLMResult:
         """Call the LLM with retry logic, dispatching to chat or responses API.
 
@@ -327,8 +329,17 @@ class BaseAgent(UsageTracking, ABC):
         breakpoint off them on both paths — see `common.prompt_cache`:
         `apply_cache_breakpoints` on the chat path, `mark_responses_input` on the
         Responses path (which is the judge's default).
+
+        ``response_format`` asks for a reply that is a JSON object matching that
+        model, as a strict ``text.format`` schema on the Responses API. The reply
+        comes back as text in ``LLMResult.content``; validating it is the caller's
+        job. The chat path has no caller for it and refuses rather than guessing.
         """
         messages = drop_unreplayable_tool_records(messages, incomplete_as_text=True)
+        if response_format is not None and self.config.api != 'responses':
+            raise ValueError(
+                f'{self.name}: response_format is only supported on the Responses API (config.api={self.config.api!r})'
+            )
         if self.config.api == 'responses':
             return await self._call_responses(
                 messages,
@@ -338,6 +349,7 @@ class BaseAgent(UsageTracking, ABC):
                 tools=tools,
                 llm_purpose=llm_purpose,
                 volatile_tail=volatile_tail,
+                response_format=response_format,
             )
         return await self._call_chat_completions(
             messages,
@@ -463,6 +475,7 @@ class BaseAgent(UsageTracking, ABC):
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
         volatile_tail: int = 0,
+        response_format: type[BaseModel] | None = None,
     ) -> LLMResult:
         """Call the LLM via the OpenAI Responses API with retry logic.
 
@@ -541,6 +554,7 @@ class BaseAgent(UsageTracking, ABC):
                     reasoning_effort=reasoning_effort,
                     instructions=self.system_prompt,
                     tools=[_responses_tool_schema(tool) for tool in tools] if tools else None,
+                    response_text_format=response_format,
                     record_input=False,
                     extra_body=extra_body or None,
                     extra_kwargs=self.config.extra_kwargs or None,
