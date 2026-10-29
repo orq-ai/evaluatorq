@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pydantic import (
     BaseModel,
@@ -406,7 +406,7 @@ class JudgeAgent(BaseAgent):
 
     # Responses is the endpoint the Orq router prices, so usage and cost arrive
     # filled in (see `common.llm_call.execute_response`). Not a preference the caller can hold.
-    REQUIRED_API: ClassVar[Literal['chat_completions', 'responses']] = 'responses'
+    REQUIRED_API = 'responses'
     MODEL_TASK: ClassVar[str] = 'sim.judge'
 
     def __init__(

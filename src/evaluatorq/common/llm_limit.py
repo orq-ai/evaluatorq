@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
     from contextvars import Token
 
 DEFAULT_LLM_PARALLELISM = 10
@@ -134,7 +134,7 @@ class llm_concurrency_limit:  # noqa: N801 - used as a context manager, named li
 
 
 @asynccontextmanager
-async def llm_slot() -> AsyncIterator[None]:
+async def llm_slot() -> AsyncGenerator[None, None]:
     """Hold one slot from every active finite LLM budget.
 
     Wrap only the request itself — holding a slot across parsing or judging

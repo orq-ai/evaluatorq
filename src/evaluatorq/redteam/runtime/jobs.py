@@ -28,7 +28,7 @@ from evaluatorq.redteam.exceptions import CredentialError
 from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
 
 def _sanitize_job_name(value: str) -> str:
@@ -57,7 +57,7 @@ async def static_target_spans(
     run_id: str | None,
     row: int,
     target_input: str,
-) -> AsyncIterator[tuple[Any, str]]:
+) -> AsyncGenerator[tuple[Any, str], None]:
     """Open the attack and target_call spans plus the conversation thread for one static row.
 
     Every static job, deployment or agent target, wraps its target call in this
