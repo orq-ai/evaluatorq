@@ -19,7 +19,6 @@ async def evaluatorq(
     description: str | None = None,
     path: str | None = None,
     inference: bool = True,
-    upload_timeout_s: float | None = None,
 ) -> EvaluatorqResult
 ```
 
@@ -34,7 +33,6 @@ async def evaluatorq(
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
 | `inference` | `bool` | `True` | Run the jobs; set `False` to score data that already has outputs |
-| `upload_timeout_s` | `float` (>0) \| `None` | `None` | Timeout in seconds for uploading the results to Orq; `None` uses `EVALUATORQ_UPLOAD_TIMEOUT_S` (`120`). A timed-out upload is not retried, because the server may still create the run |
 
 Parameters can also be passed positionally as an `EvaluatorParams` model or a plain dict — the three forms below are equivalent:
 

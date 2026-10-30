@@ -710,36 +710,3 @@ async def test_streaming_run_uploads_with_its_dataset_id_and_feeds_the_sink(
     # send_results_to_orq(api_key, name, description, dataset_id, results, start, end)
     assert upload_calls[0][3] == 'ds_42'
     assert sink == ['https://my.orq.ai/e/streamed']
-
-
-@pytest.mark.asyncio
-async def test_upload_timeout_s_reaches_send_results_to_orq(monkeypatch: pytest.MonkeyPatch):
-    """BACK-2363: ``evaluatorq(upload_timeout_s=...)`` is the upload timeout, ``None`` defers to the env var."""
-    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
-    timeouts: list[object] = []
-
-    async def fake_upload(*_args: object, **kwargs: object):
-        timeouts.append(kwargs['timeout_s'])
-
-    async def job(_data: DataPoint, _row: int):
-        return {'name': 'job', 'output': 'output'}
-
-    monkeypatch.setattr(evaluatorq_module, 'send_results_to_orq', fake_upload)
-    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
-
-    data = [DataPoint(inputs={'row': 0})]
-    await evaluatorq_module.evaluatorq('t', data=data, jobs=[job], print_results=False, upload_timeout_s=7)
-    await evaluatorq_module.evaluatorq('t', {'data': data, 'jobs': [job], 'print': False, 'upload_timeout_s': 9})
-    await evaluatorq_module.evaluatorq('t', data=data, jobs=[job], print_results=False)
-
-    assert timeouts == [7, 9, None]
-
-
-def test_upload_timeout_s_must_be_positive():
-    async def job(_data: DataPoint, _row: int):
-        return {'name': 'job', 'output': 'output'}
-
-    data = [DataPoint(inputs={})]
-    EvaluatorParams(data=data, jobs=[job], upload_timeout_s=1)
-    with pytest.raises(ValueError, match='upload_timeout_s'):
-        EvaluatorParams(data=data, jobs=[job], upload_timeout_s=0)

@@ -139,8 +139,6 @@ _ROWS = (
         description='Send W3C trace context on outgoing calls.',
     ),
     EnvVar('EVALUATORQ_SPAN_MAX_TEXT_CHARS', 'raw', None, 'Per-attribute span text limit.'),
-    # Results upload
-    EnvVar('EVALUATORQ_UPLOAD_TIMEOUT_S', 'float', 120.0, 'Results upload HTTP timeout.', 1.0),
     # Simulation LLM defaults
     EnvVar('EVALUATORQ_LLM_TIMEOUT_S', 'float', 60.0, 'Simulation per-call LLM timeout.', 1.0),
     EnvVar('EVALUATORQ_LLM_MAX_TOKENS', 'int', 10000, 'Simulation per-call completion token cap.', 1),

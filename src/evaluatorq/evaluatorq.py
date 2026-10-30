@@ -244,7 +244,6 @@ class _EvaluationInputs:
     path: str | None
     inference: bool | None
     single_trace: bool
-    upload_timeout_s: float | None
     on_datapoint_complete: DataPointComplete | None
 
 
@@ -260,7 +259,6 @@ class _ResolvedEvaluationInputs:
     description: str | None
     path: str | None
     single_trace: bool
-    upload_timeout_s: float | None
     on_datapoint_complete: DataPointComplete | None
 
 
@@ -290,7 +288,6 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
     path = inputs.path
     inference = inputs.inference
     single_trace = inputs.single_trace
-    upload_timeout_s = inputs.upload_timeout_s
     on_datapoint_complete = inputs.on_datapoint_complete
 
     # Handle params dict/object vs kwargs
@@ -310,7 +307,6 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
             path=path,
             inference=inference,
             single_trace=single_trace,
-            upload_timeout_s=upload_timeout_s,
             on_datapoint_complete=on_datapoint_complete,
         )
     else:
@@ -341,7 +337,6 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
     description = validated.description
     path = validated.path
     single_trace = validated.single_trace
-    upload_timeout_s = validated.upload_timeout_s
     on_datapoint_complete = validated.on_datapoint_complete
 
     return _ResolvedEvaluationInputs(
@@ -355,7 +350,6 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
         description=description,
         path=path,
         single_trace=single_trace,
-        upload_timeout_s=upload_timeout_s,
         on_datapoint_complete=on_datapoint_complete,
     )
 
@@ -494,7 +488,6 @@ class _EvaluationFinishInputs:
     start_time: datetime
     path: str | None
     base_url: str | None
-    upload_timeout_s: float | None
     experiment_url_out: list[str] | None
 
 
@@ -518,7 +511,6 @@ async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
     start_time = inputs.start_time
     path = inputs.path
     base_url = inputs.base_url
-    upload_timeout_s = inputs.upload_timeout_s
     experiment_url_out = inputs.experiment_url_out
 
     # Display results table
@@ -537,7 +529,6 @@ async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
             datetime.now(timezone.utc),
             path=path,
             base_url=base_url,
-            timeout_s=upload_timeout_s,
         )
         # Hand the created experiment's URL back to callers that opted in with a
         # sink list (e.g. simulation persists it on the SimulationRun report).
@@ -763,7 +754,6 @@ async def evaluatorq(
     path: str | None = None,
     inference: bool | None = None,
     single_trace: bool = False,
-    upload_timeout_s: float | None = None,
     on_datapoint_complete: DataPointComplete | None = None,
     _send_results: bool = True,
     _base_url: str | None = None,
@@ -822,9 +812,6 @@ async def evaluatorq(
         single_trace: Group every row under one ``evaluatorq.run`` span so the whole
               evaluation is a single trace. Defaults to False, which leaves each row's
               ``orq.job`` as its own root — an N-row run is then N separate traces.
-        upload_timeout_s: HTTP timeout in seconds for uploading the results to Orq.
-              ``None`` reads ``EVALUATORQ_UPLOAD_TIMEOUT_S`` (default 120). Raise it
-              for large result sets; a timed-out upload is not retried.
         on_datapoint_complete: Optional sync or async callback invoked exactly once after each
               DataPointResult reaches a terminal state. Exceptions propagate and abort the run.
 
@@ -868,7 +855,6 @@ async def evaluatorq(
             path=path,
             inference=inference,
             single_trace=single_trace,
-            upload_timeout_s=upload_timeout_s,
             on_datapoint_complete=on_datapoint_complete,
         )
     )
@@ -957,7 +943,6 @@ async def evaluatorq(
                 start_time=start_time,
                 path=path,
                 base_url=_base_url,
-                upload_timeout_s=resolved.upload_timeout_s,
                 experiment_url_out=_experiment_url_out,
             )
         )

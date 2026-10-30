@@ -803,7 +803,7 @@ class TestUploadDiagnostics:
 
 
 class TestSendResultsTimeoutAndRetry:
-    """BACK-2363: configurable upload timeout, retries only where no run can exist yet."""
+    """BACK-2363: 120 s upload timeout, retries only where no run can exist yet."""
 
     @staticmethod
     def _upload(build_results: Callable[..., list[DataPointResult]], **kwargs: Any):
@@ -838,23 +838,12 @@ class TestSendResultsTimeoutAndRetry:
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 
     @pytest.mark.asyncio
-    async def test_default_timeout_is_120s(self, monkeypatch: pytest.MonkeyPatch, build_results):
-        monkeypatch.delenv("EVALUATORQ_UPLOAD_TIMEOUT_S", raising=False)
+    async def test_timeout_is_120s(self, monkeypatch: pytest.MonkeyPatch, build_results):
         seen: list[httpx.AsyncClient] = []
         self._scripted_post(monkeypatch, [200], seen)
 
         assert await self._upload(build_results) is not None
         assert seen[0].timeout.read == 120.0
-
-    @pytest.mark.asyncio
-    async def test_env_sets_timeout_and_kwarg_wins(self, monkeypatch: pytest.MonkeyPatch, build_results):
-        monkeypatch.setenv("EVALUATORQ_UPLOAD_TIMEOUT_S", "5")
-        seen: list[httpx.AsyncClient] = []
-        self._scripted_post(monkeypatch, [200, 200], seen)
-
-        await self._upload(build_results)
-        await self._upload(build_results, timeout_s=7)
-        assert [c.timeout.read for c in seen] == [5.0, 7.0]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("first", [httpx.ConnectError, httpx.ConnectTimeout, 429])
@@ -894,9 +883,9 @@ class TestSendResultsTimeoutAndRetry:
         warnings: list[str] = []
         monkeypatch.setattr("evaluatorq.send_results.logger.warning", lambda msg, *a: warnings.append(msg))
 
-        assert await self._upload(build_results, timeout_s=3) is None
+        assert await self._upload(build_results) is None
         assert len(seen) == 1
-        assert "timed out after 3s" in warnings[0] and "may still finish" in warnings[0]
+        assert "timed out after 120s" in warnings[0] and "may still finish" in warnings[0]
 
     @pytest.mark.asyncio
     async def test_read_timeout_raises_with_raise_on_error(self, monkeypatch: pytest.MonkeyPatch, build_results):

@@ -389,8 +389,6 @@ class EvaluatorParams(BaseModel):
         single_trace: Group every row of the run under one ``evaluatorq.run``
               span, so the whole evaluation is a single trace. Off by default:
               each row's ``orq.job`` is its own root, i.e. one trace per row.
-        upload_timeout_s: HTTP timeout in seconds for uploading the results to
-              Orq. ``None`` reads ``EVALUATORQ_UPLOAD_TIMEOUT_S`` (default 120).
     """
 
     model_config: ClassVar[ConfigDict] = {
@@ -422,8 +420,6 @@ class EvaluatorParams(BaseModel):
     single_trace: bool = False
     """When True, open one ``evaluatorq.run`` span for the whole run so every row
     shares a trace. Default False keeps each row's ``orq.job`` as its own root."""
-    upload_timeout_s: float | None = Field(default=None, gt=0)
-    """Results upload HTTP timeout in seconds; ``None`` reads ``EVALUATORQ_UPLOAD_TIMEOUT_S``."""
     on_datapoint_complete: DataPointComplete | None = None
 
     @model_validator(mode='after')
