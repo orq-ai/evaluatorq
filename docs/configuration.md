@@ -188,6 +188,7 @@ Set the embedding role with `EVALUATORQ_EMBEDDING_MODEL`, `--embedding-model`, t
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
 | `EVALUATORQ_DIR` | No | `.evaluatorq` in the current directory | Base directory for the run store, where both red teaming (`runs/`) and simulation (`sim-runs/`) persist reports. Must point at the store directory itself (e.g. `/tmp/x/.evaluatorq`), not its parent — only the working-directory fallback appends `.evaluatorq`. Empty is treated as unset. |
+| `EVALUATORQ_UPLOAD_TIMEOUT_S` | No | `120` | HTTP timeout in seconds for uploading results to Orq (`/v2/spreadsheets/evaluations/receive`) at the end of `evaluatorq()` and a red-team run. `evaluatorq(upload_timeout_s=...)` and `send_results_to_orq(timeout_s=...)` win when set. Raise it for large result sets: a 27 MB upload has taken about a minute. The upload retries up to 3 times on connection errors and `429`. A timed-out upload is not retried, because the server may still finish and create the run: check the experiment before uploading again. |
 | `EQ_DEBUG` | No | unset | Set to any non-empty value to show the full traceback on CLI errors instead of the one-line message. CLI-wide; distinct from `ORQ_DEBUG`, which only affects tracing diagnostics. |
 | `EVALUATORQ_LOG_LEVEL` | No | `INFO` | Dashboard server log level. `DEBUG` logs finder model requests and responses, including trace content, in CLI and dashboard runs; `eq find` also prints changed progress. The default suppresses httpx's per-request INFO line; explicit `INFO` or `DEBUG` allows it. |
 
@@ -236,13 +237,13 @@ All three are fallback defaults only: the matching field on the agent's `LLMCall
 
 ## When a value is wrong
 
-Ten of the variables on this page are validated when they are read, and a wrong value in any of them never stops a run: evaluatorq logs a `WARNING`, uses the documented default, and carries on.
+Eleven of the variables on this page are validated when they are read, and a wrong value in any of them never stops a run: evaluatorq logs a `WARNING`, uses the documented default, and carries on.
 
 A variable that looks like it did nothing was rejected, outranked, or never read, and only the first of the three says so. A rejected value leaves the `WARNING` below. An outranked one leaves nothing: the three [Simulation LLM defaults](#simulation-llm-defaults) are fallbacks, and an `LLMCallConfig` field beats them whenever it is set at all — including when it is set to the same number as the default. A knob nobody read leaves nothing either, because these are read where they are used rather than at startup: `ORQ_OTEL_MAX_QUEUE_SIZE` is read when tracing initialises, so with tracing off a bad value passes without a word. Read the warnings first, and treat their absence as "no opinion" rather than as "fine".
 
-**Which variables this covers.** Ten knobs are parsed and validated — the numbers against a minimum, the booleans against an accepted vocabulary: `ORQ_DISABLE_TRACING`, the four `ORQ_OTEL_*` variables, `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`, `EVALUATORQ_PROPAGATE_TRACE_CONTEXT`, `EVALUATORQ_CATALOGUE_TIMEOUT_S`, `EVALUATORQ_LLM_TIMEOUT_S` and `EVALUATORQ_LLM_MAX_TOKENS`.
+**Which variables this covers.** Eleven knobs are parsed and validated — the numbers against a minimum, the booleans against an accepted vocabulary: `ORQ_DISABLE_TRACING`, the four `ORQ_OTEL_*` variables, `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`, `EVALUATORQ_PROPAGATE_TRACE_CONTEXT`, `EVALUATORQ_CATALOGUE_TIMEOUT_S`, `EVALUATORQ_LLM_TIMEOUT_S`, `EVALUATORQ_UPLOAD_TIMEOUT_S` and `EVALUATORQ_LLM_MAX_TOKENS`.
 
-The minimum is `1` for the four `ORQ_OTEL_*` variables and for `EVALUATORQ_LLM_MAX_TOKENS`, `1.0` for `EVALUATORQ_LLM_TIMEOUT_S`, and `0.1` for `EVALUATORQ_CATALOGUE_TIMEOUT_S`. None of them has a maximum.
+The minimum is `1` for the four `ORQ_OTEL_*` variables and for `EVALUATORQ_LLM_MAX_TOKENS`, `1.0` for `EVALUATORQ_LLM_TIMEOUT_S` and `EVALUATORQ_UPLOAD_TIMEOUT_S`, and `0.1` for `EVALUATORQ_CATALOGUE_TIMEOUT_S`. None of them has a maximum.
 
 Everything else on this page is a string evaluatorq hands on as it finds it — a key, a base URL, a directory, `EVALUATORQ_REASONING_EFFORT` — and a wrong value there surfaces where it is used, as a failed request or an empty run store, not as one of these warnings. `EVALUATORQ_LOG_LEVEL` is the one that does not land softly: a name Python's `logging` module does not recognise raises `ValueError: Unknown level` out of the dashboard's logging setup, and the dashboard never starts.
 

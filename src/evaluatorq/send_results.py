@@ -6,7 +6,8 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from .common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
+from .common.env_config import DEFAULT_ORQ_BASE_URL, env_float, env_raw
+from .common.retry import with_retry
 from .types import DataPointResult, EvaluatorqResult
 
 
@@ -40,6 +41,56 @@ class SendResultsError(RuntimeError):
     """Raised when uploading evaluation results to Orq fails."""
 
 
+async def _post_results(
+    url: str,
+    api_key: str,
+    payload: dict[str, object],
+    *,
+    timeout: float,
+    raise_on_error: bool,
+) -> httpx.Response | None:
+    """POST the payload, retrying only failures that never reached the handler.
+
+    Returns ``None`` after a read timeout (logged, or raised as
+    ``SendResultsError`` under ``raise_on_error``); any other response,
+    successful or not, is returned for the caller to inspect.
+    """
+    async with httpx.AsyncClient(timeout=timeout) as client:
+
+        async def post() -> httpx.Response | None:
+            try:
+                response = await client.post(
+                    url,
+                    headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'},
+                    json=payload,
+                )
+            except httpx.ReadTimeout:
+                # Caught here, inside the retry, because with_retry retries a
+                # ReadTimeout: the server keeps processing after the client gives
+                # up, so a retry would create a second run. Lift this once the
+                # platform deduplicates repeated uploads (BACK-2363).
+                return None
+            # 429 is rejected before the handler runs, so it is safe to retry; a
+            # 5xx may come after the run was created, so it is returned as-is.
+            if response.status_code == 429:
+                response.raise_for_status()
+            return response
+
+        try:
+            response = await with_retry(post, max_attempts=3, label='Orq results upload')
+        except httpx.HTTPStatusError as err:
+            return err.response
+    if response is None:
+        message = (
+            f'Orq results upload timed out after {timeout:g}s. The server may still finish and create '
+            'the run: check the experiment before uploading again, or raise EVALUATORQ_UPLOAD_TIMEOUT_S.'
+        )
+        if raise_on_error:
+            raise SendResultsError(message)
+        logger.warning(message)
+    return response
+
+
 async def send_results_to_orq(
     api_key: str,
     evaluation_name: str,
@@ -52,6 +103,7 @@ async def send_results_to_orq(
     path: str | None = None,
     base_url: str | None = None,
     raise_on_error: bool = False,
+    timeout_s: float | None = None,
 ) -> OrqResponse | None:
     """
     Send evaluation results to Orq platform.
@@ -71,6 +123,11 @@ async def send_results_to_orq(
               ``https://my.orq.ai``. Lets callers route results to the same
               server used for inference.
         raise_on_error: Raise upload errors instead of treating upload as best-effort.
+        timeout_s: HTTP timeout in seconds for the upload. When omitted, falls
+              back to the ``EVALUATORQ_UPLOAD_TIMEOUT_S`` env var (default 120).
+              The upload retries up to 3 times on connection errors and 429.
+              A timed-out upload is not retried: the server may still finish
+              and create the run, so a retry could create a duplicate.
 
     Returns:
         The full ``OrqResponse`` (``experiment_url``, ``rows_created``,
@@ -124,53 +181,54 @@ async def send_results_to_orq(
                         es['score'].pop('raw_output', None)
                     es.setdefault('error', '')
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f'{resolved_base_url}/v2/spreadsheets/evaluations/receive',
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {api_key}',
-                },
-                json=payload_dict,
-            )
+        timeout = timeout_s if timeout_s is not None else env_float('EVALUATORQ_UPLOAD_TIMEOUT_S')
+        response = await _post_results(
+            f'{resolved_base_url}/v2/spreadsheets/evaluations/receive',
+            api_key,
+            payload_dict,
+            timeout=timeout,
+            raise_on_error=raise_on_error,
+        )
+        if response is None:
+            return None
 
-            if not response.is_success:
-                error_text = response.text or 'Unknown error'
-                if raise_on_error:
-                    raise SendResultsError(
-                        'Could not send results to Orq platform '
-                        f'({response.status_code} {response.reason_phrase}): {error_text}'
-                    )
-                logger.warning(
-                    'Could not send results to Orq platform ({} {}): {}',
-                    response.status_code,
-                    response.reason_phrase,
-                    error_text,
+        if not response.is_success:
+            error_text = response.text or 'Unknown error'
+            if raise_on_error:
+                raise SendResultsError(
+                    'Could not send results to Orq platform '
+                    f'({response.status_code} {response.reason_phrase}): {error_text}'
                 )
-                return None
+            logger.warning(
+                'Could not send results to Orq platform ({} {}): {}',
+                response.status_code,
+                response.reason_phrase,
+                error_text,
+            )
+            return None
 
-            orq_result = OrqResponse.model_validate(response.json())
+        orq_result = OrqResponse.model_validate(response.json())
 
-            logger.info(
-                'Results sent to Orq: {} ({} rows created)',
-                orq_result.experiment_name,
+        logger.info(
+            'Results sent to Orq: {} ({} rows created)',
+            orq_result.experiment_name,
+            orq_result.rows_created,
+        )
+        if orq_result.rows_created < len(results):
+            # The "missing samples" footgun: the platform registered fewer
+            # rows than we uploaded. One loud line with both numbers + URL.
+            logger.warning(
+                'Orq registered {} of {} uploaded rows for experiment {!r} — '
+                'some results will be missing from the Explorer. URL: {}',
                 orq_result.rows_created,
+                len(results),
+                orq_result.experiment_name,
+                orq_result.experiment_url or '<no url returned>',
             )
-            if orq_result.rows_created < len(results):
-                # The "missing samples" footgun: the platform registered fewer
-                # rows than we uploaded. One loud line with both numbers + URL.
-                logger.warning(
-                    'Orq registered {} of {} uploaded rows for experiment {!r} — '
-                    'some results will be missing from the Explorer. URL: {}',
-                    orq_result.rows_created,
-                    len(results),
-                    orq_result.experiment_name,
-                    orq_result.experiment_url or '<no url returned>',
-                )
-            if orq_result.experiment_url:
-                logger.info('View your evaluation at: {}', orq_result.experiment_url)
+        if orq_result.experiment_url:
+            logger.info('View your evaluation at: {}', orq_result.experiment_url)
 
-            return orq_result
+        return orq_result
 
     except SendResultsError:
         raise
