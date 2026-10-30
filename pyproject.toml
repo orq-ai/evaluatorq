@@ -352,7 +352,7 @@ dev = [
   "pytest-asyncio>=1.2.0",
   "pytest-timeout>=2.3.0",
   "tomli>=2.0.0; python_version < '3.11'",
-  "ty==0.0.90",
+  "ty==0.0.92",
   "ruff>=0.14.3",
   "orq-ai-sdk>=4.14",
   "anthropic>=0.75.0",
