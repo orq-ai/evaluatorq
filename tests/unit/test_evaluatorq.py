@@ -736,5 +736,10 @@ async def test_upload_timeout_s_reaches_send_results_to_orq(monkeypatch: pytest.
 
 
 def test_upload_timeout_s_must_be_positive():
-    with pytest.raises(ValueError):
-        EvaluatorParams(data=[], jobs=[], upload_timeout_s=0)
+    async def job(_data: DataPoint, _row: int):
+        return {'name': 'job', 'output': 'output'}
+
+    data = [DataPoint(inputs={})]
+    EvaluatorParams(data=data, jobs=[job], upload_timeout_s=1)
+    with pytest.raises(ValueError, match='upload_timeout_s'):
+        EvaluatorParams(data=data, jobs=[job], upload_timeout_s=0)

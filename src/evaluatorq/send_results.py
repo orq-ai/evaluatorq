@@ -125,7 +125,8 @@ async def send_results_to_orq(
         raise_on_error: Raise upload errors instead of treating upload as best-effort.
         timeout_s: HTTP timeout in seconds for the upload. When omitted, falls
               back to the ``EVALUATORQ_UPLOAD_TIMEOUT_S`` env var (default 120).
-              The upload retries up to 3 times on connection errors and 429.
+              The upload makes up to 3 attempts, retrying on connection
+              errors and 429.
               A timed-out upload is not retried: the server may still finish
               and create the run, so a retry could create a duplicate.
 
