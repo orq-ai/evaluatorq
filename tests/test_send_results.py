@@ -346,7 +346,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", "https://my.orq.ai/v3/experiments/evaluations/receive")
             return httpx.Response(
                 401,
                 request=request,
@@ -374,7 +374,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", "https://my.orq.ai/v3/experiments/evaluations/receive")
             raise httpx.RequestError("connection failed", request=request)
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -398,7 +398,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", "https://my.orq.ai/v3/experiments/evaluations/receive")
             return httpx.Response(503, request=request, json={"error": "service unavailable"})
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -429,7 +429,7 @@ class TestSendResultsUploadFailures:
 
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
             captured["json"] = kwargs["json"]
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", "https://my.orq.ai/v3/experiments/evaluations/receive")
             return httpx.Response(
                 200,
                 request=request,
@@ -544,7 +544,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", "https://my.orq.ai/v3/experiments/evaluations/receive")
             raise httpx.RequestError("connection failed", request=request)
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -598,7 +598,7 @@ class TestSendResultsBaseUrl:
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
             base_url="https://my.staging.orq.ai",
         )
-        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
     @pytest.mark.asyncio
     async def test_base_url_trailing_slash_normalized(
@@ -619,7 +619,7 @@ class TestSendResultsBaseUrl:
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
             base_url="https://my.staging.orq.ai/",
         )
-        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_env_when_base_url_not_supplied(
@@ -640,7 +640,7 @@ class TestSendResultsBaseUrl:
             start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
         )
-        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
 
 class TestUploadDiagnostics:
@@ -649,7 +649,7 @@ class TestUploadDiagnostics:
     @staticmethod
     def _fake_post(rows_created: int, url: str | None = "https://my.orq.ai/e/abc"):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", "https://my.orq.ai/v3/experiments/evaluations/receive")
             body = {
                 "sheet_id": "s1",
                 "manifest_id": "m1",
