@@ -184,7 +184,7 @@ async def send_results_to_orq(
                     es.setdefault('error', '')
 
         response = await _post_results(
-            f'{resolved_base_url}/v2/spreadsheets/evaluations/receive',
+            f'{resolved_base_url}/v3/experiments/evaluations/receive',
             api_key,
             payload_dict,
             raise_on_error=raise_on_error,

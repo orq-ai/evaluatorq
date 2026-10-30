@@ -13,7 +13,6 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 from orq_ai_sdk import Orq
-from orq_ai_sdk.models.invokeevalop import BERTScore, RougeN
 
 from evaluatorq import DataPoint, Evaluator, ScorerParameter, evaluatorq, job
 
@@ -131,20 +130,13 @@ async def _rouge_n_scorer(params: ScorerParameter) -> dict[str, Any]:
         output=str(output),
         reference=str(data.expected_output or ""),
     )
-    if isinstance(result, RougeN):
-        val = result.value
+
+    if result.type == "rouge_n" and result.value is not None:
         return {
-            "value": {
-                "type": "rouge_n",
-                "value": {
-                    "rouge_1": {"precision": val.rouge_1.precision, "recall": val.rouge_1.recall, "f1": val.rouge_1.f1},
-                    "rouge_2": {"precision": val.rouge_2.precision, "recall": val.rouge_2.recall, "f1": val.rouge_2.f1},
-                    "rouge_l": {"precision": val.rouge_l.precision, "recall": val.rouge_l.recall, "f1": val.rouge_l.f1},
-                },
-            },
+            "value": {"type": "rouge_n", "value": result.value},
             "explanation": "ROUGE-N similarity scores between output and reference",
         }
-    return {"value": 0, "explanation": "Unexpected response format"}
+    return {"value": 0, "explanation": f"Unexpected evaluator response type: {result.type!r}"}
 
 
 # Evaluator 3: BERTScore (via Orq platform)
@@ -162,20 +154,13 @@ async def _bert_score_scorer(params: ScorerParameter) -> dict[str, Any]:
         output=str(output),
         reference=str(data.expected_output or ""),
     )
-    if isinstance(result, BERTScore):
-        val = result.value
+
+    if result.type == "bert_score" and result.value is not None:
         return {
-            "value": {
-                "type": "bert_score",
-                "value": {
-                    "precision": val.precision,
-                    "recall": val.recall,
-                    "f1": val.f1,
-                },
-            },
+            "value": {"type": "bert_score", "value": result.value},
             "explanation": "BERTScore semantic similarity between output and reference",
         }
-    return {"value": 0, "explanation": "Unexpected response format"}
+    return {"value": 0, "explanation": f"Unexpected evaluator response type: {result.type!r}"}
 
 
 async def main():
