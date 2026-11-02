@@ -131,12 +131,14 @@ async def _rouge_n_scorer(params: ScorerParameter) -> dict[str, Any]:
         reference=str(data.expected_output or ""),
     )
 
-    if result.type == "rouge_n" and result.value is not None:
-        return {
-            "value": {"type": "rouge_n", "value": result.value},
-            "explanation": "ROUGE-N similarity scores between output and reference",
-        }
-    return {"value": 0, "explanation": f"Unexpected evaluator response type: {result.type!r}"}
+    if result.type != "rouge_n":
+        return {"value": 0, "explanation": f"Unexpected evaluator response type: {result.type!r}"}
+    if result.value is None:
+        return {"value": 0, "explanation": "The evaluator returned no value"}
+    return {
+        "value": {"type": "rouge_n", "value": result.value},
+        "explanation": "ROUGE-N similarity scores between output and reference",
+    }
 
 
 # Evaluator 3: BERTScore (via Orq platform)
@@ -155,12 +157,14 @@ async def _bert_score_scorer(params: ScorerParameter) -> dict[str, Any]:
         reference=str(data.expected_output or ""),
     )
 
-    if result.type == "bert_score" and result.value is not None:
-        return {
-            "value": {"type": "bert_score", "value": result.value},
-            "explanation": "BERTScore semantic similarity between output and reference",
-        }
-    return {"value": 0, "explanation": f"Unexpected evaluator response type: {result.type!r}"}
+    if result.type != "bert_score":
+        return {"value": 0, "explanation": f"Unexpected evaluator response type: {result.type!r}"}
+    if result.value is None:
+        return {"value": 0, "explanation": "The evaluator returned no value"}
+    return {
+        "value": {"type": "bert_score", "value": result.value},
+        "explanation": "BERTScore semantic similarity between output and reference",
+    }
 
 
 async def main():

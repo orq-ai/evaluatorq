@@ -144,10 +144,13 @@ async def fetch_dataset_as_datapoints(
     return all_datapoints
 
 
-# The export POST either 302-redirects to a cached signed URL or builds the export
-# inline and returns it as the response body (Content-Disposition: attachment).
-# Repeating the POST is safe: the server serves the cache or rebuilds inline — it
-# never enqueues a job per call (orquesta-web sheets.manager.ts exportManifest).
+# Experiments API routes (Orq 4.18 and later).
+EXPERIMENT_RUNS_PATH = '/v3/experiments/{experiment_id}/runs'
+EXPERIMENT_RUN_EXPORT_PATH = '/v3/experiments/{experiment_id}/runs/{run_id}/export'
+
+# The export either streams the file as the response body (Content-Disposition:
+# attachment) or 302-redirects to a cached signed URL. Repeating the request is
+# safe: the server rebuilds inline or serves the cache, it never enqueues a job.
 _EXPORT_URL_ATTEMPTS = 5
 _EXPORT_URL_RETRY_SECONDS = 2.0
 
@@ -247,12 +250,12 @@ async def fetch_experiment_datapoints(
 
     Args:
         api_key: Orq API key for authentication.
-        experiment_id: The experiment (sheet) ID to load responses from. Read it off the
-            experiment URL in the Orq UI: ``/experiments/<experiment_id>`` (the API refers
-            to experiments as "spreadsheets", hence the ``/v2/spreadsheets/<id>`` routes).
-        run_id: A specific run (manifest) ID. When omitted, the latest run is used. Each
-            time an experiment is run it produces a new run; open the run from the
-            experiment's run history to read its ID from the URL.
+        experiment_id: The experiment ID to load responses from. Read it off the
+            experiment URL in the Orq UI: ``/experiments/<experiment_id>``; the same ID
+            appears in the ``/v3/experiments/<id>`` API routes.
+        run_id: A specific run ID. When omitted, the latest run is used. Each time an
+            experiment is run it produces a new run; open the run from the experiment's
+            run history to read its ID from the URL.
         base_url: Optional Orq host override. Falls back to ``ORQ_BASE_URL`` then the
             default host.
 
@@ -271,20 +274,22 @@ async def fetch_experiment_datapoints(
     async with httpx.AsyncClient(timeout=60.0) as client:
         resolved_run_id = run_id
         if resolved_run_id is None:
-            manifests_resp = await client.get(f'{base}/v2/spreadsheets/{experiment_id}/manifests', headers=headers)
-            _raise_for_experiment(manifests_resp, experiment_id, 'list runs')
-            payload = manifests_resp.json()
-            manifests = payload if isinstance(payload, list) else payload.get('data', [])
-            if not manifests:
+            runs_resp = await client.get(
+                f'{base}{EXPERIMENT_RUNS_PATH.format(experiment_id=experiment_id)}', headers=headers
+            )
+            _raise_for_experiment(runs_resp, experiment_id, 'list runs')
+            payload = runs_resp.json()
+            runs = payload if isinstance(payload, list) else payload.get('data', [])
+            if not runs:
                 raise ValueError(f"Experiment '{experiment_id}' has no runs to load responses from.")
-            if all(not m.get('created') for m in manifests):
+            if all(not r.get('created_at') for r in runs):
                 raise ValueError(
-                    f"Experiment '{experiment_id}' manifests carry no 'created' "
+                    f"Experiment '{experiment_id}' runs carry no 'created_at' "
                     'timestamps, so the latest run cannot be determined. '
                     'Pass run_id explicitly.'
                 )
-            latest = max(manifests, key=lambda m: m.get('created') or '')
-            resolved_run_id = latest.get('_id') or latest.get('id')
+            latest = max(runs, key=lambda r: r.get('created_at') or '')
+            resolved_run_id = latest.get('run_id')
             if not resolved_run_id:
                 raise ValueError(f"Could not determine the latest run for experiment '{experiment_id}'.")
             logger.debug(
@@ -298,10 +303,10 @@ async def fetch_experiment_datapoints(
         for attempt in range(1, _EXPORT_URL_ATTEMPTS + 1):
             if attempt > 1:
                 await asyncio.sleep(_EXPORT_URL_RETRY_SECONDS)
-            export_resp = await client.post(
-                f'{base}/v2/spreadsheets/{experiment_id}/manifests/{resolved_run_id}/export',
+            export_resp = await client.get(
+                f'{base}{EXPERIMENT_RUN_EXPORT_PATH.format(experiment_id=experiment_id, run_id=resolved_run_id)}',
                 headers=headers,
-                json={'format': 'jsonl'},
+                params={'format': 'jsonl'},
             )
             if export_resp.is_redirect:
                 export_url = export_resp.headers.get('location')

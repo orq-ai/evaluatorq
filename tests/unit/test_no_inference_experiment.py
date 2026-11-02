@@ -38,15 +38,15 @@ def _mock_transport(
     *,
     manifests_status: int = 200,
 ) -> httpx.MockTransport:
-    """A transport that fakes the manifests list, the export redirect, and the
+    """A transport that fakes the runs list, the export redirect, and the
     signed-URL download."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
-        if path.endswith("/manifests"):
+        if path.endswith("/runs"):
             if manifests_status != 200:
                 return httpx.Response(manifests_status, text="nope")
-            return httpx.Response(200, json=manifests)
+            return httpx.Response(200, json={"data": manifests, "has_more": False})
         if path.endswith("/export"):
             return httpx.Response(302, headers={"location": SIGNED_URL})
         if str(request.url) == SIGNED_URL:
@@ -118,8 +118,8 @@ def test_row_with_blank_response_has_no_assistant_message():
 @pytest.mark.asyncio
 async def test_fetch_uses_latest_run_when_no_run_id(patch_client):
     manifests = [
-        {"_id": "run_old", "created": "2026-01-01T00:00:00Z"},
-        {"_id": "run_new", "created": "2026-06-01T00:00:00Z"},
+        {"run_id": "run_old", "created_at": "2026-01-01T00:00:00Z"},
+        {"run_id": "run_new", "created_at": "2026-06-01T00:00:00Z"},
     ]
     rows = [
         {"inputs": '{"name": "Ada"}', "task_output": "Hello, Ada!"},
@@ -264,7 +264,7 @@ async def test_fetch_raises_when_export_url_never_ready(patch_client, monkeypatc
 
 @pytest.mark.asyncio
 async def test_fetch_raises_when_export_empty(patch_client):
-    manifests = [{"_id": "run1", "created": "2026-01-01T00:00:00Z"}]
+    manifests = [{"run_id": "run1", "created_at": "2026-01-01T00:00:00Z"}]
     patch_client(_mock_transport(manifests, []))
     with pytest.raises(ValueError, match="no rows"):
         await fetch_experiment_datapoints("key", SHEET)
