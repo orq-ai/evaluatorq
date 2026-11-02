@@ -33,6 +33,7 @@ async def evaluatorq(
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
 | `inference` | `bool` | `True` | Run the jobs; set `False` to score data that already has outputs |
+| `on_datapoint_complete` | `DataPointComplete` \| `None` | `None` | Callback run once per data point as it finishes — see [Reacting to each row as it finishes](#reacting-to-each-row-as-it-finishes) |
 
 Parameters can also be passed positionally as an `EvaluatorParams` model or a plain dict — the three forms below are equivalent:
 
@@ -356,6 +357,105 @@ async def my_job(data_point, row_index):
 Wrap only the request — holding a slot across parsing shrinks the budget without reducing load on the provider.
 
 `red_team()`, `simulate()`, `generate_and_simulate()` and `generate()` take the same argument, with the same meaning.
+
+### Reacting to each row as it finishes
+
+`on_datapoint_complete` is a callback `evaluatorq()` invokes once per data point, as soon as that row's jobs and evaluators are done. Reach for it when the run is long enough that waiting for the returned list is too late — you want each row streamed into a log, a queue, or your own UI, or you want a failing row to surface while the run is still going. Skip it when you only need the finished list; the returned results carry everything the callback sees.
+
+Running the example below with `ORQ_API_KEY` set uploads a four-row experiment named `ticket-triage` to your workspace, as any `evaluatorq()` run does. Unset the key to run it locally and upload nothing.
+
+```python
+import asyncio
+
+from evaluatorq import (
+    DataPoint,
+    DataPointComplete,
+    DataPointResult,
+    evaluatorq,
+    exact_match_evaluator,
+    job,
+)
+
+
+@job("classify")
+async def classify(data: DataPoint, _row: int) -> str:
+    ticket = data.inputs["ticket"].lower()
+    if "refund" in ticket:
+        return "billing"
+    if "broken" in ticket:
+        return "hardware"
+    raise RuntimeError("no rule matched this ticket")
+
+
+async def unavailable_row() -> DataPoint:
+    raise RuntimeError("ticket store timed out")
+
+
+def row_finished(result: DataPointResult) -> None:
+    ticket = result.data_point.inputs.get("ticket")
+    if result.error is not None:
+        print(f"row {result.data_point.inputs.get('row_index')} dropped: {result.error}")
+        return
+    for job_result in result.job_results or []:
+        if job_result.error is not None:
+            print(f"{ticket} | {job_result.job_name} failed: {job_result.error}")
+            continue
+        for score in job_result.evaluator_scores or []:
+            if score.error is not None:
+                print(f"{ticket} | {score.evaluator_name} could not score: {score.error}")
+            else:
+                print(f"{ticket} | {score.evaluator_name}={score.score.value} pass={score.score.pass_}")
+
+
+sink: DataPointComplete = row_finished
+
+
+async def main() -> None:
+    data = [
+        DataPoint(inputs={"ticket": "I want a refund"}, expected_output="billing"),
+        DataPoint(inputs={"ticket": "My device is broken"}, expected_output="hardware"),
+        DataPoint(inputs={"ticket": "Where is my order?"}, expected_output="shipping"),
+        unavailable_row(),
+    ]
+    await evaluatorq(
+        "ticket-triage",
+        data=data,
+        jobs=[classify],
+        evaluators=[exact_match_evaluator()],
+        on_datapoint_complete=sink,
+        print_results=False,
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+The callback receives the row's `DataPointResult` — the same object the returned list holds, carrying `data_point` and a `job_results` list whose entries have `job_name`, `output`, `error` and `evaluator_scores`. `DataPointComplete` is the callback's own type, exported from `evaluatorq`, which is what the example's `sink` annotation uses.
+
+Agent simulation has a hook of the same name, `SimulationHooks.on_datapoint_complete`, and it is a different thing: it fires per simulated conversation and receives a `SimulationResult`. See [Hooks receive failed evaluator outcomes](guides/agent-simulation.md#hooks-receive-failed-evaluator-outcomes) for that one.
+
+A plain `def` and an `async def` are both accepted. An awaitable return value is awaited before the row releases its slot in `datapoint_parallelism`, so a callback that blocks on a slow sink reduces how many rows can be in flight. Keep it cheap, or hand the work to a queue and return.
+
+Rows run concurrently under `datapoint_parallelism`, which is 10 unless you set it, so the callback fires in completion order, which is not row order unless that budget is 1 — the example above reports its four rows in whichever order they finish. Read `result.data_point` to tell which row arrived. The returned list stays in row order.
+
+**Three separate `error` fields decide whether a row failed, and a callback that reads fewer than all three reports a broken row as healthy.** They sit at the three levels of the result, and a failure at one leaves the other two `None`:
+
+| Field | Set when | What is left |
+|---|---|---|
+| `DataPointResult.error` | the row never reached its jobs — an awaitable datapoint that raised | `job_results` is `None`, and if the awaitable never resolved, `data_point.inputs` is a `{"row_index": N}` placeholder instead of your own keys |
+| `JobResult.error` | the job raised, or reported its own failure | that job's `output` is `None` and its evaluators are skipped, so `evaluator_scores` is empty |
+| `EvaluatorScore.error` | the job succeeded but an evaluator could not produce a verdict | the job's `output` is intact; that score's `value` is empty and its `pass_` is `None` |
+
+The last one is the quiet one: a dead judge leaves the row and the job both reporting success, so a callback that stops at `JobResult.error` sees a healthy row. [Reporting a failure the job handled](#reporting-a-failure-the-job-handled) covers the job level in more detail.
+
+In the example, `unavailable_row()` drives the first row, the `Where is my order?` ticket drives the second, and the two matched tickets come through with their `exact-match` score.
+
+**An exception from the callback aborts the whole run.** It propagates out of `evaluatorq()`, which raises instead of returning, so every row already scored is lost — including the ones the callback had accepted — and nothing is uploaded. That much holds for every data source. What differs is how the rest of the run winds down. Rows held in memory that are still in flight are cancelled and drained first. An Orq dataset streams its rows instead, and those are not cancelled: the remaining batches are still fetched, every remaining row runs and reports, and only then does the exception surface — on its own if one callback failed, or, if several did, wrapped in an internal `RuntimeError` subclass whose message lists each of them, so catch `RuntimeError` rather than matching on the class. In both cases the fix is the same: catch your own failures inside the callback and let the run finish.
+
+Only an Orq dataset (`DatasetIdInput`) streams. Its rows arrive in batches, and the callback still fires per row, when that row finishes rather than when its batch does. Every other source — inline rows, `ExperimentInput`, `TraceInput` — is resolved up front and runs from memory. Watching the batched path for yourself takes a live Orq dataset, because nothing local stands in for it.
+
+The example passes `print_results=False` so the callback's output is the only thing on screen — see [Suppressing terminal output](#suppressing-terminal-output). It does not stop the upload: a run still sends its results to Orq whenever `ORQ_API_KEY` is set.
 
 ### Organizing results on Orq
 
