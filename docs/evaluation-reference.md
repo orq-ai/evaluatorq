@@ -435,7 +435,7 @@ The callback receives the row's `DataPointResult` — the same object the return
 
 Agent simulation has a hook of the same name, `SimulationHooks.on_datapoint_complete`, and it is a different thing: it fires per simulated conversation and receives a `SimulationResult`. See [Hooks receive failed evaluator outcomes](guides/agent-simulation.md#hooks-receive-failed-evaluator-outcomes) for that one.
 
-A plain `def` and an `async def` are both accepted. An awaitable return value is awaited before the row releases its slot in `datapoint_parallelism`, so a callback that blocks on a slow sink reduces how many rows can be in flight. Keep it cheap, or hand the work to a queue and return.
+A plain `def` and an `async def` are both accepted, and the choice matters as soon as the callback does something slow. An awaitable is awaited before the row releases its slot in `datapoint_parallelism`, so an `async def` that waits on a slow sink costs that row its slot and nothing more. A plain `def` runs inline on the event loop, so a blocking call inside one stalls every other row as well: five rows at `datapoint_parallelism=5` with a 0.2 s wait in the callback spend 0.2 s on callbacks in total under `async def`, and 1.0 s under a blocking `def`. Use `async def` for anything that waits, or hand the work off and return.
 
 Rows run concurrently under `datapoint_parallelism`, which is 10 unless you set it, so the callback fires in completion order, which is not row order unless that budget is 1 — the example above reports its four rows in whichever order they finish. Read `result.data_point` to tell which row arrived. The returned list stays in row order.
 
