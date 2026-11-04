@@ -168,13 +168,10 @@ Generate the FIRST message this user would send to start the conversation.
 The message should immediately convey their goal and emotional state.
 Keep it natural - this is how they would actually open a conversation."""
 
-        messages: list[ChatCompletionMessageParam] = cast(
-            'list[ChatCompletionMessageParam]',
-            [
-                {'role': 'system', 'content': _FIRST_MESSAGE_PROMPT},
-                {'role': 'user', 'content': user_prompt},
-            ],
-        )
+        messages: list[ChatCompletionMessageParam] = [
+            {'role': 'system', 'content': _FIRST_MESSAGE_PROMPT},
+            {'role': 'user', 'content': user_prompt},
+        ]
 
         async with with_llm_span(
             model=self._model,

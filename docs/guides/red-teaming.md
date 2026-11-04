@@ -21,18 +21,49 @@ flowchart LR
 - **static** — replays a fixed dataset of known attacks instead of generating them. Deterministic, cheap, good for CI. Runs Orq's public [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities) dataset by default; pass `dataset=` to run your own. The [static dataset cookbook](../examples/redteam/02_static_dataset.md) shows the reproducible version end to end.
 - **hybrid** — static seeds plus dynamic expansion; see the [hybrid mode cookbook](../examples/redteam/03_hybrid_mode.md) when you want both known attacks and generated coverage.
 
+In dynamic and hybrid mode each attack is a conversation, not a single prompt. An attacker LLM writes the next message from the target's last reply, for up to `max_turns` turns, and stops early when it judges the objective met. That self-report never decides the outcome: the judge reads the whole transcript afterwards and returns the verdict.
+
+```mermaid
+sequenceDiagram
+    participant A as Attacker LLM
+    participant E as evaluatorq
+    participant T as Target
+    participant J as Judge
+    loop up to max_turns
+        E->>A: target's last reply
+        A-->>E: next attack message
+        E->>T: attack message
+        T-->>E: reply
+    end
+    E->>J: full transcript
+    J-->>E: RESISTANT or VULNERABLE
+```
+
 An Orq deployment (`target="deployment:<key>"`) runs in static mode only, with the default dataset or your own. Dynamic and hybrid drive a multi-turn conversational target, and no deployment target exists yet, so they refuse the combination with an error instead of attacking the wrong thing.
 
 Replay is not a separate mode. It re-runs a previous run's exact attacks against the target you give it now, so a before/after comparison changes the agent while holding the attack set fixed. See [Replay a previous run](#replay-a-previous-run).
 
-```python
-# static mode replays Orq's public attack dataset by default
-report = await red_team(target=target, mode="static")
+=== "CLI"
 
-# ...or bring your own — a local JSON file or a HuggingFace repo
-report = await red_team(target=target, mode="static", dataset="./my_attacks.json")
-report = await red_team(target=target, mode="static", dataset="hf:my-org/my-attacks")
-```
+    ```bash
+    # static mode replays Orq's public attack dataset by default
+    eq redteam run --target agent:my-agent --mode static --yes
+
+    # ...or bring your own — a local JSON file or a HuggingFace repo
+    eq redteam run --target agent:my-agent --mode static --dataset ./my_attacks.json --yes
+    eq redteam run --target agent:my-agent --mode static --dataset hf:my-org/my-attacks --yes
+    ```
+
+=== "Python"
+
+    ```python
+    # static mode replays Orq's public attack dataset by default
+    report = await red_team(target="agent:my-agent", mode="static")
+
+    # ...or bring your own — a local JSON file or a HuggingFace repo
+    report = await red_team(target="agent:my-agent", mode="static", dataset="./my_attacks.json")
+    report = await red_team(target="agent:my-agent", mode="static", dataset="hf:my-org/my-attacks")
+    ```
 
 ## Seed a dynamic attack from a trace
 
@@ -97,23 +128,51 @@ The [deliberately vulnerable support agent](https://github.com/orq-ai/evaluatorq
 
 ### Fastest first run
 
-If you prefer the CLI, start with a small static run against a test agent. Static mode uses the built-in attack dataset, so it is a predictable way to verify your setup before exploring dynamic or hybrid runs.
+Start with a small static run against a test agent. Static mode uses the built-in attack dataset, so it is a predictable way to verify your setup before exploring dynamic or hybrid runs.
 
 ```bash
 export ORQ_API_KEY=...
 uv add "evaluatorq[redteam]"
-eq redteam run \
-  --target agent:your-agent-key \
-  --mode static \
-  --category LLM01 \
-  --max-static-datapoints 5 \
-  --no-executive-summary \
-  --no-recommendations \
-  --report redteam-report.json \
-  --yes
 ```
 
-The command writes a JSON report and exits non-zero if no attacks receive a verdict or evaluation coverage falls below the configured floor. See the [CLI reference](../cli-reference/redteam.md) for the other output formats and run options.
+=== "CLI"
+
+    ```bash
+    eq redteam run \
+      --target agent:my-agent \
+      --mode static \
+      --category LLM01 \
+      --max-static-datapoints 5 \
+      --no-executive-summary \
+      --no-recommendations \
+      --report redteam-report.json \
+      --yes
+    ```
+
+=== "Python"
+
+    ```python
+    import asyncio
+
+    from evaluatorq.redteam import red_team
+
+
+    async def main():
+        report = await red_team(
+            target="agent:my-agent",
+            mode="static",
+            categories=["LLM01"],
+            max_static_datapoints=5,
+            generate_executive_summary=False,
+            recommendations=False,
+        )
+        print(report.summary.resistance_rate)
+
+
+    asyncio.run(main())
+    ```
+
+The CLI command writes a JSON report and exits non-zero if no attacks receive a verdict or evaluation coverage falls below the configured floor. In Python, check `report.summary` yourself. See the [CLI reference](../cli-reference/redteam.md) for the other output formats and run options.
 
 ### Choose a cookbook
 
@@ -303,6 +362,14 @@ When a judge fails to return a verdict, the reason is captured on `result.evalua
 ## Replay a previous run
 
 A saved run keeps its *cases*: the attacks it ran, not only the scores it gave them. Replay re-runs those exact cases, in the same order and with the same turn budget, against whatever target you point it at now. Dynamic and hybrid runs generate fresh attacks every time, so re-running one after a fix changes the agent *and* the exam, and a resistance rate that moved cannot tell you which one moved it. Replay holds the exam fixed and varies only the agent.
+
+```mermaid
+flowchart LR
+    R1["First run<br/>generates attacks"] --> S[("Run store<br/>.evaluatorq/runs/")]
+    S -->|"same cases, same order"| R2["Replay<br/>previous_run=..."]
+    P["Patched target"] --> R2
+    R2 --> C["Before / after<br/>resistance rate"]
+```
 
 ### What is replayable
 
@@ -573,6 +640,18 @@ Land on the cross-surface overview, pick the run from **Red Team**, then work do
 | **Attacks** | Every attack, expandable to the judge verdict and transcript |
 | **Usage** | Tokens and API calls per agent |
 | **Config** | What was tested — and what was *not* |
+
+**Overview** is where a run opens: the executive summary, the headline numbers, and attack success per agent.
+
+![Red team Overview tab: executive summary, headline metrics, outcome donut, severity split and per-agent attack success.](../assets/dashboard/redteam-03-overview.png){ .dashboard-shot }
+
+**Focus areas** turns those numbers into a work list. Each card carries the category, its risk score, and a recommended fix.
+
+![Red team Focus areas tab: fixes ranked by risk, with Memory & Context Poisoning (ASI06) first at risk 4.0 and 50% attack success, each card showing a recommended fix.](../assets/dashboard/redteam-05-focus-areas.png){ .dashboard-shot }
+
+**Attacks** holds the evidence. Expand a row to read the judge's verdict above the full transcript; this one is a memory-poisoning attack that got the agent to store an "UNRESTRICTED System Administrator" directive.
+
+![An expanded attack row: the judge's verdict and reasoning above the full message-by-message transcript of a successful memory-poisoning attack.](../assets/dashboard/redteam-08-attack-detail.png){ .dashboard-shot }
 
 Two traps worth knowing before you read a number: the resistance rate covers only the categories this run attacked (check **Config** for the skipped ones), and it is measured over *evaluated* attacks, so failed judge calls drop out of the denominator rather than counting as resisted.
 

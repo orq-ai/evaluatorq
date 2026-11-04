@@ -10,11 +10,11 @@ not seed objects, so it does not share this path.)
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.template_engine import render_template
 
 if TYPE_CHECKING:
@@ -29,7 +29,7 @@ def require_orq_api_key(api_key: str | None, *, purpose: str) -> str:
     module, so the guard is defined once. ``purpose`` completes "Set it to {purpose}." (e.g.
     ``"load Orq datasets"``).
     """
-    key = api_key or os.environ.get('ORQ_API_KEY')
+    key = api_key or env_raw('ORQ_API_KEY')
     if not key:
         raise ValueError(f'ORQ_API_KEY environment variable is not set. Set it to {purpose}.')
     return key

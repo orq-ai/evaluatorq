@@ -10,10 +10,10 @@ UUID-shaped ``workspace_id``: ``{base}/{workspace_key}/{entity}/{id}``.
 
 from __future__ import annotations
 
-import os
-from urllib.parse import urlparse
 from uuid import UUID
 
+from evaluatorq.common.env_config import env_raw
+from evaluatorq.common.reports.html_helpers import parse_http_url
 from evaluatorq.dashboard.orq_workspace import resolve_base_url
 
 _ENTITY = {'agent': 'agents', 'deployment': 'deployments'}
@@ -45,8 +45,8 @@ def parse_experiment_url(url: str | None) -> tuple[str | None, str | None]:
     """
     if not url:
         return None, None
-    parsed = urlparse(url)
-    if not parsed.scheme or not parsed.netloc:
+    parsed = parse_http_url(url)
+    if parsed is None:
         return None, None
     segments = [s for s in parsed.path.split('/') if s]
     # Expect /{workspace}/experiments/{id}
@@ -62,7 +62,7 @@ def studio_workspace_key(fallback: str | None = None) -> str | None:
     ``fallback`` (the entity's own workspace slug). UUID workspace IDs are never
     accepted as route slugs.
     """
-    env = os.getenv('ORQ_WORKSPACE')
+    env = env_raw('ORQ_WORKSPACE')
     if is_studio_workspace_key(env):
         return env
     return fallback if is_studio_workspace_key(fallback) else None
@@ -92,5 +92,7 @@ def orq_studio_url(
         workspace_key = studio_workspace_key(workspace_id)
         host = base_url or resolve_base_url()
     if not workspace_key or not host:
+        return None
+    if parse_http_url(host) is None:
         return None
     return f'{host.rstrip("/")}/{workspace_key}/{entity}/{entity_id}'

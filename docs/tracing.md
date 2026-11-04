@@ -442,12 +442,27 @@ Separate root invocations receive separate ids: two calls to `simulate()`, `gene
 
 In Orq's trace UI, filter spans/traces on the `evaluatorq_run_id` request-metadata value (copy it from the `orq.evaluatorq_run_id` attribute on the run's root span, or from your own logs/hooks that captured the run id) to see every model call — target, judge, user-simulator, attacker, evaluator, generation — that belongs to one `red_team()` or `simulate()`/`generate_and_simulate()`/`generate()` invocation, including calls made through the nested `evaluatorq()` run. Add `evaluatorq_pipeline` to the filter to scope further to just red-team or just simulation traffic.
 
+## Job and evaluator payloads
+
+Job spans capture the datapoint, including its inputs and expected output, in `gen_ai.input` and the returned job output in `gen_ai.output`. Objects and message lists remain structured JSON; scalar and empty job outputs are wrapped as `{"value": ...}` in the trace so the generic panel can display them. A job that returns an error keeps its returned output; a job that raises keeps its input and error status.
+
+Evaluator spans capture the scorer arguments (`data`, `output`, and `row` when available) in `orq.evaluation.input`. The `orq.evaluation.output` verdict contains `value`, `passed`, `type`, optional `reason`, and optional `raw_output` for detailed results such as simulation criterion audits. A scorer that raises records an error instead of a verdict and retains its input. Python scorers default to the `python_eval` evaluator kind; an explicit `evaluator_type`, such as `llm_eval`, takes precedence.
+
+These field names match Orq's separate job and evaluator panels. Sending only `gen_ai.input/output` on an evaluator span does not populate its dedicated Input and Output panels. Payloads are stored with the trace detail, so retrieve the hydrated span when diagnosing a missing panel:
+
+```bash
+orq traces get-span "$TRACE_ID" "$SPAN_ID" \
+    --workspace "$WORKSPACE" --project "$PROJECT" -o json
+```
+
+Set the four shell variables to the trace, span, workspace and project you want to inspect. New payload capture applies to new runs; it cannot restore content that an older run never emitted. Serialization failures log a warning and leave the job result unchanged.
+
 ## Content capture and truncation
 
 Two env vars control how much text is stored on spans:
 
-- **`EVALUATORQ_CAPTURE_MESSAGE_CONTENT`** (default `true`): set to `false` or `0` to keep LLM message content out of traces entirely. Token counts and model name are still recorded.
-- **`EVALUATORQ_SPAN_MAX_TEXT_CHARS`** (default: no limit): set to a positive integer to truncate span text attributes. Truncated strings end with `... [truncated]`.
+- **`EVALUATORQ_CAPTURE_MESSAGE_CONTENT`** (default `true`): set to `false` or `0` to suppress LLM message content, job input/output, and evaluator input/output payloads. Scalar score, pass/fail, and explanation attributes remain available. Token counts and model name are still recorded.
+- **`EVALUATORQ_SPAN_MAX_TEXT_CHARS`** (default: no limit): set to a positive integer to truncate span text attributes. Truncated strings end with `... [truncated]` when the limit can fit the marker. In structured job and evaluator payloads, the limit applies to each string value before JSON encoding, preserving valid JSON and numeric or boolean values; it is not a total JSON byte limit.
 
 ## W3C trace context propagation
 

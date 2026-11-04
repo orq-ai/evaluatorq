@@ -15,6 +15,7 @@ from evaluatorq.insights.models import (
     InsightsPopulation,
     InsightsRun,
     LabelAnswer,
+    LabelResult,
     LabelSpec,
     PriorityPoint,
     TraceInsight,
@@ -22,6 +23,31 @@ from evaluatorq.insights.models import (
     real_assistant_errors,
 )
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
+
+
+def test_label_result_counts_warning_is_limited_to_legacy_failure_taxonomy() -> None:
+    from evaluatorq.insights.presets import FAILURE_TAXONOMY
+
+    assert isinstance(FAILURE_TAXONOMY.criteria, dict)
+    legacy_criteria = FAILURE_TAXONOMY.criteria.copy()
+    legacy_criteria.pop('No failure')
+    legacy = FAILURE_TAXONOMY.model_copy(update={'criteria': legacy_criteria})
+    unrelated = LabelSpec(name='other_choice', kind='choice', instructions='Choose.', criteria={'yes': None})
+    revised = FAILURE_TAXONOMY.model_copy(update={'criteria': legacy_criteria | {'No failure': None}})
+    revised_failure_only = LabelResult(
+        spec=revised, counts={'Hallucination': 2}, mean_confidence=None, n_low_confidence=0, n_failed=0
+    )
+
+    def result(spec: LabelSpec) -> LabelResult:
+        return LabelResult(spec=spec, counts={}, mean_confidence=None, n_low_confidence=0, n_failed=0)
+
+    assert 'may include clean traces' in (result(legacy).counts_warning or '')
+    assert result(unrelated).counts_warning is None
+    assert revised_failure_only.counts_warning is None
+    assert result(legacy.model_copy(update={'criteria': None})).counts_warning
+    assert result(legacy.model_copy(update={'criteria': ['Hallucination']})).counts_warning
+    non_choice = legacy.model_copy(update={'kind': 'noul'})
+    assert result(non_choice).counts_warning is None
 
 
 def test_finder_export_and_query_are_exclusive() -> None:

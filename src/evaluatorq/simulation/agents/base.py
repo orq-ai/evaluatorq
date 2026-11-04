@@ -7,12 +7,11 @@ including LLM interaction with retry logic.
 from __future__ import annotations
 
 import logging
-import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from evaluatorq.common.env_config import env_float, env_int
+from evaluatorq.common.env_config import env_float, env_int, env_raw
 from evaluatorq.common.llm_call import (
     execute_chat_completion,
     execute_response,
@@ -30,7 +29,6 @@ from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_input
 from evaluatorq.contracts import (
-    DEFAULT_TARGET_MAX_TOKENS,
     AgentResponse,
     FunctionCall,
     LLMCallConfig,
@@ -44,9 +42,8 @@ from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.tracing import span_message_text, with_llm_span
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from openai import AsyncOpenAI
+    from pydantic import BaseModel
 
     from evaluatorq.simulation.contracts import Message
 
@@ -62,7 +59,7 @@ def _default_timeout_s() -> float:
     tailscale box under parallel load) can exceed the default; raise via
     EVALUATORQ_LLM_TIMEOUT_S, or per-agent via ``LLMCallConfig.timeout_ms``.
     """
-    return env_float('EVALUATORQ_LLM_TIMEOUT_S', 60.0, min_value=1.0)
+    return env_float('EVALUATORQ_LLM_TIMEOUT_S')
 
 
 def _default_max_tokens() -> int:
@@ -73,7 +70,7 @@ def _default_max_tokens() -> int:
     as "no text and no tool calls". Raise via EVALUATORQ_LLM_MAX_TOKENS, or
     per-agent via ``LLMCallConfig.max_tokens``.
     """
-    return env_int('EVALUATORQ_LLM_MAX_TOKENS', DEFAULT_TARGET_MAX_TOKENS, min_value=1)
+    return env_int('EVALUATORQ_LLM_MAX_TOKENS')
 
 
 def _default_reasoning_effort() -> str | None:
@@ -95,7 +92,7 @@ def _default_reasoning_effort() -> str | None:
     a `BaseAgent`'s config leaves it unset, that one via an explicit
     ``reasoning_effort=`` threaded into the target's backend construction.
     """
-    raw = os.environ.get('EVALUATORQ_REASONING_EFFORT', '').strip().lower()
+    raw = env_raw('EVALUATORQ_REASONING_EFFORT', '').strip().lower()
     return raw if raw not in ('', 'none', 'off') else None
 
 
@@ -111,99 +108,6 @@ class LLMResult:
     content: str
     tool_calls: list[Any] | None = None
     refusal: str | None = None
-
-
-# A field missing here is dropped from the request, without a word, on the legacy `AgentConfig` path.
-_MIRRORED_FIELDS: tuple[str, ...] = (
-    'api',
-    'temperature',
-    'max_tokens',
-    'timeout_ms',
-    'extra_kwargs',
-    'extra_body',
-    'reasoning_effort',
-    'retry_count',
-)
-
-
-@dataclass
-class AgentConfig:
-    """Configuration options for constructing an agent.
-
-    Deprecated: use `evaluatorq.contracts.LLMCallConfig` instead. `AgentConfig`
-    is kept for backwards compatibility and will be removed in a future release.
-
-    Every field except ``client``, ``api_key`` and ``api`` defaults
-    to ``None`` here (not `LLMCallConfig`'s own defaults): ``None`` means
-    "caller didn't touch this", so `_config_from_agent_config` omits it from
-    the constructed `LLMCallConfig`, letting the per-call-site literal / env
-    fallback apply — exactly as if this legacy class had never been in the
-    way. A ``model`` left at ``None`` lets the agent pick its model role.
-    """
-
-    model: str | None = None
-    client: AsyncOpenAI | None = None
-    api_key: str | None = None
-    api: Literal['chat_completions', 'responses'] = 'chat_completions'
-    temperature: float | None = None
-    max_tokens: int | None = None
-    timeout_ms: int | None = None
-    extra_kwargs: dict[str, Any] | None = None
-    extra_body: dict[str, Any] | None = None
-    reasoning_effort: str | None = None
-    retry_count: int | None = None
-
-
-def _mirror_gaps(config_fields: Iterable[str], agent_fields: Iterable[str]) -> tuple[set[str], set[str]]:
-    """What the hand-maintained `_MIRRORED_FIELDS` mirror is missing, in both directions.
-
-    Returns the `LLMCallConfig` fields nothing mirrors, and the mirrored names
-    `AgentConfig` has no attribute for. ``model`` and ``client`` are excluded
-    because `_config_from_agent_config` passes those outside the loop.
-    """
-    return (
-        set(config_fields) - set(_MIRRORED_FIELDS) - {'model', 'client'},
-        set(_MIRRORED_FIELDS) - set(agent_fields),
-    )
-
-
-# Checked at import time, like the vulnerability registry: a field forgotten here vanishes from the request in silence.
-_unmirrored, _unbacked = _mirror_gaps(LLMCallConfig.model_fields, {f.name for f in fields(AgentConfig)})
-if _unmirrored:
-    raise RuntimeError(
-        f'LLMCallConfig fields missing from _MIRRORED_FIELDS: {sorted(_unmirrored)}. Add each one there, and to '
-        'AgentConfig, or the legacy AgentConfig path drops it from the request in silence.'
-    )
-if _unbacked:
-    raise RuntimeError(f'_MIRRORED_FIELDS names fields AgentConfig does not have: {sorted(_unbacked)}.')
-
-
-def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, str | None]:
-    """Convert a legacy AgentConfig into a LLMCallConfig + optional api_key.
-
-    Only fields the caller actually set on ``agent_cfg`` (non-``None``) are
-    passed through to the `LLMCallConfig` constructor, so
-    `LLMCallConfig.model_fields_set` accurately reflects caller intent for the
-    resolvers in `BaseAgent` (``_resolved_temperature`` etc.) — a field left at
-    its `AgentConfig` default of ``None`` must NOT shadow the per-call-site
-    literal / env fallback with `LLMCallConfig`'s own field default.
-
-    ``api`` is the one deliberate exception: it always lands in
-    ``model_fields_set`` so that the legacy path stays pinned to
-    ``chat_completions`` against `BaseAgent.DEFAULT_API`, regardless of
-    whether the caller touched it. ``model`` follows the ``None`` rule, so an
-    unset one leaves the agent to resolve its model role.
-    """
-    kwargs: dict[str, Any] = {'api': agent_cfg.api}
-    if agent_cfg.model is not None:
-        kwargs['model'] = agent_cfg.model
-    if agent_cfg.client is not None:
-        kwargs['client'] = agent_cfg.client
-    for field in _MIRRORED_FIELDS:
-        value = getattr(agent_cfg, field)
-        if field != 'api' and value is not None:
-            kwargs[field] = value
-    return LLMCallConfig(**kwargs), agent_cfg.api_key
 
 
 class BaseAgent(UsageTracking, ABC):
@@ -230,14 +134,10 @@ class BaseAgent(UsageTracking, ABC):
     # its model from when the config does not set one explicitly.
     MODEL_TASK: ClassVar[str] = 'sim.user'
 
-    def __init__(self, config: LLMCallConfig | AgentConfig | None = None) -> None:
+    def __init__(self, config: LLMCallConfig | None = None) -> None:
         # Deferred: `_config` imports the reports layer, which imports this module.
         from evaluatorq.simulation._config import sim_role_config
 
-        # Normalise legacy AgentConfig into LLMCallConfig
-        extra_api_key: str | None = None
-        if isinstance(config, AgentConfig):
-            config, extra_api_key = _config_from_agent_config(config)
         self.config = sim_role_config(config, self.MODEL_TASK)
         if self.REQUIRED_API is not None:
             if 'api' in self.config.model_fields_set and self.config.api != self.REQUIRED_API:
@@ -252,7 +152,7 @@ class BaseAgent(UsageTracking, ABC):
             self.config = self.config.model_copy(update={'api': self.DEFAULT_API})
 
         self._client_owned: bool
-        self._client: AsyncOpenAI = self._build_client(extra_api_key)
+        self._client: AsyncOpenAI = self._build_client()
         self._model = self.config.model
         self.reset_usage()
 
@@ -315,18 +215,16 @@ class BaseAgent(UsageTracking, ABC):
     # Protected helpers
     # ---------------------------------------------------------------------------
 
-    def _build_client(self, api_key: str | None = None) -> AsyncOpenAI:
+    def _build_client(self) -> AsyncOpenAI:
         """Construct (or reuse) an ``AsyncOpenAI`` client from ``self.config``.
 
         Delegates to `evaluatorq.openresponses.client.build_simulation_client`.
 
         Resolution order:
         1. ``self.config.client`` — injected client, used as-is (not owned).
-        2. ``api_key`` argument (extracted from legacy ``AgentConfig.api_key``),
-           treated as an ORQ key and routed through the Orq router.
-        3. ``ORQ_API_KEY`` env var — routes through
+        2. ``ORQ_API_KEY`` env var — routes through
            ``ORQ_BASE_URL/v3/router`` (default: ``https://my.orq.ai/v3/router``).
-        4. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
+        3. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
            traffic goes to OpenAI directly, not to the Orq router.
 
         Retry owner: ``with_retry`` in ``_call_chat_completions`` / ``_call_responses``,
@@ -335,7 +233,6 @@ class BaseAgent(UsageTracking, ABC):
         """
         client, owned = build_simulation_client(
             self.config.client,
-            extra_api_key=api_key,
             max_retries=0,
         )
         self._client_owned = owned
@@ -402,11 +299,8 @@ class BaseAgent(UsageTracking, ABC):
         env fallback on purpose — else the call-time-resolved env fallback
         (`_default_reasoning_effort`, EVALUATORQ_REASONING_EFFORT).
 
-        The explicit-``None`` opt-out is reachable only by passing an
-        ``LLMCallConfig`` directly. `_config_from_agent_config` forwards only
-        non-``None`` fields, so on the legacy `AgentConfig` path
-        ``reasoning_effort=None`` is indistinguishable from unset and the env
-        fallback still applies.
+        Pass ``reasoning_effort=None`` explicitly to opt out of the env
+        fallback.
         """
         if 'reasoning_effort' in self.config.model_fields_set:
             return self.config.reasoning_effort
@@ -422,6 +316,7 @@ class BaseAgent(UsageTracking, ABC):
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
         volatile_tail: int = 0,
+        response_format: type[BaseModel] | None = None,
     ) -> LLMResult:
         """Call the LLM with retry logic, dispatching to chat or responses API.
 
@@ -434,8 +329,17 @@ class BaseAgent(UsageTracking, ABC):
         breakpoint off them on both paths — see `common.prompt_cache`:
         `apply_cache_breakpoints` on the chat path, `mark_responses_input` on the
         Responses path (which is the judge's default).
+
+        ``response_format`` asks for a reply that is a JSON object matching that
+        model, as a strict ``text.format`` schema on the Responses API. The reply
+        comes back as text in ``LLMResult.content``; validating it is the caller's
+        job. The chat path has no caller for it and refuses rather than guessing.
         """
         messages = drop_unreplayable_tool_records(messages, incomplete_as_text=True)
+        if response_format is not None and self.config.api != 'responses':
+            raise ValueError(
+                f'{self.name}: response_format is only supported on the Responses API (config.api={self.config.api!r})'
+            )
         if self.config.api == 'responses':
             return await self._call_responses(
                 messages,
@@ -445,6 +349,7 @@ class BaseAgent(UsageTracking, ABC):
                 tools=tools,
                 llm_purpose=llm_purpose,
                 volatile_tail=volatile_tail,
+                response_format=response_format,
             )
         return await self._call_chat_completions(
             messages,
@@ -570,6 +475,7 @@ class BaseAgent(UsageTracking, ABC):
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
         volatile_tail: int = 0,
+        response_format: type[BaseModel] | None = None,
     ) -> LLMResult:
         """Call the LLM via the OpenAI Responses API with retry logic.
 
@@ -648,6 +554,7 @@ class BaseAgent(UsageTracking, ABC):
                     reasoning_effort=reasoning_effort,
                     instructions=self.system_prompt,
                     tools=[_responses_tool_schema(tool) for tool in tools] if tools else None,
+                    response_text_format=response_format,
                     record_input=False,
                     extra_body=extra_body or None,
                     extra_kwargs=self.config.extra_kwargs or None,

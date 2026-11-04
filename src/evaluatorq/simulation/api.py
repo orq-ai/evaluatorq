@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import os
 import sys
 import uuid
 from copy import deepcopy
@@ -20,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
+from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.llm_limit import active_llm_parallelism, llm_concurrency_limit
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM, resolve_datapoint_parallelism
@@ -2258,7 +2258,7 @@ def _resolve_target(
 
 
 def _require_orq_api_key(caller: str) -> str:
-    api_key = os.environ.get('ORQ_API_KEY')
+    api_key = env_raw('ORQ_API_KEY')
     if not api_key:
         raise ValueError(f'ORQ_API_KEY environment variable is not set. Set it before calling {caller}().')
     return api_key
@@ -2706,9 +2706,9 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
 
     This is the machine-readable half of what `_sim_evaluation_details` renders as prose: it lands on
     ``EvaluationResult.raw_output``, so anything reading the live score object gets JSON rather than a
-    joined string it would have to re-parse. Like the red-team path's use of the same field, it stays
-    local — `evaluatorq.send_results` strips ``raw_output`` at the upload boundary, and the evaluator
-    span carries only value, explanation and pass.
+    joined string it would have to re-parse. `evaluatorq.send_results` strips ``raw_output`` at the
+    experiment upload boundary. The evaluator trace's Output panel includes it when span content
+    capture is enabled.
 
     ``criteria_met`` returns its per-criterion `CriteriaMeta` records — dumped in JSON mode — with an
     ``audited`` label. The run-level ``criteria_verified`` and ``unverified_reason`` fields explain

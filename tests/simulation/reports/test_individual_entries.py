@@ -40,6 +40,7 @@ EXPECTED_KEY_ORDER = [
     'transcript',
     'thread_id',
     'last_trace_id',
+    'goal',
 ]
 
 EXPECTED_CRITERIA_KEY_ORDER = ['id', 'description', 'type', 'passed', 'safety', 'audited', 'evidence', 'state']

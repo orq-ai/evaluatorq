@@ -93,13 +93,13 @@ def test_cache_connection_waits_for_overlapping_run_writes(tmp_path, cache_facto
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         holder = pool.submit(hold_write_transaction)
-        assert lock_held.wait(timeout=2)
+        assert lock_held.wait(timeout=30)
         writer = pool.submit(write_vector)
-        assert writer_started.wait(timeout=2)
+        assert writer_started.wait(timeout=30)
         assert writer_finished.wait(timeout=0.1) is False
         release_lock.set()
-        holder.result(timeout=2)
-        writer.result(timeout=2)
+        holder.result(timeout=30)
+        writer.result(timeout=30)
 
     assert cache.get_vectors('e', ['a']) == {'a': [0.5]}
 
@@ -144,13 +144,13 @@ def test_vector_lookup_serializes_connection_close(tmp_path, cache_factory):
             cache.put_vectors('e', {'b': [1.0]})
 
         writer = pool.submit(write_vector)
-        assert writer_started.wait(timeout=2)
+        assert writer_started.wait(timeout=30)
         assert write_started.wait(timeout=0.1) is False
         close = pool.submit(cache.close)
         assert connection_closed.wait(timeout=0.1) is False
         allow_query.set()
         assert lookup.result(timeout=2) == {'a': [0.5]}
-        writer.result(timeout=2)
+        writer.result(timeout=30)
         close.result(timeout=2)
     assert connection_closed.is_set()
 

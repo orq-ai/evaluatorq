@@ -16,7 +16,7 @@ from evaluatorq import cli as cli_root
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.insights import cli as cli_module
 from evaluatorq.insights.models import LabelResult, LabelSpec
-from evaluatorq.insights.presets import CONCERNING, USER_FRUSTRATION
+from evaluatorq.insights.presets import CONCERNING, FAILURE_TAXONOMY, USER_FRUSTRATION
 from evaluatorq.trace_finder.export import (
     ExportCounts,
     ExportFilters,
@@ -79,6 +79,32 @@ def test_score_preset_display_does_not_repeat_level_index(minimal_run: Any, caps
     description = spec.criteria[0].split(':', 1)[0].removeprefix('0 ')
     assert f'0 · {description}' in output
     assert '0 · 0 ' not in output
+
+
+def test_print_run_shows_legacy_failure_taxonomy_counts_warning(minimal_run: Any, capsys: pytest.CaptureFixture[str]) -> None:
+    assert isinstance(FAILURE_TAXONOMY.criteria, dict)
+    criteria = FAILURE_TAXONOMY.criteria.copy()
+    criteria.pop('No failure')
+    legacy = FAILURE_TAXONOMY.model_copy(update={'criteria': criteria})
+    result = LabelResult(
+        spec=legacy, counts={'Hallucination': 2}, mean_confidence=None, n_low_confidence=0, n_failed=0
+    )
+    run = minimal_run.model_copy(update={'labels': {'failure_taxonomy': result}})
+
+    cli_module._print_run(run, None)
+
+    output = unstyle(capsys.readouterr().out)
+    assert 'Hallucination' in output
+    assert output.index('Hallucination') < output.index('This failure taxonomy did not offer')
+
+
+def test_print_run_omits_revised_failure_taxonomy_counts_warning(minimal_run: Any, capsys: pytest.CaptureFixture[str]) -> None:
+    result = LabelResult(
+        spec=FAILURE_TAXONOMY, counts={'No failure': 2}, mean_confidence=None, n_low_confidence=0, n_failed=0
+    )
+    cli_module._print_run(minimal_run.model_copy(update={'labels': {'failure_taxonomy': result}}), None)
+
+    assert 'This failure taxonomy did not offer' not in unstyle(capsys.readouterr().out)
 
 
 @pytest.mark.parametrize(

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from collections import defaultdict, deque
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
@@ -12,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 import httpx
 from loguru import logger
 
+from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.messages import content_part_text
 from evaluatorq.common.orq_client import orq_server_url
 from evaluatorq.common.retry import with_retry
@@ -38,7 +38,7 @@ def _mapping(value: Any) -> dict[str, Any]:
 
 
 def _resolve_orq_credentials(api_key: str | None, base_url: str | None) -> tuple[str, str]:
-    key = api_key or os.environ.get('ORQ_API_KEY')
+    key = api_key or env_raw('ORQ_API_KEY')
     if not key:
         raise ValueError('Missing Orq API key: set ORQ_API_KEY or pass api_key=.')
     # orq_server_url() is the single host resolver; re-deriving it here is how self-hosted deployments got ignored.

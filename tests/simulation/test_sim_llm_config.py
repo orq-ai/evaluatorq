@@ -17,7 +17,6 @@ import pytest
 from evaluatorq.common.structured_output import UNSET
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation._config import resolve_sim_llm_config
-from evaluatorq.simulation.agents.base import AgentConfig, _config_from_agent_config
 from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
 from evaluatorq.simulation.generators import (
@@ -62,38 +61,6 @@ def test_no_warning_when_the_model_argument_is_untouched(caplog: pytest.LogCaptu
     assert caplog.text == ''
 
 
-def test_legacy_agent_config_round_trips_into_a_call_config() -> None:
-    """`AgentConfig` is deprecated but still accepted; only fields the caller set
-    on it may reach the `LLMCallConfig`, or its `None` defaults would shadow the
-    per-call-site literals."""
-    from evaluatorq.simulation.agents.base import _config_from_agent_config
-
-    back, _api_key = _config_from_agent_config(
-        AgentConfig(model='openai/gpt-4o', temperature=0.25, reasoning_effort='high')
-    )
-    assert back.model_fields_set == {'model', 'api', 'temperature', 'reasoning_effort'}
-    assert back.temperature == 0.25
-    assert back.reasoning_effort == 'high'
-    assert back.max_tokens not in back.model_fields_set
-    assert 'client' not in back.model_fields_set
-
-
-def test_legacy_agent_config_only_marks_client_set_when_caller_supplied_one() -> None:
-    """A legacy `AgentConfig` left at its `client=None` default must not mark
-    `client` as caller-set on the resulting `LLMCallConfig`, or it would shadow
-    the per-call-site client resolution the same way a stray `None` does for
-    every other mirrored field."""
-    from evaluatorq.simulation.agents.base import _config_from_agent_config
-
-    without_client, _ = _config_from_agent_config(AgentConfig(model='openai/gpt-4o'))
-    assert 'client' not in without_client.model_fields_set
-
-    injected_client = MagicMock()
-    with_client, _ = _config_from_agent_config(AgentConfig(model='openai/gpt-4o', client=injected_client))
-    assert 'client' in with_client.model_fields_set
-    assert with_client.client is injected_client
-
-
 def test_agents_default_to_the_responses_api_on_a_bare_call_config() -> None:
     """`LLMCallConfig` defaults to chat_completions, which rejects function tools
     plus reasoning_effort together with a 400 on the judge's models."""
@@ -102,18 +69,6 @@ def test_agents_default_to_the_responses_api_on_a_bare_call_config() -> None:
     assert UserSimulatorAgent(cfg).config.api == 'responses'
     # The user simulator sends a plain completion, so it honours either endpoint.
     assert UserSimulatorAgent(cfg.model_copy(update={'api': 'chat_completions'})).config.api == 'chat_completions'
-
-
-def test_the_legacy_config_classes_default_to_the_same_endpoint() -> None:
-    """They set `api` themselves, because `_config_from_agent_config` always writes
-    it and so `BaseAgent.DEFAULT_API` never reaches them — a second literal there
-    would drift the deprecated path off the endpoint the agents actually speak."""
-    from evaluatorq.simulation.agents.base import BaseAgent
-    from evaluatorq.simulation.agents.judge import JudgeAgentConfig
-    from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgentConfig
-
-    assert JudgeAgentConfig().api == BaseAgent.DEFAULT_API
-    assert UserSimulatorAgentConfig().api == BaseAgent.DEFAULT_API
 
 
 def test_runner_builds_its_agents_from_the_config() -> None:
@@ -373,9 +328,8 @@ def test_a_matching_model_argument_and_config_model_do_not_warn(caplog: pytest.L
 
 
 def test_the_runner_config_reaches_both_agents_intact() -> None:
-    """The runner hands its `LLMCallConfig` to each agent whole. An explicitly set
-    `temperature=None` — "send no temperature" — is the case a detour through the
-    legacy `AgentConfig` loses, because that class spells unset as `None` too."""
+    """The runner hands each agent's `LLMCallConfig` through intact, including an
+    explicit `temperature=None` that opts out of sending the parameter."""
     cfg = LLMCallConfig(model='chosen/model', temperature=None, reasoning_effort='high', client=MagicMock())
     sim = UserSimulatorAgent(cfg, system_prompt='be brief')
     judge = JudgeAgent(cfg, goal='g', criteria=[], ground_truth='')
@@ -434,15 +388,6 @@ def test_config_timeout_reaches_generate_structured_in_seconds() -> None:
         timeout_s=UNSET,
     )
     assert settings.timeout_s == 1.5
-
-
-def test_a_field_set_to_a_falsy_value_survives_the_agent_round_trip() -> None:
-    """`temperature=0.0` is the case that separates `model_fields_set` keying from
-    a truthiness or `is not None` check — every other test here uses 0.25."""
-    agent_cfg = AgentConfig(model='m', temperature=0.0)
-    back, _api_key = _config_from_agent_config(agent_cfg)
-    assert back.temperature == 0.0
-    assert 'temperature' in back.model_fields_set
 
 
 def test_runner_uses_the_config_client_without_env_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -556,19 +501,6 @@ def test_a_config_field_no_keyword_beats_is_not_reported_as_dropped(
         )
     assert settings.temperature == 0.9
     assert 'ignores llm_config' not in caplog.text
-
-
-def test_the_agent_config_mirror_is_checked_against_llm_call_config() -> None:
-    """A field added to `LLMCallConfig` and not mirrored is dropped from the legacy
-    `AgentConfig` path in silence — which is what happened to `extra_body`. The mirror
-    is verified at import time; this is the same check with a field the mirror lacks."""
-    from dataclasses import fields as dataclass_fields
-
-    from evaluatorq.simulation.agents.base import _mirror_gaps
-
-    agent_fields = {f.name for f in dataclass_fields(AgentConfig)}
-    assert _mirror_gaps(LLMCallConfig.model_fields, agent_fields) == (set(), set())
-    assert _mirror_gaps([*LLMCallConfig.model_fields, 'new_knob'], agent_fields)[0] == {'new_knob'}
 
 
 @pytest.mark.asyncio
@@ -762,18 +694,6 @@ async def test_the_executive_summary_resolver_is_given_the_config_client(monkeyp
     )
     assert seen['client'] is mine
     assert seen['llm_client'] is mine
-
-
-def test_the_legacy_config_classes_still_carry_their_prompt_data() -> None:
-    """The keyword arguments are the new shape; the config attributes are what every
-    existing caller still passes. An inverted precedence judges against an empty goal."""
-    from evaluatorq.simulation.agents.judge import JudgeAgentConfig
-    from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgentConfig
-
-    judge = JudgeAgent(JudgeAgentConfig(goal='from the config', client=MagicMock()))
-    assert judge._goal == 'from the config'
-    simulator = UserSimulatorAgent(UserSimulatorAgentConfig(system_prompt='from the config', client=MagicMock()))
-    assert simulator._custom_system_prompt == 'from the config'
 
 
 def test_a_config_model_that_contradicts_the_call_is_logged(caplog: pytest.LogCaptureFixture) -> None:

@@ -27,6 +27,10 @@ def test_parse_experiment_url_rejects_non_experiment(url):
     assert parse_experiment_url(url) == (None, None)
 
 
+def test_parse_experiment_url_rejects_malformed_host():
+    assert parse_experiment_url('https://[bad/orq-research/experiments/x') == (None, None)
+
+
 def test_experiment_url_drives_entity_link():
     # host + workspace come from the run's own experiment_url, ignoring env.
     url = orq_studio_url(
@@ -109,4 +113,16 @@ def test_configured_workspace_key_overrides_entity_workspace_id(monkeypatch):
             base_url='https://my.orq.ai',
         )
         == 'https://my.orq.ai/research/agents/abc123'
+    )
+
+
+def test_malformed_base_url_hides_entity_link():
+    assert (
+        orq_studio_url(
+            target_kind='agent',
+            entity_id='abc123',
+            workspace_id='ws1',
+            base_url='https://[bad',
+        )
+        is None
     )

@@ -124,6 +124,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 |---|---|---|
 | Any chat completion | `common.llm_call.execute_chat_completion` / `execute_chat_parse` | `client.chat.completions.create(...)` at a new call site |
 | Structured / schema output | `common.structured_output` (parse + `json_object` fallback) | hand-rolled `response_format` + `json.loads` |
+| A schema-shaped reply from an in-loop simulation agent (the judge) | `BaseAgent._call_llm(response_format=...)` on the Responses API: it keeps the prompt-cache breakpoints, unpaired-tool-call replay, retries and usage accounting that `common.structured_output` does not have | `generate_structured` inside the simulation loop, or a hand-built `text.format` |
 | Parsing JSON out of model text | `common.extract_json.extract_json_from_response` | bespoke fence-stripping regex |
 | Building call params | `LLMCallConfig.request_params(...)` (`contracts.py`) | hand-built `extra_kwargs` dict — it skips the reserved-key guard |
 | Resolving an LLM client | `common.llm_client.resolve_llm_client` | `AsyncOpenAI(...)` anywhere but that module |
@@ -133,6 +134,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Replaying a recorded transcript to a simulation agent or the in-loop judge | `BaseAgent._call_llm`: it shows an unpaired call as text and replays the rest | passing the raw transcript to `to_chat_completion()` or `messages_to_responses_input` for a replay. The recorded transcript is evidence and keeps incomplete calls; scorer inputs (`evaluators.py`, the red-team seed context in `redteam/adaptive/pipeline.py`) filter with `incomplete_as_text=True` before rendering |
 | LLM-as-judge | `common.judge.run_judge`; multi-judge via `common.jury` | new judge prompt + parse loop |
 | OTel spans, token usage, cost | `common.tracing` (`with_llm_span`, `record_token_usage`, `record_llm_response`) | `get_tracer` / `start_as_current_span` outside a `tracing.py` module |
+| Structured job/evaluator span payloads | `common.tracing.record_span_payload`; jobs use `gen_ai.input/output`, evaluators use `orq.evaluation.input/output` | bare `input/output` attributes or Python repr payloads for these panels |
 | Surface-specific span naming | `redteam/tracing.py`, `simulation/tracing.py` — thin wrappers that delegate | new span vocabulary |
 | Prompt caching on a replayed conversation | `common.prompt_cache` (`apply_cache_breakpoints` for chat, `mark_responses_input` for Responses), gated on `caching_applies(client, model)` | hand-placed `cache_control`, a `prompt_cache_key` (OpenAI caches automatically; it needs none), or a bare `client_routes_through_orq` gate |
 | Prompt templating | `common.template_engine.render_template` | f-string prompt assembly |
@@ -141,6 +143,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Strict cross-process file locking | `common.file_lock.strict_file_lock` on a permanent sibling lock file | locks on atomically replaced data files or surface-local platform locking |
 | Applying recommendations to an agent | `common.apply.apply_recommendations` | surface-local merge logic |
 | Console / HTML / MD report output | `common/reports/` (`console`, `render`, `vega`, `palette`) | new renderer or colour set |
+| Optional external HTTP(S) links in reports | `common.reports.html_helpers.parse_http_url` before rendering; `None` means unavailable | unchecked `urlparse` / `urlsplit` on saved metadata, which can raise on malformed hosts or ports |
 | CLI output, errors, JSON, width | `common/cli_*.py` | bespoke `typer.echo` formatting |
 | Normalising agent output shapes | `common.output_adapters`, `common.messages` | per-surface `isinstance` ladders |
 | Turning message content or a tool result into text | `contracts.content_to_text` / `common.messages.tool_result_to_text` (`contracts.tool_result_to_text` stays the public alias; `common.messages` is the home) | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
@@ -148,6 +151,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Rendering a whole message list as one text blob | `common.messages.messages_to_text` | `''.join(...)` over `content` — it glues turns into one word, drops `tool_calls` (so an agent that acted scores as silent) and lets tool JSON read as the agent's answer |
 | Turning a `TraceInput` or loaded traces into rows | `common.trace_input.load_traces` (fetch + one `partition_traces` log) | `fetch_traces` then a hand-rolled usable/failed split |
 | Computing trace signals | `evaluatorq.signals.compute_signals` | ad-hoc counting over trajectories |
+| Classifying agent simulation results as errored across saved reports and typed reports | `simulation.metrics.is_errored_result` | per-surface error checks |
 | Representing an Insights conversation with trace metadata | `common.trace_document.TraceDocument`; convert with `ensure_trace_document`, render with `to_chat_messages`, persist coverage with `source_coverage` | a second stored message list beside the ATIF trajectory, or unrestricted capture payloads in saved review data |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
 | Untrusted trace text (a shell command, tool arguments or output) going to an external classifier | `common.redact.scrub_known_secrets` (local, pure, no network) before the text is rendered or sent | an ad-hoc credential regex, or sending the raw text |
@@ -213,22 +217,7 @@ These tests use fakes and do not require API credentials. The repository does no
 
 ### Environment Variables
 
-- `ORQ_API_KEY` — ORQ platform authentication
-- `ORQ_BASE_URL` — ORQ API base URL (optional override; default `https://my.orq.ai`)
-- `OPENAI_API_KEY` — for direct OpenAI backend or pipeline LLM calls
-- `ORQ_WORKSPACE` (or `ORQ_WORKSPACE_SLUG`) — workspace slug for dashboard→Orq trace deep-links; buttons hidden when unset
-- `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
-- `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` — `false`/`0` stops W3C `traceparent` injection on outgoing LLM/target calls (default on)
-- `EVALUATORQ_FAST_MODEL` — model for the fast role: simulated user, simulation generators, trace-finder compiler (default `openai/gpt-6-luna`, the `DEFAULT_PIPELINE_MODEL` alias)
-- `EVALUATORQ_SMART_MODEL` — model for the smart role: red-team attacks, every judge and evaluator, apply-recommendations, Insights summaries (default `openai/gpt-6-sol`)
-- `EVALUATORQ_APPLY_MODEL` — deprecated; pins the `apply` task. Use `--model-override apply=...`, the settings file's `model_overrides`, or `EVALUATORQ_SMART_MODEL`
-- `EVALUATORQ_DASHBOARD_SETTINGS` — path to the dashboard and trace-finder settings JSON (default `.evaluatorq/dashboard-settings.json`)
-- `EVALUATORQ_COMPILER_MODEL` — deprecated; pins the `finder.compiler` task. Use `--model-override finder.compiler=...` or `EVALUATORQ_FAST_MODEL`
-- `EVALUATORQ_CLASSIFIER_MODEL` — model for the classifier role: Ask AI, trace-finder classification, Insights labels, signals (default `typesafe/jev-latest`)
-- `EVALUATORQ_EMBEDDING_MODEL` — model for the embedding role: Insights embeddings (default `openai/text-embedding-3-small`)
-- `EVALUATORQ_FINDER_WINDOW_DAYS` — trace-finder lookback window in days (default `7`)
-- `EVALUATORQ_FINDER_LIMIT` — trace-finder population cap (default `500`)
-- `EVALUATORQ_FINDER_PARALLELISM` — concurrent trace-finder classify calls (default `100`)
+Every variable evaluatorq owns is an `EnvVar` row in `ENV_VARS` (`src/evaluatorq/common/env_config.py`), and the user-facing list with defaults is the reference tables in `docs/configuration.md`. Read a variable through the readers in that module (`env_raw`, `env_text`, `env_int`, `env_float`, `env_bool`); a new one needs a row in both places, which `tests/test_reuse_guardrails.py` and `tests/common/test_env_config.py` enforce.
 
 ### Code Style
 

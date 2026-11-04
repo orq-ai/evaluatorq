@@ -47,7 +47,26 @@ Pass `container=DockerOptions()` to enable the default container setup. `DockerO
 | `pass_env` | `None` | Explicit environment variable names to forward; with `None`, only launcher credentials are selected. |
 | `allow_privilege_escalation` | `False` | When true, omit `--security-opt no-new-privileges`. |
 
-The image needs the selected agent binary on `PATH`, plus `orq` for `launcher='orq'`, POSIX `sh`, `cat` and `sleep`, and `evq-entrypoint` on `PATH`. A Debian-based task image without Node needs Node installed before its agent package. This Dockerfile layer installs Node and an agent, and copies the runtime entrypoint from the default image built above:
+`eq coding-agent build-image` passes the image tag and any build arguments to `<binary> build` and exits with that build's status. These options change what it runs:
+
+| Option | Default | Purpose |
+|---|---|---|
+| `--tag TEXT` | `evaluatorq-coding-agent:<version>` | Tag for the built image; set `DockerOptions.image` to the same value. |
+| `--binary TEXT` | `docker` | Container CLI that runs the build. Exits with an error if it is not on `PATH`. |
+| `--context TEXT` | none | Docker context, such as `orbstack`; adds `--context <name>` to the build. |
+| `--build-arg KEY=VALUE` | none | Repeatable. The Dockerfile accepts `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `OPENCODE_VERSION` and `ORQ_CLI_VERSION` to pin a tool version. The defaults are the `ARG` lines in `src/evaluatorq/backends/docker/Dockerfile`. |
+
+A target finds the image only when its `DockerOptions` sets the same `image`, `binary` and `context`, because it looks the image up with `image inspect` through that binary and context.
+
+This example builds under a custom tag in the `orbstack` context and pins Claude Code to 2.1.282 (changing the value chooses another release):
+
+```bash
+eq coding-agent build-image --context orbstack --tag my-agents:claude --build-arg CLAUDE_CODE_VERSION=2.1.282
+```
+
+Then pass `container=DockerOptions(context='orbstack', image='my-agents:claude')` to the target.
+
+The image needs the selected agent binary on `PATH`, plus `orq` for `launcher='orq'`, POSIX `sh`, `cat` and `sleep`, and `evq-entrypoint` on `PATH`. A Debian-based task image without Node needs Node installed before its agent package. This Dockerfile layer installs Node and an agent, and copies the runtime entrypoint from the default image (`eq coding-agent build-image` with no options):
 
 ```dockerfile
 ARG EVQ_IMAGE=evaluatorq-coding-agent:replace-me

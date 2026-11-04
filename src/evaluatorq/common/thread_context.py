@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 if TYPE_CHECKING:
-    from collections.abc import Hashable, Iterator, Sequence
+    from collections.abc import Generator, Hashable, Sequence
 
     from opentelemetry.trace import Span
 
@@ -139,7 +139,7 @@ def pipeline_metadata_param() -> dict[str, dict[str, str]]:
 
 
 @contextmanager
-def evaluatorq_pipeline(label: str) -> Iterator[str]:
+def evaluatorq_pipeline(label: str) -> Generator[str, None, None]:
     """Bind the pipeline label ('agent_simulation' / 'red_teaming') for a run.
 
     Restores the previous value on exit so nested/sequential runs don't bleed.
@@ -155,7 +155,7 @@ def evaluatorq_pipeline(label: str) -> Iterator[str]:
 
 
 @contextmanager
-def evaluatorq_run_id(run_id: str) -> Iterator[str]:
+def evaluatorq_run_id(run_id: str) -> Generator[str, None, None]:
     """Bind the run id for a red-team / agent-simulation run.
 
     Restores the previous value on exit so nested/sequential runs don't bleed
@@ -172,7 +172,7 @@ def evaluatorq_run_id(run_id: str) -> Iterator[str]:
 
 
 @contextmanager
-def _evaluatorq_run_scope(run_id: str, span: Span | None = None) -> Iterator[str]:
+def _evaluatorq_run_scope(run_id: str, span: Span | None = None) -> Generator[str, None, None]:
     """Stamp a root span and bind its run id for nested work.
 
     Yields:
@@ -186,7 +186,7 @@ def _evaluatorq_run_scope(run_id: str, span: Span | None = None) -> Iterator[str
 
 
 @contextmanager
-def conversation_thread(thread_id: str | None = None) -> Iterator[str]:
+def conversation_thread(thread_id: str | None = None) -> Generator[str, None, None]:
     """Bind a thread id for the duration of one conversation.
 
     Generates a uuid when none is given. Also opens the conversation's set of already-shown

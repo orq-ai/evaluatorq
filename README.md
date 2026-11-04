@@ -233,13 +233,14 @@ flowchart LR
 ```
 
 ```python
-from evaluatorq.simulation import simulate
+from evaluatorq.simulation import generate_and_simulate
 
-results = await simulate(
+results = await generate_and_simulate(
     run_name="support-agent-sim",
     target="agent:my-support-agent",   # or any local async callable
-    personas=[persona],
-    scenarios=[scenario],
+    agent_description="Customer support agent for an online shop",
+    num_personas=3,
+    num_scenarios=3,
     max_turns=8,
 )
 print(results[0].goal_achieved, results[0].goal_completion_score)

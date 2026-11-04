@@ -13,6 +13,7 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator, model_validator
 
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_text
 from evaluatorq.common.file_lock import strict_file_lock
 
 SETTINGS_PATH_ENV = 'EVALUATORQ_DASHBOARD_SETTINGS'
@@ -177,7 +178,7 @@ def _default_settings() -> DashboardSettings:
 
 def settings_path() -> Path:
     """Return the settings file path from the environment or its default."""
-    configured = os.environ.get(SETTINGS_PATH_ENV, '').strip()
+    configured = env_text(SETTINGS_PATH_ENV)
     return Path(configured) if configured else Path('.evaluatorq/dashboard-settings.json')
 
 
@@ -185,8 +186,6 @@ def credential_fingerprint(api_key: str | None, base_url: str | None) -> str | N
     """Bind a saved project to the key and API host that exposed it, without persisting the key."""
     if not api_key:
         return None
-    from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL
-
     host = (base_url or DEFAULT_ORQ_BASE_URL).rstrip('/')
     return sha256(f'{api_key}\0{host}'.encode()).hexdigest()
 
@@ -470,7 +469,7 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
         ('limit', 'EVALUATORQ_FINDER_LIMIT', MIN_LIMIT, MAX_LIMIT),
         ('parallelism', 'EVALUATORQ_FINDER_PARALLELISM', MIN_PARALLELISM, MAX_PARALLELISM),
     ):
-        env_value = os.environ.get(env_name, '').strip()
+        env_value = env_text(env_name)
         if not env_value:
             continue
         try:

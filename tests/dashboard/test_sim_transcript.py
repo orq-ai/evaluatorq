@@ -636,8 +636,8 @@ class TestConversationRows:
         html = render_sim_row_list('rid', sim_entries)
         assert '#1' in html
         assert 'alice' in html
-        assert '<td class="sim-conv-turns">3</td>' in html
-        assert '<td class="sim-conv-score">0.82</td>' in html
+        assert '<td class="sim-conv-turns num">3</td>' in html
+        assert '<td class="sim-conv-score num">0.82</td>' in html
         assert 'Goal met' in html
         assert 'Goal missed' in html
         assert 'Error' in html
@@ -785,9 +785,32 @@ class TestTranscriptFragmentRewrite:
         html = render_transcript_fragment(sim_entry_with_safety_criterion)
         # goal_achieved defaults True, one of two criteria passed. Goal outcome and
         # criteria tally are shown as separate spans (not "PASS · 1/2 met").
-        assert 'sim-criteria-verdict--pass' in html
+        assert 'status-badge--pass' in html
         assert 'Goal met' in html
         assert '1/2 criteria met' in html
+
+    def test_transcript_fragment_states_goal_above_criteria(self) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        entry = _entry(goal_achieved=False).model_copy(update={'goal': 'Get a <b>refund</b>'})
+        html = render_transcript_fragment(entry)
+        assert 'Get a &lt;b&gt;refund&lt;/b&gt;' in html
+        assert 'Goal missed' in html
+        # Goal and its verdict come before the criteria list.
+        assert html.index('GOAL') < html.index('refund') < html.index('CRITERIA')
+        assert html.index('Goal missed') < html.index('CRITERIA')
+
+        legacy = render_transcript_fragment(_entry(criteria=[]))
+        assert 'The goal text was not saved with this run.' in legacy
+        assert 'Goal met' in legacy
+
+    def test_transcript_fragment_error_without_criteria_shows_error_pill(self) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        html = render_transcript_fragment(_entry(criteria=[], error='target timed out', terminated_by='error'))
+        assert 'status-badge--warn">Error<' in html
+        assert 'Goal met' not in html and 'Goal missed' not in html
+        assert 'No criteria defined for this scenario.' in html
 
     def test_transcript_fragment_bubbles_present(self, sim_entry_with_transcript) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment

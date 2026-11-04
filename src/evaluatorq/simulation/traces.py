@@ -498,9 +498,9 @@ async def datapoints_from_traces(
     Distinct from ``redteam.datapoints_from_traces``: that function is pure
     (``Trace`` in, red-team datapoints out, no network or LLM call) while this
     one fetches from Orq when ``source`` is a ``TraceInput`` and then makes a
-    summarize call plus a persona/scenario-inference call per trace, so its
-    cost and latency scale with the number of conversations, not just their
-    count as rows.
+    summarize call plus a persona/scenario-inference call per trace (and, with the default
+    ``generate_first_message=True``, a first-message call), so its cost and latency scale with the
+    number of conversations, not just their count as rows.
 
     ``source`` may be a ``TraceInput`` to fetch canonical traces, a sequence of
     already-loaded ``Trace`` objects, or the legacy ``TraceConversation`` values.

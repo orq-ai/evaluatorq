@@ -152,7 +152,7 @@ async def process_job(
         JobResult containing job output and evaluator scores
     """
     # Import tracing utilities lazily to avoid import errors when OTEL is not installed
-    from .common.tracing import set_span_error
+    from .common.tracing import record_span_payload, set_span_error
     from .tracing.spans import (
         JobSpanOptions,
         set_job_name_attribute,
@@ -172,6 +172,7 @@ async def process_job(
             trace_type=tracing_context.trace_type if tracing_context else 'evaluatorq',
         )
     ) as job_span:
+        record_span_payload(job_span, key='gen_ai.input', payload=data_point)
         try:
             # Execute the job
             if semaphore is None:
@@ -181,6 +182,14 @@ async def process_job(
                     result = await job(data_point, row_index)
             job_name = cast('str', result['name'])
             output = cast('Output', result['output'])
+            # Orq's generic panel ignores hydrated scalar/empty values. Keep
+            # them visible in the span mirror without changing the job result.
+            span_output = (
+                {'value': output}
+                if output is None or isinstance(output, (str, int, float, bool)) or not output
+                else output
+            )
+            record_span_payload(job_span, key='gen_ai.output', payload=span_output)
             # Returned, not raised: without this the row counts as a success. The
             # output is kept — unlike the raise path, which has none — but evaluators
             # are skipped either way: scoring a transcript we already know is dead
@@ -288,6 +297,7 @@ async def process_evaluator(
         EvaluatorScore with the evaluation result or error
     """
     # Import tracing utilities lazily to avoid import errors when OTEL is not installed
+    from .common.tracing import record_span_payload, set_span_error
     from .tracing.spans import (
         EvaluationSpanOptions,
         set_evaluation_attributes,
@@ -301,6 +311,7 @@ async def process_evaluator(
         EvaluationSpanOptions(
             run_id=tracing_context.run_id if tracing_context else '',
             evaluator_name=evaluator_name,
+            evaluator_type=evaluator.get('evaluator_type', 'python_eval'),
         )
     ) as eval_span:
         try:
@@ -320,6 +331,7 @@ async def process_evaluator(
             if row_index is not None:
                 scorer_param['row'] = row_index
 
+            record_span_payload(eval_span, key='orq.evaluation.input', payload=scorer_param)
             result = await evaluator['scorer'](scorer_param)
 
             # Convert dict to EvaluationResult if needed
@@ -332,7 +344,8 @@ async def process_evaluator(
                 explanation=score.explanation,
                 pass_=score.pass_,
                 evaluator_name=evaluator_name,
-                evaluator_type=evaluator.get('evaluator_type'),
+                evaluator_type=evaluator.get('evaluator_type', 'python_eval'),
+                raw_output=score.raw_output,
             )
 
             return EvaluatorScore(
@@ -342,6 +355,8 @@ async def process_evaluator(
             )
 
         except Exception as error:
+            set_span_error(eval_span, str(error))
+            record_span_payload(eval_span, key='orq.evaluation.output', payload={'error': str(error)})
             # Return error result with empty score
             return EvaluatorScore(
                 evaluator_name=evaluator_name,
