@@ -223,6 +223,7 @@ def test_classifier_result_carries_a_coerced_verdict():
 
     payload = EvaluatorResponsePayload(value=True, explanation="contradiction", abstain=True)
     result = _outcome_result(JudgeOutcome(payload=payload, raw_content='{}'), model='m')
+    assert result.raw_output is not None
     vote = result.raw_output['jury']['votes'][0]
     assert vote['repetitions_coerced'] == 1
     assert vote['repetitions'][0]['verdict_coerced'] is True
