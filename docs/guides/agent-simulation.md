@@ -250,7 +250,7 @@ for item in report.items:
     print(item.name, item.score, [i.code for i in item.issues])
 ```
 
-`passed` needs `overall_score` to reach `pass_threshold` (default `0.7`) and no issue of severity `fail`, so one thin background or unreflected seed fails the batch. A seed too short to check, such as `AI`, is reported as `seed_unchecked` and costs nothing. The checks read surface form only: whether a trait contradicts a background, or whether an item fits your agent, is not checked.
+`passed` needs `overall_score` to reach `pass_threshold` (default `0.7`) and no issue of severity `fail`, so one thin background fails the batch. The seed check only compares words and generators paraphrase, so `seed_not_reflected` is a hint: it costs nothing and does not fail the batch. A seed too short to check, such as `AI`, is reported as `seed_unchecked`, listed in `checks_skipped`, and costs nothing. The checks read surface form only: whether a trait contradicts a background, or whether an item fits your agent, is not checked.
 
 ## Full control: hand-build personas
 

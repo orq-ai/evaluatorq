@@ -3,8 +3,9 @@
 The persona/scenario generators state quality guidelines in their prompts, but nothing checks that
 the *output* honours them. `validate_personas` and `validate_scenarios` score a batch against the
 guidelines that can be checked mechanically: specificity (no generic names, thin or filler text),
-trait diversity across the batch (the "vary trait values" rule), well-formedness (scenarios need a
-goal, criteria and context), and seed adherence. They return per-item scores plus batch diagnostics.
+trait diversity across the batch (the "vary trait values" rule) and well-formedness (scenarios need a
+goal, criteria and context). They return per-item scores plus batch diagnostics. A seed is only
+compared word for word, so a miss is reported and neither costs score nor fails the batch.
 
 These are opt-in: no generator calls them, so a caller runs them on the batch it got back. They are
 deterministic (no LLM), so a run costs nothing. They read surface form only: whether a trait
@@ -72,8 +73,12 @@ class ValidationReport(BaseModel):
 
     items: list[ItemValidation] = Field(default_factory=list)
     batch_issues: list[Issue] = Field(default_factory=list)
-    overall_score: float = Field(ge=0.0, le=1.0, default=1.0)
-    passed: bool = True
+    overall_score: float = Field(ge=0.0, le=1.0)
+    passed: bool
+    checks_skipped: list[str] = Field(
+        default_factory=list,
+        description='Checks that could not run, so a high score says nothing about them.',
+    )
 
 
 def _words(text: str) -> int:
@@ -86,15 +91,14 @@ def _has_generic_marker(text: str) -> bool:
 
 def _seed_tokens(seed: str) -> list[str]:
     """The seed's content words: those long enough for a substring match to mean anything."""
-    return [t for t in seed.lower().split() if len(t) > 2]
+    return [t for t in re.findall(r'\w+', seed.lower()) if len(t) > 2]
 
 
 def _seed_reflected(tokens: list[str], *parts: str) -> bool:
-    """A loose check: at least one content word of the seed appears in the item text. Seeds are
-    short archetypes ("angry customer"), so token presence is a reasonable deterministic proxy.
+    """Whether at least one content word of the seed appears in the item text.
 
-    This is bare substring matching, so it can over- or under-match ("cat" matches "category"). It
-    errs toward reporting a seed as reflected (fewer false seed_not_reflected failures).
+    This is bare substring matching, and generators paraphrase: "Careful Retired Librarian" fits
+    "first-time elderly shoppers" and shares no word with it. So a miss is a hint, never a failure.
     """
     hay = ' '.join(parts).lower()
     return any(t in hay for t in tokens)
@@ -114,7 +118,10 @@ def _finalize(items: list[ItemValidation], batch_issues: list[Issue], *, pass_th
     overall = max(0.0, per_item - penalty)
     issues = [*batch_issues, *(issue for item in items for issue in item.issues)]
     passed = bool(items) and overall >= pass_threshold and not any(i.severity == 'fail' for i in issues)
-    return ValidationReport(items=items, batch_issues=batch_issues, overall_score=round(overall, 4), passed=passed)
+    skipped = ['seed_adherence'] if any(i.code == 'seed_unchecked' for i in batch_issues) else []
+    return ValidationReport(
+        items=items, batch_issues=batch_issues, overall_score=round(overall, 4), passed=passed, checks_skipped=skipped
+    )
 
 
 def validate_personas(
@@ -125,11 +132,11 @@ def validate_personas(
 ) -> ValidationReport:
     """Score a generated persona batch against the generator's quality guidelines (model-free).
 
-    Per persona: a generic name, a thin or generic background, and (when ``seed`` is set) a seed
-    the persona does not reflect each deduct from a 1.0 start. Batch-level: a numeric trait with
-    almost no spread across the batch ("all similar") and duplicate backgrounds are flagged.
-    ``passed`` needs the score to reach ``pass_threshold`` and no issue of severity ``fail``, so one
-    thin background or unreflected seed fails the batch.
+    Per persona: a generic name and a thin or generic background each deduct from a 1.0 start.
+    Batch-level: a numeric trait with almost no spread across the batch ("all similar") and duplicate
+    backgrounds are flagged. ``passed`` needs the score to reach ``pass_threshold`` and no issue of
+    severity ``fail``, so one thin background fails the batch. When ``seed`` is set, a persona sharing
+    no word with it is reported as ``seed_not_reflected``, which costs nothing.
     """
     tokens = _seed_tokens(seed)
     items: list[ItemValidation] = []
@@ -148,8 +155,7 @@ def validate_personas(
             issues.append(Issue(code='generic_background', message='background uses generic filler', severity='warn'))
             score -= 0.2
         if tokens and not _seed_reflected(tokens, p.name, p.background):
-            issues.append(Issue(code='seed_not_reflected', message=f'does not reflect seed {seed!r}', severity='fail'))
-            score -= 0.3
+            issues.append(Issue(code='seed_not_reflected', message=f'shares no word with seed {seed!r}', severity='info'))
         items.append(ItemValidation(name=p.name, score=max(0.0, round(score, 4)), issues=issues))
 
     batch_issues = [*_batch_persona_issues(personas), *_seed_unchecked(seed)]
@@ -186,9 +192,10 @@ def validate_scenarios(
 ) -> ValidationReport:
     """Score a generated scenario batch against the generator's quality guidelines (model-free).
 
-    Per scenario: a thin or generic goal, a missing context, and missing success criteria each deduct;
-    a seed not reflected in the goal/name fails. Batch-level: duplicate goals are flagged.
-    ``passed`` needs the score to reach ``pass_threshold`` and no issue of severity ``fail``.
+    Per scenario: a thin or generic goal, a missing context, and missing success criteria each deduct.
+    Batch-level: duplicate goals are flagged. ``passed`` needs the score to reach ``pass_threshold``
+    and no issue of severity ``fail``. When ``seed`` is set, a scenario sharing no word with it is
+    reported as ``seed_not_reflected``, which costs nothing.
     """
     tokens = _seed_tokens(seed)
     items: list[ItemValidation] = []
@@ -201,15 +208,14 @@ def validate_scenarios(
         elif _has_generic_marker(s.goal):
             issues.append(Issue(code='generic_goal', message='goal uses generic filler', severity='warn'))
             score -= 0.2
-        if not s.criteria:
+        if not any(c.description.strip() for c in s.criteria or []):
             issues.append(Issue(code='no_criteria', message='scenario has no success criteria', severity='fail'))
             score -= 0.3
-        if not s.context:
+        if not (s.context or '').strip():
             issues.append(Issue(code='no_context', message='scenario has no context', severity='warn'))
             score -= 0.1
         if tokens and not _seed_reflected(tokens, s.name, s.goal):
-            issues.append(Issue(code='seed_not_reflected', message=f'does not reflect seed {seed!r}', severity='fail'))
-            score -= 0.3
+            issues.append(Issue(code='seed_not_reflected', message=f'shares no word with seed {seed!r}', severity='info'))
         items.append(ItemValidation(name=s.name, score=max(0.0, round(score, 4)), issues=issues))
 
     batch_issues = _seed_unchecked(seed)

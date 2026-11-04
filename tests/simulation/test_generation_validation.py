@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from evaluatorq.simulation.contracts import CommunicationStyle, Criterion, Persona, Scenario
 from evaluatorq.simulation.generators.validation import (
+    ValidationReport,
     Issue,
     trait_spread,
     trait_variance,
@@ -208,9 +209,59 @@ def test_a_seed_too_short_to_check_is_reported_as_unchecked():
         assert report.batch_issues[0].severity == 'info'
         assert report.passed
         assert report.overall_score == 1.0  # nothing was measured, so nothing is deducted
+        assert report.checks_skipped == ['seed_adherence']
         assert not report.items[0].issues
 
 
 def test_issue_codes_are_a_closed_set():
     with pytest.raises(ValidationError):
         Issue.model_validate({'code': 'thin_backgrond', 'message': 'a typo in the code'})
+
+
+@pytest.mark.parametrize(
+    ('name', 'seed'),
+    [
+        ('Careful Retired Librarian', 'first-time elderly shoppers'),
+        ('Deadline-Driven Office Procurement Lead', 'impatient business buyers'),
+    ],
+)
+def test_a_paraphrased_seed_is_reported_and_does_not_fail_the_batch(name: str, seed: str):
+    # Real generator output: both fit their seed and share no word with it.
+    report = validate_personas([_persona(name, _SPECIFIC)], seed=seed)
+    assert report.items[0].issues[0].code == 'seed_not_reflected'
+    assert report.items[0].issues[0].severity == 'info'
+    assert report.overall_score == 1.0
+    assert report.passed
+
+
+def test_seed_words_ignore_punctuation():
+    report = validate_personas([_persona('Real Person', 'Wants a refund for the broken phone and is losing patience fast.')], seed='refund,')
+    assert not report.items[0].issues
+
+
+def test_a_fully_checked_batch_skips_nothing():
+    assert validate_personas([_persona('Real Person', _SPECIFIC)]).checks_skipped == []
+
+
+@pytest.mark.parametrize('partial', [{'overall_score': 1.0}, {'passed': True}])
+def test_a_report_nothing_populated_cannot_read_as_a_pass(partial: dict):
+    with pytest.raises(ValidationError):
+        ValidationReport.model_validate(partial)
+
+
+@pytest.mark.parametrize('validate', [validate_personas, validate_scenarios])
+def test_an_empty_batch_does_not_pass(validate):
+    report = validate([])
+    assert report.overall_score == 0.0
+    assert report.passed is False
+
+
+def test_blank_criteria_and_context_count_as_missing():
+    scenario = Scenario(
+        name='A',
+        goal='Get a refund for the broken phone',
+        context='   ',
+        criteria=[Criterion(description='', type='must_happen')],
+    )
+    codes = {i.code for i in validate_scenarios([scenario]).items[0].issues}
+    assert {'no_criteria', 'no_context'} <= codes
