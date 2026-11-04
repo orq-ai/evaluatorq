@@ -490,7 +490,11 @@ async def _compute_judge_vote(
                 ),
                 usages,
             )
-        error = next((p.error for p in predictions if p.error), 'no successful prediction')
+        error = next((p.error for p in predictions if p.error), None)
+        if error is None:
+            # Every pass was a bare value=None. The judge's own reason is the only cause there is.
+            reason = next((p.explanation for p in predictions if p.explanation), '')
+            error = f'judge returned no verdict: {reason}' if reason else 'judge returned no verdict'
         return (
             JuryVote(
                 model=model,

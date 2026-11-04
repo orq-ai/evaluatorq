@@ -1015,6 +1015,8 @@ class JuryVote(BaseModel):
             raise ValueError('failed JuryVote must have a null value')
         if not self.success and self.abstained:
             raise ValueError('failed JuryVote cannot also be abstained')
+        if self.repetitions and self.repetitions_coerced != sum(r.verdict_coerced for r in self.repetitions):
+            raise ValueError('repetitions_coerced must equal the repetitions flagged verdict_coerced')
         return self
 
 

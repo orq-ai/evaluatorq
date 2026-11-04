@@ -1129,3 +1129,12 @@ class TestCoercedVerdictReachesTheVote:
             )
         assert prediction.abstained is True
         assert prediction.verdict_coerced is coerced
+
+
+@pytest.mark.parametrize(('content', 'coerced'), [(COERCED_VERDICT, True), (CLEAN_ABSTENTION, False)])
+def test_single_judge_result_carries_the_coerced_flag(content: str, coerced: bool):
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.raw_output is not None
+    assert result.raw_output['verdict_coerced'] is coerced

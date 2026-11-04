@@ -394,3 +394,40 @@ def test_to_evaluation_result_string_label_no_passing_labels():
         score_range=(0.0, 1.0),
     )
     assert result.pass_ is None
+
+
+@pytest.mark.asyncio
+async def test_coerced_count_matches_the_flagged_repetitions():
+    from evaluatorq.common.jury import Prediction, VerdictKind, run_jury
+
+    passes = iter([
+        Prediction(abstained=True, verdict_coerced=True),
+        Prediction(abstained=True, verdict_coerced=True),
+        Prediction(abstained=True),
+    ])
+
+    async def judge(model: str) -> Prediction:
+        return next(passes)
+
+    delib = await run_jury(judge_fn=judge, panel=['m'], repetitions=3, verdict_kind=VerdictKind.CATEGORICAL, tie_break=None)
+    assert delib.jury.votes[0].repetitions_coerced == 2
+
+
+def test_jury_vote_rejects_a_coerced_count_the_repetitions_do_not_back():
+    from evaluatorq.contracts import JuryRepetition
+
+    with pytest.raises(ValueError, match='repetitions_coerced'):
+        JuryVote(model='m', success=True, abstained=True, repetitions=[JuryRepetition()], repetitions_coerced=3)
+
+
+@pytest.mark.asyncio
+async def test_bare_none_passes_name_the_cause_on_the_vote():
+    from evaluatorq.common.jury import Prediction, VerdictKind, run_jury
+
+    payload = EvaluatorResponsePayload(value=None, explanation='transcript is empty', abstain=False)
+
+    async def judge(model: str) -> Prediction:
+        return _outcome_to_prediction(JudgeOutcome(payload=payload, raw_content='{}'))
+
+    delib = await run_jury(judge_fn=judge, panel=['m'], repetitions=1, verdict_kind=VerdictKind.CATEGORICAL, tie_break=None)
+    assert delib.jury.votes[0].error == 'judge returned no verdict: transcript is empty'
