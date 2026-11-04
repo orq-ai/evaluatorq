@@ -235,7 +235,9 @@ def test_a_paraphrased_seed_is_reported_and_does_not_fail_the_batch(name: str, s
 
 
 def test_seed_words_ignore_punctuation():
-    report = validate_personas([_persona('Real Person', 'Wants a refund for the broken phone and is losing patience fast.')], seed='refund,')
+    report = validate_personas(
+        [_persona('Real Person', 'Wants a refund for the broken phone and is losing patience fast.')], seed='refund,'
+    )
     assert not report.items[0].issues
 
 

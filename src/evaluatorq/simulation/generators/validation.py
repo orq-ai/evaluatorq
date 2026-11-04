@@ -155,7 +155,9 @@ def validate_personas(
             issues.append(Issue(code='generic_background', message='background uses generic filler', severity='warn'))
             score -= 0.2
         if tokens and not _seed_reflected(tokens, p.name, p.background):
-            issues.append(Issue(code='seed_not_reflected', message=f'shares no word with seed {seed!r}', severity='info'))
+            issues.append(
+                Issue(code='seed_not_reflected', message=f'shares no word with seed {seed!r}', severity='info')
+            )
         items.append(ItemValidation(name=p.name, score=max(0.0, round(score, 4)), issues=issues))
 
     batch_issues = [*_batch_persona_issues(personas), *_seed_unchecked(seed)]
@@ -215,7 +217,9 @@ def validate_scenarios(
             issues.append(Issue(code='no_context', message='scenario has no context', severity='warn'))
             score -= 0.1
         if tokens and not _seed_reflected(tokens, s.name, s.goal):
-            issues.append(Issue(code='seed_not_reflected', message=f'shares no word with seed {seed!r}', severity='info'))
+            issues.append(
+                Issue(code='seed_not_reflected', message=f'shares no word with seed {seed!r}', severity='info')
+            )
         items.append(ItemValidation(name=s.name, score=max(0.0, round(score, 4)), issues=issues))
 
     batch_issues = _seed_unchecked(seed)
