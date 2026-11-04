@@ -244,7 +244,7 @@ def test_a_fully_checked_batch_skips_nothing():
 
 
 @pytest.mark.parametrize('partial', [{'overall_score': 1.0}, {'passed': True}])
-def test_a_report_nothing_populated_cannot_read_as_a_pass(partial: dict):
+def test_a_report_nothing_populated_cannot_read_as_a_pass(partial: dict[str, float | bool]):
     with pytest.raises(ValidationError):
         ValidationReport.model_validate(partial)
 
