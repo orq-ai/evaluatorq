@@ -49,6 +49,9 @@ class RedTeamReplay:
     the 5-turn default would not be the same run."""
     attacker_instructions: str | None = None
     """Domain steering the original run used, restored for the same reason."""
+    max_backtracks: int | None = None
+    """Erasures per attack the original run allowed, restored so a before/after
+    comparison does not change the attack behaviour along with the agent."""
 
 
 def _looks_like_a_simulation_run(payload: dict[str, Any], rows: list[Any]) -> bool:
@@ -143,6 +146,7 @@ def load_redteam_replay(reference: str, runs_dir: Path) -> RedTeamReplay:
     config = stored_config if isinstance(stored_config, dict) else {}
     max_turns = config.get('max_turns')
     instructions = config.get('attacker_instructions')
+    max_backtracks = config.get('max_backtracks')
 
     return RedTeamReplay(
         datapoints=datapoints,
@@ -152,4 +156,5 @@ def load_redteam_replay(reference: str, runs_dir: Path) -> RedTeamReplay:
         path=path,
         max_turns=max_turns if isinstance(max_turns, int) else None,
         attacker_instructions=instructions if isinstance(instructions, str) else None,
+        max_backtracks=max_backtracks if isinstance(max_backtracks, int) else None,
     )
