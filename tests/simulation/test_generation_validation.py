@@ -1,9 +1,13 @@
-"""Tests for the model-free persona/scenario generation validation pass (RES-1086)."""
+"""Tests for the model-free persona/scenario generation validation pass."""
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from evaluatorq.simulation.contracts import CommunicationStyle, Criterion, Persona, Scenario
 from evaluatorq.simulation.generators.validation import (
+    Issue,
     trait_spread,
     trait_variance,
     validate_personas,
@@ -69,7 +73,7 @@ def test_generic_and_thin_personas_are_flagged():
     assert not report.passed
     codes = {issue.code for item in report.items for issue in item.issues}
     assert 'generic_name' in codes
-    assert {'thin_background', 'generic_background'} & codes
+    assert 'thin_background' in codes
     assert report.overall_score < 0.7
     assert all(item.issues for item in report.items)
 
@@ -146,3 +150,67 @@ def test_duplicate_scenario_goals_are_flagged():
     ]
     report = validate_scenarios(scenarios)
     assert any(issue.code == 'duplicate' for issue in report.batch_issues)
+
+
+_SPECIFIC = 'A meticulous former aerospace engineer who reads every manual and wants precise answers about his router.'
+_CRITERIA = [Criterion(description='c', type='must_happen')]
+
+
+def test_an_item_level_fail_fails_the_batch():
+    # thin_background alone scores 0.7, exactly the threshold, so only the severity can fail it.
+    report = validate_personas([_persona('Angry Shopper', 'Wants a refund today')])
+    assert report.overall_score == 0.7
+    assert not report.passed
+
+
+def test_an_item_level_warn_does_not_fail_the_batch():
+    report = validate_personas([_persona('Shopper', _SPECIFIC)])
+    assert report.items[0].issues[0].code == 'generic_name'
+    assert report.passed
+
+
+def test_generic_filler_in_long_text_is_flagged():
+    filler = 'This is simply a customer with a problem who wants some kind of help from the agent today.'
+    report = validate_personas([_persona('Some Shopper', filler)])
+    assert {i.code for i in report.items[0].issues} == {'generic_background'}
+
+    goal = 'Help a customer with a problem get an answer from support'
+    scenario = Scenario(name='Vague', goal=goal, context='x', criteria=_CRITERIA)
+    assert {i.code for i in validate_scenarios([scenario]).items[0].issues} == {'generic_goal'}
+
+
+def test_specific_text_is_not_read_as_generic():
+    for text in (
+        'A customer who ordered a router and needs a refund for the damaged unit that arrived.',
+        'Refills a generic blood pressure medication every month and needs the order moved up by a week.',
+    ):
+        assert not validate_personas([_persona('Real Person', text)]).items[0].issues, text
+    goal = 'Find out why something I never ordered was charged to my card'
+    scenario = Scenario(name='Charge', goal=goal, context='x', criteria=_CRITERIA)
+    assert not validate_scenarios([scenario]).items[0].issues
+
+
+def test_a_marker_inside_a_longer_word_does_not_match():
+    for text in (
+        'Their brother-in-law has a problematic router and asks the agent to replace it under the warranty.',
+        'A subcustomer with a problem on their reseller invoice asks the agent to correct the billed amount today.',
+    ):
+        assert not validate_personas([_persona('Real Person', text)]).items[0].issues, text
+
+
+def test_a_seed_too_short_to_check_is_reported_as_unchecked():
+    persona = validate_personas([_persona('Real Person', _SPECIFIC)], seed='AI')
+    scenario = validate_scenarios(
+        [Scenario(name='A', goal='Get a refund for the broken phone', context='x', criteria=_CRITERIA)], seed='UX'
+    )
+    for report in (persona, scenario):
+        assert [i.code for i in report.batch_issues] == ['seed_unchecked']
+        assert report.batch_issues[0].severity == 'info'
+        assert report.passed
+        assert report.overall_score == 1.0  # nothing was measured, so nothing is deducted
+        assert not report.items[0].issues
+
+
+def test_issue_codes_are_a_closed_set():
+    with pytest.raises(ValidationError):
+        Issue.model_validate({'code': 'thin_backgrond', 'message': 'a typo in the code'})

@@ -1,20 +1,19 @@
-"""Validate generated personas and scenarios against the generators' own quality intent (RES-1086).
+"""Validate generated personas and scenarios against the generators' own quality guidelines.
 
-The persona/scenario generators embed quality guidelines in their prompts and coverage guards during
-generation, but nothing checks that the *output* actually honours them. This adds a model-free
-validation/scoring pass that scores a generated batch against the concrete, checkable guidelines the
-generator prompts state - specificity (no generic names/backgrounds), trait diversity across the
-batch (the "vary trait values, some low some high" rule), well-formedness (scenarios need a goal and
-criteria), and seed adherence - and reports per-item scores plus batch diagnostics.
+The persona/scenario generators state quality guidelines in their prompts, but nothing checks that
+the *output* honours them. `validate_personas` and `validate_scenarios` score a batch against the
+guidelines that can be checked mechanically: specificity (no generic names, thin or filler text),
+trait diversity across the batch (the "vary trait values" rule), well-formedness (scenarios need a
+goal, criteria and context), and seed adherence. They return per-item scores plus batch diagnostics.
 
-It is deliberately deterministic (no LLM): it runs on every generation at zero cost and catches the
-exact failure modes the prompts warn against ("Generic", "Contradictory", "All similar"). The
-subjective semantic check ("does this persona truly align with the agent description") is a natural
-LLM-judge extension, not built here, so the shipped pass needs no model to run.
+These are opt-in: no generator calls them, so a caller runs them on the batch it got back. They are
+deterministic (no LLM), so a run costs nothing. They read surface form only: whether a trait
+contradicts a background, or whether an item fits the agent description, is not checked.
 """
 
 from __future__ import annotations
 
+import re
 from statistics import pvariance
 from typing import TYPE_CHECKING, Literal
 
@@ -30,24 +29,32 @@ _MIN_BACKGROUND_WORDS = 12
 _MIN_GOAL_WORDS = 5
 # A numeric trait whose spread across the batch is below this is "all similar".
 _MIN_TRAIT_SPREAD = 0.2
-# Phrases that signal a generic, non-specific persona/scenario (from the prompts' DON'T lists).
-_GENERIC_MARKERS = (
-    'a customer who',
-    'customer with a problem',
-    'has a problem',
-    'something',
-    'a user who',
-    'generic',
-)
+# Filler phrases, matched as whole words. The prompts' DON'T list names "Customer with a problem". Words
+# like "something" or "a customer who" are left out on purpose: they are common in specific text too.
+_GENERIC_MARKER = re.compile(r'\b(?:customer with a problem|user with a problem|has a problem)\b', re.IGNORECASE)
 _NUMERIC_TRAITS = ('patience', 'assertiveness', 'politeness', 'technical_level')
 
-Severity = Literal['warn', 'fail']
+# `fail` fails the batch, `warn` only costs score, `info` reports something and costs nothing.
+Severity = Literal['info', 'warn', 'fail']
+IssueCode = Literal[
+    'generic_name',
+    'thin_background',
+    'generic_background',
+    'seed_not_reflected',
+    'seed_unchecked',
+    'low_diversity',
+    'duplicate',
+    'thin_goal',
+    'generic_goal',
+    'no_criteria',
+    'no_context',
+]
 
 
 class Issue(BaseModel):
     """One thing wrong with a generated item or batch."""
 
-    code: str
+    code: IssueCode
     message: str
     severity: Severity = 'warn'
 
@@ -74,31 +81,39 @@ def _words(text: str) -> int:
 
 
 def _has_generic_marker(text: str) -> bool:
-    low = text.lower()
-    return any(marker in low for marker in _GENERIC_MARKERS)
+    return _GENERIC_MARKER.search(text) is not None
 
 
-def _seed_reflected(seed: str, *parts: str) -> bool:
+def _seed_tokens(seed: str) -> list[str]:
+    """The seed's content words: those long enough for a substring match to mean anything."""
+    return [t for t in seed.lower().split() if len(t) > 2]
+
+
+def _seed_reflected(tokens: list[str], *parts: str) -> bool:
     """A loose check: at least one content word of the seed appears in the item text. Seeds are
     short archetypes ("angry customer"), so token presence is a reasonable deterministic proxy.
 
     This is bare substring matching, so it can over- or under-match ("cat" matches "category"). It
-    errs toward reporting a seed as reflected (fewer false seed_not_reflected failures); the
-    semantic "really on-seed" check belongs to the LLM-judge extension noted in the module docstring.
+    errs toward reporting a seed as reflected (fewer false seed_not_reflected failures).
     """
-    tokens = [t for t in seed.lower().split() if len(t) > 2]
-    if not tokens:
-        return True
     hay = ' '.join(parts).lower()
     return any(t in hay for t in tokens)
 
 
+def _seed_unchecked(seed: str) -> list[Issue]:
+    """A seed with no content word (`AI`, `UX`) cannot be checked, so say that rather than imply it held."""
+    if seed.strip() and not _seed_tokens(seed):
+        return [Issue(code='seed_unchecked', message=f'seed {seed!r} is too short to check', severity='info')]
+    return []
+
+
 def _finalize(items: list[ItemValidation], batch_issues: list[Issue], *, pass_threshold: float) -> ValidationReport:
     per_item = sum(i.score for i in items) / len(items) if items else 0.0
-    # Each batch-level issue is a flat penalty on the overall score; a failing batch issue caps it.
-    penalty = 0.15 * len(batch_issues)
+    # Each batch-level warning or failure is a flat penalty on the overall score.
+    penalty = 0.15 * sum(i.severity != 'info' for i in batch_issues)
     overall = max(0.0, per_item - penalty)
-    passed = bool(items) and overall >= pass_threshold and not any(i.severity == 'fail' for i in batch_issues)
+    issues = [*batch_issues, *(issue for item in items for issue in item.issues)]
+    passed = bool(items) and overall >= pass_threshold and not any(i.severity == 'fail' for i in issues)
     return ValidationReport(items=items, batch_issues=batch_issues, overall_score=round(overall, 4), passed=passed)
 
 
@@ -113,7 +128,10 @@ def validate_personas(
     Per persona: a generic name, a thin or generic background, and (when ``seed`` is set) a seed
     the persona does not reflect each deduct from a 1.0 start. Batch-level: a numeric trait with
     almost no spread across the batch ("all similar") and duplicate backgrounds are flagged.
+    ``passed`` needs the score to reach ``pass_threshold`` and no issue of severity ``fail``, so one
+    thin background or unreflected seed fails the batch.
     """
+    tokens = _seed_tokens(seed)
     items: list[ItemValidation] = []
     for p in personas:
         issues: list[Issue] = []
@@ -129,12 +147,12 @@ def validate_personas(
         elif _has_generic_marker(p.background):
             issues.append(Issue(code='generic_background', message='background uses generic filler', severity='warn'))
             score -= 0.2
-        if seed and not _seed_reflected(seed, p.name, p.background):
+        if tokens and not _seed_reflected(tokens, p.name, p.background):
             issues.append(Issue(code='seed_not_reflected', message=f'does not reflect seed {seed!r}', severity='fail'))
             score -= 0.3
         items.append(ItemValidation(name=p.name, score=max(0.0, round(score, 4)), issues=issues))
 
-    batch_issues = _batch_persona_issues(personas)
+    batch_issues = [*_batch_persona_issues(personas), *_seed_unchecked(seed)]
     return _finalize(items, batch_issues, pass_threshold=pass_threshold)
 
 
@@ -170,7 +188,9 @@ def validate_scenarios(
 
     Per scenario: a thin or generic goal, a missing context, and missing success criteria each deduct;
     a seed not reflected in the goal/name fails. Batch-level: duplicate goals are flagged.
+    ``passed`` needs the score to reach ``pass_threshold`` and no issue of severity ``fail``.
     """
+    tokens = _seed_tokens(seed)
     items: list[ItemValidation] = []
     for s in scenarios:
         issues: list[Issue] = []
@@ -187,12 +207,12 @@ def validate_scenarios(
         if not s.context:
             issues.append(Issue(code='no_context', message='scenario has no context', severity='warn'))
             score -= 0.1
-        if seed and not _seed_reflected(seed, s.name, s.goal):
+        if tokens and not _seed_reflected(tokens, s.name, s.goal):
             issues.append(Issue(code='seed_not_reflected', message=f'does not reflect seed {seed!r}', severity='fail'))
             score -= 0.3
         items.append(ItemValidation(name=s.name, score=max(0.0, round(score, 4)), issues=issues))
 
-    batch_issues: list[Issue] = []
+    batch_issues = _seed_unchecked(seed)
     seen: set[str] = set()
     for s in scenarios:
         key = ' '.join(s.goal.lower().split())
