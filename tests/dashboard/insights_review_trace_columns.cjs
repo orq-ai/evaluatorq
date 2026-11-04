@@ -205,4 +205,60 @@ const drawer = env => { const html = env.run('tracePanel(T[0])'); return {html, 
   assert.doesNotMatch(verifiedTile.innerHTML, /failed/);
 }
 
+/* custom questions get a generic column each, in payload order, before Errors */
+const CUSTOM = () => [
+  label('made_errors', 'noul', {}, {yes: 1, no: 2}),
+  label('quality', 'score', FRUS_CRITERIA, {1: 2, 4: 1}),
+  label('sentiment', 'choice', {positive: 'Positive', negative: 'Negative'}, {positive: 2, negative: 1}),
+];
+const customTraces = () => [
+  trace('t1', {l: {made_errors: ['no'], quality: ['1'], sentiment: ['positive']}}),
+  trace('t2', {l: {made_errors: ['yes'], quality: ['4'], sentiment: ['negative']}}),
+  trace('t3', {l: {made_errors: ['no'], quality: ['1'], sentiment: ['positive']}}),
+];
+{
+  const env = load({labels: CUSTOM(), traces: customTraces()});
+  const custom = ['lbl:made_errors', 'lbl:quality', 'lbl:sentiment'];
+  const {doc, rows} = checkList(env, ['when', 'req', 'theme', ...custom, 'errors']);
+  assert.deepEqual(tracks(env.els.tlist.style['--tr-cols']).slice(-4), ['70px', '96px', '120px', '52px'], 'track width by kind');
+  const text = (row, key) => row.querySelector(`[data-col="${key}"]`).textContent.trim();
+  assert.deepEqual(custom.map(k => text(rows[0], k)), ['No', 'calm', 'Positive']);
+  assert.deepEqual(custom.map(k => text(rows[1], k)), ['Yes', 'frustrated', 'Negative']);
+  const head = doc.querySelector('.trh').querySelector('[data-col="lbl:made_errors"]');
+  assert.equal(head.textContent, 'Made errors');
+  assert.equal(head.getAttribute('title'), 'Made errors');
+  assert.equal(head.getAttribute('class'), 'lbl');
+}
+
+/* built-in coding labels keep their renderers; coding_agent gets no column; custom ones follow them */
+{
+  const traces = [
+    trace('t1', {l: {coding_agent: ['yes'], task_type: ['bugfix'], outcome: ['done'], user_frustration: ['1'], unfixed_error: ['no'], risky_action: ['none'], verified: ['verified'], user_corrections: ['0'], made_errors: ['no'], quality: ['1'], sentiment: ['positive']}}),
+    trace('t2', {l: {coding_agent: ['yes'], task_type: ['bugfix'], outcome: ['partial'], user_frustration: ['4'], unfixed_error: ['yes'], risky_action: ['deleted'], verified: ['unverified'], user_corrections: ['3'], made_errors: ['yes'], quality: ['4'], sentiment: ['negative']}}),
+  ];
+  const labels = [label('coding_agent', 'noul', {}, {yes: 2}), ...FULL_CODING(), CUSTOM()[0], CUSTOM()[2]];
+  const env = load({labels, traces});
+  const builtin = ['when', 'req', 'theme', 'task', 'outcome', 'frus', 'unfixed', 'risky', 'unver', 'corr'];
+  checkList(env, [...builtin, 'lbl:made_errors', 'lbl:sentiment', 'errors']);
+  assert.doesNotMatch(env.els.tlist.innerHTML, /coding_agent/);
+}
+
+/* a custom question configured but never asked gets no column */
+{
+  const unasked = label('sentiment', 'choice', {positive: 'Positive'});
+  const env = load({labels: [unasked, CUSTOM()[0]], traces: customTraces()});
+  checkList(env, ['when', 'req', 'theme', 'lbl:made_errors', 'errors']);
+}
+
+/* a custom question that failed on a trace reads failed in that cell */
+{
+  const traces = customTraces();
+  traces[1].l.sentiment = undefined;
+  traces[1].label_errors = {sentiment: 'timeout'};
+  const env = load({labels: [CUSTOM()[2]], traces});
+  const {rows} = checkList(env, ['when', 'req', 'theme', 'lbl:sentiment', 'errors']);
+  assert.equal(rows[0].querySelector('[data-col="lbl:sentiment"]').textContent.trim(), 'Positive');
+  assert.match(rows[1].querySelector('[data-col="lbl:sentiment"]').innerHTML, /failed/);
+}
+
 console.log('Insights trace column checks passed');

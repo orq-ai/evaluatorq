@@ -16,27 +16,39 @@ Four separate settings carry the words "reasoning effort", and they apply to fou
 
 | You want to change | Use | Applies to |
 |---|---|---|
-| The **target agent** under test | `--target-reasoning-effort`, or `LLMConfig(target_reasoning_effort=...)` / `simulate(target_reasoning_effort=...)` | The agent being red-teamed or simulated |
+| The **target agent** under test | `--target-reasoning-effort` (`eq redteam run`, `eq sim run` and `eq sim simulate`), or `LLMConfig(target_reasoning_effort=...)` / `simulate(target_reasoning_effort=...)` | The agent being red-teamed or simulated |
 | The **attacker or judge** in red teaming | `LLMCallConfig(reasoning_effort=...)` on `attacker=` / `evaluator=` | evaluatorq's own pipeline calls |
 | The **user simulator and judge** in simulation | `EVALUATORQ_REASONING_EFFORT`, or `llm_config=LLMCallConfig(reasoning_effort=...)` on `simulate()` / `generate_and_simulate()` | evaluatorq's own simulation calls |
-| The **jury** in core evaluation | `reasoning_effort=` on `llm_jury()`, `llm_jury_pairwise()` or `PairwiseComparator` | The verdict calls those evaluators make under `evaluatorq()` |
+| The **jury** in core evaluation (Python only, no CLI form) | `reasoning_effort=` on `llm_jury()`, `llm_jury_pairwise()` or `PairwiseComparator` | The verdict calls those evaluators make under `evaluatorq()` |
 
-```python
-from evaluatorq.contracts import LLMCallConfig
-from evaluatorq.redteam import EvaluatorConfig, LLMConfig, red_team
+=== "CLI"
 
-await red_team(
-    target="agent:my-agent",
-    llm_config=LLMConfig(
-        # the attacker's own thinking budget
-        attacker=LLMCallConfig(model="openai/gpt-5.6-luna", reasoning_effort="high"),
-        # the judge's own thinking budget
-        evaluator=EvaluatorConfig(model="openai/gpt-5.6-luna", reasoning_effort="low"),
-        # the thinking budget of the agent being attacked
-        target_reasoning_effort="medium",
-    ),
-)
-```
+    ```bash
+    eq redteam run --target agent:my-agent --yes --llm-config '{
+      "attacker": {"model": "openai/gpt-5.6-luna", "reasoning_effort": "high"},
+      "evaluator": {"model": "openai/gpt-5.6-luna", "reasoning_effort": "low"},
+      "target_reasoning_effort": "medium"
+    }'
+    ```
+
+=== "Python"
+
+    ```python
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.redteam import EvaluatorConfig, LLMConfig, red_team
+
+    await red_team(
+        target="agent:my-agent",
+        llm_config=LLMConfig(
+            # the attacker's own thinking budget
+            attacker=LLMCallConfig(model="openai/gpt-5.6-luna", reasoning_effort="high"),
+            # the judge's own thinking budget
+            evaluator=EvaluatorConfig(model="openai/gpt-5.6-luna", reasoning_effort="low"),
+            # the thinking budget of the agent being attacked
+            target_reasoning_effort="medium",
+        ),
+    )
+    ```
 
 Accepted values differ per model, and evaluatorq does not guess: the value is forwarded verbatim and the **provider** is the authority. An unsupported value comes back as a 400, which the executors turn into a drop-the-block-and-retry-once — the call succeeds without reasoning rather than failing, and the rejection is remembered for the rest of the process so later calls to the same model skip the block up front.
 
@@ -67,16 +79,25 @@ The same holds per call: a `temperature=None` argument means "leave it unset", n
 
 Red teaming already had a home for it: `LLMConfig(attacker=..., evaluator=...)` on `red_team()`. Simulation now has the matching one — `llm_config=` on `simulate()`, `generate_and_simulate()` and `generate()`:
 
-```python
-from evaluatorq.contracts import LLMCallConfig
-from evaluatorq.simulation import simulate
+=== "CLI"
 
-await simulate(
-    target="agent:my-agent",
-    datapoints=datapoints,
-    llm_config=LLMCallConfig(model="openai/gpt-5.6-luna", temperature=0.2),
-)
-```
+    ```bash
+    eq sim simulate --input cases.jsonl --target agent:my-agent \
+      --llm-config '{"model": "openai/gpt-5.6-luna", "temperature": 0.2}'
+    ```
+
+=== "Python"
+
+    ```python
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation import simulate
+
+    await simulate(
+        target="agent:my-agent",
+        datapoints=datapoints,
+        llm_config=LLMCallConfig(model="openai/gpt-5.6-luna", temperature=0.2),
+    )
+    ```
 
 One config drives every simulation-side call — five roles: the user simulator, the judge, the persona / scenario / first-message generators, the recommendations pass and the executive summary. It never touches the target under test — that is the thing being measured, and it is configured where it is constructed.
 
@@ -92,7 +113,7 @@ Simulation's own calls default to the **Responses API**, even though `LLMCallCon
 
 Three fields are narrower than the rest. `max_tokens` reaches the user simulator, the judge and the executive summary; the generators and the recommendations pass size their own budget from the item count instead. `api` and `retry_count` reach the two agents only — every other role is pinned to one endpoint and owns its own retry, and the judge is pinned too. Each is logged when ignored, so a value that did not apply says so rather than disappearing.
 
-One config covers every simulation-side role, so a sampling setting reaches the judge and the simulated user alike. That is the trade for a single knob: lowering `temperature` to make scoring more repeatable also flattens the variation the simulated user exists to produce, and reasoning-class models reject `temperature` at any value. When you want to configure one role and not the others, build that agent yourself and pass it as `judge=` or `user_simulator=` — an injected agent carries its own settings, and `simulate()` warns that `llm_config` will not reach it.
+One config covers every simulation-side role, so a sampling setting reaches the judge and the simulated user alike. That is the trade for a single knob: lowering `temperature` to make scoring more repeatable also flattens the variation the simulated user exists to produce, and reasoning-class models reject `temperature` at any value. When you want to configure one role and not the others (Python only, the CLI has no flag for an injected agent), build that agent yourself and pass it as `judge=` or `user_simulator=` — an injected agent carries its own settings, and `simulate()` warns that `llm_config` will not reach it.
 
 ## Target-call reliability
 
@@ -100,44 +121,58 @@ The target is the slow, flaky part of any run: it is a real agent running real t
 
 === "Red teaming"
 
-    ```bash
-    eq redteam run -t agent:my-agent \
-      --target-timeout-ms 480000 \
-      --max-target-retries 3 \
-      --max-tool-continuations 8
-    ```
+    === "CLI"
 
-    ```python
-    from evaluatorq.redteam import LLMConfig, red_team
+        ```bash
+        eq redteam run -t agent:my-agent --yes \
+          --target-timeout-ms 480000 \
+          --max-target-retries 3 \
+          --max-tool-continuations 8
+        ```
 
-    await red_team(
-        target="agent:my-agent",
-        llm_config=LLMConfig(
-            target_agent_timeout_ms=480_000,
-            max_target_retries=3,
-            max_tool_continuations=8,
-        ),
-    )
-    ```
+    === "Python"
+
+        ```python
+        from evaluatorq.redteam import LLMConfig, red_team
+
+        await red_team(
+            target="agent:my-agent",
+            llm_config=LLMConfig(
+                target_agent_timeout_ms=480_000,
+                max_target_retries=3,
+                max_tool_continuations=8,
+            ),
+        )
+        ```
 
 === "Simulation"
 
-    ```bash
-    eq sim run --target agent:my-agent --target-reasoning-effort medium
-    ```
+    === "CLI"
 
-    ```python
-    from evaluatorq.simulation import simulate
+        ```bash
+        # eq sim simulate has no flags for these, so they go in --config
+        eq sim simulate --input cases.jsonl --target agent:my-agent --config '{
+          "target_agent_timeout_ms": 480000,
+          "max_target_retries": 3,
+          "per_simulation_timeout_s": 900,
+          "max_tool_result_chars": 2000
+        }'
+        ```
 
-    await simulate(
-        target="agent:my-agent",
-        datapoints=datapoints,
-        target_agent_timeout_ms=480_000,
-        max_target_retries=3,
-        per_simulation_timeout_s=900,
-        max_tool_result_chars=2000,
-    )
-    ```
+    === "Python"
+
+        ```python
+        from evaluatorq.simulation import simulate
+
+        await simulate(
+            target="agent:my-agent",
+            datapoints=datapoints,
+            target_agent_timeout_ms=480_000,
+            max_target_retries=3,
+            per_simulation_timeout_s=900,
+            max_tool_result_chars=2000,
+        )
+        ```
 
 | Knob | Default | Raise it when |
 |---|---|---|
@@ -182,6 +217,8 @@ from evaluatorq.contracts import LLMCallConfig
 
 cfg = LLMCallConfig(model="openai/gpt-5.6-luna", extra_kwargs={"top_p": 0.9})
 ```
+
+On the CLI, both go inside the `--llm-config` JSON. `eq sim` takes them at the top level (`{"extra_kwargs": {"top_p": 0.9}}`); `eq redteam run` takes them per role (`{"attacker": {"extra_kwargs": {"top_p": 0.9}}}`, or `evaluator`). The jury evaluators have no CLI, so they are Python only.
 
 Structural request fields are **reserved** and raise `ValueError` if they appear in `extra_kwargs`: `model`, `messages` / `input`, `response_format` / `text`, and `extra_body`. Letting `extra_kwargs` silently replace one of those would break the call it rides on — dropping a required JSON schema, or replacing the Orq router's thread and memory body wholesale.
 

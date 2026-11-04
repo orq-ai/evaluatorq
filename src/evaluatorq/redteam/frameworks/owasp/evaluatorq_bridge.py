@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections import Counter
 from functools import partial
 from pathlib import Path
@@ -13,6 +12,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from evaluatorq import DataPoint, EvaluationResult
+from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replacements, judge_error_payload, run_judge
 from evaluatorq.common.jury import (
     Prediction,
@@ -495,7 +495,7 @@ def _validate_platform_datapoint(inputs: dict[str, Any]) -> None:
 
 def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
     """Fetch all datapoints from an ORQ dataset, handling pagination."""
-    orq_api_key = os.environ.get('ORQ_API_KEY')
+    orq_api_key = env_raw('ORQ_API_KEY')
     if not orq_api_key:
         msg = (
             'Fetching datasets from the ORQ platform requires ORQ_API_KEY to be set. '

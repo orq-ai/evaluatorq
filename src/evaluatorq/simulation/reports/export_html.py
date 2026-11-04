@@ -1,9 +1,8 @@
 """HTML renderer for agent simulation reports.
 
-``export_html(results)`` produces a self-contained HTML document styled with
-the shared report CSS. All charts are Vega-Lite specs rendered to SVG via
-``vl-convert-python``; when that package is absent charts are omitted and
-the report degrades to a tables-only layout.
+``export_html(run_or_results)`` produces an offline document using the dashboard
+report layout with every available tab expanded. Legacy section renderers remain
+available to fragment consumers and the shared Markdown/HTML section layer.
 """
 
 from __future__ import annotations
@@ -22,9 +21,6 @@ from evaluatorq.common.reports import (
 )
 from evaluatorq.common.reports import (
     kpi_cards as _kpi_cards,
-)
-from evaluatorq.common.reports import (
-    load_css as _load_css,
 )
 from evaluatorq.common.reports import (
     pct as _pct,
@@ -57,7 +53,7 @@ from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import ReportSection, Usage
-    from evaluatorq.simulation.contracts import SimulationRecommendation, SimulationResult
+    from evaluatorq.simulation.contracts import SimulationRecommendation, SimulationResult, SimulationRun
 
 # Heatmap colour direction:
 # ``ORQ_SCALE_GOOD_BAD`` is green at 0.0 -> red at 1.0 (i.e. good == low).
@@ -703,10 +699,9 @@ def render_report_body(
 ) -> str:
     """Render simulation results as an HTML body fragment (no ``<html>`` or ``<head>`` wrapper).
 
-    This is the body-only counterpart to ``export_html``.  It assembles the
-    same hero header, KPI band, and section content but does not wrap the
-    output in a full HTML document.  Use this function when you need to embed
-    the report inside another shell (e.g. a FastHTML dashboard page).
+    This preserves the legacy section-by-section fragment for embedding.
+    ``export_html`` uses the dashboard report composition for its standalone
+    document; this fragment retains its existing layout for callers.
 
     Args:
         results: Simulation results to render.
@@ -785,7 +780,7 @@ def render_report_body(
 
 
 def export_html(
-    results: list[SimulationResult],
+    results: list[SimulationResult] | SimulationRun,
     *,
     target: str = 'agent',
     run_date: datetime | None = None,
@@ -794,28 +789,31 @@ def export_html(
     recommendations: list[SimulationRecommendation] | None = None,
     run_token_usage_total: Usage | None = None,
 ) -> str:
-    """Render a list of simulation results as a self-contained HTML document."""
-    head = (
-        '<meta charset="utf-8">\n'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        '<title>Agent Simulation Report</title>\n'
-        f'<style>\n{_load_css()}\n</style>'
-    )
-    body_html = render_report_body(
-        results,
-        target=target,
-        run_date=run_date,
-        executive_summary=executive_summary,
-        experiment_url=experiment_url,
-        recommendations=recommendations,
-        run_token_usage_total=run_token_usage_total,
-    )
-    return (
-        '<!DOCTYPE html>\n'
-        '<html lang="en">\n'
-        f'<head>\n{head}\n</head>\n'
-        '<body>\n<div class="container">\n'
-        f'{body_html}\n'
-        '</div>\n</body>\n'
-        '</html>\n'
-    )
+    """Render dashboard sections as an offline document.
+
+    Pass a ``SimulationRun`` to retain its captured agent, run configuration,
+    recommendation status, and whole-run usage. A result list remains accepted
+    for callers that do not have the saved run wrapper.
+    """
+    from evaluatorq.common.reports.standalone import simulation_html
+    from evaluatorq.simulation.contracts import SimulationRun
+
+    if isinstance(results, SimulationRun):
+        run = results
+    else:
+        run = SimulationRun(
+            run_name='Agent Simulation Report',
+            created_at=run_date or datetime.now(tz=timezone.utc),
+            mode='simulate',
+            target_kind='callback',
+            target=target,
+            evaluator_names=[],
+            total_results=len(results),
+            scorer_averages={},
+            results=results,
+            executive_summary=executive_summary,
+            experiment_url=experiment_url,
+            recommendations=recommendations,
+            token_usage_total=run_token_usage_total,
+        )
+    return simulation_html(run)

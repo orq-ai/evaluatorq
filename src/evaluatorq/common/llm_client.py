@@ -20,13 +20,14 @@ likely to be present intentionally.
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, NamedTuple
+
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-ORQ_DEFAULT_HOST = 'https://my.orq.ai'
+ORQ_DEFAULT_HOST = DEFAULT_ORQ_BASE_URL
 ORQ_ROUTER_SUFFIX = '/v3/router'
 
 
@@ -39,7 +40,7 @@ def orq_base_url() -> str:
     otherwise. See ``dashboard.orq_workspace.classify_host`` for prod/staging/
     on-prem detection from this value.
     """
-    return os.getenv('ORQ_BASE_URL', ORQ_DEFAULT_HOST).rstrip('/')
+    return env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL).rstrip('/')
 
 
 class MissingLLMCredentialsError(ValueError):
@@ -79,7 +80,7 @@ def client_routes_through_orq(client: AsyncOpenAI | None) -> bool:
 def resolve_results_base_url(
     client: AsyncOpenAI | None = None,
     *,
-    default_orq_host: str = ORQ_DEFAULT_HOST,
+    default_orq_host: str = DEFAULT_ORQ_BASE_URL,
 ) -> str:
     """Resolve the Orq host that results should be uploaded to.
 
@@ -94,7 +95,7 @@ def resolve_results_base_url(
     if client is not None and client_routes_through_orq(client):
         host = str(client.base_url).rstrip('/')
         return host[: -len(ORQ_ROUTER_SUFFIX)].rstrip('/')
-    return os.environ.get('ORQ_BASE_URL', default_orq_host).rstrip('/')
+    return env_raw('ORQ_BASE_URL', default_orq_host).rstrip('/')
 
 
 def resolve_llm_client(
@@ -102,7 +103,7 @@ def resolve_llm_client(
     *,
     extra_api_key: str | None = None,
     orq_host: str | None = None,
-    default_orq_host: str = ORQ_DEFAULT_HOST,
+    default_orq_host: str = DEFAULT_ORQ_BASE_URL,
     honor_openai_base_url: bool = True,
     require_orq: bool = False,
     max_retries: int | None = None,
@@ -150,9 +151,9 @@ def resolve_llm_client(
 
     retries = max_retries if max_retries is not None else DEFAULT_MAX_RETRIES
 
-    orq_api_key = extra_api_key or os.environ.get('ORQ_API_KEY')
+    orq_api_key = extra_api_key or env_raw('ORQ_API_KEY')
     if orq_api_key:
-        host = (orq_host or os.environ.get('ORQ_BASE_URL', default_orq_host)).rstrip('/')
+        host = (orq_host or env_raw('ORQ_BASE_URL', default_orq_host)).rstrip('/')
         router_url = f'{host}{ORQ_ROUTER_SUFFIX}'
         return ResolvedClient(
             client=AsyncOpenAI(api_key=orq_api_key, base_url=router_url, max_retries=retries),
@@ -168,9 +169,9 @@ def resolve_llm_client(
             'ORQ agent targets must run on the Orq router.'
         )
 
-    openai_api_key = os.environ.get('OPENAI_API_KEY')
+    openai_api_key = env_raw('OPENAI_API_KEY')
     if openai_api_key:
-        base_url = os.environ.get('OPENAI_BASE_URL') if honor_openai_base_url else None
+        base_url = env_raw('OPENAI_BASE_URL') if honor_openai_base_url else None
         client = (
             AsyncOpenAI(api_key=openai_api_key, base_url=base_url, max_retries=retries)
             if base_url

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Iterator  # noqa: TC003
+from collections.abc import Generator  # noqa: TC003
 from contextlib import contextmanager
 from pathlib import Path  # noqa: TC003
 
@@ -19,7 +19,7 @@ def _thread_lock(path: Path) -> threading.Lock:
 
 
 @contextmanager
-def strict_file_lock(path: Path, *, thread_lock: threading.Lock | None = None) -> Iterator[None]:
+def strict_file_lock(path: Path, *, thread_lock: threading.Lock | None = None) -> Generator[None, None, None]:
     """Hold a permanent lock file across threads and processes; fail if unavailable."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with thread_lock or _thread_lock(path):

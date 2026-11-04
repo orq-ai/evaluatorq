@@ -13,13 +13,13 @@ from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.dashboard.auth import DashboardAuth, build_auth_clients
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
     from openai import AsyncOpenAI
 
 
 @asynccontextmanager
-async def catalogue_client(auth: DashboardAuth) -> AsyncIterator[AsyncOpenAI]:
+async def catalogue_client(auth: DashboardAuth) -> AsyncGenerator[AsyncOpenAI, None]:
     """The client the catalogue is read through, closing whatever this opened.
 
     Yields:

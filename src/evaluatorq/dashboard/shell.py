@@ -115,6 +115,7 @@ _FAVICON_PATH = Path(__file__).parent / 'static' / 'orq-favicon.svg'
 _favicon_cache: str | None = None
 FIND_ICON = '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><circle cx="11" cy="11" r="2"/>'
 TRACE_ICON = '<path d="M3 12h3l3-8 6 16 3-8h3"/>'
+COMPRESSION_ICON = '<path d="m4 4 5 5M4 9h5V4"/><path d="m20 20-5-5m5 0h-5v5"/>'
 
 
 def _favicon_link() -> str:
@@ -201,7 +202,7 @@ def _sidebar_html(active_nav: str, *, compression_inspector_enabled: bool) -> st
             inspector_active = ' active' if active_nav == 'compression-inspector' else ''
             items.append(
                 f'<a class="nav-item{inspector_active}" href="/compression-inspector">'
-                f'{icon(TRACE_ICON)}<span>Compression inspector</span></a>'
+                f'{icon(COMPRESSION_ICON)}<span>Compression inspector</span></a>'
             )
         active = ' active' if key == active_nav else ''
         items.append(f'<a class="nav-item{active}" href="{href}">{icon(icon_path)}<span>{esc(label)}</span></a>')

@@ -14,3 +14,4 @@ Outcomes: `prepared` (work committed, PR not yet created) · `opened` · `blocke
 | 2026-09-28 | `entry point (simulate() / red_team()) × target kind (VercelAISdkTarget)` | docs/autofill-vercel-ai-sdk-target | opened |
 | 2026-10-05 | `entry point (fetch_traces()) × surface (Python API)` | docs/autofill-fetch-traces | opened |
 | 2026-10-12 | `entry point (run_classify()) × surface (Python API)` | docs/autofill-run-classify | opened |
+| 2026-10-26 | `tier 1: CLI flags (eq sim from-traces --generate-first-message/--replay-first-message, --redact-pii/--no-redact-pii, --max-summaries)` | docs/autofill-from-traces-flags | opened |

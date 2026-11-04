@@ -198,6 +198,7 @@ Set the embedding role with `EVALUATORQ_EMBEDDING_MODEL`, `--embedding-model`, t
 | `ORQ_WORKSPACE` / `ORQ_WORKSPACE_SLUG` | No | unset | Workspace slug used to build dashboard deep-links into the Orq UI for runs without an experiment URL. `ORQ_WORKSPACE` wins over `ORQ_WORKSPACE_SLUG`. When neither is set, those deep-link buttons are hidden. See [Dashboard](dashboard.md). |
 | `ORQ_UI_BASE_URL` | No | Saved profile host, then `ORQ_BASE_URL`, then `https://my.orq.ai` | Base URL for dashboard deep-links into the Orq UI. Set this when the UI host differs from the selected profile's API host. |
 | `EVALUATORQ_DASHBOARD_SETTINGS` | No | `.evaluatorq/dashboard-settings.json` | Path to the JSON file used for dashboard and trace-finder models and the selected authentication method. |
+| `EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY` | Off macOS, to store an API key | unset | Fernet key that encrypts an API key entered on the dashboard Settings page before it is saved to the settings file. When set, it is used on every platform, macOS included. When unset, macOS keeps the encryption key in Keychain and other platforms cannot save a key. An invalid Fernet key raises an error. Generate one with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. |
 | `EVALUATORQ_FINDER_WINDOW_DAYS` | No | `7` | Default number of recent days searched by the trace finder. Valid values are `1` through `90`. |
 | `EVALUATORQ_FINDER_LIMIT` | No | `500` | Default maximum number of traces selected for trace-finder classification. Valid values are `1` through `5000`. |
 | `EVALUATORQ_FINDER_PARALLELISM` | No | `100` | Default number of concurrent per-trace classify calls. Valid values are `1` through `200`. |
@@ -209,7 +210,7 @@ See [Tracing](tracing.md) for the full picture.
 
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
-| `ORQ_DISABLE_TRACING` | No | unset | Set to `1`, `true`, `yes` or `on` to suppress all OpenTelemetry spans even when `ORQ_API_KEY` or `OTEL_EXPORTER_OTLP_ENDPOINT` is present. Case-insensitive; see [When a value is wrong](#when-a-value-is-wrong). |
+| `ORQ_DISABLE_TRACING` | No | `false` | Set to `1`, `true`, `yes` or `on` to suppress all OpenTelemetry spans even when `ORQ_API_KEY` or `OTEL_EXPORTER_OTLP_ENDPOINT` is present. Case-insensitive; see [When a value is wrong](#when-a-value-is-wrong). |
 | `ORQ_DEBUG` | No | unset | Set to any non-empty value to print tracing setup diagnostics to stdout (endpoint, auth headers, initialization errors). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | — | Explicit OTLP HTTP endpoint. Takes precedence over the `ORQ_BASE_URL`-derived endpoint. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | No | — | Comma-separated `key=value` pairs added to every OTLP export request. Format: `key1=value1,key2=value2`. |
@@ -219,9 +220,9 @@ See [Tracing](tracing.md) for the full picture.
 | `ORQ_OTEL_MAX_BATCH_SIZE` | No | `512` | Maximum spans per OTLP export request. Reaching it wakes the exporter immediately. A value larger than the queue size is clamped to the queue size, with a warning. |
 | `ORQ_OTEL_SCHEDULE_DELAY_MS` | No | `5000` | Milliseconds a partial batch waits before it is exported. It does not throttle a full batch. |
 | `ORQ_OTEL_FLUSH_TIMEOUT_MS` | No | `5000` | Milliseconds the end-of-run force-flush waits before giving up and logging a warning. Read per run; enforced by evaluatorq rather than the SDK. Bounds the final flush only — the per-request export timeout is a fixed 5s. |
-| `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` | No | `true` | Set to `false`, `0`, `no` or `off` to strip LLM message content (prompts and responses) from spans. Case-insensitive; see [When a value is wrong](#when-a-value-is-wrong). Token counts, model name, and latency are still recorded. Useful when exporting to third-party backends or to avoid capturing PII. |
+| `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` | No | `true` | Set to `false`, `0`, `no` or `off` to strip LLM message content, job input/output, and evaluator input/output payloads from spans. Scalar evaluator scores and explanations remain available. Case-insensitive; see [When a value is wrong](#when-a-value-is-wrong). Token counts, model name, and latency are still recorded. Useful when exporting to third-party backends or to avoid capturing PII. |
 | `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` | No | `true` | Set to `false`, `0`, `no` or `off` to stop evaluatorq sending W3C `traceparent`/`tracestate` headers on its outgoing LLM and target calls. Case-insensitive; see [When a value is wrong](#when-a-value-is-wrong). Default on, so an Orq-hosted deployment or agent nests its server-side spans under the calling span. Turn it off when the receiving side should trace independently, or when a gateway rejects an unexpected `traceparent`. |
-| `EVALUATORQ_SPAN_MAX_TEXT_CHARS` | No | unset (no limit) | Maximum characters per span text attribute. Set a positive integer (e.g. `8192`) to truncate long strings. Unset or `0` / `-1` means capture all. |
+| `EVALUATORQ_SPAN_MAX_TEXT_CHARS` | No | unset (no limit) | Maximum characters per span text attribute (per string value inside structured job/evaluator payloads). Set a positive integer (e.g. `8192`) to truncate long strings. Unset or `0` / `-1` means capture all. |
 
 ### Simulation LLM defaults
 
@@ -283,7 +284,7 @@ EVALUATORQ_CATALOGUE_TIMEOUT_S=abc eq redteam runs
 ```
 
 ```console
-2026-09-14 06:32:21.018 | WARNING  | evaluatorq.common.env_config:env_float:72 - EVALUATORQ_CATALOGUE_TIMEOUT_S is not a number ('abc'); using default 30.0.
+2026-09-14 06:32:21.018 | WARNING  | evaluatorq.common.env_config:env_float:232 - EVALUATORQ_CATALOGUE_TIMEOUT_S is not a number ('abc'); using default 30.0.
 ```
 
 The command then lists your runs as usual and exits `0` — the rejected timeout costs it nothing but that line. Expect one line per read, not one per process: a knob read on every LLM call warns on every LLM call. The same contract on a boolean:
@@ -293,7 +294,7 @@ ORQ_DISABLE_TRACING=maybe python -c "from evaluatorq.tracing import is_tracing_e
 ```
 
 ```console
-2026-09-14 06:19:52.231 | WARNING  | evaluatorq.common.env_config:env_bool:95 - ORQ_DISABLE_TRACING is not a boolean ('maybe'); using default False.
+2026-09-14 06:19:52.231 | WARNING  | evaluatorq.common.env_config:env_bool:241 - ORQ_DISABLE_TRACING is not a boolean ('maybe'); using default False.
 ```
 
 None of the ten raise. A typo costs you a default and a log line, never a stopped process.

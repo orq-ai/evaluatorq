@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
+from evaluatorq.common.env_config import env_text
 from evaluatorq.contracts import (
     DEFAULT_CLASSIFIER_MODEL,
     DEFAULT_EMBEDDING_MODEL,
@@ -95,10 +96,6 @@ def parse_overrides(pairs: Iterable[str]) -> dict[str, str]:
     return parsed
 
 
-def _env(name: str) -> str | None:
-    return os.environ.get(name, '').strip() or None
-
-
 def export_cli_models() -> None:
     """Publish this process's CLI flags in the environment for child processes to inherit."""
     if _cli_roles or _cli_overrides:
@@ -109,7 +106,7 @@ def export_cli_models() -> None:
 
 def _inherited_cli_models() -> tuple[dict[str, str], dict[str, str]]:
     """The CLI flags a parent process exported, tolerating anything malformed."""
-    raw = _env(OVERRIDES_ENV)
+    raw = os.environ.get(OVERRIDES_ENV, '').strip() or None
     if not raw:
         return {}, {}
     try:
@@ -135,7 +132,7 @@ def _legacy_env(task: str) -> str | None:
     name = LEGACY_TASK_ENV.get(task)
     if name is None:
         return None
-    value = _env(name)
+    value = env_text(name)
     if value and name not in _warned_legacy:
         _warned_legacy.add(name)
         logger.warning('{} is deprecated; use --model-override {}={} or the settings file', name, task, value)
@@ -164,7 +161,7 @@ def _resolve(role: Role, task: str | None) -> tuple[str, str, bool]:
     if task and task in settings.model_overrides:
         return settings.model_overrides[task], 'settings', True
     env_name = ROLE_ENV.get(role)
-    env_value = _env(env_name) if env_name else None
+    env_value = env_text(env_name) if env_name else None
     if env_value:
         return env_value, 'env', False
     saved = getattr(settings, f'{role}_model')

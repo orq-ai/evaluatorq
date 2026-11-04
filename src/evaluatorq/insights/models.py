@@ -346,6 +346,17 @@ class LabelResult(BaseModel):
     n_failed: int
     n_not_asked: int = 0
 
+    @property
+    def counts_warning(self) -> str | None:
+        if self.spec.name != 'failure_taxonomy' or self.spec.kind != 'choice':
+            return None
+        if isinstance(self.spec.criteria, dict) and 'No failure' in self.spec.criteria:
+            return None
+        return (
+            'This failure taxonomy did not offer "No failure". '
+            'Its counts may include clean traces. Saved answers are unchanged.'
+        )
+
 
 class PriorityPoint(BaseModel):
     """One cluster's point in the priority matrix (volume vs. satisfaction vs. error share)."""

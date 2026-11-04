@@ -10,7 +10,7 @@ import contextvars
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from functools import partial
@@ -333,7 +333,9 @@ async def _start_attack_progress(
 
 
 @asynccontextmanager
-async def _target_attempt_span(attempt_index: int, *, prompt: str, turn: int, strategy_name: str) -> AsyncIterator[Any]:
+async def _target_attempt_span(
+    attempt_index: int, *, prompt: str, turn: int, strategy_name: str
+) -> AsyncGenerator[Any, None]:
     """Open one ``orq.redteam.target_call`` span per target attempt.
 
     Passed to ``call_target_with_retry`` as its ``on_attempt`` hook, so it runs

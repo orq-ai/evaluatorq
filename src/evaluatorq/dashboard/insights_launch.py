@@ -18,13 +18,13 @@ import uuid
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from types import MappingProxyType
-from typing import Literal, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 from loguru import logger
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from typing_extensions import Self
 
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
 from evaluatorq.common.private_files import write_private_atomic
 from evaluatorq.common.run_manifest import fail_if_running, start_manifest
 from evaluatorq.common.run_store_dir import get_store_dir
@@ -42,6 +42,9 @@ from evaluatorq.insights.store import get_insights_runs_dir
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import FacetSelection, Snapshot
 from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
+
+if TYPE_CHECKING:
+    from evaluatorq.common.orq_client import OrqProfile
 
 Source = Literal['recent', 'query', 'finder', 'snapshot']
 FormSource = Source | Literal['sessions']
@@ -372,7 +375,9 @@ def _worker_process_identity(pid: int) -> str | None:
 
 # The child must record import-time failures too. This tiny stdlib-only wrapper
 # runs before importing the package worker, then edits the already-created
-# manifest if Python cannot import the worker or its dependencies.
+# manifest if Python cannot import the worker or its dependencies. Its environment
+# reads sit inside a string, out of reach of the env_config guard; the three names are
+# in ENV_NAME_EXEMPT in tests/test_reuse_guardrails.py.
 _WORKER_BOOTSTRAP = """
 import datetime, json, os, runpy, stat, sys, tempfile
 manifest = os.environ.get("EVALUATORQ_INSIGHTS_MANIFEST")

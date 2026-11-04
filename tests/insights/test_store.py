@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from evaluatorq.insights import store
+from evaluatorq.insights.models import LabelAnswer, LabelResult
+from evaluatorq.insights.presets import FAILURE_TAXONOMY
 from evaluatorq.insights.store import list_run_paths, list_runs, load_run, save_run
 
 
@@ -22,6 +24,76 @@ def test_round_trip_and_truncated_file(minimal_run, tmp_path: Path) -> None:
     assert [p for p, _ in listed] == [broken, path]
     assert isinstance(listed[0][1], str)
     assert isinstance(listed[1][1], type(minimal_run))
+
+
+def test_saved_legacy_failure_taxonomy_warns_without_changing_saved_data(minimal_run, tmp_path: Path) -> None:
+    import json
+
+    assert isinstance(FAILURE_TAXONOMY.criteria, dict)
+    legacy_criteria = FAILURE_TAXONOMY.criteria.copy()
+    legacy_criteria.pop('No failure')
+    legacy_spec = FAILURE_TAXONOMY.model_copy(update={
+        'instructions': 'Classify the primary way the assistant failed in this trace.',
+        'criteria': legacy_criteria,
+    })
+    traces = [trace.model_copy(update={'labels': {
+        'failure_taxonomy': LabelAnswer(value='Hallucination', confidence=0.9, probabilities=None, error=None),
+    }}) for trace in minimal_run.traces]
+    result = LabelResult(
+        spec=legacy_spec,
+        counts={'Hallucination': len(traces)},
+        mean_confidence=0.9,
+        n_low_confidence=0,
+        n_failed=0,
+    )
+    run = minimal_run.model_copy(update={
+        'config': minimal_run.config.model_copy(update={'labels': [legacy_spec]}),
+        'traces': traces,
+        'labels': {'failure_taxonomy': result},
+    })
+
+    path = save_run(run, tmp_path)
+    saved_bytes = path.read_bytes()
+    restored = load_run(path)
+    saved_model = restored.model_dump(mode='json')
+
+    assert restored.config.labels == [legacy_spec]
+    assert restored.labels['failure_taxonomy'].spec == legacy_spec
+    assert [trace.labels['failure_taxonomy'].value for trace in restored.traces] == ['Hallucination'] * len(traces)
+    assert restored.labels['failure_taxonomy'].counts == {'Hallucination': len(traces)}
+    assert restored.warnings == run.warnings
+    counts_warning = restored.labels['failure_taxonomy'].counts_warning
+    assert counts_warning is not None
+    assert 'may include clean traces' in counts_warning
+    assert path.read_bytes() == saved_bytes
+    assert json.loads(path.read_bytes()) == saved_model
+    assert restored.model_dump(mode='json') == saved_model
+
+    revised_criteria = {**legacy_criteria, 'No failure': 'The assistant did not fail in this trace.'}
+    revised_spec = legacy_spec.model_copy(update={
+        'instructions': FAILURE_TAXONOMY.instructions,
+        'criteria': revised_criteria,
+    })
+    revised_trace = traces[0].model_copy(update={'labels': {
+        **traces[0].labels,
+        'failure_taxonomy': LabelAnswer(value='No failure', confidence=0.9, probabilities=None, error=None),
+    }})
+    revised = LabelResult(
+        spec=revised_spec,
+        counts={'No failure': 1},
+        mean_confidence=0.9,
+        n_low_confidence=0,
+        n_failed=0,
+    )
+    revised_run = run.model_copy(update={
+        'config': run.config.model_copy(update={'labels': [revised_spec]}),
+        'traces': [revised_trace],
+        'labels': {'failure_taxonomy': revised},
+    })
+    revised_path = save_run(revised_run, tmp_path)
+    revised_restored = load_run(revised_path)
+    assert revised_restored.traces[0].labels['failure_taxonomy'].value == 'No failure'
+    assert revised_restored.labels['failure_taxonomy'].counts_warning is None
 
 
 def test_map_layouts_survive_save_and_legacy_reports_remain_readable(minimal_run, tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, computed_field
 from typing_extensions import TypedDict
 
+from evaluatorq.common.responses import scrub_wire_schema
 from evaluatorq.contracts import (
     DEFAULT_PIPELINE_MODEL,
     Message,
@@ -317,11 +318,49 @@ class Criterion(BaseModel):
         Criterion(description="Agent blames the customer", type="must_not_happen"),
     ]
     ```
+
+    `MustHappenCriterion` and `MustNotHappenCriterion` fix the type for you.
     """
 
     description: str
     type: Literal['must_happen', 'must_not_happen']
     evaluator: str | None = None
+
+
+class MustHappenCriterion(Criterion):
+    """A `Criterion` that passes when the described behaviour occurs.
+
+    Usage:
+
+    ```python
+    from evaluatorq.simulation import MustHappenCriterion
+
+    criterion = MustHappenCriterion("Agent asks for order details")
+    ```
+    """
+
+    type: Literal['must_happen'] = 'must_happen'  # ty: ignore[invalid-mutable-override] -- pins the parent's type
+
+    def __init__(self, description: str, **data: Any) -> None:
+        super().__init__(description=description, **data)
+
+
+class MustNotHappenCriterion(Criterion):
+    """A `Criterion` that passes when the described behaviour does not occur.
+
+    Usage:
+
+    ```python
+    from evaluatorq.simulation import MustNotHappenCriterion
+
+    criterion = MustNotHappenCriterion("Agent blames the customer")
+    ```
+    """
+
+    type: Literal['must_not_happen'] = 'must_not_happen'  # ty: ignore[invalid-mutable-override] -- pins the parent's type
+
+    def __init__(self, description: str, **data: Any) -> None:
+        super().__init__(description=description, **data)
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +429,10 @@ class CriterionVerdict(BaseModel):
     marked a satisfied `must_happen` as unmet while its own reason said otherwise.
     The type-to-verdict mapping lives in code, where it cannot be confused.
     """
+
+    # The judge's response schema embeds this model; its docstring is maintainer
+    # rationale, not something to show the judge.
+    model_config = ConfigDict(json_schema_extra=scrub_wire_schema)
 
     criterion_id: str = Field(
         pattern=CRITERION_ID_PATTERN,
@@ -803,3 +846,5 @@ class SimulationEntry(BaseModel):
     transcript: list[TranscriptMessage]
     thread_id: str | None = None
     last_trace_id: str | None = None
+    goal: str | None = None
+    """The scenario goal the judge scored against. ``None`` on runs saved before the field."""

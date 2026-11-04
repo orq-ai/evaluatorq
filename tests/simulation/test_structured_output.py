@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: S101
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -955,7 +955,7 @@ def _capture_span(monkeypatch: pytest.MonkeyPatch) -> _FakeSpan:
     span = _FakeSpan()
 
     @contextlib.asynccontextmanager
-    async def _fake_span(**_kwargs: Any) -> AsyncIterator[_FakeSpan]:
+    async def _fake_span(**_kwargs: Any) -> AsyncGenerator[_FakeSpan, None]:
         yield span
 
     monkeypatch.setattr(structured_output_module, 'with_llm_span', _fake_span)

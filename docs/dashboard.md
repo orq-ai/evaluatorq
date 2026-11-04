@@ -204,6 +204,12 @@ The red team surface exposes four dashboard-only interactive panels alongside th
 3. **Conversation viewer** — drill into the full message-by-message transcript for any individual attack (system / user / assistant / tool messages plus evaluator explanation).
 4. **Disagreement viewer** — for multi-agent runs, select any agent pair and page through attacks where their results differ (side-by-side transcripts).
 
+### Per-attack jury panel health
+
+Open an attack in the red-team report's **Attacks** tab to inspect its **Jury panel health**, the recorded votes from its panel of model judges. The panel sits below the evaluator verdict and above the transcript. Boolean votes read **RESISTANT** or **VULNERABLE**; an abstention reads **abstained**, and a judge that failed reads **failed** with its recorded error. Failed repetitions and replacement judges carry their own tags.
+
+The summary counts decisive votes over all attempted judges, including replacements. For example, three configured judges and one replacement with two decisive votes read **2/4 decisive votes**. The **failed** count covers configured judges only; a failed replacement is visible in its own row. An abstention contributes no decisive vote, so read the per-judge rows before treating a small numerator as a mechanical failure. Ties and inconclusive panels are marked explicitly. A result with no recorded jury has no panel; reopening an older single-judge run cannot recover votes that were never saved.
+
 ### Apply recommendations to the agent
 
 On a single-agent run that produced recommendations, **Focus areas** and **Recommendations** can preview suggested instruction changes as a diff. Nothing is written until you confirm. Applying a recommendation creates a new minor agent version and marks the recommendation as applied on the run.
@@ -379,9 +385,9 @@ Zeros everywhere and an empty rail mean no report files were found, not that the
 
 ### 2. Agent Sim — pick a run { #sim-run-list }
 
-**Agent Sim** lists every simulation job with its target, goal-completion score, conversation count and cost. The picker above the list selects two runs to compare — see [Compare](#sim-compare).
+**Agent Sim** shows goal completion, simulations run, average turns and total recorded spend in one summary strip. Pricing coverage appears beneath the spend when some calls have no recorded cost. Each run lists its target, goals achieved over total conversations, goal-completion percentage, conversation count and cost. Errors are called out separately; a run where every conversation errored has no goal verdict. Goal completion includes errors in the total conversation count. Open a report and use **Compare with** to [compare two runs](#sim-compare).
 
-![The Agent Sim run list: simulations run, goal completion, average turns and cost per simulation.](assets/dashboard/sim-02-run-list.png){ .dashboard-shot }
+![The Agent Sim run list: goal completion, simulations run, average turns and total spend.](assets/dashboard/sim-02-run-list.png){ .dashboard-shot }
 
 ### 3. Overview — the headline { #sim-overview }
 
@@ -391,7 +397,7 @@ Those four are scored by the judge on every turn regardless of what you passed i
 
 Two numbers on this screen are easy to conflate. The **pass rate** is the share of conversations where the judge set `goal_achieved` — the donut. **Average score** is the mean `goal_completion_score`, the judge's 0–1 rating of *how fully* the goal was met, so a run can average 0.7 while passing half its conversations.
 
-The **CONFIDENCE** badge is a band on the pass rate, not a statistical confidence: ≥ 80% of goals achieved reads HIGH, ≥ 50% MEDIUM, below that LOW. It carries no sample-size meaning at all — three conversations that all pass still read HIGH. A LOW badge says the run went badly, not that you need more data.
+The simulation summary does not show a confidence badge: goal success alone does not establish how much evidence supports the result. Read the conversation count and errors alongside the rates. When every conversation errors, the summary states that no goal verdict is available. Cohorts with no completed conversations show unavailable goal rates and scores in Breakdown; the distribution includes only completed conversations. Partial cohorts retain the total-conversation denominator and display their error counts. Confirmed criterion violations observed before an execution error remain in the failure-mode list.
 
 Filters sit in the right rail on every tab — goal outcome, rule violations, who terminated the conversation, persona, scenario, and score/turn thresholds — and the whole page respects them. "Terminated by" takes four values: `judge` (the judge decided the conversation was done), `max_turns` (the turn cap hit first), `error`, and `timeout`. A run dominated by `max_turns` means the cap, not the agent, decided where the conversations ended.
 
@@ -444,6 +450,12 @@ Every report page includes a download sidebar with export links:
 | Markdown | yes | yes | — |
 | CSV (filtered result rows) | yes | — | yes |
 | JSON (filtered result rows) | yes | yes | yes |
+
+Simulation and red-team HTML downloads open with a compact report brief: tested scope, outcome and coverage counts, and up to three priority findings linked to their evidence. The findings show recorded recommendations or existing framework guidance when available; missing recommendations stay explicit. Every available dashboard tab follows as a numbered section, with chart-reading notes and links back to the brief. Configuration and usage appear in closed appendix disclosures at the end. The file embeds its styles, fonts, charts and recorded evidence, so it opens without the dashboard server or an internet connection. Conversation and attack details are embedded in foldable rows that are closed by default, with local links from summary tables to their summaries. Open a row to read the complete transcript. Printing includes the evidence rows and appendix disclosures you have opened; closed disclosures retain only their summaries. A notice in the printout explains this limit. Recommendations retain their recorded applied status; applying changes, fetching live agent details and comparing runs remain dashboard actions.
+
+Red-team rates use evaluated attacks as their denominator. The Overview shows evaluation coverage and distinguishes attacks without verdicts from recorded errors, so a partially evaluated run does not read as a clean pass.
+
+HTML downloads render the full, unfiltered saved report. For simulation, the saved run supplies the captured agent details, target, model, maximum turns, recommendations and whole-run token usage when recorded. Missing fields in older runs stay unavailable. Transcripts are included in full, so a large run produces a larger file. CSV and JSON downloads continue to contain the filtered result rows.
 
 The pairwise CSV writes one row per comparison: the question, the consensus winner, and each judge's vote as its own column, all resolved to the run's side labels rather than the bare `A` / `B` slot letters.
 

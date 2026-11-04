@@ -2,7 +2,7 @@
 
 Persistent copies of the `eq dashboard` screenshots produced for [DOC-653](https://linear.app/orqai/issue/DOC-653) (red teaming) and [DOC-655](https://linear.app/orqai/issue/DOC-655) (agent simulation). They were posted as Linear comments first; Linear's upload URLs are signed and expire, so the files live here instead. Docs pages and the README should reference these paths, not the Linear links.
 
-Captured against the FastHTML dashboard at `main @ fcb525a6`, 1440×900, light theme, so the whole set reads consistently side by side.
+The original set was captured against the FastHTML dashboard at `main @ fcb525a6`, 1440×900, light theme. `sim-02-run-list.png` is a replacement screenshot from a synthetic set of 18 conversations, captured at 1440×1000; its spend is the total recorded spend for those runs. The remaining images retain their original provenance.
 
 ## Red teaming — `redteam-*.png`
 
@@ -23,12 +23,12 @@ Source run: hybrid red team, 2 target agents (one deliberately vulnerable, one h
 
 ## Agent simulation — `sim-*.png`
 
-Source run: `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 50 conversations against a refund agent, judged per turn. 74% goal completion, mean score 0.86, with one scenario column that clearly fails.
+Older screenshots use `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 50 conversations against a refund agent, judged per turn. 74% goal completion, mean score 0.86, with one scenario column that clearly fails. The replacement run-list screenshot uses synthetic data with 18 conversations across three runs.
 
 | File | Page |
 |---|---|
 | `sim-01-landing.png` | Dashboard landing, agent sim alongside red team |
-| `sim-02-run-list.png` | Agent Sim run list — goal completion, avg turns, cost per sim |
+| `sim-02-run-list.png` | Agent Sim run list — 18 synthetic conversations, goal completion, avg turns, total recorded spend |
 | `sim-03-overview.png` | Report → Overview — best/worst persona × scenario, quality metrics |
 | `sim-04-breakdown-heatmap.png` | Report → Breakdown — the persona × scenario heatmap |
 | `sim-05-transcripts.png` | Report → Transcripts — all 50 conversations |

@@ -82,7 +82,14 @@ function scoreKey(criteria, index) {
   const text = String(criteria[index] ?? '');
   return text.match(/^\s*(\d+)/)?.[1] || String(index);
 }
-function lvals(l) { return l.kind === 'noul' ? ['yes', 'no'] : l.kind === 'score' ? l.criteria.map((_, i) => scoreKey(l.criteria, i)) : Object.keys(l.criteria); }
+function lvals(l) {
+  if (l.kind === 'noul') return ['yes', 'no'];
+  if (l.kind === 'score') return l.criteria.map((_, i) => scoreKey(l.criteria, i));
+  const choices = l.criteria && typeof l.criteria === 'object' && !Array.isArray(l.criteria)
+    ? Object.keys(l.criteria)
+    : [];
+  return choices.length ? choices : Object.keys(l.counts || {});
+}
 function lval(t, name) {
   const a = t.l[name], l = LBY[name];
   if (!a || a[0] == null) return null;
@@ -145,15 +152,20 @@ const flagCell = (t, f) => {
   const tip = v === 'yes' ? (f.yesTip ? f.yesTip(t) : f.tip) : v === 'na' ? f.naTip : f.noTip;
   return `<span class="bool ${v === 'yes' ? 'yes' : 'no'}" title="${esc(tip)}">${v === 'yes' ? 'Yes' : v === 'na' ? 'n/a' : 'No'}</span>`;
 };
-const TRACE_COLS = [
+const LEAD_COLS = [
   {key: 'when', head: 'Date', tip: 'When the trace ran', track: '52px', cls: 'when', cell: t => fmtDate(t.ts)},
   {key: 'req', head: 'Request', tip: 'What the user asked', track: 'minmax(220px,1fr)', cls: 'req', title: t => t.request, cell: t => esc(t.request || '(no summary)')},
   {key: 'theme', head: 'Theme', tip: 'Theme the trace belongs to', track: '160px', cls: 'cl', needs: () => DIMS.length > 0,
     cell: t => { const c = S.dim ? clusterOf(t, S.dim) : null; return c ? `<i style="background:${c.color}"></i><span>${esc(c.name)}</span>` : '<span>Not grouped</span>'; }},
-  {key: 'task', head: 'Task', tip: 'Kind of task', track: '104px', cls: '', needs: () => asked('task_type'), cell: t => answerCell(t, 'task_type', () => chip('task_type', t))},
-  {key: 'outcome', head: 'Outcome', tip: 'How the task ended', track: '94px', cls: 'oc', needs: () => asked('outcome'), cell: t => answerCell(t, 'outcome', () => outcomeHtml(t))},
-  {key: 'frus', head: 'Frust.', tip: 'User frustration, 1 to 5', track: '52px', cls: 'ctr', needs: () => asked('user_frustration'), cell: t => answerCell(t, 'user_frustration', () => frusHtml(frus(t)))},
+  {key: 'task', label: 'task_type', head: 'Task', tip: 'Kind of task', track: '104px', cls: '', needs: () => asked('task_type'), cell: t => answerCell(t, 'task_type', () => chip('task_type', t))},
+  {key: 'outcome', label: 'outcome', head: 'Outcome', tip: 'How the task ended', track: '94px', cls: 'oc', needs: () => asked('outcome'), cell: t => answerCell(t, 'outcome', () => outcomeHtml(t))},
+  {key: 'frus', label: 'user_frustration', head: 'Frust.', tip: 'User frustration, 1 to 5', track: '52px', cls: 'ctr', needs: () => asked('user_frustration'), cell: t => answerCell(t, 'user_frustration', () => frusHtml(frus(t)))},
   ...FLAG_COLS.map(f => ({...f, cls: 'ctr', needs: () => asked(f.label), cell: t => flagCell(t, f)})),
+];
+const LABEL_TRACKS = {noul: '70px', score: '96px'};
+const COVERED = new Set(LEAD_COLS.map(c => c.label).filter(Boolean));
+const TRACE_COLS = [...LEAD_COLS,
+  ...LABELS.filter(l => l.name !== 'coding_agent' && !COVERED.has(l.name)).map(l => ({key: 'lbl:' + l.name, head: esc(human(l.name)), tip: human(l.name), track: LABEL_TRACKS[l.kind] || '120px', cls: 'lbl', needs: () => asked(l.name), cell: t => answerCell(t, l.name, () => chip(l.name, t))})),
   {key: 'errors', head: 'Errors', tip: 'Number of assistant mistakes in the summary', track: '52px', cls: '', needs: () => T.some(t => t.has_summary),
     cell: t => !t.has_summary ? NA : hasErr(t) ? `<span class="errb" title="Assistant errors">${t.errors.length}</span>` : '<span class="errb zero" title="No assistant errors in the summary">0</span>'},
 ];
@@ -894,9 +906,9 @@ function renderCompare() {
 function renderTraces() {
   const vis = visible(), sel = S.sel && S.sel.kind === 'trace' ? S.sel.id : null, cols = visibleCols();
   $('tlist').style.setProperty('--tr-cols', cols.map(c => c.track).join(' '));
-  const rows = vis.slice(0, S.more).map(t => `<button class="tr ${t.id === sel ? 'on' : ''}" data-t="${esc(t.id)}">${cols.map(c => `<span data-col="${c.key}" class="${c.cls}"${c.title ? ` title="${esc(c.title(t))}"` : ''}>${c.cell(t)}</span>`).join('')}</button>`).join('');
+  const rows = vis.slice(0, S.more).map(t => `<button class="tr ${t.id === sel ? 'on' : ''}" data-t="${esc(t.id)}">${cols.map(c => `<span data-col="${esc(c.key)}" class="${c.cls}"${c.title ? ` title="${esc(c.title(t))}"` : ''}>${c.cell(t)}</span>`).join('')}</button>`).join('');
   $('tlist').innerHTML = `<div class="th"><h3>Traces</h3><span class="c num">${vis.length}</span><input id="q" placeholder="Search requests and summaries" value="${esc(S.q)}"></div>
-    ${vis.length ? `<div class="tr trh">${cols.map(c => `<span data-col="${c.key}" class="${c.cls === 'oc' || c.cls === 'ctr' ? c.cls : ''}" title="${esc(c.tip)}">${c.head}</span>`).join('')}</div>` + rows : `<div class="empty"><b>No traces match</b>Remove a filter above or clear the search.</div>`}
+    ${vis.length ? `<div class="tr trh">${cols.map(c => `<span data-col="${esc(c.key)}" class="${['oc', 'ctr', 'lbl'].includes(c.cls) ? c.cls : ''}" title="${esc(c.tip)}">${c.head}</span>`).join('')}</div>` + rows : `<div class="empty"><b>No traces match</b>Remove a filter above or clear the search.</div>`}
     ${vis.length > S.more ? `<div class="tmore"><button class="btn" id="more">Show ${Math.min(20, vis.length - S.more)} more</button></div>` : ''}`;
   $('tlist').querySelectorAll('[data-t]').forEach(r => r.onclick = () => select('trace', r.dataset.t));
   $('q').oninput = e => {
@@ -950,6 +962,7 @@ function labelBlock(l, ts) {
   const failed = ts.length - answered;
   const vs = lvals(l).filter(v => counts[v]);
   return `<div class="lab"><div class="lh"><b>${esc(human(l.name))}</b><span>${answered ? '' : 'not answered'}${failed ? `${answered ? '' : ' · '}${failed} failed` : ''}</span></div>
+    ${l.counts_warning ? `<p class="note label-counts-warning" role="status">${esc(l.counts_warning)}</p>` : ''}
     ${answered ? `<div class="sbar">${vs.map(v => `<button data-l="${esc(l.name)}" data-v="${esc(v)}" class="${isOn({t: 'l', name: l.name, v}) ? 'on' : ''}" style="flex:${counts[v]};background:${lcolor(l.name, v)}" title="${esc(ldisp(l.name, v))}: ${counts[v]}">${counts[v]}</button>`).join('')}</div>
     <div class="slegend">${vs.map(v => `<span><i style="background:${lcolor(l.name, v)}"></i>${esc(ldisp(l.name, v))}</span>`).join('')}</div>` : `<div class="note">No answers for these traces.</div>`}</div>`;
 }

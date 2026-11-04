@@ -31,7 +31,6 @@ import asyncio
 import csv
 import io
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -45,8 +44,10 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from evaluatorq.common.cli_oauth import OrqCLIError, list_oauth_sessions
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, mask_secret
+from evaluatorq.common.env_config import report as env_report
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
+from evaluatorq.common.orq_client import OrqProfile, close_orq_client, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
@@ -127,16 +128,6 @@ def _paging(req: Request) -> tuple[int, int]:
     return page, per_page
 
 
-def _mask_key(value: str) -> str:
-    """Show only a key's last 4 characters so a user can validate *which* key is
-    loaded without exposing the secret. Hidden chars render as ``*`` (capped so a
-    long key doesn't blow out the row). Short keys reveal nothing but length."""
-    if len(value) <= 4:
-        return '*' * len(value)
-    stars = '*' * min(len(value) - 4, 16)
-    return f'{stars}{value[-4:]}'
-
-
 _CSV_FORMULA_LEAD = ('=', '+', '-', '@', '\t', '\r')
 
 
@@ -187,12 +178,12 @@ def _settings_config(
         config.append(('Orq profile status', 'unavailable — choose Environment or another profile'))
     if profile is not None:
         config.extend((
-            ('Selected profile API key', _mask_key(profile.api_key)),
+            ('Selected profile API key', mask_secret(profile.api_key)),
             ('Selected profile host', profile.server or DEFAULT_ORQ_BASE_URL),
         ))
+    env = {row.name: row for row in env_report()}
     for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
-        value = os.environ.get(var)
-        config.append((label, _mask_key(value) if value else 'not set'))
+        config.append((label, env[var].value or 'not set'))
     # Runs with an experiment URL supply their own link scope. Otherwise use
     # the selected OAuth workspace or the environment/CLI fallback.
     host = resolve_base_url()
@@ -223,18 +214,12 @@ def _index(req: Request) -> NotStr:
         # Combined Dashboard landing — aggregates across all run stores.
         body = landing_body(metrics.landing(roots))
         return NotStr(page('Dashboard', body, active_nav='dashboard'))
-    # Agent Sim is the design's rich item-level overview; Red Team (and any
-    # unknown surface) still render the run list.  Unknown surfaces fall
-    # through to an empty run-list screen rather than 500.
+    # Simulation and red team share the overview layout with surface-specific
+    # metrics. Unknown surfaces fall through to an empty run-list screen.
     label = SURFACE_LABELS.get(surface, 'Reports')
     pg, per_pg = _paging(req)
     if surface == 'sim':
-        # Compare picker options: sim runs only, excluding error-flagged runs
-        # (they route to a 404), newest-first, capped so the dropdown stays
-        # usable on large stores. library.scan reuses the mtime-keyed JSON
-        # cache metrics.sim_overview already warmed, so this is not a full re-parse.
-        sim_choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-        body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg), compare_choices=sim_choices)
+        body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg))
     elif surface == 'redteam':
         body = redteam_overview_body(metrics.redteam_overview(roots, page=pg, per_page=per_pg))
     else:

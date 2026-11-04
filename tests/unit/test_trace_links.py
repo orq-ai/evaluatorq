@@ -100,6 +100,10 @@ def test_button_renders_anchor(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'target="_blank"' in html
 
 
+def test_button_hides_malformed_http_url() -> None:
+    assert trace_links.trace_link_button('https://[bad', 'View traces') == ''
+
+
 def test_button_renders_extra_attributes() -> None:
     html = trace_links.trace_link_button(
         'https://x/y',

@@ -1,8 +1,9 @@
 """Ready-made labels and the discovered-dimension source fields.
 
-`INTENT_TAXONOMY` and `FAILURE_TAXONOMY` are copied verbatim (names and descriptions)
-from `trace_intelligence/classify/defaults.py` in `orq-traces-intelligence`, the
-project this package ports.
+`INTENT_TAXONOMY` and the failure modes in `FAILURE_TAXONOMY` are copied verbatim
+(names and descriptions) from `trace_intelligence/classify/defaults.py` in
+`orq-traces-intelligence`, the project this package ports. The `No failure`
+choice and its instruction in `FAILURE_TAXONOMY` are local additions.
 """
 
 from __future__ import annotations
@@ -92,12 +93,16 @@ INTENT_TAXONOMY = LabelSpec(
     },
 )
 
-# Copied verbatim (names and descriptions) from
-# `trace_intelligence/classify/defaults.py::DEFAULT_FAILURE_MODES` in orq-traces-intelligence.
+# Failure modes are copied verbatim (names and descriptions) from
+# `trace_intelligence/classify/defaults.py::DEFAULT_FAILURE_MODES` in orq-traces-intelligence; `No failure` and its
+# instruction are local additions.
 FAILURE_TAXONOMY = LabelSpec(
     name='failure_taxonomy',
     kind='choice',
-    instructions='Classify the primary way the assistant failed in this trace.',
+    instructions=(
+        'Classify the primary way the assistant failed in this trace. '
+        'Choose "No failure" when the assistant did not fail.'
+    ),
     criteria={
         'Hallucination': 'Fabricated facts, non-existent references, or invented data',
         'Instruction Non-compliance': 'Ignoring system prompt rules, constraints, or explicit user instructions',
@@ -113,6 +118,7 @@ FAILURE_TAXONOMY = LabelSpec(
         'Premature Termination': "Ended the task or conversation before the user's request was resolved",
         'Safety Guardrail Failure': 'Inappropriate safety bypass or false-positive content block',
         'Factual Inaccuracy': 'Incorrect but real-sounding information about the domain',
+        'No failure': 'The assistant did not fail in this trace.',
     },
 )
 

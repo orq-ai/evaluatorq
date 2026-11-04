@@ -1,6 +1,5 @@
 import asyncio
 import inspect
-import os
 from collections.abc import Awaitable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
@@ -9,6 +8,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from loguru import logger
 
+from .common.env_config import env_raw
 from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
 from .common.output_adapters import has_meaningful_output
@@ -342,7 +342,7 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
     return _ResolvedEvaluationInputs(
         data=data,
         inference=inference,
-        jobs=cast('list[Job]', jobs),
+        jobs=jobs,
         evaluators_list=evaluators_list,
         datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
@@ -879,7 +879,7 @@ async def evaluatorq(
         if single_trace:
             await _enter_single_trace(span_stack, tracing_context, name, _trace_type)
 
-        orq_api_key = os.environ.get('ORQ_API_KEY')
+        orq_api_key = env_raw('ORQ_API_KEY')
 
         start_time = datetime.now(timezone.utc)
 

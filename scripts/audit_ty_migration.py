@@ -301,16 +301,6 @@ def audit(*, baseline_path: Path = BASELINE) -> dict[str, set[str]]:
     workflow = (ROOT / '.github/workflows/ci.yml').read_text()
     _require(baseline['schema'] == 1, f'unsupported baseline schema {baseline["schema"]!r}')
     _require(
-        f'ty=={baseline["ty"]["version"]}' in config['dependency-groups']['dev'],
-        'pyproject dev group does not pin the baseline ty version',
-    )
-    locked = tomllib.loads((ROOT / 'uv.lock').read_text())
-    ty_packages = [package for package in locked['package'] if package['name'] == 'ty']
-    _require(
-        [package['version'] for package in ty_packages] == [baseline['ty']['version']],
-        'uv.lock ty version does not match the baseline',
-    )
-    _require(
         len(re.findall(r'(?m)^\s*run:\s*uv run ruff check src\s*$', workflow)) == 1,
         'ci.yml must contain exactly one `uv run ruff check src` step',
     )

@@ -23,6 +23,8 @@ from urllib.request import urlopen
 
 from loguru import logger
 
+from evaluatorq.common.env_config import env_raw
+
 
 def ensure_fasthtml() -> None:
     """Exit with code 1 + install hint when fasthtml or uvicorn are missing."""
@@ -164,7 +166,7 @@ def _install_log_bridge() -> None:
     when diagnosing; the override shows httpx lines again.
     """
     global _console_bridge
-    override = os.environ.get('EVALUATORQ_LOG_LEVEL', '').upper()
+    override = env_raw('EVALUATORQ_LOG_LEVEL', '').upper()
     level: int | str = override or logging.INFO
     bridge = _console_bridge
     if not (
@@ -237,7 +239,6 @@ def build_app_from_env():
     subprocess, so it reads the local environment, (re)installs the loguru
     bridge, and rebuilds the app from the roots stashed by ``serve``."""
     import json
-    import os
 
     from evaluatorq.dashboard.app import build_app
 
@@ -279,7 +280,6 @@ def serve(
         port:  TCP port (default ``8080``).
         open_browser: Open the dashboard once it starts (default ``True``).
     """
-    import os
 
     ensure_fasthtml()
     _load_local_env()
