@@ -96,12 +96,10 @@ DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT = (
 # that path is generated against this model's schema, so the field-order and prompt
 # notes above do not bind it.
 #
-# The mirror case (`abstain=False`, `value=None`) is deliberately NOT normalised, and
-# the two judge surfaces read it differently: the redteam paths pass `abstain` and
-# `value` through separately, so the jury's `failed_count` (common/jury.py) counts it
-# as a failed repetition, while `llm_jury._outcome_to_prediction` treats any null
-# value as a clean abstention. Normalising here would erase the redteam distinction;
-# unifying the two surfaces is a separate change.
+# The mirror case (`abstain=False`, `value=None`) is deliberately NOT normalised: every
+# judge surface passes `abstain` and `value` through separately, so the jury's
+# `failed_count` (common/jury.py) counts it as a failed repetition rather than an
+# abstention. Normalising it here would erase that distinction.
 class EvaluatorResponsePayload(BaseModel):
     """A judge's verdict: the reasoning, whether the judge declined, and the verdict itself."""
 

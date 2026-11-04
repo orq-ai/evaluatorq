@@ -944,8 +944,8 @@ class JuryRepetition(BaseModel):
     )
     verdict_coerced: bool = Field(
         default=False,
-        description='True when this pass abstained only because the judge sent abstain=True with a value, which '
-        'common/judge.py coerced to an abstention (RES-1414). Lets a report tell a coerced verdict from a clean one.',
+        description='True when the judge sent abstain=True with a value on this pass, which common/judge.py coerced '
+        'to an abstention. Tells a coerced verdict from a clean abstention.',
     )
 
 
@@ -993,11 +993,11 @@ class JuryVote(BaseModel):
         'non-abstained pass (RES-1251). A clean abstention is not counted. Independent of the aggregate '
         'success/abstained.',
     )
-    verdicts_coerced: int = Field(
+    repetitions_coerced: int = Field(
         default=0,
         ge=0,
-        description='Count of repetitions whose abstention was coerced from a self-contradictory abstain=True with '
-        'a value (RES-1414). Subset of the abstained passes; lets a report tell a coerced verdict from a clean one.',
+        description='Count of repetitions flagged verdict_coerced. Also stamped on the orq.judge span as '
+        'judge.repetitions_coerced. No report renders it yet.',
     )
 
     @model_validator(mode='after')

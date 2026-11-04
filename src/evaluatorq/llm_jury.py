@@ -402,9 +402,7 @@ def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
     # Only an explicit abstain is a clean abstention. A bare value=None with
     # abstain=False is a non-usable verdict, so it falls through to a non-decisive,
     # non-abstained Prediction that _compute_judge_vote counts as a failed
-    # repetition - the same reading the redteam bridges already use (RES-1414).
-    # Before this, llm_jury alone read value=None as a clean abstention, moving
-    # judge-consistency the opposite way from the redteam paths for one output.
+    # repetition, the same reading the redteam bridges use.
     if payload.abstain:
         return Prediction(
             abstained=True,
