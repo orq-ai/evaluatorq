@@ -38,7 +38,12 @@ from evaluatorq.common.thread_context import (
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, ConversationHistoryMode, LLMCallConfig, Message, TokenUsage
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
-from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress, ensure_target_can_backtrack
+from evaluatorq.redteam.adaptive.orchestrator import (
+    ProgressDisplay,
+    _get_active_progress,
+    ensure_target_can_backtrack,
+    target_history_mode,
+)
 from evaluatorq.redteam.adaptive.pipeline import (
     cleanup_memory_entities,
     create_dynamic_evaluator,
@@ -194,10 +199,9 @@ def _validate_trace_replay_targets(targets: list[str | AgentTarget], seed_datapo
 
     for target in targets:
         if isinstance(target, AgentTarget):
-            try:
-                history_mode = ConversationHistoryMode(target.history_mode)
-            except (TypeError, ValueError) as exc:
-                raise RedTeamError('last_assistant trace replay requires caller-owned history on the target') from exc
+            history_mode = target_history_mode(
+                target, invalid_message='last_assistant trace replay requires caller-owned history on the target'
+            )
             if history_mode is ConversationHistoryMode.TARGET:
                 raise RedTeamError(
                     'last_assistant trace replay requires caller-owned history; '

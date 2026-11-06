@@ -22,7 +22,7 @@ from evaluatorq.contracts import (
     TextOutputItem,
     ToolCallOutputItem,
 )
-from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator
+from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, ensure_target_can_backtrack
 from evaluatorq.redteam.backends.registry import make_agent_backend
 from evaluatorq.redteam.contracts import (
     AgentContext,
@@ -437,6 +437,20 @@ class TestTargetsThatKeepTheirOwnHistory:
 
         assert target.history_mode is ConversationHistoryMode.CALLER
 
+    @pytest.mark.parametrize(
+        ('module', 'name'),
+        [
+            ('evaluatorq.redteam.backends.orq', 'ORQAgentTarget'),
+            ('evaluatorq.integrations.langgraph_integration.target', 'LangGraphTarget'),
+            ('evaluatorq.integrations.pydantic_ai_integration.target', 'PydanticAITarget'),
+        ],
+    )
+    def test_the_targets_the_guide_names_are_rejected(self, module: str, name: str) -> None:
+        target_class = getattr(pytest.importorskip(module), name)
+
+        with pytest.raises(RedTeamError, match='history'):
+            ensure_target_can_backtrack(object.__new__(target_class))
+
     def test_preflight_rejects_a_target_owned_history_target(self) -> None:
         with pytest.raises(RedTeamError, match='history'):
             _validate_backtracking_targets([_TargetOwnedHistory([])], max_backtracks=1, mode=Pipeline.DYNAMIC)
@@ -508,6 +522,7 @@ class TestJudgeSpanAndPayload:
         with patch('evaluatorq.redteam.adaptive.orchestrator.run_judge', AsyncMock(return_value=outcome)) as judge:
             await orchestrator._is_refusal('q', AgentResponse(output=[TextOutputItem(text='no', annotations=[])]))
 
+        assert judge.await_args is not None
         attributes = judge.await_args.kwargs['span_attributes']
         assert attributes['orq.llm.purpose'] == 'refusal_judge'
         assert attributes['orq.redteam.llm_purpose'] == 'refusal_judge'
