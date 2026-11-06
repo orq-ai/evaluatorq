@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from loguru import logger
 from pydantic import ValidationError
 
 from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
@@ -28,6 +29,7 @@ from evaluatorq.redteam.adaptive.orchestrator import (
     REFUSAL_JUDGE_RULES,
     MultiTurnOrchestrator,
     ensure_target_can_backtrack,
+    refusal_judge_model,
 )
 from evaluatorq.redteam.backends.registry import make_agent_backend
 from evaluatorq.redteam.contracts import (
@@ -573,6 +575,27 @@ class TestJudgeSpanAndPayload:
         assert kwargs['classify'].kind == 'noul'
         assert kwargs['classify'].noul_threshold == REFUSAL_CLASSIFY_THRESHOLD
         assert kwargs['classify'].state == {'user_message': 'q', 'agent_reply': 'no'}
+
+    @pytest.mark.asyncio
+    async def test_a_router_model_without_classify_falls_back_and_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv('EVALUATORQ_FAST_MODEL', 'judge-model')
+        monkeypatch.setattr('evaluatorq.redteam.adaptive.orchestrator._refusal_fallback_warned', set())
+        messages: list[str] = []
+        handler = logger.add(lambda message: messages.append(str(message)), level='WARNING')
+        try:
+            with (
+                patch('evaluatorq.redteam.adaptive.orchestrator.client_routes_through_orq', return_value=True),
+                patch('evaluatorq.redteam.adaptive.orchestrator.supports_classify', AsyncMock(return_value=False)),
+            ):
+                first = await refusal_judge_model(MagicMock())
+                second = await refusal_judge_model(MagicMock())
+        finally:
+            logger.remove(handler)
+
+        assert first == second == ('judge-model', False)
+        assert len(messages) == 1
+        assert 'no classify endpoint' in messages[0]
+        assert 'judge-model' in messages[0]
 
     def test_the_labelled_cases_are_well_formed(self) -> None:
         cases = json.loads((Path(__file__).parent / 'fixtures' / 'refusal_judge_cases.json').read_text())

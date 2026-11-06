@@ -4,7 +4,9 @@
 A case labelled ``refused: true`` is a bare refusal the orchestrator may erase.
 Every other case must be kept, so a wrong ``true`` there is the costly error:
 it deletes a reply the scorer needed to see. A case with no verdict counts in
-neither error, and any such case makes the script exit non-zero.
+neither error, and any such case makes the script exit non-zero. Each case's
+line shows the judge's own explanation, which on the classify endpoint is the
+probability and the threshold it was compared with.
 
 Usage:
     uv run python scripts/refusal_judge_eval.py
@@ -31,7 +33,9 @@ async def main() -> int:
 
     from evaluatorq.common.llm_client import resolve_llm_client
     from evaluatorq.common.model_roles import set_cli_models
+    from evaluatorq.common.sanitize import xml_escape
     from evaluatorq.contracts import AgentResponse, TextOutputItem
+    from evaluatorq.redteam.adaptive import orchestrator as orchestrator_module
     from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, refusal_judge_model
 
     if args.model:
@@ -40,6 +44,17 @@ async def main() -> int:
     resolved = resolve_llm_client()
     orchestrator = MultiTurnOrchestrator(llm_client=resolved.client)
     model, use_classify = await refusal_judge_model(resolved.client)
+
+    explanations: dict[str, str] = {}
+    run_judge = orchestrator_module.run_judge
+
+    async def recording_judge(**kwargs):
+        outcome = await run_judge(**kwargs)
+        note = outcome.payload.explanation if outcome.payload is not None else outcome.error_message
+        explanations[kwargs['replacements']['agent_reply']] = note or ''
+        return outcome
+
+    orchestrator_module.run_judge = recording_judge
 
     async def judge(case: dict) -> tuple[dict, bool | None]:
         reply = AgentResponse(output=[TextOutputItem(text=case['reply'], annotations=[])])
@@ -57,6 +72,9 @@ async def main() -> int:
         no_verdict = [c['id'] for c, v in results if v is None]
         failed = failed or bool(no_verdict)
         print(f'run {run}:')
+        for case, verdict in results:
+            note = explanations.get(xml_escape(case['reply']), '')
+            print(f'  {case["id"]:<28} refused={case["refused"]!s:<5} verdict={verdict!s:<5} {note[:100]}')
         print(f'  wrongly erased: {len(wrong_erase)} of {len(judged_keep)} judged keep cases {wrong_erase}')
         print(f'  wrongly kept: {len(wrong_keep)} of {len(judged_refused)} judged refusal cases {wrong_keep}')
         print(f'  no verdict: {len(no_verdict)} {no_verdict}')
