@@ -134,6 +134,7 @@ def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
         value=payload_value if decisive else None,
         explanation=payload_explanation,
         raw_output=outcome.raw_output,
+        verdict_coerced=outcome.verdict_coerced,
     )
     vote = JuryVote(
         model=model,
@@ -144,6 +145,7 @@ def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
         error=message if not success else None,
         repetitions=[repetition],
         repetitions_failed=0 if success else 1,
+        repetitions_coerced=1 if outcome.verdict_coerced else 0,
     )
     jury = JuryResult(
         judges_configured=1,

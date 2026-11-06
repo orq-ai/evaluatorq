@@ -82,6 +82,10 @@ class Prediction(BaseModel):
     raw_output: dict[str, Any] | None = None
     error: str | None = None
     abstained: bool = False
+    # True when the judge sent a self-contradictory abstain=True *with* a value, which
+    # common/judge.py coerced to an abstention. Carried so the artifact can tell a coerced
+    # verdict from a clean one.
+    verdict_coerced: bool = False
 
     @property
     def decisive(self) -> bool:
@@ -420,6 +424,7 @@ def _record_judge_span(span: Span | None, vote: JuryVote, *, latency_ms: float, 
             # Provider errors are unbounded; cap like every other text attribute.
             'judge.error': None if vote.error is None else truncate_for_span(vote.error),
             'judge.repetitions_failed': vote.repetitions_failed,
+            'judge.repetitions_coerced': vote.repetitions_coerced,
         },
     )
     if not vote.success:
@@ -449,6 +454,7 @@ async def _compute_judge_vote(
             value=p.value if p.decisive else None,
             explanation=p.explanation or None,
             raw_output=p.raw_output,
+            verdict_coerced=p.verdict_coerced,
         )
         for p in predictions
     ]
@@ -461,6 +467,9 @@ async def _compute_judge_vote(
     # already means "error is None and not abstained and value is not None", so a tie or a genuine
     # clean abstention is never counted. Shared jury layer, so it tightens redteam/simulation too.
     failed_count = sum(1 for p in predictions if not p.decisive and (not p.abstained or p.error is not None))
+    # Surfaced on the vote and the judge span so a reader can tell coerced verdicts from
+    # clean abstentions without re-reading the per-pass flags.
+    coerced_count = sum(1 for p in predictions if p.verdict_coerced)
 
     if failed_count > 0 and failed_count < len(predictions):
         logger.warning('judge {} had {}/{} repetitions fail', model, failed_count, len(predictions))
@@ -477,10 +486,15 @@ async def _compute_judge_vote(
                     explanation=explanation,
                     repetitions=repetitions_raw,
                     repetitions_failed=failed_count,
+                    repetitions_coerced=coerced_count,
                 ),
                 usages,
             )
-        error = next((p.error for p in predictions if p.error), 'no successful prediction')
+        error = next((p.error for p in predictions if p.error), None)
+        if error is None:
+            # Every pass was a bare value=None. The judge's own reason is the only cause there is.
+            reason = next((p.explanation for p in predictions if p.explanation), '')
+            error = f'judge returned no verdict: {reason}' if reason else 'judge returned no verdict'
         return (
             JuryVote(
                 model=model,
@@ -489,6 +503,7 @@ async def _compute_judge_vote(
                 error=error,
                 repetitions=repetitions_raw,
                 repetitions_failed=failed_count,
+                repetitions_coerced=coerced_count,
             ),
             usages,
         )
@@ -511,6 +526,7 @@ async def _compute_judge_vote(
                 explanation='Judge repetitions tied without a decisive tie-break.',
                 repetitions=repetitions_raw,
                 repetitions_failed=failed_count,
+                repetitions_coerced=coerced_count,
             ),
             usages,
         )
@@ -526,6 +542,7 @@ async def _compute_judge_vote(
             explanation=representative,
             repetitions=repetitions_raw,
             repetitions_failed=failed_count,
+            repetitions_coerced=coerced_count,
         ),
         usages,
     )

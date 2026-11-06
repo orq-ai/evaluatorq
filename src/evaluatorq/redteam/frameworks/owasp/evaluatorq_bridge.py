@@ -250,6 +250,7 @@ async def _owasp_judge_fn(
         explanation=outcome.payload.explanation,
         token_usage=outcome.token_usage,
         abstained=outcome.payload.abstain,
+        verdict_coerced=outcome.verdict_coerced,
     )
 
 
