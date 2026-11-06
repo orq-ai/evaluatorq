@@ -312,6 +312,7 @@ _RUN_FLAGS: tuple[Flag, ...] = (
     Flag('min_evaluation_coverage', 'llm_config.evaluator.min_evaluation_coverage'),
     Flag('target_timeout_ms', 'llm_config.target_agent_timeout_ms'),
     Flag('max_target_retries', 'llm_config.max_target_retries'),
+    Flag('max_backtracks', 'llm_config.max_backtracks'),
     Flag('retry_count', 'llm_config.retry_count'),
     Flag('max_tool_continuations', 'llm_config.max_tool_continuations'),
     Flag('target_reasoning_effort', 'llm_config.target_reasoning_effort'),
@@ -532,6 +533,17 @@ def run(
             f'Defaults to {LLMConfig.model_fields["max_target_retries"].default}.',
         ),
     ] = None,
+    max_backtracks: Annotated[
+        int | None,
+        typer.Option(
+            '--max-backtracks',
+            min=0,
+            max=10,
+            help='Refused turns a Crescendo attack may erase from the target and retry, per attack. '
+            'Each adds a target call on top of --max-turns. Fails on targets that keep their own history. '
+            f'Defaults to {LLMConfig.model_fields["max_backtracks"].default} (off).',
+        ),
+    ] = None,
     retry_count: Annotated[
         int | None,
         typer.Option(
@@ -709,7 +721,7 @@ def run(
             help=(
                 'LLMConfig as a JSON object, e.g. \'{"attacker": {"temperature": 0.9}}\'. Merged field by field '
                 'into "llm_config" from --config. --attack-model, --evaluator-model, --min-evaluation-coverage, '
-                '--target-timeout-ms, --max-target-retries, --retry-count, --max-tool-continuations and '
+                '--target-timeout-ms, --max-target-retries, --max-backtracks, --retry-count, --max-tool-continuations and '
                 '--target-reasoning-effort win over it for their own field when passed.'
             ),
         ),

@@ -65,6 +65,39 @@ Replay is not a separate mode. It re-runs a previous run's exact attacks against
     report = await red_team(target="agent:my-agent", mode="static", dataset="hf:my-org/my-attacks")
     ```
 
+### Backtracking
+
+**Backtracking** erases a turn the target refused, so the attacker tries again in a conversation where the refusal never happened. It is off by default and applies only to attacks that use the Crescendo delivery method. Reach for it when a target's refusals end attacks that a different opening might have got past.
+
+```python
+from evaluatorq.redteam import red_team
+from evaluatorq.redteam.contracts import LLMConfig
+
+report = await red_team(
+    'agent:my-agent',
+    mode='dynamic',
+    delivery_methods=['crescendo'],
+    llm_config=LLMConfig(max_backtracks=3),
+)
+```
+
+The CLI equivalent is `--max-backtracks 3`. The value is the number of erasures allowed per attack, from 0 to 10, and an erased attempt does not use up a turn. The target's next call leaves the exchange out, while the attacker is told about the refusal so it can change technique. Erased exchanges are kept in `execution.backtracked_turns` on each result, and the judge never sees them.
+
+Each reply costs one extra call to label it as refused or not, until the attack has used its erasures. The call runs on the `classifier` role (task `redteam.refusal_judge`), or on the `fast` role when the client does not route through the Orq router. A reply that holds only a refusal flagged by the model provider needs no extra call.
+
+Even with erasures left, a turn is kept when one of these holds, and the run reports no error for it:
+
+- The reply holds anything beyond the refusal itself, such as what was asked for, related information, or a specific fact the target let slip beside the refusal. Those replies stay so the judge can score them, and the label is cautious on purpose, so a long refusal can be kept.
+- The reply is empty, or the attacker has already declared the objective achieved.
+- The labelling call fails or gives no clear answer. The turn is kept, the run continues, and the report's `pipeline_warnings` says how many turns this affected.
+- The target called a tool during the turn and the call shows in the reply. Erasing the text would not undo the tool's effect.
+
+Backtracking needs a target that receives the full conversation on every call, which includes `agent:<key>` strings. `ORQAgentTarget`, `LangGraphTarget` and `PydanticAITarget` keep the history themselves, so a turn cannot be erased from them, and the run raises `RedTeamError` before any attack starts. A `mode="static"` run skips this check because no static attack can backtrack.
+
+An erasure removes the exchange from the conversation sent to the target, nothing else. Anything the target stored outside that conversation during the turn, such as a memory written without a tool call showing in the reply, stays where it is.
+
+A run with no dynamic Crescendo attack, such as `mode="static"`, gets a `pipeline_warnings` entry saying the setting had no effect. A saved run stores the value and [replay](#replay-a-previous-run) restores it, unless you set `max_backtracks` yourself.
+
 ## Seed a dynamic attack from a trace
 
 `datapoints_from_traces(...)` turns recorded conversations into dynamic attack seeds. The rows are not offline scores: `red_team()` sends a new attack to the target, captures a new response, and judges that new exchange. Unlike `simulation.datapoints_from_traces`, this one is pure — no summarize call, no inference call, just the trace fetch — so it costs nothing beyond that fetch regardless of how many traces you pull in.
