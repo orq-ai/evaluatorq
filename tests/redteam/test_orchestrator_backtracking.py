@@ -527,6 +527,20 @@ class TestJudgeSpanAndPayload:
         assert attributes['orq.llm.purpose'] == 'refusal_judge'
         assert attributes['orq.redteam.llm_purpose'] == 'refusal_judge'
 
+    @pytest.mark.asyncio
+    async def test_the_judge_runs_on_the_fast_role_not_the_attacker_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv('EVALUATORQ_FAST_MODEL', 'judge-model')
+        orchestrator, _ = _orchestrator([], max_backtracks=1)
+        outcome = JudgeOutcome(
+            payload=EvaluatorResponsePayload(explanation='declined', abstain=False, value=True), token_usage=None
+        )
+
+        with patch('evaluatorq.redteam.adaptive.orchestrator.run_judge', AsyncMock(return_value=outcome)) as judge:
+            await orchestrator._is_refusal('q', AgentResponse(output=[TextOutputItem(text='no', annotations=[])]))
+
+        assert judge.await_args is not None
+        assert judge.await_args.kwargs['model'] == 'judge-model'
+
     def test_an_attribute_shaped_output_keeps_the_backtracking_fields(self) -> None:
         turn = {'attacker': {'output': []}, 'target': {'output': []}}
 

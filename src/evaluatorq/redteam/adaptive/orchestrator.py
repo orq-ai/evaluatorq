@@ -30,6 +30,7 @@ from evaluatorq.common.content_filter import (
 )
 from evaluatorq.common.judge import run_judge
 from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.sanitize import delimit, xml_escape
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
@@ -1347,7 +1348,7 @@ class MultiTurnOrchestrator:
         # writing varied prompts, and reasoning models reject an explicit value.
         outcome = await run_judge(
             client=self.llm_client,
-            model=self.model,
+            model=role_model('fast', task='redteam.refusal_judge'),
             cfg=self._cfg.attacker,
             prompt_template=REFUSAL_JUDGE_PROMPT,
             replacements={'user_message': xml_escape(attack_prompt), 'agent_reply': xml_escape(response.text)},

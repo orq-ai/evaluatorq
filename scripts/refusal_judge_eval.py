@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 
 CASES = Path(__file__).resolve().parent.parent / 'tests' / 'redteam' / 'fixtures' / 'refusal_judge_cases.json'
@@ -24,6 +25,8 @@ async def main() -> None:
     parser.add_argument('--model', required=True)
     parser.add_argument('--cases', type=Path, default=CASES)
     args = parser.parse_args()
+    # The judge reads its model from the fast role (task redteam.refusal_judge).
+    os.environ['EVALUATORQ_FAST_MODEL'] = args.model
 
     from evaluatorq.common.llm_client import resolve_llm_client
     from evaluatorq.contracts import AgentResponse, TextOutputItem
@@ -31,7 +34,7 @@ async def main() -> None:
 
     cases = json.loads(args.cases.read_text())
     resolved = resolve_llm_client()
-    orchestrator = MultiTurnOrchestrator(llm_client=resolved.client, model=args.model)
+    orchestrator = MultiTurnOrchestrator(llm_client=resolved.client)
 
     async def judge(case: dict) -> tuple[dict, bool | None]:
         reply = AgentResponse(output=[TextOutputItem(text=case['reply'], annotations=[])])
