@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.contracts import (
     AgentResponse,
     AgentTarget,
@@ -22,7 +23,12 @@ from evaluatorq.contracts import (
     TextOutputItem,
     ToolCallOutputItem,
 )
-from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, ensure_target_can_backtrack
+from evaluatorq.redteam.adaptive.orchestrator import (
+    REFUSAL_CLASSIFY_THRESHOLD,
+    REFUSAL_JUDGE_RULES,
+    MultiTurnOrchestrator,
+    ensure_target_can_backtrack,
+)
 from evaluatorq.redteam.backends.registry import make_agent_backend
 from evaluatorq.redteam.contracts import (
     AgentContext,
@@ -528,9 +534,9 @@ class TestJudgeSpanAndPayload:
         assert attributes['orq.redteam.llm_purpose'] == 'refusal_judge'
 
     @pytest.mark.asyncio
-    async def test_the_judge_runs_on_the_fast_role_not_the_attacker_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_the_judge_falls_back_to_the_fast_role_off_the_router(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv('EVALUATORQ_FAST_MODEL', 'judge-model')
-        orchestrator, _ = _orchestrator([], max_backtracks=1)
+        orchestrator, _ = _orchestrator([], max_backtracks=1, attacker=LLMCallConfig(reasoning_effort='high'))
         outcome = JudgeOutcome(
             payload=EvaluatorResponsePayload(explanation='declined', abstain=False, value=True), token_usage=None
         )
@@ -539,7 +545,48 @@ class TestJudgeSpanAndPayload:
             await orchestrator._is_refusal('q', AgentResponse(output=[TextOutputItem(text='no', annotations=[])]))
 
         assert judge.await_args is not None
-        assert judge.await_args.kwargs['model'] == 'judge-model'
+        kwargs = judge.await_args.kwargs
+        assert kwargs['model'] == 'judge-model'
+        assert kwargs['classify'] is None
+        assert kwargs['cfg'].reasoning_effort is None
+
+    @pytest.mark.asyncio
+    async def test_the_judge_asks_the_classifier_on_the_router(self) -> None:
+        orchestrator, _ = _orchestrator([], max_backtracks=1)
+        outcome = JudgeOutcome(
+            payload=EvaluatorResponsePayload(explanation='declined', abstain=False, value=True), token_usage=None
+        )
+
+        with (
+            patch('evaluatorq.redteam.adaptive.orchestrator.client_routes_through_orq', return_value=True),
+            patch('evaluatorq.redteam.adaptive.orchestrator.supports_classify', AsyncMock(return_value=True)),
+            patch('evaluatorq.redteam.adaptive.orchestrator.run_judge', AsyncMock(return_value=outcome)) as judge,
+        ):
+            verdict, _ = await orchestrator._is_refusal(
+                'q', AgentResponse(output=[TextOutputItem(text='no', annotations=[])])
+            )
+
+        assert verdict is True
+        assert judge.await_args is not None
+        kwargs = judge.await_args.kwargs
+        assert kwargs['model'] == role_model('classifier', task='redteam.refusal_judge')
+        assert kwargs['classify'].kind == 'noul'
+        assert kwargs['classify'].noul_threshold == REFUSAL_CLASSIFY_THRESHOLD
+        assert kwargs['classify'].state == {'user_message': 'q', 'agent_reply': 'no'}
+
+    def test_the_labelled_cases_are_well_formed(self) -> None:
+        cases = json.loads((Path(__file__).parent / 'fixtures' / 'refusal_judge_cases.json').read_text())
+
+        assert all(set(case) == {'id', 'refused', 'user', 'reply'} for case in cases)
+        assert all(isinstance(case['refused'], bool) for case in cases)
+        assert all(isinstance(case[key], str) and case[key] for case in cases for key in ('id', 'user', 'reply'))
+        assert len({case['id'] for case in cases}) == len(cases)
+        assert {case['refused'] for case in cases} == {True, False}
+
+    def test_no_prompt_example_is_a_labelled_case(self) -> None:
+        cases = json.loads((Path(__file__).parent / 'fixtures' / 'refusal_judge_cases.json').read_text())
+
+        assert not [case['id'] for case in cases if case['reply'] in REFUSAL_JUDGE_RULES]
 
     def test_an_attribute_shaped_output_keeps_the_backtracking_fields(self) -> None:
         turn = {'attacker': {'output': []}, 'target': {'output': []}}
