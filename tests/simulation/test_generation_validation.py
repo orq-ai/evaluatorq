@@ -200,7 +200,7 @@ def test_a_marker_inside_a_longer_word_does_not_match():
 
 
 def test_a_seed_too_short_to_check_is_reported_as_unchecked():
-    persona = validate_personas([_persona('Real Person', _SPECIFIC)], seed='AI')
+    persona = validate_personas(_GOOD_PERSONAS, seed='AI')
     scenario = validate_scenarios(
         [Scenario(name='A', goal='Get a refund for the broken phone', context='x', criteria=_CRITERIA)], seed='UX'
     )
@@ -242,7 +242,37 @@ def test_seed_words_ignore_punctuation():
 
 
 def test_a_fully_checked_batch_skips_nothing():
-    assert validate_personas([_persona('Real Person', _SPECIFIC)]).checks_skipped == []
+    assert validate_personas(_GOOD_PERSONAS).checks_skipped == []
+
+
+def test_a_batch_too_small_for_the_trait_check_lists_it_as_skipped():
+    report = validate_personas(_GOOD_PERSONAS[:2])
+    assert [i.code for i in report.batch_issues] == ['diversity_unchecked']
+    assert report.batch_issues[0].severity == 'info'
+    assert report.checks_skipped == ['trait_diversity']
+    assert report.overall_score == 1.0
+    assert report.passed
+
+
+def test_a_paraphrased_seed_on_a_scenario_is_reported_and_does_not_fail_the_batch():
+    scenario = Scenario(
+        name='Bulk Order Deadline',
+        goal='Confirm the forty office chairs arrive before Monday',
+        context='The company moves offices next week.',
+        criteria=_CRITERIA,
+    )
+    report = validate_scenarios([scenario], seed='impatient business buyers')
+    issue = report.items[0].issues[0]
+    assert (issue.code, issue.severity) == ('seed_not_reflected', 'info')
+    assert report.overall_score == 1.0
+    assert report.passed
+
+
+def test_a_hyphenated_seed_word_stays_whole():
+    # `first-time` must not split into `time`, which would match `sometimes`.
+    persona = _persona('Real Person', 'Sometimes orders gifts online and wants the parcel tracked closely every day.')
+    report = validate_personas([persona], seed='first-time shoppers')
+    assert [i.code for i in report.items[0].issues] == ['seed_not_reflected']
 
 
 @pytest.mark.parametrize('partial', [{'overall_score': 1.0}, {'passed': True}])
@@ -263,7 +293,7 @@ def test_blank_criteria_and_context_count_as_missing():
         name='A',
         goal='Get a refund for the broken phone',
         context='   ',
-        criteria=[Criterion(description='', type='must_happen')],
+        criteria=[Criterion(description='   ', type='must_happen')],
     )
     codes = {i.code for i in validate_scenarios([scenario]).items[0].issues}
     assert {'no_criteria', 'no_context'} <= codes

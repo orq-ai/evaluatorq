@@ -5,7 +5,7 @@ the *output* honours them. `validate_personas` and `validate_scenarios` score a 
 guidelines that can be checked mechanically: specificity (no generic names, thin or filler text),
 trait diversity across the batch (the "vary trait values" rule) and well-formedness (scenarios need a
 goal, criteria and context). They return per-item scores plus batch diagnostics. A seed is only
-compared word for word, so a miss is reported and neither costs score nor fails the batch.
+matched as a substring, so a miss is reported and neither costs score nor fails the batch.
 
 These are opt-in: no generator calls them, so a caller runs them on the batch it got back. They are
 deterministic (no LLM), so a run costs nothing. They read surface form only: whether a trait
@@ -30,6 +30,8 @@ _MIN_BACKGROUND_WORDS = 12
 _MIN_GOAL_WORDS = 5
 # A numeric trait whose spread across the batch is below this is "all similar".
 _MIN_TRAIT_SPREAD = 0.2
+# Fewer personas than this cannot show whether trait values vary.
+_MIN_DIVERSITY_BATCH = 3
 # Filler phrases, matched as whole words. The prompts' DON'T list names "Customer with a problem". Words
 # like "something" or "a customer who" are left out on purpose: they are common in specific text too.
 _GENERIC_MARKER = re.compile(r'\b(?:customer with a problem|user with a problem|has a problem)\b', re.IGNORECASE)
@@ -44,6 +46,7 @@ IssueCode = Literal[
     'seed_not_reflected',
     'seed_unchecked',
     'low_diversity',
+    'diversity_unchecked',
     'duplicate',
     'thin_goal',
     'generic_goal',
@@ -91,7 +94,7 @@ def _has_generic_marker(text: str) -> bool:
 
 def _seed_tokens(seed: str) -> list[str]:
     """The seed's content words: those long enough for a substring match to mean anything."""
-    return [t for t in re.findall(r'\w+', seed.lower()) if len(t) > 2]
+    return [t for t in re.findall(r'[\w-]+', seed.lower()) if len(t) > 2]
 
 
 def _seed_reflected(tokens: list[str], *parts: str) -> bool:
@@ -111,6 +114,10 @@ def _seed_unchecked(seed: str) -> list[Issue]:
     return []
 
 
+# Info codes that mean a check could not run, mapped to the check they stand for.
+_SKIPPED_CHECKS: dict[str, str] = {'diversity_unchecked': 'trait_diversity', 'seed_unchecked': 'seed_adherence'}
+
+
 def _finalize(items: list[ItemValidation], batch_issues: list[Issue], *, pass_threshold: float) -> ValidationReport:
     per_item = sum(i.score for i in items) / len(items) if items else 0.0
     # Each batch-level warning or failure is a flat penalty on the overall score.
@@ -118,7 +125,7 @@ def _finalize(items: list[ItemValidation], batch_issues: list[Issue], *, pass_th
     overall = max(0.0, per_item - penalty)
     issues = [*batch_issues, *(issue for item in items for issue in item.issues)]
     passed = bool(items) and overall >= pass_threshold and not any(i.severity == 'fail' for i in issues)
-    skipped = ['seed_adherence'] if any(i.code == 'seed_unchecked' for i in batch_issues) else []
+    skipped = [_SKIPPED_CHECKS[i.code] for i in batch_issues if i.code in _SKIPPED_CHECKS]
     return ValidationReport(
         items=items, batch_issues=batch_issues, overall_score=round(overall, 4), passed=passed, checks_skipped=skipped
     )
@@ -135,8 +142,10 @@ def validate_personas(
     Per persona: a generic name and a thin or generic background each deduct from a 1.0 start.
     Batch-level: a numeric trait with almost no spread across the batch ("all similar") and duplicate
     backgrounds are flagged. ``passed`` needs the score to reach ``pass_threshold`` and no issue of
-    severity ``fail``, so one thin background fails the batch. When ``seed`` is set, a persona sharing
-    no word with it is reported as ``seed_not_reflected``, which costs nothing.
+    severity ``fail``, so one thin background fails the batch. When ``seed`` is set, a persona whose
+    name and background contain none of the seed's words as a substring is reported as
+    ``seed_not_reflected``, which costs nothing. The trait check needs at least three personas; with
+    fewer it is reported as ``diversity_unchecked`` and listed in ``checks_skipped``.
     """
     tokens = _seed_tokens(seed)
     items: list[ItemValidation] = []
@@ -156,7 +165,11 @@ def validate_personas(
             score -= 0.2
         if tokens and not _seed_reflected(tokens, p.name, p.background):
             issues.append(
-                Issue(code='seed_not_reflected', message=f'shares no word with seed {seed!r}', severity='info')
+                Issue(
+                    code='seed_not_reflected',
+                    message=f'contains no word of seed {seed!r} as a substring',
+                    severity='info',
+                )
             )
         items.append(ItemValidation(name=p.name, score=max(0.0, round(score, 4)), issues=issues))
 
@@ -166,7 +179,15 @@ def validate_personas(
 
 def _batch_persona_issues(personas: Sequence[Persona]) -> list[Issue]:
     issues: list[Issue] = []
-    if len(personas) >= 3:
+    if len(personas) < _MIN_DIVERSITY_BATCH:
+        issues.append(
+            Issue(
+                code='diversity_unchecked',
+                message=f'trait diversity needs at least {_MIN_DIVERSITY_BATCH} personas, got {len(personas)}',
+                severity='info',
+            )
+        )
+    else:
         for trait in _NUMERIC_TRAITS:
             values = [getattr(p, trait) for p in personas]
             if max(values) - min(values) < _MIN_TRAIT_SPREAD:
@@ -196,8 +217,8 @@ def validate_scenarios(
 
     Per scenario: a thin or generic goal, a missing context, and missing success criteria each deduct.
     Batch-level: duplicate goals are flagged. ``passed`` needs the score to reach ``pass_threshold``
-    and no issue of severity ``fail``. When ``seed`` is set, a scenario sharing no word with it is
-    reported as ``seed_not_reflected``, which costs nothing.
+    and no issue of severity ``fail``. When ``seed`` is set, a scenario whose name and goal contain none
+    of the seed's words as a substring is reported as ``seed_not_reflected``, which costs nothing.
     """
     tokens = _seed_tokens(seed)
     items: list[ItemValidation] = []
@@ -218,7 +239,11 @@ def validate_scenarios(
             score -= 0.1
         if tokens and not _seed_reflected(tokens, s.name, s.goal):
             issues.append(
-                Issue(code='seed_not_reflected', message=f'shares no word with seed {seed!r}', severity='info')
+                Issue(
+                    code='seed_not_reflected',
+                    message=f'contains no word of seed {seed!r} as a substring',
+                    severity='info',
+                )
             )
         items.append(ItemValidation(name=s.name, score=max(0.0, round(score, 4)), issues=issues))
 
