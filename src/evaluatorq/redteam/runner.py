@@ -3937,7 +3937,11 @@ def _build_redteam_evaluators(*, inputs: _RedTeamEvaluatorInputs) -> list[Any]:
             **panel_kwargs,
         )
         static_evaluator = create_owasp_evaluator(
-            evaluator_model=evaluator_model, llm_client=evaluator_client, cfg=evaluator_cfg, **panel_kwargs
+            evaluator_model=evaluator_model,
+            llm_client=evaluator_client,
+            cfg=evaluator_cfg,
+            log_panel_warnings=False,  # the dynamic evaluator above logged the same panel
+            **panel_kwargs,
         )
 
         async def hybrid_scorer(params: Any) -> EvaluationResult:

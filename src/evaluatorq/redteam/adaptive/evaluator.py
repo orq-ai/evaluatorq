@@ -10,7 +10,7 @@ from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replace
 from evaluatorq.common.jury import (
     Prediction,
     VerdictKind,
-    _panel_composition_messages,
+    panel_composition_messages,
     run_jury,
 )
 from evaluatorq.common.jury import provider_family as provider_family
@@ -18,6 +18,7 @@ from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
+    RED_TEAM_TIE_OUTCOME,
     AttackEvaluationResult,
     EvaluatorConfig,
     LLMCallConfig,
@@ -114,7 +115,10 @@ class OWASPEvaluator:
         # Composition warnings (judge diversity + self-judge / family bias). These
         # are advisory by default so existing configs keep running; strict_panel
         # turns them into hard errors for callers who want fail-closed composition.
-        for issue in _panel_composition_messages(self.panel, target_models or [], strict=strict_panel):
+        configured_panel = [evaluator_model, *(judges or [])]
+        for issue in panel_composition_messages(
+            configured_panel, target_models or [], strict=strict_panel, tie_outcome=RED_TEAM_TIE_OUTCOME
+        ):
             if strict_panel:
                 raise ValueError(issue)
             logger.warning(issue)
@@ -272,7 +276,7 @@ class OWASPEvaluator:
             min_successful_judges=self.min_successful_judges,
             verdict_kind=VerdictKind.CATEGORICAL,
             tie_break=lambda _values: False,
-            tie_break_label='fail-closed to VULNERABLE',
+            tie_break_label=RED_TEAM_TIE_OUTCOME,
             propagate_errors=False,
         )
         final_passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None

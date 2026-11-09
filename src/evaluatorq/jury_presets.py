@@ -20,7 +20,7 @@ and `DROPPED_PRESETS` carry one and `get_preset` hands it back by name instead o
 a bare "unknown preset".
 
 Reserves are a reviewed change to this file, not a grade-time substitution. A
-panel that contains the generator warns and proceeds (`_panel_composition_messages`
+panel that contains the generator warns and proceeds (`panel_composition_messages`
 in `common.jury`, or `strict_panel=True` to make it fatal); it never silently
 swaps a judge, because a user who picks a preset should get the panel they picked.
 
