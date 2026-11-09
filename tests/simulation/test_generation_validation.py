@@ -13,6 +13,7 @@ from evaluatorq.simulation.generators.validation import (
     Issue,
     IssueCode,
     ValidationReport,
+    _seed_tokens,
     trait_spread,
     trait_variance,
     validate_personas,
@@ -328,3 +329,23 @@ def test_blank_criteria_and_context_count_as_missing():
     )
     codes = {i.code for i in validate_scenarios([scenario]).items[0].issues}
     assert {'no_criteria', 'no_context'} <= codes
+
+
+@pytest.mark.parametrize(
+    ('seed', 'expected'),
+    [
+        ('3-4 year olds', ['3-4', '3 4', 'year', 'olds']),
+        ('9-5', ['9-5', '9 5']),
+        ('___', []),
+        ('---', []),
+        ('a--', []),
+        ('-ai-', []),
+    ],
+)
+def test_seed_tokens_count_letters_digits_and_inner_hyphens(seed: str, expected: list[str]):
+    assert _seed_tokens(seed) == expected
+
+
+def test_a_punctuation_seed_says_it_has_no_content_word():
+    report = validate_personas(_GOOD_PERSONAS, seed='---')
+    assert [i.message for i in report.batch_issues if i.code == 'seed_unchecked'] == ["seed '---' has no content word to check"]

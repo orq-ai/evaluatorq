@@ -97,12 +97,16 @@ def _seed_tokens(seed: str) -> list[str]:
 
     A hyphenated word also counts with spaces, so `first-time` matches a background that
     writes `first time`, but not on its parts, where `time` would match `sometimes`. Length
-    counts word characters only, so `---` or `a--` is not a word.
+    counts letters, digits and the hyphens between them, after trimming hyphens and
+    underscores from the ends: `3-4` and `9-5` are words, `---`, `___` and `a--` are not.
     """
     tokens: list[str] = []
     for word in re.findall(r'[\w-]+', seed.lower()):
+        word = word.strip('-_')
+        if len(re.sub(r'[\W_]', '', word)) + word.count('-') <= 2:
+            continue
         for t in (word, word.replace('-', ' ')):
-            if len(re.sub(r'\W', '', t)) > 2 and t not in tokens:
+            if t not in tokens:
                 tokens.append(t)
     return tokens
 
@@ -118,9 +122,10 @@ def _seed_reflected(tokens: list[str], *parts: str) -> bool:
 
 
 def _seed_unchecked(seed: str) -> list[Issue]:
-    """A seed with no content word (`AI`, `UX`) cannot be checked, so say that rather than imply it held."""
+    """A seed with no content word (`AI`, `UX`, or punctuation such as `---`) cannot be checked,
+    so say that rather than imply it held."""
     if seed.strip() and not _seed_tokens(seed):
-        return [Issue(code='seed_unchecked', message=f'seed {seed!r} is too short to check', severity='info')]
+        return [Issue(code='seed_unchecked', message=f'seed {seed!r} has no content word to check', severity='info')]
     return []
 
 
