@@ -22,6 +22,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--strategy` / `-s` | `str` (repeatable) | Restrict to named attack strategies. Repeatable and/or comma-separated. Unknown registry names are rejected. |
 | `--delivery-method` / `-d` | `str` (repeatable) | Restrict to one or more delivery methods. Repeatable and/or comma-separated. |
 | `--max-turns` | `int` / `5` | Maximum conversation turns for multi-turn attacks. |
+| `--max-backtracks` | `int` (0 to 10) / `0` | Refused turns to erase per Crescendo attack, and retry without using up a turn. See [Backtracking](../guides/red-teaming.md#backtracking). |
 | `--max-per-category` | `int \| None` / `None` | Cap strategies per category. |
 | `--attack-model` | `str \| None` / `None` | Model for adversarial prompt generation. Unset resolves the `smart` role (`openai/gpt-6-sol` by default); see [Configuration › Models](../configuration.md#models). |
 | `--attacker-instructions` | `str \| None` / `None` | Domain-specific context to steer attack generation. |
@@ -53,7 +54,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` per-attack progress + info logs; `-vv` debug logs. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress progress bars and non-error output. |
 | `--config` | `JSON \| PATH \| -` / `None` | JSON object (shell-quote it), file path, or `-` to read JSON from stdin. See [Driving the CLI from a config file or inline JSON](#driving-the-cli-from-a-config-file-or-inline-json). |
-| `--llm-config` | JSON / `None` | `LLMConfig` as a JSON object. Merged field by field into `"llm_config"` from `--config`. Each of `--attack-model`, `--evaluator-model`, `--min-evaluation-coverage`, `--target-timeout-ms`, `--max-target-retries`, `--retry-count`, `--max-tool-continuations` and `--target-reasoning-effort` wins over it for its own field when passed. |
+| `--llm-config` | JSON / `None` | `LLMConfig` as a JSON object. Merged field by field into `"llm_config"` from `--config`. Each of `--attack-model`, `--evaluator-model`, `--min-evaluation-coverage`, `--target-timeout-ms`, `--max-target-retries`, `--max-backtracks`, `--retry-count`, `--max-tool-continuations` and `--target-reasoning-effort` wins over it for its own field when passed. |
 | `--json` | `bool` / `False` | Print the final `RedTeamReport` as JSON on stdout. Progress and messages go to stderr; exit codes are unchanged. |
 
 **Delivery methods** (`--delivery-method`): `DAN`, `role-play`, `skeleton-key`, `base64`, `leetspeak`, `multilingual`, `character-spacing`, `crescendo`, `many-shot`, `authority-impersonation`, `refusal-suppression`, `direct-request`, `code-elicitation`, `code-assistance`, `tool-response`, `word-substitution`.

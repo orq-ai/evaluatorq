@@ -182,13 +182,14 @@ def test_run_config_is_persisted_and_restored(tmp_path: Path, monkeypatch: pytes
         _minimal_report(),
         name='rt',
         datapoints=[DYNAMIC_INPUTS],
-        run_config={'max_turns': 9, 'attacker_instructions': 'financial agent'},
+        run_config={'max_turns': 9, 'attacker_instructions': 'financial agent', 'max_backtracks': 4},
     )
     assert path is not None
 
     replay = load_redteam_replay('latest', runner_mod.get_runs_dir())
     assert replay.max_turns == 9
     assert replay.attacker_instructions == 'financial agent'
+    assert replay.max_backtracks == 4
 
 
 def test_run_config_absent_leaves_the_defaults_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,6 +199,7 @@ def test_run_config_absent_leaves_the_defaults_alone(tmp_path: Path, monkeypatch
     replay = load_redteam_replay('latest', runs)
     assert replay.max_turns is None
     assert replay.attacker_instructions is None
+    assert replay.max_backtracks is None
 
 
 def test_a_simulation_run_is_rejected_with_a_pointer_to_the_right_command(tmp_path: Path) -> None:

@@ -335,6 +335,8 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
         'error_details',
         'error_turn',
         'truncated_turns',
+        'backtracked_turns',
+        'refusal_judge_failures',
     ):
         if hasattr(raw_output, key):
             out[key] = getattr(raw_output, key)
@@ -704,6 +706,8 @@ def dynamic_evaluatorq_results_to_report(
             token_usage=token_usage,
             token_usage_bootstrap=job_output.token_usage_bootstrap,
             seed_context=job_output.seed_context,
+            backtracked_turns=job_output.backtracked_turns,
+            refusal_judge_failures=job_output.refusal_judge_failures,
         )
 
         agent = AgentInfo(

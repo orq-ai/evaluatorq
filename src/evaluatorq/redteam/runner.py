@@ -38,7 +38,12 @@ from evaluatorq.common.thread_context import (
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, ConversationHistoryMode, LLMCallConfig, Message, TokenUsage
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
-from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
+from evaluatorq.redteam.adaptive.orchestrator import (
+    ProgressDisplay,
+    _get_active_progress,
+    ensure_target_can_backtrack,
+    target_history_mode,
+)
 from evaluatorq.redteam.adaptive.pipeline import (
     cleanup_memory_entities,
     create_dynamic_evaluator,
@@ -64,6 +69,7 @@ from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     SUPPORTED_TARGET_KINDS,
     AgentContext,
+    AttackSource,
     AttackTechnique,
     DeliveryMethod,
     LLMConfig,
@@ -71,6 +77,7 @@ from evaluatorq.redteam.contracts import (
     PipelineStage,
     RedTeamRecommendationConfig,
     RedTeamReport,
+    RedTeamResult,
     SaveMode,
     TargetConfig,
     TargetKind,
@@ -192,10 +199,9 @@ def _validate_trace_replay_targets(targets: list[str | AgentTarget], seed_datapo
 
     for target in targets:
         if isinstance(target, AgentTarget):
-            try:
-                history_mode = ConversationHistoryMode(target.history_mode)
-            except (TypeError, ValueError) as exc:
-                raise RedTeamError('last_assistant trace replay requires caller-owned history on the target') from exc
+            history_mode = target_history_mode(
+                target, invalid_message='last_assistant trace replay requires caller-owned history on the target'
+            )
             if history_mode is ConversationHistoryMode.TARGET:
                 raise RedTeamError(
                     'last_assistant trace replay requires caller-owned history; '
@@ -214,6 +220,43 @@ def _validate_trace_replay_targets(targets: list[str | AgentTarget], seed_datapo
             f'(history_mode CALLER, e.g. OpenAIModelTarget or a custom AgentTarget); '
             f'target {target!r} resolves to a {kind.value} target and {reason}.'
         )
+
+
+def _validate_backtracking_targets(targets: list[str | AgentTarget], *, max_backtracks: int, mode: Pipeline) -> None:
+    """Reject targets a turn cannot be erased from before any LLM call is paid for."""
+    if max_backtracks == 0 or mode is Pipeline.STATIC:
+        return
+    for target in targets:
+        if isinstance(target, AgentTarget):
+            ensure_target_can_backtrack(target)
+
+
+def _restore_replayed_backtracks(llm_config: LLMConfig | None, replay: RedTeamReplay | None) -> LLMConfig | None:
+    """Apply the stored erasure budget to a replay, unless the caller set one explicitly."""
+    if replay is None or not replay.max_backtracks:
+        return llm_config
+    if llm_config is not None and 'max_backtracks' in llm_config.model_fields_set:
+        return llm_config
+    return (llm_config or LLMConfig()).model_copy(update={'max_backtracks': replay.max_backtracks})
+
+
+def _backtracking_warnings(results: list[RedTeamResult], *, max_backtracks: int) -> list[str]:
+    """Report a backtracking setting that applied to nothing, or a judge that could not do its job."""
+    if max_backtracks == 0:
+        return []
+    dynamic = [r for r in results if r.attack.source in (AttackSource.TEMPLATE_DYNAMIC, AttackSource.GENERATED_DYNAMIC)]
+    warnings: list[str] = []
+    if not any(DeliveryMethod.CRESCENDO in r.attack.delivery_methods for r in dynamic):
+        warnings.append(
+            f'max_backtracks={max_backtracks} had no effect: no multi-turn attack in this run used the '
+            'Crescendo delivery method.'
+        )
+    if failures := sum(r.execution.refusal_judge_failures for r in dynamic if r.execution is not None):
+        warnings.append(
+            f'The refusal judge gave no usable verdict on {failures} turn(s). Those turns were kept, so '
+            'backtracking may have erased fewer refusals than it could. Check the fast-role model (task redteam.refusal_judge) and credentials.'
+        )
+    return warnings
 
 
 def get_runs_dir() -> Path:
@@ -1220,6 +1263,7 @@ def _persist_and_index_run(
     metrics: RedTeamRunMetrics,
     resolved_max_turns: int,
     attacker_instructions: str | None,
+    max_backtracks: int,
 ) -> _PersistedRun:
     # Persist report according to the save mode. 'detail' mode already had
     # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
@@ -1243,6 +1287,7 @@ def _persist_and_index_run(
             run_config={
                 'max_turns': resolved_max_turns,
                 'attacker_instructions': attacker_instructions,
+                'max_backtracks': max_backtracks,
             },
         )
         if auto_save_path is None:
@@ -1532,6 +1577,7 @@ async def red_team(
         raw_targets,
         trace_datapoints if trace_datapoints is not None else replay.datapoints if replay is not None else None,
     )
+    llm_config = _restore_replayed_backtracks(llm_config, replay)
 
     # Build or merge config -------------------------------------------------
     # When ``llm_config`` is provided it is the source of truth for models and
@@ -1540,6 +1586,7 @@ async def red_team(
 
     resolved_mode = Pipeline(mode)
     _reject_unsupported_targets(targets, resolved_mode)
+    _validate_backtracking_targets(raw_targets, max_backtracks=config.max_backtracks, mode=resolved_mode)
 
     attack_model = config.attacker.model
     evaluator_model = config.evaluator.model or config.evaluator.judges[0]
@@ -1687,6 +1734,10 @@ async def red_team(
 
             _fold_post_processing_usage(report=report, post_processing_usages=post_processing_usages)
 
+            report.pipeline_warnings.extend(
+                _backtracking_warnings(report.results, max_backtracks=config.max_backtracks)
+            )
+
             persisted = _persist_and_index_run(
                 report=report,
                 save=save,
@@ -1696,6 +1747,7 @@ async def red_team(
                 metrics=metrics,
                 resolved_max_turns=resolved_max_turns,
                 attacker_instructions=attacker_instructions,
+                max_backtracks=config.max_backtracks,
             )
 
             await await_maybe(
@@ -3885,7 +3937,11 @@ def _build_redteam_evaluators(*, inputs: _RedTeamEvaluatorInputs) -> list[Any]:
             **panel_kwargs,
         )
         static_evaluator = create_owasp_evaluator(
-            evaluator_model=evaluator_model, llm_client=evaluator_client, cfg=evaluator_cfg, **panel_kwargs
+            evaluator_model=evaluator_model,
+            llm_client=evaluator_client,
+            cfg=evaluator_cfg,
+            log_panel_warnings=False,  # the dynamic evaluator above logged the same panel
+            **panel_kwargs,
         )
 
         async def hybrid_scorer(params: Any) -> EvaluationResult:
