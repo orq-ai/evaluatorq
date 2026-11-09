@@ -237,6 +237,21 @@ The middle ground between "just give me five" and specifying every trait: name t
 
 Batch forms `generate_personas([...])` / `generate_scenarios([...])` take a list of seeds and return one object each.
 
+## Check a generated batch
+
+`validate_personas` and `validate_scenarios` score a batch you pass them against the generators' guidelines that can be checked mechanically. They use no model and cost nothing, and no generator calls them for you.
+
+```python
+from evaluatorq.simulation.generators import validate_personas
+
+report = validate_personas(personas, seed='angry refund')
+print(report.passed, report.overall_score, [i.code for i in report.batch_issues])
+for item in report.items:
+    print(item.name, item.score, [i.code for i in item.issues])
+```
+
+`passed` needs `overall_score` to reach `pass_threshold` (default `0.7`) and no issue of severity `fail`, so one thin background fails the batch. The seed check only compares words and generators paraphrase, so `seed_not_reflected` is a hint: it costs nothing and does not fail the batch. A seed too short to check, such as `AI`, is reported as `seed_unchecked`, listed in `checks_skipped`, and costs nothing. The checks read surface form only: whether a trait contradicts a background, or whether an item fits your agent, is not checked.
+
 ## Full control: hand-build personas
 
 When you want exact personas and pass/fail criteria, build them yourself and call `simulate()`. A **persona** is *who* is talking (patience, assertiveness, tone); a **scenario** is *what they want* plus the **criteria** the agent must (or must not) satisfy.
