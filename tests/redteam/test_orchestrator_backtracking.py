@@ -704,3 +704,7 @@ class TestReplayKeepsTheBudget:
         config = LLMConfig()
 
         assert _restore_replayed_backtracks(config, replay) is config
+
+
+def test_the_classify_threshold_stays_inside_the_measured_gap() -> None:
+    assert 0.19 < REFUSAL_CLASSIFY_THRESHOLD < 0.87

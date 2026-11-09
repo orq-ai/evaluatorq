@@ -254,7 +254,7 @@ def _backtracking_warnings(results: list[RedTeamResult], *, max_backtracks: int)
     if failures := sum(r.execution.refusal_judge_failures for r in dynamic if r.execution is not None):
         warnings.append(
             f'The refusal judge gave no usable verdict on {failures} turn(s). Those turns were kept, so '
-            'backtracking may have erased fewer refusals than it could. Check the fast-role model (task redteam.refusal_judge) and credentials.'
+            'backtracking may have erased fewer refusals than it could. Check the model behind task redteam.refusal_judge (classifier role, or fast role on fallback) and credentials.'
         )
     return warnings
 
