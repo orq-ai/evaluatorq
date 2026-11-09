@@ -189,12 +189,13 @@ Conventional commit, `docs:` type. Never `feat!`/`fix!`. CODEOWNERS requests rev
 
 **PR body: short.** A reviewer should see what changed and what needs them on one screen. Prose sections are two or three sentences each, not paragraphs; detail a reviewer only needs to check something goes in a `<details>` block. In this order:
 
-1. **The gap** — the literal `gap: <axis> × <axis>` line, then one sentence on why it ranked first. Runner-ups and clean sweeps are not listed; point at `.context/docs-coverage-matrix.md`.
+0. **Status** — one line, before any heading, that says whether the PR is waiting on a human: `Adds docs/guides/<page>.md. 15 of 18 blocks ran, all exit 0. 2 open decisions.` or `... 0 open decisions, nothing needs you but a read.` Counts come from the receipt's `RESULT:` line and the review table, never from memory.
+1. **The gap** — the literal `gap: <axis> × <axis>` line, then one sentence on why it ranked first. Put `.context/docs-coverage-matrix.md` in a folded `<details>` block under it, verbatim: `.context/` is gitignored, so a reviewer cannot open the file, and the matrix is the evidence for the ranking.
 2. **What the page covers** — one sentence, plus one on what it deliberately leaves out.
 3. **Spend** — the step 0 disclosure in one or two sentences: live calls, which key/workspace, records written or not.
 4. **Persona verdicts** — one line each, persona → task → verdict, and how many rounds it took.
 5. **Open decisions** — the hate Decisions and anything the review table marked `Open`, each with its Lean, in the plain-words form `docs-writing` requires. Omit the heading when there are none.
-6. **Review** — the single table from `docs-writing`'s **Reporting the review in the PR**, every lens finding *and* every hate finding, each `Fixed` / `Left out` / `Open`. One table, not one per reviewer. Fold it in `<details>` when it has more than ~8 rows.
+6. **Review** — the single table from `docs-writing`'s **Reporting the review in the PR**, with its `Impact` column, sorted High first. Show every `Left out` and `Open` row and every `High` row; fold the remaining `Fixed` rows in a `<details>` block headed `N more fixed`.
 7. **Receipt** — always folded. The summary line carries the result, the block carries the step 4 file verbatim:
 
    ````markdown
