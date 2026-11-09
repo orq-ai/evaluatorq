@@ -679,6 +679,20 @@ class TestLLMConfigFlagForwarding:
         assert result.exit_code == 2, result.output
         mock_rt.assert_not_called()
 
+    def test_max_backtracks_flag_reaches_the_config(self):
+        result, mock_rt = _run_with_mocked_red_team(
+            ["run", "--target", "agent:test-agent", "--max-backtracks", "3", "--yes"]
+        )
+        assert result.exit_code == 0, result.output
+        assert self._config(mock_rt).max_backtracks == 3
+
+    def test_max_backtracks_rejects_out_of_range(self):
+        result, mock_rt = _run_with_mocked_red_team(
+            ["run", "--target", "agent:test-agent", "--max-backtracks", "11", "--yes"]
+        )
+        assert result.exit_code == 2, result.output
+        mock_rt.assert_not_called()
+
     def test_max_target_retries_rejects_out_of_range(self):
         """--max-target-retries is bounded 0..10 at the CLI, matching the field bounds."""
         result, mock_rt = _run_with_mocked_red_team(

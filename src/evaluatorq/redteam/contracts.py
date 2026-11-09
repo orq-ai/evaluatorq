@@ -962,6 +962,10 @@ class LLMConfig(BaseModel):
     max_objectives_per_llm_call: int = Field(default=8, ge=1)
     # Probe turns for blackbox capability inference. Each is a live target call.
     max_probe_turns: int = Field(default=8, ge=1)
+    # Refused turns a Crescendo attack may erase from the target's view, per attack.
+    # Each is an extra target call on top of max_turns, plus one judge call per turn
+    # while budget remains. 0 turns it off. Needs caller-owned target history.
+    max_backtracks: int = Field(default=0, ge=0, le=10)
 
     # --- Cleanup timeout ------------------------------------------------------
     cleanup_timeout_ms: int = 60_000
@@ -1339,6 +1343,14 @@ class OrchestratorResult(BaseModel):
     truncated_turns: list[int] = Field(
         default_factory=list, description='Turn numbers where adversarial LLM hit max_tokens'
     )
+    backtracked_turns: list[Turn] = Field(
+        default_factory=list,
+        description='Refused exchanges erased from the target conversation; never part of the judged transcript',
+    )
+    refusal_judge_failures: int = Field(
+        default=0,
+        description='Turns the refusal judge could not label; they were kept without knowing whether they were refused',
+    )
 
     @model_validator(mode='after')
     def _validate_max_turns(self) -> 'OrchestratorResult':
@@ -1602,6 +1614,8 @@ class JobOutputPayload(BaseModel):
     error_details: dict[str, Any] | None = None
     error_turn: int | None = None
     truncated_turns: list[int] = Field(default_factory=list)
+    backtracked_turns: list[Turn] = Field(default_factory=list)
+    refusal_judge_failures: int = 0
     finish_reason: str | None = None
     thread_id: str | None = None
     response_traces: list[ResponseTrace] = Field(default_factory=list)
@@ -1635,6 +1649,14 @@ class ExecutionDetails(BaseModel):
     token_usage: TokenUsage | None = None
     token_usage_bootstrap: TokenUsage | None = None
     seed_context: list[Message] = Field(default_factory=list)
+    backtracked_turns: list[Turn] = Field(
+        default_factory=list,
+        description='Refused exchanges erased from the target conversation; never part of the judged transcript',
+    )
+    refusal_judge_failures: int = Field(
+        default=0,
+        description='Turns the refusal judge could not label; they were kept without knowing whether they were refused',
+    )
 
 
 class AgentInfo(BaseModel):
