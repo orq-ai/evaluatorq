@@ -1,8 +1,16 @@
-# Ambiguous refund recovery — deterministic simulation proposal
+# Ambiguous refund recovery — deterministic simulation example
 
-This is a **proposed example**, not a merged contribution to evaluatorq.
+This example tests a specific distributed-systems property: a timeout does **not** reveal whether a refund committed. Its two independent observables are the backend transaction ledger and the confirmation evidence actually received by the agent. A failed status query leaves the agent uncertain even when a commit happened.
 
-It tests a specific distributed-systems property: a timeout does **not** reveal whether a refund committed. Its two independent observables are the backend transaction ledger and the confirmation evidence actually received by the agent. A failed status query leaves the agent uncertain even when a commit happened.
+## Quick Start (No API Keys Needed)
+
+Run the focused `simulate()` example:
+
+```bash
+uv run python examples/agent_simulation/failure_and_recovery/simulate_refund_recovery.py
+```
+
+This runs a local, deterministic simulation where the gateway injects an ambiguous post-commit timeout and status query timeout. Evaluatorq's `simulate()` checks that the agent safely reports `outcome='unknown'` and does not claim completion to the customer.
 
 ## API-free deterministic tests
 
@@ -45,6 +53,14 @@ tests alongside injected user and judge stubs.
 
 The deterministic suite exercises the independent policy fixture and the real local `evaluatorq.simulation.api.simulate()` implementation, including positive and negative customer-message criterion controls. The simulation's `goal_achieved` means **safe recovery handling**, *not* that a refund settled; `Audit.refund_confirmed_to_agent` is the separate outcome signal.
 
+## Structure & Architecture
+
+- `refund_recovery.py`: Core domain logic and mock payment gateway. Implements idempotent refunds, fault injection points (`BEFORE_COMMIT`, `AFTER_COMMIT`), and local audit verification.
+- `simulate_refund_recovery.py`: Minimal, focused entry point showing how to configure `simulate()` with a custom target, user simulator, and safety judge.
+- `live_refund_evaluatorq.py`: Advanced multi-turn test harness supporting live model inference across providers (Orq, custom OpenAI-compatible endpoints) with interactive secret prompts and audit reporting.
+- `LIVE_TEST_SUMMARY.md`: Reproduction commands, command flags, and recorded evidence from live model runs.
+- `tests/simulation/failure_recovery/`: Complete pytest test suite verifying simulation contracts, offline behavior, and custom provider configuration.
+
 ## What it does *not* prove
 
 - A deterministic English phrase guard rejects common explicit success claims when the structured outcome is `unknown`; it is not a general semantic, multilingual, or indirect-claim evaluator.
@@ -53,17 +69,6 @@ The deterministic suite exercises the independent policy fixture and the real lo
 - An agent can safely report uncertainty even when the mock backend has committed. Ledger truth alone must not authorize a success claim.
 - The optional live-model demo is separate evidence and is not required by these tests.
 
-## Suggested upstream changes
-
-Start with this one example; request maintainer feedback before changing APIs, exposing a new skill parameter, or claiming a production-ready resilience framework. If accepted, factor out common fixtures and extend with business-logic negative controls.
-
-The repository's default pytest path discovers these tests under
-`tests/simulation/failure_recovery/`. See `examples/agent_simulation/README.md`
-for the API-free command. See `../../../LIVE_TEST_SETUP.md` for the separate,
-credentialed real-model scenario. If evaluatorq's simulation contract changes,
-update the example and tests to match; never replace `simulate()` with a fake
-to turn an integration failure green.
-
 ## OpenAI-compatible third-party APIs
 
-Use `--provider custom --base-url <official-base-url> --model <exact-model-id>`. The runner prompts for `LLM_API_KEY` (hidden), supports `LLM_BASE_URL`, and allows `--tool-choice auto` or `--token-parameter max_completion_tokens` when documented by the provider. See root `LIVE_TEST_SETUP.md` for details.
+For the advanced live runner (`live_refund_evaluatorq.py`), custom OpenAI-compatible endpoints can be used via `--provider custom --base-url <official-base-url> --model <exact-model-id>`. The runner prompts for `LLM_API_KEY` (hidden), supports `LLM_BASE_URL`, and allows `--tool-choice auto` or `--token-parameter max_completion_tokens` when documented by the provider. See [LIVE_TEST_SUMMARY.md](LIVE_TEST_SUMMARY.md) for detailed configuration options and reproduction commands.

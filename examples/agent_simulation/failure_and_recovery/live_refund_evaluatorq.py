@@ -1,11 +1,15 @@
 """Real LLM + real evaluatorq simulate() + FAKE refund gateway.
 
+Advanced live harness with custom provider and credential configuration, multi-turn
+tool loop, and detailed audit reporting. For a focused, minimal simulate() entry point,
+see simulate_refund_recovery.py.
+
 Only the model inference call is external. The payment/refund/status tools are
 local, synthetic, and cannot move real money. No API keys are written to disk.
 
 Example (from evaluatorq's existing uv environment):
     uv run --no-sync python /path/to/live_refund_evaluatorq.py \
-        --provider orq --model openai/gpt-4o-mini --case post_commit
+        --provider orq --model openai/gpt-6-luna --case post_commit
 """
 
 # This example runs as a script and is imported by the repository tests.
