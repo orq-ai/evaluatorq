@@ -39,7 +39,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--max-dynamic-datapoints` | `int \| None` / `None` | Cap dynamically generated datapoints. |
 | `--max-static-datapoints` | `int \| None` / `None` | Cap static (dataset) datapoints. |
 | `--cleanup-memory` / `--no-cleanup-memory` | `bool` / `--cleanup-memory` | Memory entity cleanup after dynamic runs. Pass `--no-cleanup-memory` to skip it. |
-| `--dataset` | `str \| None` / `None` | Dataset source: local path, `hf:org/repo`, or `hf:org/repo/file.json`. |
+| `--dataset` | `str \| None` / `None` | Dataset source: local path, `hf:org/repo`, `hf:org/repo/file.json`, or `orq:<dataset-id>` for an Orq platform dataset. See [Your Own Attack Dataset](../guides/red-team-datasets.md) for the file format. |
 | `--from-run` | `str \| None` / `None` | Replay a previous run instead of generating data: pass its file name, run id, path, or `latest`. Re-runs the exact same attacks, so only the target and models may differ. Cannot be combined with `--mode`, `--dataset`, `--category`, `--vulnerability`, `--strategy`, `--delivery-method`, or the `--max-*-datapoints` caps. |
 | `--artifacts-dir` | `Path \| None` / `None` | Directory for saved JSON files. Required when `--save detail`. (`--output-dir` was removed; use `--artifacts-dir`.) |
 | `--save` | `none \| final \| detail` / `final` | What to persist: `none` (no files), `final` (summary only), or `detail` (all stage artifacts). |
@@ -128,7 +128,7 @@ eq redteam validate-dataset [DATASET]
 
 | Argument | Type / Default | Description |
 |---|---|---|
-| `DATASET` | `str \| None` / `None` | Local path, `hf:org/repo`, or `hf:org/repo/file.json`. Defaults to the official `orq/redteam-vulnerabilities` HuggingFace dataset. |
+| `DATASET` | `str \| None` / `None` | Local path, `hf:org/repo`, or `hf:org/repo/file.json`. Defaults to the official `orq/redteam-vulnerabilities` HuggingFace dataset. Unlike `eq redteam run --dataset`, this command has no `orq:` form — an `orq:` argument is read as a file path. |
 
 ---
 
