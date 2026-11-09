@@ -15,6 +15,7 @@ from evaluatorq.common.jury import (
     Prediction,
     TieBreak,
     VerdictKind,
+    _panel_composition_messages,
     append_jury_summary,
     attach_jury_raw_output,
     run_jury,
@@ -634,6 +635,10 @@ def _resolve_and_validate_panel(
             f'min_successful_judges ({min_successful_judges}) must be between 1 and '
             f'the deduplicated panel size ({len(deduped)}).'
         )
+    # The same composition advice the red-team paths give. There is no target here,
+    # so the self-judging check has nothing to compare against and stays silent.
+    for issue in _panel_composition_messages(panel, []):
+        logger.warning(issue)
     return panel, deduped
 
 

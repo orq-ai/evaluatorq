@@ -854,8 +854,40 @@ def provider_family(model_id: str) -> str:
     return 'unknown'
 
 
+def duplicate_judges_message(panel: Sequence[str]) -> str | None:
+    """The warning for a panel that names a judge more than once, or None.
+
+    Every path dedups the panel before it runs, so a repeated judge still casts one
+    vote; saying so is what stops `[a, a, b]` reading as a three-judge panel.
+    """
+    counts = Counter(model for model in panel if model)
+    repeated = [model for model, count in counts.items() if count > 1]
+    if not repeated:
+        return None
+    return (
+        f'Judge(s) {repeated} appear more than once in the panel {list(panel)}. '
+        'Each judge votes once, so the repeats are dropped; list each judge once.'
+    )
+
+
 def _panel_composition_messages(panel: list[str], target_models: list[str], *, strict: bool = False) -> list[str]:
+    """Advisory messages about how a judge panel is put together.
+
+    ``panel`` is the panel as configured, repeats included: the duplicate check needs
+    them, and the other checks run on the deduplicated panel that actually votes.
+    """
     messages: list[str] = []
+    if (duplicates := duplicate_judges_message(panel)) is not None:
+        messages.append(duplicates)
+    panel = list(dict.fromkeys(model for model in panel if model))
+    # A strict majority can fail on any split, so an even panel can tie with no
+    # verdict. An odd size avoids a two-way split, not a plurality miss across
+    # three or more labels, so the message does not promise more than that.
+    if panel and len(panel) % 2 == 0:
+        messages.append(
+            f'Panel has an even number of judges ({len(panel)}): {panel}. '
+            'Even panels can split with no majority; prefer an odd panel size.'
+        )
     families = {provider_family(m) for m in panel}
     known = families - {'unknown'}
     if len(panel) > 1 and 'unknown' not in families and len(known) == 1:

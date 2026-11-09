@@ -654,8 +654,66 @@ class TestPanelComposition:
         assert not any('single provider family' in m for m in msgs)
 
     def test_unknown_family_panel_not_flagged(self):
-        # Cannot prove same-family for unknown IDs, so stay silent.
-        assert _panel_composition_messages(['mystery-a', 'mystery-b'], []) == []
+        # Cannot prove same-family for unknown IDs, so stay silent. Three judges, so the
+        # even-panel advisory does not fire either.
+        assert _panel_composition_messages(['mystery-a', 'mystery-b', 'mystery-c'], []) == []
+
+    @pytest.mark.parametrize(('size', 'warns'), [(1, False), (2, True), (3, False), (4, True)])
+    def test_even_panels_warn_and_odd_panels_do_not(self, size: int, warns: bool):
+        panel = [f'mystery-{i}' for i in range(size)]
+        msgs = _panel_composition_messages(panel, [])
+        assert any(f'even number of judges ({size})' in m for m in msgs) is warns
+        if not warns:
+            assert msgs == []
+
+    def test_even_panel_counts_the_judges_that_vote(self):
+        # [a, a, b] votes as two judges, so it is an even panel as well as a repeat.
+        msgs = _panel_composition_messages(['mystery-a', 'mystery-a', 'mystery-b'], [])
+        assert any('even number of judges (2)' in m for m in msgs)
+
+    def test_a_repeated_judge_is_named(self):
+        msgs = _panel_composition_messages(['mystery-a', 'mystery-a', 'mystery-b', 'mystery-c'], [])
+        repeated = [m for m in msgs if 'more than once' in m]
+        assert len(repeated) == 1
+        assert "['mystery-a']" in repeated[0]
+        assert 'mystery-b' not in repeated[0].split(' appear')[0]
+
+    def test_evaluator_config_warns_on_a_repeated_judge_and_raises_under_strict_panel(self, monkeypatch):
+        from evaluatorq.redteam import contracts as contracts_mod
+
+        warnings: list[str] = []
+        monkeypatch.setattr(contracts_mod.logger, 'warning', lambda msg, *a, **k: warnings.append(msg))
+        cfg = EvaluatorConfig(judges=['mystery-a', 'mystery-a', 'mystery-b'])
+        assert cfg.judges == ['mystery-a', 'mystery-b']
+        assert any("['mystery-a']" in w and 'more than once' in w for w in warnings)
+
+        with pytest.raises(ValueError, match='more than once'):
+            EvaluatorConfig(judges=['mystery-a', 'mystery-a', 'mystery-b'], strict_panel=True)
+
+    def test_owasp_bridge_warns_on_a_repeated_judge(self, monkeypatch):
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge as bridge_mod
+
+        warnings: list[str] = []
+        monkeypatch.setattr(bridge_mod.logger, 'warning', lambda msg, *a, **k: warnings.append(msg))
+        bridge_mod.create_owasp_evaluator(
+            evaluator_model='mystery-a',
+            llm_client=AsyncMock(),
+            judges=['mystery-b', 'mystery-b', 'mystery-c'],
+        )
+        assert any("['mystery-b']" in w and 'more than once' in w for w in warnings)
+
+    def test_owasp_evaluator_warns_on_a_repeated_judge(self, monkeypatch):
+        from evaluatorq.redteam.adaptive import evaluator as evaluator_mod
+
+        warnings: list[str] = []
+        monkeypatch.setattr(evaluator_mod.logger, 'warning', lambda msg, *a, **k: warnings.append(msg))
+        ev = OWASPEvaluator(
+            evaluator_model='mystery-a',
+            judges=['mystery-b', 'mystery-b', 'mystery-c'],
+            llm_client=_model_client({}),
+        )
+        assert ev.panel == ['mystery-a', 'mystery-b', 'mystery-c']
+        assert any("['mystery-b']" in w and 'more than once' in w for w in warnings)
 
     def test_self_judge_family_flagged(self):
         # A lone judge sharing the target family is advisory-only noise on a

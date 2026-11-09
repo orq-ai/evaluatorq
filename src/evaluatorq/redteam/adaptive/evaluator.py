@@ -114,7 +114,8 @@ class OWASPEvaluator:
         # Composition warnings (judge diversity + self-judge / family bias). These
         # are advisory by default so existing configs keep running; strict_panel
         # turns them into hard errors for callers who want fail-closed composition.
-        for issue in _panel_composition_messages(self.panel, target_models or [], strict=strict_panel):
+        configured_panel = [evaluator_model, *(judges or [])]
+        for issue in _panel_composition_messages(configured_panel, target_models or [], strict=strict_panel):
             if strict_panel:
                 raise ValueError(issue)
             logger.warning(issue)

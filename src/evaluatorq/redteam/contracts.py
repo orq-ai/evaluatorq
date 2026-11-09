@@ -14,6 +14,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
 
+from loguru import logger
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -24,6 +25,7 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, TypedDict
 
+from evaluatorq.common.jury import duplicate_judges_message
 from evaluatorq.common.messages import EMPTY_ASSISTANT_TEXT
 from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.redact import scrub_known_secrets
@@ -709,6 +711,11 @@ class EvaluatorConfig(LLMCallConfig):
 
     @model_validator(mode='after')
     def _check_min_successful_judges(self) -> 'EvaluatorConfig':
+        # The repeats are dropped below, so this is the last place they can be seen.
+        if (duplicates := duplicate_judges_message(self.judges)) is not None:
+            if self.strict_panel:
+                raise ValueError(duplicates)
+            logger.warning(duplicates)
         panel: list[str] = []
         for j in self.judges:
             if j and j not in panel:
