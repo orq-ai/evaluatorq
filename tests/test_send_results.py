@@ -598,7 +598,7 @@ class TestSendResultsBaseUrl:
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
             base_url="https://my.staging.orq.ai",
         )
-        assert captured["url"] == f"https://my.staging.orq.ai{RESULTS_RECEIVE_PATH}"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
     @pytest.mark.asyncio
     async def test_base_url_trailing_slash_normalized(
@@ -619,7 +619,7 @@ class TestSendResultsBaseUrl:
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
             base_url="https://my.staging.orq.ai/",
         )
-        assert captured["url"] == f"https://my.staging.orq.ai{RESULTS_RECEIVE_PATH}"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_env_when_base_url_not_supplied(
@@ -640,7 +640,7 @@ class TestSendResultsBaseUrl:
             start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
         )
-        assert captured["url"] == f"https://my.staging.orq.ai{RESULTS_RECEIVE_PATH}"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
 
 class TestUploadDiagnostics:
@@ -937,7 +937,7 @@ class TestSendResultsExperimentsApiResponse:
             base_url="http://localhost:4200",
         )
 
-        assert captured["url"] == f"http://localhost:4200{RESULTS_RECEIVE_PATH}"
+        assert captured["url"] == "http://localhost:4200/v3/experiments/evaluations/receive"
         assert result == OrqResponse.model_validate(experiments_api_body)
         assert result is not None
         assert result.experiment_url is not None

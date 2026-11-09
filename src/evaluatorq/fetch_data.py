@@ -144,10 +144,6 @@ async def fetch_dataset_as_datapoints(
     return all_datapoints
 
 
-# Experiments API routes (Orq 4.18 and later).
-EXPERIMENT_RUNS_PATH = '/v3/experiments/{experiment_id}/runs'
-EXPERIMENT_RUN_EXPORT_PATH = '/v3/experiments/{experiment_id}/runs/{run_id}/export'
-
 # The export either streams the file as the response body (Content-Disposition:
 # attachment) or 302-redirects to a cached signed URL. Repeating the request is
 # safe: the server rebuilds inline or serves the cache, it never enqueues a job.
@@ -166,6 +162,25 @@ def _raise_for_experiment(response: httpx.Response, experiment_id: str, action: 
     raise ValueError(
         f"Could not {action} for experiment '{experiment_id}' "
         f'({response.status_code} {response.reason_phrase}): {detail}'
+    )
+
+
+def _experiment_json(response: httpx.Response, experiment_id: str, action: str) -> Any:
+    """Parse a successful experiments API response, or raise naming the likely cause.
+
+    A host without the ``/v3/experiments`` routes (Orq before 4.18) answers them with
+    its web app page (``200 text/html``), which would otherwise surface as a bare
+    ``JSONDecodeError`` or be retried as an export that is not ready yet.
+    """
+    _raise_for_experiment(response, experiment_id, action)
+    content_type = response.headers.get('content-type', '')
+    if 'json' in content_type.lower():
+        with contextlib.suppress(json.JSONDecodeError):
+            return response.json()
+    raise ValueError(
+        f"Could not {action} for experiment '{experiment_id}': {response.request.url} returned "
+        f'{content_type or "no content type"} instead of JSON. The host does not serve the '
+        'Experiments API (it needs Orq 4.18 or later), or ORQ_BASE_URL points at the web app.'
     )
 
 
@@ -274,22 +289,16 @@ async def fetch_experiment_datapoints(
     async with httpx.AsyncClient(timeout=60.0) as client:
         resolved_run_id = run_id
         if resolved_run_id is None:
+            # The runs list is newest first, so the first entry of the first page is
+            # the latest run and no further pages are needed.
             runs_resp = await client.get(
-                f'{base}{EXPERIMENT_RUNS_PATH.format(experiment_id=experiment_id)}', headers=headers
+                f'{base}/v3/experiments/{experiment_id}/runs', headers=headers, params={'limit': 1}
             )
-            _raise_for_experiment(runs_resp, experiment_id, 'list runs')
-            payload = runs_resp.json()
-            runs = payload if isinstance(payload, list) else payload.get('data', [])
+            payload = _experiment_json(runs_resp, experiment_id, 'list runs')
+            runs = payload.get('data') if isinstance(payload, dict) else None
             if not runs:
                 raise ValueError(f"Experiment '{experiment_id}' has no runs to load responses from.")
-            if all(not r.get('created_at') for r in runs):
-                raise ValueError(
-                    f"Experiment '{experiment_id}' runs carry no 'created_at' "
-                    'timestamps, so the latest run cannot be determined. '
-                    'Pass run_id explicitly.'
-                )
-            latest = max(runs, key=lambda r: r.get('created_at') or '')
-            resolved_run_id = latest.get('run_id')
+            resolved_run_id = runs[0].get('run_id')
             if not resolved_run_id:
                 raise ValueError(f"Could not determine the latest run for experiment '{experiment_id}'.")
             logger.debug(
@@ -304,7 +313,7 @@ async def fetch_experiment_datapoints(
             if attempt > 1:
                 await asyncio.sleep(_EXPORT_URL_RETRY_SECONDS)
             export_resp = await client.get(
-                f'{base}{EXPERIMENT_RUN_EXPORT_PATH.format(experiment_id=experiment_id, run_id=resolved_run_id)}',
+                f'{base}/v3/experiments/{experiment_id}/runs/{resolved_run_id}/export',
                 headers=headers,
                 params={'format': 'jsonl'},
             )
@@ -320,10 +329,9 @@ async def fetch_experiment_datapoints(
                 if 'attachment' in disposition or 'ndjson' in content_type or 'jsonl' in content_type:
                     export_text = export_resp.text
                 else:
-                    with contextlib.suppress(json.JSONDecodeError):
-                        body = export_resp.json()
-                        if isinstance(body, dict):
-                            export_url = body.get('url') or body.get('redirectUrl') or body.get('signedUrl')
+                    body = _experiment_json(export_resp, experiment_id, 'export run')
+                    if isinstance(body, dict):
+                        export_url = body.get('url') or body.get('redirectUrl') or body.get('signedUrl')
             else:
                 _raise_for_experiment(export_resp, experiment_id, 'export run')
             if export_url or export_text is not None:

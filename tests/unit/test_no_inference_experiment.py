@@ -37,17 +37,25 @@ def _mock_transport(
     rows: Sequence[dict[str, Any]],
     *,
     manifests_status: int = 200,
+    export_run: str | None = None,
 ) -> httpx.MockTransport:
     """A transport that fakes the runs list, the export redirect, and the
-    signed-URL download."""
+    signed-URL download. It answers only the exact v3 method, path and query, so a
+    wrong route or the wrong run gets a 404. The export is served for ``export_run``,
+    defaulting to the first (newest) run in ``manifests``."""
+    run = export_run or (manifests[0]["run_id"] if manifests else "run_explicit")
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
-        if path.endswith("/runs"):
+        if request.method == "GET" and path == f"/v3/experiments/{SHEET}/runs":
             if manifests_status != 200:
                 return httpx.Response(manifests_status, text="nope")
             return httpx.Response(200, json={"data": manifests, "has_more": False})
-        if path.endswith("/export"):
+        if (
+            request.method == "GET"
+            and path == f"/v3/experiments/{SHEET}/runs/{run}/export"
+            and request.url.params.get("format") == "jsonl"
+        ):
             return httpx.Response(302, headers={"location": SIGNED_URL})
         if str(request.url) == SIGNED_URL:
             return httpx.Response(200, text=_jsonl(rows))
@@ -117,9 +125,10 @@ def test_row_with_blank_response_has_no_assistant_message():
 
 @pytest.mark.asyncio
 async def test_fetch_uses_latest_run_when_no_run_id(patch_client):
+    # The runs list is newest first; the transport only exports run_new.
     manifests = [
-        {"run_id": "run_old", "created_at": "2026-01-01T00:00:00Z"},
         {"run_id": "run_new", "created_at": "2026-06-01T00:00:00Z"},
+        {"run_id": "run_old", "created_at": "2026-01-01T00:00:00Z"},
     ]
     rows = [
         {"inputs": '{"name": "Ada"}', "task_output": "Hello, Ada!"},
@@ -260,6 +269,29 @@ async def test_fetch_raises_when_export_url_never_ready(patch_client, monkeypatc
 
     with pytest.raises(ValueError, match="did not return a download URL"):
         await fetch_experiment_datapoints("key", SHEET, "run1")
+
+
+@pytest.mark.asyncio
+async def test_fetch_names_the_gateway_when_runs_list_returns_html(patch_client):
+    """A host without the v3 routes serves its web app page with a 200."""
+    patch_client(httpx.MockTransport(lambda r: httpx.Response(200, html="<html></html>")))
+    with pytest.raises(ValueError, match="Orq 4.18") as exc_info:
+        await fetch_experiment_datapoints("key", SHEET)
+    assert not isinstance(exc_info.value, json.JSONDecodeError)
+
+
+@pytest.mark.asyncio
+async def test_fetch_does_not_retry_an_html_export(patch_client):
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, html="<html></html>")
+
+    patch_client(httpx.MockTransport(handler))
+    with pytest.raises(ValueError, match="Orq 4.18"):
+        await fetch_experiment_datapoints("key", SHEET, "run1")
+    assert calls["n"] == 1
 
 
 @pytest.mark.asyncio

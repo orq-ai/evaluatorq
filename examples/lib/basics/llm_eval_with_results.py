@@ -131,10 +131,11 @@ async def _rouge_n_scorer(params: ScorerParameter) -> dict[str, Any]:
         reference=str(data.expected_output or ""),
     )
 
+    # Raising records an evaluator error instead of a score of 0 that would drag averages down.
     if result.type != "rouge_n":
-        return {"value": 0, "explanation": f"Unexpected evaluator response type: {result.type!r}"}
+        raise ValueError(f"Unexpected evaluator response type: {result.type!r} (status {result.status!r})")
     if result.value is None:
-        return {"value": 0, "explanation": "The evaluator returned no value"}
+        raise ValueError(f"The evaluator returned no value (status {result.status!r})")
     return {
         "value": {"type": "rouge_n", "value": result.value},
         "explanation": "ROUGE-N similarity scores between output and reference",
@@ -157,10 +158,11 @@ async def _bert_score_scorer(params: ScorerParameter) -> dict[str, Any]:
         reference=str(data.expected_output or ""),
     )
 
+    # Raising records an evaluator error instead of a score of 0 that would drag averages down.
     if result.type != "bert_score":
-        return {"value": 0, "explanation": f"Unexpected evaluator response type: {result.type!r}"}
+        raise ValueError(f"Unexpected evaluator response type: {result.type!r} (status {result.status!r})")
     if result.value is None:
-        return {"value": 0, "explanation": "The evaluator returned no value"}
+        raise ValueError(f"The evaluator returned no value (status {result.status!r})")
     return {
         "value": {"type": "bert_score", "value": result.value},
         "explanation": "BERTScore semantic similarity between output and reference",
