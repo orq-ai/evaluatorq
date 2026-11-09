@@ -93,8 +93,18 @@ def _has_generic_marker(text: str) -> bool:
 
 
 def _seed_tokens(seed: str) -> list[str]:
-    """The seed's content words: those long enough for a substring match to mean anything."""
-    return [t for t in re.findall(r'[\w-]+', seed.lower()) if len(t) > 2]
+    """The seed's content words: those long enough for a substring match to mean anything.
+
+    A hyphenated word also counts with spaces, so `first-time` matches a background that
+    writes `first time`, but not on its parts, where `time` would match `sometimes`. Length
+    counts word characters only, so `---` or `a--` is not a word.
+    """
+    tokens: list[str] = []
+    for word in re.findall(r'[\w-]+', seed.lower()):
+        for t in (word, word.replace('-', ' ')):
+            if len(re.sub(r'\W', '', t)) > 2 and t not in tokens:
+                tokens.append(t)
+    return tokens
 
 
 def _seed_reflected(tokens: list[str], *parts: str) -> bool:
@@ -115,7 +125,7 @@ def _seed_unchecked(seed: str) -> list[Issue]:
 
 
 # Info codes that mean a check could not run, mapped to the check they stand for.
-_SKIPPED_CHECKS: dict[str, str] = {'diversity_unchecked': 'trait_diversity', 'seed_unchecked': 'seed_adherence'}
+_SKIPPED_CHECKS: dict[IssueCode, str] = {'diversity_unchecked': 'trait_diversity', 'seed_unchecked': 'seed_adherence'}
 
 
 def _finalize(items: list[ItemValidation], batch_issues: list[Issue], *, pass_threshold: float) -> ValidationReport:

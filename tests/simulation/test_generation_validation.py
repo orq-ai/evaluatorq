@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import typing
+
 import pytest
 from pydantic import ValidationError
 
 from evaluatorq.simulation.contracts import CommunicationStyle, Criterion, Persona, Scenario
 from evaluatorq.simulation.generators.validation import (
-    ValidationReport,
+    _SKIPPED_CHECKS,
     Issue,
+    IssueCode,
+    ValidationReport,
     trait_spread,
     trait_variance,
     validate_personas,
@@ -273,6 +277,33 @@ def test_a_hyphenated_seed_word_stays_whole():
     persona = _persona('Real Person', 'Sometimes orders gifts online and wants the parcel tracked closely every day.')
     report = validate_personas([persona], seed='first-time shoppers')
     assert [i.code for i in report.items[0].issues] == ['seed_not_reflected']
+
+
+def test_a_hyphenated_seed_word_matches_its_spaced_form():
+    persona = _persona(
+        'Real Person',
+        'A first time buyer from Leeds who compares delivery dates and return policies before every order.',
+    )
+    report = validate_personas([persona], seed='first-time shoppers')
+    assert 'seed_not_reflected' not in [i.code for i in report.items[0].issues]
+
+
+@pytest.mark.parametrize('seed', ['---', '-- --', 'a-- ---'])
+def test_a_seed_of_only_punctuation_is_unchecked_not_missed(seed: str):
+    report = validate_personas(_GOOD_PERSONAS, seed=seed)
+    assert report.checks_skipped == ['seed_adherence']
+    assert not any(i.code == 'seed_not_reflected' for item in report.items for i in item.issues)
+
+
+def test_two_skipped_checks_are_both_listed():
+    report = validate_personas(_GOOD_PERSONAS[:2], seed='AI')
+    assert sorted(report.checks_skipped) == ['seed_adherence', 'trait_diversity']
+    assert report.passed
+
+
+def test_every_unchecked_code_names_the_check_it_skipped():
+    unchecked = {code for code in typing.get_args(IssueCode) if code.endswith('_unchecked')}
+    assert unchecked == set(_SKIPPED_CHECKS), 'a new *_unchecked code needs an entry in _SKIPPED_CHECKS'
 
 
 @pytest.mark.parametrize('partial', [{'overall_score': 1.0}, {'passed': True}])
