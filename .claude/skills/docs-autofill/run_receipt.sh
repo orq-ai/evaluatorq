@@ -39,6 +39,7 @@ WORK="$(mktemp -d)"
 ROWS="$WORK/rows.txt"   # per-block rows; assembled under the RESULT line at the end
 : >"$ROWS"
 mkdir -p "$ROOT/.context"
+rm -f "$SUMMARY_FILE"  # an interrupted run must not leave the last run's status to be pasted
 
 EVALUATORQ_DIR="$(mktemp -d)"
 export EVALUATORQ_DIR

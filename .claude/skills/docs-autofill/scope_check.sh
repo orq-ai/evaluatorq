@@ -15,7 +15,12 @@ BASE="${2:-origin/main}"
 MAX_FILES=3
 MAX_LINES=60
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-cd "$ROOT" || exit 0
+cd "$ROOT" || { printf 'scope check did not run: cannot enter %s\n' "$ROOT"; exit 0; }
+
+if ! git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
+  printf 'scope check did not run: unknown base ref %s\n' "$BASE"
+  exit 0
+fi
 
 files=0
 lines=0
@@ -44,6 +49,10 @@ while IFS= read -r file; do
 done < <(git ls-files --others --exclude-standard)
 
 fences=$(git diff -U0 "$BASE" -- . ':!'"$PAGE" 2>/dev/null | grep -cE '^[+-][[:space:]]*```')
+while IFS= read -r file; do
+  [ "$file" = "$PAGE" ] && continue
+  fences=$((fences + $(grep -cE '^[[:space:]]*```' "$file" 2>/dev/null)))
+done < <(git ls-files --others --exclude-standard)
 
 printf 'adjacent edits: %s files (budget %s), %s added lines (budget about %s)\n' "$files" "$MAX_FILES" "$lines" "$MAX_LINES"
 [ -n "$list" ] && printf '%b\n' "$list"
