@@ -2,7 +2,7 @@
 
 One row per attempt. The routine's only memory — read from `main` and from every unmerged `docs/autofill-*` branch, so a gap whose PR was rejected is never re-attempted. Never delete a row; a row removed is a gap that comes back.
 
-Outcomes: `prepared` (work committed, PR not yet created) · `opened` · `blocked` (3 rounds, persona still stuck) · `skipped-no-key` · `skipped-code-defect` (the page could not be written honestly around a code/docs inconsistency — see the Slack message for that run) · `follow-up` (a gap an earlier run saw and left for later; unlike every other outcome it is **eligible** again, and the run that picks it adds a new row that supersedes it).
+Outcomes: `prepared` (work committed, PR not yet created) · `opened` · `blocked` (3 rounds, persona still stuck) · `skipped-no-key` · `skipped-code-defect` (the page could not be written honestly around a code/docs inconsistency — see the Slack message for that run) · `follow-up` or `follow-up BACK-1234` (a gap an earlier run saw and left for later, with the Linear ticket filed for it when there is one; unlike every other outcome it is **eligible** again, and the run that picks it adds a new row that supersedes it).
 
 | date | matrix cell | branch | outcome |
 |---|---|---|---|

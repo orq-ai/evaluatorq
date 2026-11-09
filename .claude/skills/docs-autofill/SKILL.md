@@ -81,7 +81,7 @@ An **adjacent edit** is allowed when all of these hold:
 
 Not adjacent, whatever the size: anything in `src/`, `.claude/skills/docs-coverage/axes.md` (that one keeps its `[axes]` tag), a rewrite of another page's structure, and anything that needs a human decision (that is an Open decision).
 
-Every adjacent edit is listed in the PR body (step 8), one line each, so a reviewer can reject one without losing the page. Everything else you wanted to do and did not is a **follow-up**: add a ledger row with outcome `follow-up` and the matrix cell it would fill, in the same commit. A "left out" sentence in the PR that no later run can find is how useful work gets lost.
+Every adjacent edit is listed in the PR body (step 8), one line each, so a reviewer can reject one without losing the page. Everything else you wanted to do and did not is a **follow-up**: add a ledger row with outcome `follow-up` and the matrix cell it would fill, in the same commit; step 8 then files a Linear ticket for it and writes the ticket id into that row. A "left out" sentence in the PR that no later run can find is how useful work gets lost.
 
 **Invoke the `docs-writing` skill and follow it — that skill does the writing, this step only scopes it.** Call it with the `Skill` tool (`skill: docs-writing`) before you draft a word; it holds the reader, the three page genres and their shapes, the voice, the four things every page carries, and the reviewer loop that gates a draft. Its instructions win over any writing habit you would otherwise fall back on. This routine writes unattended, so a page drafted without it is a page nobody read for voice before it shipped.
 
@@ -160,7 +160,7 @@ Not found → run the `docs-writing` lenses alone, say so in the PR body, and **
 Run it in `--apply --sonnet` mode. Three overrides for unattended use:
 
 - Its "ask, then STOP" branch does not apply; `--apply` is in force, so Recommendations get applied and Decisions stay open for the PR body.
-- Its Linear-comment step is replaced by the PR body. There is no ticket.
+- Its Linear-comment step is replaced by the PR body. There is no ticket for the run itself; the only tickets this routine files are the follow-ups in step 8.
 - Its Context Resolution table has no pattern for "diff against main". Give it the diff explicitly: commit step 3's work as a single commit before dispatch, so its `git diff HEAD~1` fallback resolves to the whole page.
 
 If one of your own checks reports that *everything* is broken — every anchor missing, every link dead — suspect the check first. Confirm against the built artifact before you state it anywhere.
@@ -181,7 +181,7 @@ Append the ledger row first, in the same commit as the docs, with outcome `prepa
 | 2026-08-24 | `entry point × hybrid` | docs/autofill-hybrid-mode | prepared |
 ```
 
-Amend it to `opened` only after `gh pr create` returns a URL. Writing `opened` up front means a failed PR creation still tells next week the gap was handled, and the gap is then skipped forever.
+Amend it to `opened` only after `gh pr create` returns a URL, and amend each `follow-up` row to `follow-up BACK-1234` once its ticket exists (below). Writing `opened` up front means a failed PR creation still tells next week the gap was handled, and the gap is then skipped forever.
 
 Then, body to a file — `gh pr create` prompts for a title and body it is not given, and a headless session has no terminal to prompt at:
 
@@ -193,6 +193,18 @@ gh pr create --title "docs: <what the page covers>" \
              --assignee @me --label docs-autofill --base main
 ```
 
+**Follow-up tickets.** Once the PR exists, file one Linear ticket per `follow-up` ledger row, with the Linear connector in `routine.json`: team `BACK`, project `EvaluatOrq`, title `docs: <what the follow-up would cover>`. First search that project for an open issue about the same matrix cell and skip the filing if one exists, so a gap does not collect a ticket per week. The description is two headers and short prose, no links to the PR's discussion:
+
+```markdown
+## Situation
+<what the page does not cover yet and who hits it; the `gap: <axis> × <axis>` line>
+
+## Desired state
+<what the missing page or section should let a reader do>
+```
+
+Put the ticket id in the ledger row (`follow-up BACK-1234`), in the PR body's **Beyond the page** line, and in the step 9 Slack message. **If the Linear connector is missing or the call fails, do not stall the run:** leave the row as plain `follow-up`, say in the PR body and in Slack that no ticket was filed and why. When a later run picks up a `follow-up BACK-nnnn` row, its PR title takes the id in trailing parentheses (`docs: <what the page covers> (BACK-1234)`) as `CLAUDE.md` requires, and the PR body says the ticket is to be closed by hand.
+
 Conventional commit, `docs:` type. Never `feat!`/`fix!`. CODEOWNERS requests reviewers; do not pass `--reviewer`. Never merge.
 
 **A title tag goes in the commit subject too.** `.github/workflows/pr-title.yml` runs `validateSingleCommitMatchesPrTitle`, and this routine always opens a one-commit PR, so a `[axes]` or `[BLOCKED]` tag appended to the title alone fails the **Conventional title** check with `The pull request title doesn't match the commit`. Amend the commit subject to the exact title before pushing. Found the hard way on #200.
@@ -202,7 +214,7 @@ Conventional commit, `docs:` type. Never `feat!`/`fix!`. CODEOWNERS requests rev
 0. **Status** — one line, before any heading, that says whether the PR is waiting on a human: `Adds docs/guides/<page>.md. 15 of 18 blocks ran, all exit 0. 2 open decisions.` or `... 0 open decisions, nothing needs you but a read.` Counts come from the receipt's `RESULT:` line and the review table, never from memory.
 1. **The gap** — the literal `gap: <axis> × <axis>` line, then one sentence on why it ranked first. Put `.context/docs-coverage-matrix.md` in a folded `<details>` block under it, verbatim: `.context/` is gitignored, so a reviewer cannot open the file, and the matrix is the evidence for the ranking.
 2. **What the page covers** — one sentence, plus one on what it deliberately leaves out.
-3. **Beyond the page** — one line per adjacent edit (file, what changed, why it belongs here), then one line per follow-up ledger row added. Omit the heading when there are neither.
+3. **Beyond the page** — one line per adjacent edit (file, what changed, why it belongs here), then one line per follow-up (the gap and its ticket id). Omit the heading when there are neither.
 4. **Spend** — the step 0 disclosure in one or two sentences: live calls, which key/workspace, records written or not.
 5. **Persona verdicts** — one line each, persona → task → verdict, and how many rounds it took.
 6. **Open decisions** — the hate Decisions and anything the review table marked `Open`, each with its Lean, in the plain-words form `docs-writing` requires. Omit the heading when there are none.
@@ -230,7 +242,7 @@ Channel `research-assistant` (`C0BNKRH9FGR`) via `slack_send_message`. **Standar
 
 Exactly one message per run, in every case:
 
-- **PR opened** — the PR's own gap line, the PR link, the persona verdicts line and rounds taken, open decision count. Reuse the PR body's wording rather than re-summarising it. Name any reviewer that did not run.
+- **PR opened** — the PR's own gap line, the PR link, the persona verdicts line and rounds taken, open decision count. Reuse the PR body's wording rather than re-summarising it. List each follow-up ticket id, or say none was filed and why. Name any reviewer that did not run.
 - **PR blocked after 3 rounds** — as above, plus a DM to `U09BR0B0Q7P`.
 - **No-op** — what was checked, why no gap cleared the bar.
 - **Aborted** — env guard failed, or `gh pr create` failed after the work was done. Name the cause; a failure at the last step is the most expensive one.
