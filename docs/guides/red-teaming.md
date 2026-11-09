@@ -18,7 +18,7 @@ flowchart LR
 ## Modes
 
 - **dynamic** — an LLM generates attacks; run the categories you pick.
-- **static** — replays a fixed dataset of known attacks instead of generating them. Deterministic, cheap, good for CI. Runs Orq's public [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities) dataset by default; pass `dataset=` to run your own. The [static dataset cookbook](../examples/redteam/02_static_dataset.md) shows the reproducible version end to end.
+- **static** — replays a fixed dataset of known attacks instead of generating them. Deterministic, cheap, good for CI. Runs Orq's public [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities) dataset by default; pass `dataset=` to run your own — [Your Own Attack Dataset](red-team-datasets.md) is the file format and the field reference. The [static dataset cookbook](../examples/redteam/02_static_dataset.md) shows the reproducible version end to end.
 - **hybrid** — static seeds plus dynamic expansion; see the [hybrid mode cookbook](../examples/redteam/03_hybrid_mode.md) when you want both known attacks and generated coverage.
 
 In dynamic and hybrid mode each attack is a conversation, not a single prompt. An attacker LLM writes the next message from the target's last reply, for up to `max_turns` turns, and stops early when it judges the objective met. That self-report never decides the outcome: the judge reads the whole transcript afterwards and returns the verdict.
