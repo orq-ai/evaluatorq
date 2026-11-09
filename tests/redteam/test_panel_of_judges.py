@@ -690,6 +690,18 @@ class TestPanelComposition:
         with pytest.raises(ValueError, match='more than once'):
             EvaluatorConfig(judges=['mystery-a', 'mystery-a', 'mystery-b'], strict_panel=True)
 
+    def test_an_even_config_panel_fails_when_its_evaluator_is_built(self):
+        # The config only checks repeats; parity is checked once the runner builds
+        # the evaluator from it, with the same split the runner uses.
+        cfg = EvaluatorConfig(judges=['mystery-a', 'mystery-b'], strict_panel=True)
+        with pytest.raises(ValueError, match='even number of judges'):
+            OWASPEvaluator(
+                evaluator_model=cfg.judges[0],
+                judges=cfg.judges[1:],
+                llm_client=_model_client({}),
+                strict_panel=cfg.strict_panel,
+            )
+
     def test_owasp_bridge_warns_on_a_repeated_judge(self, monkeypatch):
         from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge as bridge_mod
 
