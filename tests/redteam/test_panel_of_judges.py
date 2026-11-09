@@ -717,6 +717,12 @@ class TestPanelComposition:
         EvaluatorConfig(model='mystery-a', judges=['mystery-a', 'mystery-a', 'mystery-b'])
         assert any('more than once' in w for w in warnings)
 
+        # Any repeat is reported once, whichever validator sees it.
+        for judges in (['mystery-a', 'mystery-a', 'mystery-b'], ['mystery-x', 'mystery-x', 'mystery-b']):
+            warnings.clear()
+            EvaluatorConfig(model='mystery-a', judges=judges)
+            assert sum('more than once' in w for w in warnings) == 1, (judges, warnings)
+
         with pytest.raises(ValueError, match='more than once'):
             EvaluatorConfig(model='mystery-a', judges=['mystery-a', 'mystery-a', 'mystery-b'], strict_panel=True)
 

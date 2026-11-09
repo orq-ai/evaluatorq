@@ -691,8 +691,9 @@ class EvaluatorConfig(LLMCallConfig):
             if model is not None:
                 judges = list(payload.get('judges') or [])
                 # The rewrite below drops repeats of `model`, so the after-validator
-                # never sees them. Check the list as written first.
-                if (duplicates := duplicate_judges_message(judges)) is not None:
+                # never sees them; report those here. Other repeats survive the
+                # rewrite and are reported once, by the after-validator.
+                if (duplicates := duplicate_judges_message([j for j in judges if j == model])) is not None:
                     if payload.get('strict_panel'):
                         raise ValueError(duplicates)
                     logger.warning(duplicates)
