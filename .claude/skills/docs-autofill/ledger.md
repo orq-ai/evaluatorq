@@ -17,4 +17,4 @@ Outcomes: `prepared` (work committed, PR not yet created) · `opened` · `blocke
 | 2026-10-19 | `tier 1: CLI flags + config fields (eq insights --max-clusters, --max-subclusters, --outlier-zscore; insights() max_clusters, max_subclusters, outlier_zscore)` | docs/autofill-insights-clustering | opened |
 | 2026-10-26 | `tier 1: CLI flags (eq sim from-traces --generate-first-message/--replay-first-message, --redact-pii/--no-redact-pii, --max-summaries)` | docs/autofill-from-traces-flags | opened |
 | 2026-11-02 | `tier 1: evaluatorq() per-row completion callback (on_datapoint_complete, DataPointComplete)` | docs/autofill-datapoint-complete-callback | opened |
-| 2026-11-09 | `entry point (red_team()) × data source (local attack dataset file)` | docs/autofill-redteam-dataset-file | prepared |
+| 2026-11-09 | `entry point (red_team()) × data source (local attack dataset file)` | docs/autofill-redteam-dataset-file | opened |
