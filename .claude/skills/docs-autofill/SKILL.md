@@ -101,7 +101,7 @@ How the runner runs blocks:
 - **Bash blocks get the project venv on `PATH`** (`source .venv/bin/activate`, or prefix with `uv run`). A bash block calling `eq`/`evaluatorq` in a bare shell exits `127`, and `127` looks like a broken example rather than a broken runner.
 - **Against a fresh run store**: `export EVALUATORQ_DIR=$(mktemp -d)` before the first block. Blocks that run against a store your own probes already populated will pass while hiding a state dependency — a `previous_run="latest"` that only resolves because you happened to leave a run lying around.
 
-Receipt table: command, exit code, first ~5 lines of output. Paste it into the PR body verbatim, folded (step 8). A docs PR whose examples were never executed is the thing this routine exists to stop shipping.
+The receipt opens with a `RESULT:` line (block counts, ran vs illustrative, pass or fail), then one row per block: its exit code, or `— illustrative (<why>)`, with the first ~5 lines of output indented under it. Paste it into the PR body verbatim, folded (step 8). A docs PR whose examples were never executed is the thing this routine exists to stop shipping.
 
 **Nonzero exit is a hard gate.** Any block that exits nonzero and is not exempt stops the run here: fix the page, regenerate the receipt, and only then go to step 5. Never carry a red row into review — a table nobody is required to act on is not a check.
 
@@ -199,7 +199,7 @@ Conventional commit, `docs:` type. Never `feat!`/`fix!`. CODEOWNERS requests rev
 
    ````markdown
    <details>
-   <summary>Receipt — 18 blocks, 15 ran (all exit 0), 3 illustrative</summary>
+   <summary>Receipt — <the receipt's RESULT line, minus the "RESULT: " prefix></summary>
 
    ```text
    <.context/receipt.txt, verbatim>
@@ -218,7 +218,7 @@ Channel `research-assistant` (`C0BNKRH9FGR`) via `slack_send_message`. **Standar
 
 Exactly one message per run, in every case:
 
-- **PR opened** — the gap in one clause, the PR link, persona verdicts and rounds taken, open decision count. Name any reviewer that did not run.
+- **PR opened** — the PR's own gap line, the PR link, the persona verdicts line and rounds taken, open decision count. Reuse the PR body's wording rather than re-summarising it. Name any reviewer that did not run.
 - **PR blocked after 3 rounds** — as above, plus a DM to `U09BR0B0Q7P`.
 - **No-op** — what was checked, why no gap cleared the bar.
 - **Aborted** — env guard failed, or `gh pr create` failed after the work was done. Name the cause; a failure at the last step is the most expensive one.
