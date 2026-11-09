@@ -50,8 +50,11 @@ esac
 # writes nothing, and leaves the run reporting success over an empty output
 # section — the same hole as an unvalidated value. Ask `head` whether it can use
 # the number instead of guessing where its limit is.
-if ! printf '' | head -n "$OUT_LINES" >/dev/null 2>&1; then
-  printf 'RECEIPT_OUT_LINES=%s is not a line count this head accepts\n' "$OUT_LINES" >&2
+# Two probes, no magic numbers: `head` must accept the count, and `test` must be
+# able to compare it. They have different ranges — `head` takes unsigned values
+# past what `[ -gt ]` parses — and both are used below, so both get asked.
+if ! printf '' | head -n "$OUT_LINES" >/dev/null 2>&1 || ! [ "$OUT_LINES" -ge 0 ] 2>/dev/null; then
+  printf 'RECEIPT_OUT_LINES=%s is not a line count this shell can use\n' "$OUT_LINES" >&2
   exit 2
 fi
 WORK="$(mktemp -d)"
