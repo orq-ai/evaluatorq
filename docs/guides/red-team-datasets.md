@@ -178,7 +178,7 @@ On the CLI the same run is `eq redteam run --target agent:my-agent --mode static
 
 A `category` the run does not ask for **passes validation and then silently disappears from the run**.
 
-Validation checks that `category` is a non-empty string, not that it is one of the 18 codes a run requests. The filter matches those codes exactly and keeps nothing else, so an unrequested value is dropped before the first API call, and nothing in the run log names the dropped row — the warnings list requested categories only.
+Validation checks that `category` is a non-empty string, not that it is one of the 18 codes a run requests. The filter keeps a row only when its `category`, upper-cased and with any `OWASP-` prefix removed, is one of those codes (`OWASP-LLM07` and `llm07` both run), so an unrequested value is dropped before the first API call, and nothing in the run log names the dropped row — the warnings list requested categories only.
 
 Two spellings land in that hole, and the second is the nastier one.
 
@@ -243,13 +243,14 @@ import sys
 from pathlib import Path
 
 from evaluatorq.redteam import RedTeamInput, list_categories
+from evaluatorq.redteam.contracts import normalize_category
 
 requested = set(list_categories())
 rows = json.loads(Path(sys.argv[1]).read_text())["samples"]
 dropped = []
 for row in rows:
     meta = RedTeamInput(**row["input"])
-    if meta.category not in requested:
+    if normalize_category(meta.category.upper()) not in requested:
         dropped.append(meta.id)
         print(f"{meta.id}: category {meta.category!r} is not requested by a run — this row will not run")
 print(f"{len(rows) - len(dropped)} of {len(rows)} rows will run")
