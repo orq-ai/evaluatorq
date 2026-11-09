@@ -899,7 +899,7 @@ def even_panel_tie_outcome(
     return tie_break_label
 
 
-def _panel_composition_messages(
+def panel_composition_messages(
     panel: list[str],
     target_models: list[str],
     *,

@@ -17,9 +17,9 @@ from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replace
 from evaluatorq.common.jury import (
     Prediction,
     VerdictKind,
-    _panel_composition_messages,
     append_jury_summary,
     attach_jury_raw_output,
+    panel_composition_messages,
     run_jury,
 )
 from evaluatorq.common.orq_client import resolve_orq_client
@@ -266,8 +266,14 @@ def create_owasp_evaluator(
     target_models: list[str] | None = None,
     *,
     strict_panel: bool = False,
+    log_panel_warnings: bool = True,
 ) -> EvaluatorqEvaluatorConfig:
-    """Create an evaluatorq scorer that routes by OWASP category."""
+    """Create an evaluatorq scorer that routes by OWASP category.
+
+    ``log_panel_warnings=False`` silences the panel-composition warnings but not the
+    ``strict_panel`` errors. Hybrid mode builds a dynamic evaluator on the same panel
+    first, which already logged them.
+    """
     # Build the client + merged cfg ONCE here (not per datapoint). Creating them
     # inside scorer() would spin up a fresh AsyncOpenAI connection pool for every
     # datapoint in a batch, none explicitly closed. Mirrors OWASPEvaluator.__init__.
@@ -295,12 +301,13 @@ def create_owasp_evaluator(
             f'after de-duplication; panel={panel}'
         )
     configured_panel = [evaluator_model, *(judges or [])]
-    for issue in _panel_composition_messages(
+    for issue in panel_composition_messages(
         configured_panel, target_models or [], strict=strict_panel, tie_outcome=RED_TEAM_TIE_OUTCOME
     ):
         if strict_panel:
             raise ValueError(issue)
-        logger.warning(issue)
+        if log_panel_warnings:
+            logger.warning(issue)
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         data = params['data']

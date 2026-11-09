@@ -10,7 +10,7 @@ from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replace
 from evaluatorq.common.jury import (
     Prediction,
     VerdictKind,
-    _panel_composition_messages,
+    panel_composition_messages,
     run_jury,
 )
 from evaluatorq.common.jury import provider_family as provider_family
@@ -116,7 +116,7 @@ class OWASPEvaluator:
         # are advisory by default so existing configs keep running; strict_panel
         # turns them into hard errors for callers who want fail-closed composition.
         configured_panel = [evaluator_model, *(judges or [])]
-        for issue in _panel_composition_messages(
+        for issue in panel_composition_messages(
             configured_panel, target_models or [], strict=strict_panel, tie_outcome=RED_TEAM_TIE_OUTCOME
         ):
             if strict_panel:

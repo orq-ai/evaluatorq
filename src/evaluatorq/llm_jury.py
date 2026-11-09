@@ -16,10 +16,10 @@ from evaluatorq.common.jury import (
     Prediction,
     TieBreak,
     VerdictKind,
-    _panel_composition_messages,
     append_jury_summary,
     attach_jury_raw_output,
     even_panel_tie_outcome,
+    panel_composition_messages,
     run_jury,
     validate_aggregator,
 )
@@ -643,7 +643,7 @@ def _resolve_and_validate_panel(
         )
     # The same composition advice the red-team paths give. There is no target here,
     # so the self-judging check has nothing to compare against and stays silent.
-    for issue in _panel_composition_messages(panel, [], tie_outcome=tie_outcome):
+    for issue in panel_composition_messages(panel, [], tie_outcome=tie_outcome):
         logger.warning(issue)
     return panel, deduped
 
