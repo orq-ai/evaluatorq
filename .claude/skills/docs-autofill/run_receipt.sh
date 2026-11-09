@@ -34,6 +34,29 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT" || exit 1
 
 RECEIPT="$ROOT/.context/receipt.txt"
+OUT_LINES="${RECEIPT_OUT_LINES:-40}"
+# Validated here, before any block runs, because the script is deliberately not
+# `set -e`: an unvalidated value reaches `head -<value>`, which rejects it as an
+# option, writes nothing, and leaves the run to print RESULT: OK over an empty
+# output section. That is the exact failure this cap was raised to prevent.
+case "$OUT_LINES" in
+  '' | *[!0-9]*)
+    printf 'RECEIPT_OUT_LINES must be a non-negative integer, got %s\n' "$OUT_LINES" >&2
+    exit 2
+    ;;
+esac
+# Decimal syntax is not enough. A value the shell accepts can still overflow this
+# platform's `head`, which rejects it ("Value too large for defined data type"),
+# writes nothing, and leaves the run reporting success over an empty output
+# section — the same hole as an unvalidated value. Ask `head` whether it can use
+# the number instead of guessing where its limit is.
+# Two probes, no magic numbers: `head` must accept the count, and `test` must be
+# able to compare it. They have different ranges — `head` takes unsigned values
+# past what `[ -gt ]` parses — and both are used below, so both get asked.
+if ! printf '' | head -n "$OUT_LINES" >/dev/null 2>&1 || ! [ "$OUT_LINES" -ge 0 ] 2>/dev/null; then
+  printf 'RECEIPT_OUT_LINES=%s is not a line count this shell can use\n' "$OUT_LINES" >&2
+  exit 2
+fi
 SUMMARY_FILE="$ROOT/.context/receipt-summary.txt"
 WORK="$(mktemp -d)"
 ROWS="$WORK/rows.txt"   # per-block rows; assembled under the RESULT line at the end
@@ -207,9 +230,17 @@ while IFS=$'\t' read -r idx lang start_line; do
 
   RAN=$((RAN + 1))
   printf '%s exit %s\n' "$row" "$code" >>"$ROWS"
-  # First 5 lines of output, indented; a block that printed nothing adds no lines.
+  # Up to OUT_LINES, not 5: the receipt is the evidence for what the prose claims,
+  # and a block whose measurements run past the cap evidences nothing below it. A
+  # 5-line cap on one page's clustering block hid three rows, and two false
+  # z-score claims rode through review behind the truncation.
+  # A block that printed nothing adds no lines.
   if [ -n "${out//[[:space:]]/}" ]; then
-    printf '%s\n' "$out" | head -5 | sed 's/^/    /' >>"$ROWS"
+    printf '%s\n' "$out" | head -n "$OUT_LINES" | sed 's/^/    /' >>"$ROWS"
+    # `printf '%s\n' ""` still feeds one newline to wc, so gate on there being output.
+    if [ "$(printf '%s\n' "$out" | wc -l)" -gt "$OUT_LINES" ]; then
+      printf '    [output truncated at %s lines]\n' "$OUT_LINES" >>"$ROWS"
+    fi
   fi
   if [ "$code" -ne 0 ]; then
     FAILED=1
