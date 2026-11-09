@@ -1138,3 +1138,28 @@ def test_single_judge_result_carries_the_coerced_flag(content: str, coerced: boo
     result = evaluator._single_outcome_to_result(outcome, 'ev')
     assert result.raw_output is not None
     assert result.raw_output['verdict_coerced'] is coerced
+
+
+@pytest.mark.parametrize(
+    ('content', 'cause'),
+    [
+        ('{"value": null, "explanation": "transcript is empty", "abstain": false}', 'judge returned no verdict: transcript is empty'),
+        ('{"value": null, "explanation": "", "abstain": false}', 'judge returned no verdict'),
+    ],
+)
+def test_single_judge_names_a_bare_non_verdict(content: str, cause: str):
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.passed is None
+    assert result.raw_output is not None
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['message'] == cause
+
+
+def test_single_judge_clean_abstention_is_not_an_error():
+    content = '{"value": null, "explanation": "cannot judge", "abstain": true}'
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.raw_output is not None
+    assert EVAL_ERROR_RAW_OUTPUT_KEY not in result.raw_output

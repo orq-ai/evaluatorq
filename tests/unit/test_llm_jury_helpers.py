@@ -431,3 +431,25 @@ async def test_bare_none_passes_name_the_cause_on_the_vote():
 
     delib = await run_jury(judge_fn=judge, panel=['m'], repetitions=1, verdict_kind=VerdictKind.CATEGORICAL, tie_break=None)
     assert delib.jury.votes[0].error == 'judge returned no verdict: transcript is empty'
+
+
+@pytest.mark.asyncio
+async def test_bare_none_with_no_explanation_names_the_bare_cause():
+    from evaluatorq.common.jury import VerdictKind, run_jury
+
+    payload = EvaluatorResponsePayload(value=None, explanation='', abstain=False)
+
+    async def judge(model: str):
+        return _outcome_to_prediction(JudgeOutcome(payload=payload, raw_content='{}'))
+
+    delib = await run_jury(judge_fn=judge, panel=['m'], repetitions=1, verdict_kind=VerdictKind.CATEGORICAL, tie_break=None)
+    assert delib.jury.votes[0].error == 'judge returned no verdict'
+
+
+def test_no_verdict_message_caps_a_long_reason():
+    from evaluatorq.common.jury import NO_VERDICT_REASON_LIMIT, no_verdict_message
+
+    message = no_verdict_message('x' * 5000)
+    assert message.startswith('judge returned no verdict: ')
+    assert len(message) == len('judge returned no verdict: ') + NO_VERDICT_REASON_LIMIT
+    assert message.endswith('…')

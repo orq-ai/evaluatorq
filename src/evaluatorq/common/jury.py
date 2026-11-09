@@ -39,6 +39,21 @@ TieBreak = Callable[[list[VerdictValue]], VerdictValue | None]
 _UNSWAP = {'A': 'B', 'B': 'A'}
 
 
+NO_VERDICT_REASON_LIMIT = 200
+
+
+def no_verdict_message(reason: str) -> str:
+    """The error for a judge that returned value=None without abstaining.
+
+    The reason is capped: the full explanation already sits on the repetition, and this
+    copy reaches saved results, so it only needs to identify the cause.
+    """
+    reason = reason.strip()
+    if len(reason) > NO_VERDICT_REASON_LIMIT:
+        reason = reason[: NO_VERDICT_REASON_LIMIT - 1].rstrip() + '…'
+    return f'judge returned no verdict: {reason}' if reason else 'judge returned no verdict'
+
+
 def _unswap(value: VerdictValue | None) -> VerdictValue | None:
     """Map a verdict from the swapped ordering back to the canonical A/B frame.
 
@@ -493,8 +508,7 @@ async def _compute_judge_vote(
         error = next((p.error for p in predictions if p.error), None)
         if error is None:
             # Every pass was a bare value=None. The judge's own reason is the only cause there is.
-            reason = next((p.explanation for p in predictions if p.explanation), '')
-            error = f'judge returned no verdict: {reason}' if reason else 'judge returned no verdict'
+            error = no_verdict_message(next((p.explanation for p in predictions if p.explanation), ''))
         return (
             JuryVote(
                 model=model,
