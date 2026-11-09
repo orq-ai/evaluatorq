@@ -250,7 +250,7 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
     ),
     reserve_judges=('minimax/MiniMax-M2.7',),
     use_when='No dependence on a closed frontier vendor; migration path to self-hosting.',
-    estimated_cost_per_1k=34.28,
+    estimated_cost_per_1k=37.66,
 )
 
 EU_REGION = JuryPreset(

@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-10-05T08:48:42.592121+00:00",
+  "captured_at": "2026-11-09T10:54:42.733853+00:00",
   "catalog_scope": "project",
   "judges": {
     "anthropic/claude-opus-5-5": {
@@ -69,7 +69,7 @@
     },
     "wafer/Kimi-K3": {
       "input_rate": 3.0,
-      "output_rate": 12.75,
+      "output_rate": 15.0,
       "default_reasoning_effort": "none"
     },
     "zai/glm-5.2": {

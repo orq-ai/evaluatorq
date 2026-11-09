@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
   issues: write
 
 jobs:
@@ -82,13 +83,35 @@ jobs:
     steps:
       - name: Open an issue
         uses: actions/github-script@v9
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
         with:
           script: |
             const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            const results = JSON.parse(process.env.JOB_RESULTS)
+            const failedChecks = []
+
+            if (results['run-examples'].result === 'failure') {
+              failedChecks.push('Curated examples: one or more example runs failed.')
+            }
+            if (results['integration-tests'].result === 'failure') {
+              failedChecks.push('Integration tests: the real API integration test job failed.')
+            }
+
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+            })
+            const failedJobs = jobs.filter(job => job.conclusion === 'failure')
+            const jobLinks = failedJobs.map(job => `- [${job.name}](${job.html_url})`).join('\n')
+            const details = failedChecks.length ? failedChecks.join('\n') : 'The workflow failed, but neither monitored job reported a failure.'
+            const failedJobDetails = jobLinks ? `\n\nFailed jobs:\n${jobLinks}` : ''
+
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Weekly example run failed (${new Date().toISOString().slice(0, 10)})`,
-              body: `One or more curated examples failed to run.\n\nRun: ${url}\n\nLikely either genuine drift in the examples or a flaky upstream API — check which before editing anything.`,
+              title: `Weekly real-API checks failed (${new Date().toISOString().slice(0, 10)})`,
+              body: `${details}${failedJobDetails}\n\nWorkflow run: ${url}`,
               labels: ['examples', 'ci'],
             })
