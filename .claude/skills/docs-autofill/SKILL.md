@@ -101,7 +101,7 @@ How the runner runs blocks:
 - **Bash blocks get the project venv on `PATH`** (`source .venv/bin/activate`, or prefix with `uv run`). A bash block calling `eq`/`evaluatorq` in a bare shell exits `127`, and `127` looks like a broken example rather than a broken runner.
 - **Against a fresh run store**: `export EVALUATORQ_DIR=$(mktemp -d)` before the first block. Blocks that run against a store your own probes already populated will pass while hiding a state dependency — a `previous_run="latest"` that only resolves because you happened to leave a run lying around.
 
-Receipt table: command, exit code, first ~5 lines of output. Paste it into the PR body verbatim. A docs PR whose examples were never executed is the thing this routine exists to stop shipping.
+Receipt table: command, exit code, first ~5 lines of output. Paste it into the PR body verbatim, folded (step 8). A docs PR whose examples were never executed is the thing this routine exists to stop shipping.
 
 **Nonzero exit is a hard gate.** Any block that exits nonzero and is not exempt stops the run here: fix the page, regenerate the receipt, and only then go to step 5. Never carry a red row into review — a table nobody is required to act on is not a check.
 
@@ -187,18 +187,30 @@ Conventional commit, `docs:` type. Never `feat!`/`fix!`. CODEOWNERS requests rev
 
 **A title tag goes in the commit subject too.** `.github/workflows/pr-title.yml` runs `validateSingleCommitMatchesPrTitle`, and this routine always opens a one-commit PR, so a `[axes]` or `[BLOCKED]` tag appended to the title alone fails the **Conventional title** check with `The pull request title doesn't match the commit`. Amend the commit subject to the exact title before pushing. Found the hard way on #200.
 
-PR body, in this order:
+**PR body: short.** A reviewer should see what changed and what needs them on one screen. Prose sections are two or three sentences each, not paragraphs; detail a reviewer only needs to check something goes in a `<details>` block. In this order:
 
-1. **The gap** — the matrix cell as a literal `gap: <axis> × <axis>` line, then why it ranked first.
-2. **What the page covers**, and what it deliberately does not.
-3. **Receipt** — the step 4 table, final round.
+1. **The gap** — the literal `gap: <axis> × <axis>` line, then one sentence on why it ranked first. Runner-ups and clean sweeps are not listed; point at `.context/docs-coverage-matrix.md`.
+2. **What the page covers** — one sentence, plus one on what it deliberately leaves out.
+3. **Spend** — the step 0 disclosure in one or two sentences: live calls, which key/workspace, records written or not.
 4. **Persona verdicts** — one line each, persona → task → verdict, and how many rounds it took.
-5. **Review** — the single table from `docs-writing`'s **Reporting the review in the PR**, covering every finding from every lens *and* every hate finding in the same table, each marked `Fixed` / `Left out` / `Open`. One table, not one per reviewer.
-6. **Open decisions** — the hate Decisions and anything the table marked `Open`, each with its Lean, in the plain-words form that section requires.
-7. Any missing reviewer, and whether `routine.json` changed.
-8. One line noting this was opened by the weekly docs-autofill routine.
+5. **Open decisions** — the hate Decisions and anything the review table marked `Open`, each with its Lean, in the plain-words form `docs-writing` requires. Omit the heading when there are none.
+6. **Review** — the single table from `docs-writing`'s **Reporting the review in the PR**, every lens finding *and* every hate finding, each `Fixed` / `Left out` / `Open`. One table, not one per reviewer. Fold it in `<details>` when it has more than ~8 rows.
+7. **Receipt** — always folded. The summary line carries the result, the block carries the step 4 file verbatim:
 
-Every sentence in the body is a whole sentence — the no-truncation rule from step 3 applies here too.
+   ````markdown
+   <details>
+   <summary>Receipt — 18 blocks, 15 ran (all exit 0), 3 illustrative</summary>
+
+   ```text
+   <.context/receipt.txt, verbatim>
+   ```
+
+   </details>
+   ````
+
+8. One line: any missing reviewer, whether `routine.json` changed, and that the weekly docs-autofill routine opened this.
+
+Every sentence in the body is a whole sentence — the no-truncation rule from step 3 applies here too. Short means fewer sentences, not clipped ones.
 
 ## Step 9 — Slack
 
