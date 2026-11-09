@@ -29,6 +29,7 @@ from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, TokenUsage
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
+    RED_TEAM_TIE_OUTCOME,
     DeliveryMethod,
     EvaluatorConfig,
     EvaluatorqEvaluatorConfig,
@@ -294,7 +295,9 @@ def create_owasp_evaluator(
             f'after de-duplication; panel={panel}'
         )
     configured_panel = [evaluator_model, *(judges or [])]
-    for issue in _panel_composition_messages(configured_panel, target_models or [], strict=strict_panel):
+    for issue in _panel_composition_messages(
+        configured_panel, target_models or [], strict=strict_panel, tie_outcome=RED_TEAM_TIE_OUTCOME
+    ):
         if strict_panel:
             raise ValueError(issue)
         logger.warning(issue)

@@ -870,11 +870,47 @@ def duplicate_judges_message(panel: Sequence[str]) -> str | None:
     )
 
 
-def _panel_composition_messages(panel: list[str], target_models: list[str], *, strict: bool = False) -> list[str]:
+TIE_LOSES_VERDICT = 'no verdict'
+
+
+def even_panel_tie_outcome(
+    aggregator: AggregatorSpec | None,
+    verdict_kind: VerdictKind,
+    tie_break: TieBreak | None,
+    tie_break_label: str | None = None,
+) -> str | None:
+    """What a split vote does to the verdict, for the even-panel advice.
+
+    None when a split cannot cost or decide the verdict, so no advice is due: a
+    numeric reduction (`mean_std`, `median`, `min`, `max`) always returns a value,
+    and `mode` with a caller's own `tie_break` resolves the way they chose.
+    `TIE_LOSES_VERDICT` when a split leaves no verdict (`majority`, `mode` with no
+    tie-break, or a custom callable, which may). The label when a built-in
+    tie-break decides it, such as the red-team fail-closed.
+    """
+    if aggregator is None:
+        aggregator = 'mean_std' if verdict_kind is VerdictKind.NUMERIC else 'mode'
+    if callable(aggregator) or aggregator == 'majority':
+        return TIE_LOSES_VERDICT
+    if aggregator != 'mode':
+        return None
+    if tie_break is None:
+        return TIE_LOSES_VERDICT
+    return tie_break_label
+
+
+def _panel_composition_messages(
+    panel: list[str],
+    target_models: list[str],
+    *,
+    strict: bool = False,
+    tie_outcome: str | None = TIE_LOSES_VERDICT,
+) -> list[str]:
     """Advisory messages about how a judge panel is put together.
 
     ``panel`` is the panel as configured, repeats included: the duplicate check needs
     them, and the other checks run on the deduplicated panel that actually votes.
+    ``tie_outcome`` comes from `even_panel_tie_outcome`; None skips the even-panel advice.
     """
     messages: list[str] = []
     if (duplicates := duplicate_judges_message(panel)) is not None:
@@ -883,10 +919,14 @@ def _panel_composition_messages(panel: list[str], target_models: list[str], *, s
     # A strict majority can fail on any split, so an even panel can tie with no
     # verdict. An odd size avoids a two-way split, not a plurality miss across
     # three or more labels, so the message does not promise more than that.
-    if panel and len(panel) % 2 == 0:
+    if panel and len(panel) % 2 == 0 and tie_outcome is not None:
+        consequence = (
+            'Even panels can split with no majority'
+            if tie_outcome == TIE_LOSES_VERDICT
+            else f'A split vote resolves as {tie_outcome}'
+        )
         messages.append(
-            f'Panel has an even number of judges ({len(panel)}): {panel}. '
-            'Even panels can split with no majority; prefer an odd panel size.'
+            f'Panel has an even number of judges ({len(panel)}): {panel}. {consequence}; prefer an odd panel size.'
         )
     families = {provider_family(m) for m in panel}
     known = families - {'unknown'}

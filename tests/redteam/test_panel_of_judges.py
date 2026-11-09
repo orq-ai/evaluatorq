@@ -690,17 +690,35 @@ class TestPanelComposition:
         with pytest.raises(ValueError, match='more than once'):
             EvaluatorConfig(judges=['mystery-a', 'mystery-a', 'mystery-b'], strict_panel=True)
 
-    def test_an_even_config_panel_fails_when_its_evaluator_is_built(self):
-        # The config only checks repeats; parity is checked once the runner builds
-        # the evaluator from it, with the same split the runner uses.
-        cfg = EvaluatorConfig(judges=['mystery-a', 'mystery-b'], strict_panel=True)
-        with pytest.raises(ValueError, match='even number of judges'):
-            OWASPEvaluator(
-                evaluator_model=cfg.judges[0],
-                judges=cfg.judges[1:],
-                llm_client=_model_client({}),
-                strict_panel=cfg.strict_panel,
-            )
+    def test_an_even_config_panel_fails_when_the_runner_builds_its_evaluator(self):
+        # Through the runner's own builder, so a change to how it splits the
+        # config's judges cannot leave this promise untested.
+        from evaluatorq.redteam.contracts import LLMConfig
+        from evaluatorq.redteam.runner import _build_static_evaluator, _StaticEvaluatorInputs
+
+        cfg = LLMConfig(evaluator=EvaluatorConfig(judges=['mystery-a', 'mystery-b'], strict_panel=True))
+        inputs = _StaticEvaluatorInputs(
+            evaluator_model=cfg.evaluator.primary_model,
+            llm_client=AsyncMock(),
+            pipeline_config=cfg,
+            agent_contexts={},
+            targets=[],
+            resolved_agent_targets=[],
+            agent_target_labels={},
+        )
+        with pytest.raises(ValueError, match='even number of judges.*fail-closed to VULNERABLE'):
+            _build_static_evaluator(inputs=inputs)
+
+    def test_model_sugar_still_reports_a_repeated_judge(self, monkeypatch):
+        from evaluatorq.redteam import contracts as contracts_mod
+
+        warnings: list[str] = []
+        monkeypatch.setattr(contracts_mod.logger, 'warning', lambda msg, *a, **k: warnings.append(msg))
+        EvaluatorConfig(model='mystery-a', judges=['mystery-a', 'mystery-a', 'mystery-b'])
+        assert any('more than once' in w for w in warnings)
+
+        with pytest.raises(ValueError, match='more than once'):
+            EvaluatorConfig(model='mystery-a', judges=['mystery-a', 'mystery-a', 'mystery-b'], strict_panel=True)
 
     def test_owasp_bridge_warns_on_a_repeated_judge(self, monkeypatch):
         from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge as bridge_mod

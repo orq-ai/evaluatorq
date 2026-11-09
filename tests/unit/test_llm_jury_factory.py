@@ -330,3 +330,22 @@ def test_llm_jury_pairwise_warns_on_an_even_panel():
         llm_jury_mod.llm_jury_pairwise(criteria="c", judges=["m1", "m2"], client=MagicMock())
     warned = [call.args[0] for call in warn.call_args_list]
     assert any("even number of judges (2)" in w for w in warned)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "warns"),
+    [
+        ({"verdict_kind": "numeric", "aggregator": "median"}, False),
+        ({"verdict_kind": "numeric"}, False),
+        ({"tie_break": lambda values: values[0]}, False),
+        ({"aggregator": "majority"}, True),
+        ({}, True),
+    ],
+)
+def test_even_panel_advice_only_where_a_split_costs_the_verdict(kwargs, warns):
+    # A numeric reduction always returns a value and a caller's tie_break settles a
+    # split, so neither can lose the verdict to an even panel.
+    with patch.object(llm_jury_mod.logger, "warning") as warn:
+        llm_jury(name="x", criteria="c", judges=["m1", "m2"], client=MagicMock(), **kwargs)
+    warned = [call.args[0] for call in warn.call_args_list]
+    assert any("even number of judges" in w for w in warned) is warns

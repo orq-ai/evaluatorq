@@ -690,6 +690,12 @@ class EvaluatorConfig(LLMCallConfig):
             model = payload.get('model')
             if model is not None:
                 judges = list(payload.get('judges') or [])
+                # The rewrite below drops repeats of `model`, so the after-validator
+                # never sees them. Check the list as written first.
+                if (duplicates := duplicate_judges_message(judges)) is not None:
+                    if payload.get('strict_panel'):
+                        raise ValueError(duplicates)
+                    logger.warning(duplicates)
                 payload['judges'] = [model, *[j for j in judges if j != model]]
             return payload
         return data
@@ -1021,6 +1027,9 @@ class LLMConfig(BaseModel):
 # Module-level default for the non-model knobs (timeouts, retries). Its model fields are
 # import-time snapshots and must not be read; build `LLMConfig()` to resolve them by role.
 PIPELINE_CONFIG = LLMConfig()
+
+# A split red-team panel fails closed: a tie marks the attack VULNERABLE.
+RED_TEAM_TIE_OUTCOME = 'fail-closed to VULNERABLE'
 
 
 def evaluator_model_for(model: str | None, cfg: LLMCallConfig | EvaluatorConfig | None) -> str:
