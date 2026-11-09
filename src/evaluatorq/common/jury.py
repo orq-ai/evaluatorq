@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from loguru import logger
 from pydantic import BaseModel
 
+from evaluatorq.common.judge import JudgeOutcome, judge_error_payload
 from evaluatorq.common.tracing import (
     current_otel_context,
     set_span_attrs,
@@ -42,16 +43,35 @@ _UNSWAP = {'A': 'B', 'B': 'A'}
 NO_VERDICT_REASON_LIMIT = 200
 
 
+NO_VERDICT_CODE = 'no_verdict'
+
+
 def no_verdict_message(reason: str) -> str:
     """The error for a judge that returned value=None without abstaining.
 
-    The reason is capped: the full explanation already sits on the repetition, and this
-    copy reaches saved results, so it only needs to identify the cause.
+    The reason is capped: the full explanation stays on the repetition on a panel, and in
+    the result's own explanation with one judge. This copy reaches saved results, so it
+    only needs to identify the cause.
     """
     reason = reason.strip()
     if len(reason) > NO_VERDICT_REASON_LIMIT:
         reason = reason[: NO_VERDICT_REASON_LIMIT - 1].rstrip() + '…'
     return f'judge returned no verdict: {reason}' if reason else 'judge returned no verdict'
+
+
+def no_verdict_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any]:
+    """The evaluation error for a bare non-verdict, for a single-judge result's raw_output.
+
+    `judge_error_payload` reads `outcome.error_kind`, which a bare non-verdict leaves
+    unset, so the type and code are fixed here: they are what the error rollup groups by.
+    """
+    explanation = outcome.payload.explanation if outcome.payload is not None else ''
+    return {
+        **judge_error_payload(outcome, evaluator_id),
+        'message': no_verdict_message(explanation or ''),
+        'error_type': NO_VERDICT_CODE,
+        'code': NO_VERDICT_CODE,
+    }
 
 
 def _unswap(value: VerdictValue | None) -> VerdictValue | None:

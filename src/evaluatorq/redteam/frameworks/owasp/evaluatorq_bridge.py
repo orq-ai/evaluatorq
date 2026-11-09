@@ -20,6 +20,7 @@ from evaluatorq.common.jury import (
     _panel_composition_messages,
     append_jury_summary,
     attach_jury_raw_output,
+    no_verdict_error_payload,
     run_jury,
 )
 from evaluatorq.common.orq_client import resolve_orq_client
@@ -355,6 +356,10 @@ def create_owasp_evaluator(
                     )
 
                 passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
+                raw_output: dict[str, Any] = {'raw_content': outcome.raw_content}
+                if outcome.payload.value is None and not outcome.payload.abstain:
+                    # A dead judge, as the adaptive single-judge path records it.
+                    raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = no_verdict_error_payload(outcome, category)
                 set_span_attrs(
                     evaluation_span,
                     {'orq.redteam.passed': _span_pass_state(passed), 'output': outcome.payload.explanation},
@@ -364,7 +369,7 @@ def create_owasp_evaluator(
                     'explanation': outcome.payload.explanation,
                     'pass': passed,
                     'token_usage': outcome.token_usage,
-                    'raw_output': {'raw_content': outcome.raw_content},
+                    'raw_output': raw_output,
                 })
 
             # Kept so the panel can name a cause, not just "quorum not met".

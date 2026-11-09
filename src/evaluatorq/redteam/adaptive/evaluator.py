@@ -11,7 +11,7 @@ from evaluatorq.common.jury import (
     Prediction,
     VerdictKind,
     _panel_composition_messages,
-    no_verdict_message,
+    no_verdict_error_payload,
     run_jury,
 )
 from evaluatorq.common.jury import provider_family as provider_family
@@ -337,10 +337,7 @@ class OWASPEvaluator:
         if outcome.payload.value is None and not outcome.payload.abstain:
             # A bare non-verdict is a dead judge, as on a panel, where JuryVote.error names
             # it. Without this the error rollup misses it whenever only one judge runs.
-            no_verdict[EVAL_ERROR_RAW_OUTPUT_KEY] = {
-                **judge_error_payload(outcome, evaluator_id),
-                'message': no_verdict_message(outcome.payload.explanation or ''),
-            }
+            no_verdict[EVAL_ERROR_RAW_OUTPUT_KEY] = no_verdict_error_payload(outcome, evaluator_id)
         return AttackEvaluationResult(
             passed=passed,
             explanation=outcome.payload.explanation,

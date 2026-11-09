@@ -449,7 +449,16 @@ async def test_bare_none_with_no_explanation_names_the_bare_cause():
 def test_no_verdict_message_caps_a_long_reason():
     from evaluatorq.common.jury import NO_VERDICT_REASON_LIMIT, no_verdict_message
 
+    prefix = 'judge returned no verdict: '
     message = no_verdict_message('x' * 5000)
-    assert message.startswith('judge returned no verdict: ')
-    assert len(message) == len('judge returned no verdict: ') + NO_VERDICT_REASON_LIMIT
+    assert message.startswith(prefix)
+    assert len(message) <= len(prefix) + NO_VERDICT_REASON_LIMIT
     assert message.endswith('…')
+    # Whitespace at the cut is dropped, so the result never ends in a space before the ellipsis.
+    # The cut keeps NO_VERDICT_REASON_LIMIT - 1 characters; make the last one a space.
+    spaced = no_verdict_message('x' * (NO_VERDICT_REASON_LIMIT - 2) + ' ' + 'y' * 100)
+    assert len(spaced) <= len(prefix) + NO_VERDICT_REASON_LIMIT
+    assert not spaced.endswith(' …')
+    # A reason exactly at the limit is kept whole.
+    exact = 'y' * NO_VERDICT_REASON_LIMIT
+    assert no_verdict_message(exact) == prefix + exact
