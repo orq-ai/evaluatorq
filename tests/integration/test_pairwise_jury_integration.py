@@ -23,10 +23,11 @@ async def test_pairwise_panel_does_not_choose_the_wrong_answer() -> None:
         response_b='The capital of France is Berlin, and Paris is in Germany.',
     )
 
-    assert comparison.winner in {'A', 'tie'}
+    assert comparison.winner in {'A', 'tie', 'inconclusive'}
     assert len(comparison.votes) == 3
     assert sum(vote.vote is not None for vote in comparison.votes) >= 2
 
     report = build_report([comparison])
     assert report.comparisons == 1
-    assert report.a_win_rate in {None, 1.0}
+    assert report.a_win_rate == (1.0 if comparison.winner == 'A' else None)
+    assert report.inconclusive_rate == (1.0 if comparison.winner == 'inconclusive' else 0.0)

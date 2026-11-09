@@ -14,8 +14,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
-  issues: write
 
 jobs:
   run-examples:
@@ -79,6 +77,10 @@ jobs:
     needs: [run-examples, integration-tests]
     if: failure()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      issues: write
 
     steps:
       - name: Open an issue
