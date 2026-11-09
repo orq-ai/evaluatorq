@@ -34,6 +34,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT" || exit 1
 
 RECEIPT="$ROOT/.context/receipt.txt"
+SUMMARY_FILE="$ROOT/.context/receipt-summary.txt"
 WORK="$(mktemp -d)"
 ROWS="$WORK/rows.txt"   # per-block rows; assembled under the RESULT line at the end
 : >"$ROWS"
@@ -60,6 +61,7 @@ trap 'rm -rf "$WORK" "$EVALUATORQ_DIR"' EXIT
 
 # Bail out with a receipt that says why, rather than a silent green one.
 die() {
+  printf 'FAILED — %s\n%s\n' "$1" "$1" >"$SUMMARY_FILE"
   printf 'RESULT: FAILED — %s\n\n' "$1" >>"$RECEIPT"
   cat "$ROWS" >>"$RECEIPT"
   cat "$RECEIPT"
@@ -153,6 +155,7 @@ FAILED=0
 SEEN=0
 RAN=0
 ILLUSTRATIVE=0
+NONZERO=0
 
 while IFS=$'\t' read -r idx lang start_line; do
   body="$WORK/$idx.body"
@@ -207,7 +210,10 @@ while IFS=$'\t' read -r idx lang start_line; do
   if [ -n "${out//[[:space:]]/}" ]; then
     printf '%s\n' "$out" | head -5 | sed 's/^/    /' >>"$ROWS"
   fi
-  [ "$code" -ne 0 ] && FAILED=1
+  if [ "$code" -ne 0 ]; then
+    FAILED=1
+    NONZERO=$((NONZERO + 1))
+  fi
 done <"$WORK/index.tsv"
 
 [ "$SEEN" -eq "$EXTRACTED" ] || die "accounted for $SEEN of $EXTRACTED extracted blocks"
@@ -223,6 +229,14 @@ else
 fi
 echo >>"$RECEIPT"
 cat "$ROWS" >>"$RECEIPT"
+
+# Line 1 is the PR body's folded <summary> text, line 2 the status-line fragment:
+# the agent pastes them instead of re-deriving counts from the RESULT line.
+if [ "$FAILED" -ne 0 ]; then
+  printf 'FAILED — %s of %s blocks that ran exited nonzero\n%s of %s blocks that ran exited nonzero\n' "$NONZERO" "$RAN" "$NONZERO" "$RAN" >"$SUMMARY_FILE"
+else
+  printf '%s of %s %sblocks ran, all exit 0, %s illustrative\n%s of %s %sblocks ran, all exit 0\n' "$RAN" "$EXTRACTED" "$scope" "$ILLUSTRATIVE" "$RAN" "$EXTRACTED" "$scope" >"$SUMMARY_FILE"
+fi
 
 cat "$RECEIPT"
 exit "$FAILED"
