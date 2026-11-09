@@ -48,7 +48,7 @@ for b in $(git branch -r --list 'origin/docs/autofill-*' --format='%(refname:sho
 done
 ```
 
-Every cell that appears in any of those is off the table. A gap this routine has already tried is not a gap it gets to try again — if the attempt was wrong, a human closed it, and repeating it weekly is the worst failure mode available.
+Every cell that appears in any of those is off the table, **except one whose latest row is `follow-up`** (step 3): that is a gap an earlier run deliberately left for later, so it is eligible again, and picking it adds a new row that supersedes the `follow-up`. A gap this routine has already tried is not a gap it gets to try again — if the attempt was wrong, a human closed it, and repeating it weekly is the worst failure mode available.
 
 This routine never inspects pull requests. It creates one. Branch names and the ledger are its whole view of history.
 
@@ -61,7 +61,7 @@ It writes `.context/docs-coverage-matrix.md`. Pick **one** gap:
 1. Tier 1 only. Tier 2 gaps do not justify an unattended PR.
 2. Not in the ledger (step 1).
 3. Every example it needs must be runnable with the keys from step 0. A gap that needs a provider we have no key for is skipped — record it in the ledger with outcome `skipped-no-key` so next week does not re-derive the same dead end.
-4. Among the rest, prefer the gap whose usage path a user is most likely to hit first — an entry point or CLI command over a niche axis crossing.
+4. Among the rest, prefer the gap whose usage path a user is most likely to hit first — an entry point or CLI command over a niche axis crossing. A `follow-up` cell from the ledger competes on the same terms; it gets no priority for being old.
 
 **No qualifying gap → write no PR.** Slack the no-op line (step 9) with what you checked, and end the run. Do not downgrade to a Tier 2 gap to have something to show.
 
@@ -71,7 +71,17 @@ The docs-coverage skill says to ask the user before writing. That instruction is
 
 Branch: `docs/autofill-<short-gap-slug>`.
 
-Scope: one page, or one section on an existing page. Not two. If the gap is genuinely too large for one page, write the page that covers the most common half and say in the PR body what you deliberately left out.
+Scope: **one page, or one section on an existing page, plus a bounded set of adjacent edits.** The page is the unit that gets run, receipted and reviewed; adjacent edits are the small, obviously-related things a reader of that page would otherwise trip over. If the gap is genuinely too large for one page, write the page that covers the most common half and record the other half as a follow-up (below).
+
+An **adjacent edit** is allowed when all of these hold:
+
+- It is prose only, with no code block added or changed. That keeps the receipt and the reader personas unchanged: nothing new to run, nothing new to test.
+- It is directly tied to the new page: a link from a page that already covers the neighbouring topic, a `see also` row, a nav or `llms.txt` entry, or a factual slip you noticed on a page the new one links to (a wrong flag name, a stale default).
+- It fits the budget: **at most 3 files besides the new page and `mkdocs.yml`, and about 400 added lines in the whole diff.** Past that, the extra goes to a follow-up.
+
+Not adjacent, whatever the size: anything in `src/`, `.claude/skills/docs-coverage/axes.md` (that one keeps its `[axes]` tag), a rewrite of another page's structure, and anything that needs a human decision (that is an Open decision).
+
+Every adjacent edit is listed in the PR body (step 8), one line each, so a reviewer can reject one without losing the page. Everything else you wanted to do and did not is a **follow-up**: add a ledger row with outcome `follow-up` and the matrix cell it would fill, in the same commit. A "left out" sentence in the PR that no later run can find is how useful work gets lost.
 
 **Invoke the `docs-writing` skill and follow it — that skill does the writing, this step only scopes it.** Call it with the `Skill` tool (`skill: docs-writing`) before you draft a word; it holds the reader, the three page genres and their shapes, the voice, the four things every page carries, and the reviewer loop that gates a draft. Its instructions win over any writing habit you would otherwise fall back on. This routine writes unattended, so a page drafted without it is a page nobody read for voice before it shipped.
 
@@ -84,7 +94,7 @@ Rules that are not negotiable:
 - **Never cut a sentence off, and do not hard-wrap the prose.** Both rules live in `CLAUDE.md` and bind every author, not just this routine — and they cover the PR title and body, the Slack message and any issue or review comment this routine writes, not only the `.md` pages. Code, and the comments and docstrings inside it, is the one place that still wraps. The one thing that is specific here: the receipt's captured output *is* the allowed truncation — the first ~5 lines of a command's output, never a sentence you wrote.
 - **Never edit `src/`. No exception, not even a one-character docstring fence.** A routine that can reach the code it documents will eventually document its way into changing behaviour, and the reviewer of a docs PR is not reading it for that. This is the hard boundary of the whole routine: it writes prose about code, and it never writes code.
 - **A code defect you find gets reported, not fixed, and never papered over.** When the code and the docs disagree — a flag the parser accepts but the help text denies, an argument silently swallowed, a docstring fence that breaks the build — you have three moves, in this order: say it in the PR body as an open Decision with its file and line; say it in the **step 9 Slack message** as a named inconsistency, because a human who never opens the PR still needs to know; and only then decide whether the page can honestly be written around it. If it cannot, drop the gap and record `skipped-code-defect` in the ledger. Writing a `!!! note` that explains an inconsistency as though it were a design is the failure mode here — it launders a bug into documented behaviour, and once documented it is much harder to fix.
-- No drive-by edits to unrelated pages.
+- No drive-by edits to pages the new one has no link to. Adjacent edits (above) are the only exception.
 
 The rest of the rules that bind a docs page in this repo are in `CLAUDE.md` under **Docs**. Read it; do not expect this file to restate it.
 
@@ -192,11 +202,12 @@ Conventional commit, `docs:` type. Never `feat!`/`fix!`. CODEOWNERS requests rev
 0. **Status** — one line, before any heading, that says whether the PR is waiting on a human: `Adds docs/guides/<page>.md. 15 of 18 blocks ran, all exit 0. 2 open decisions.` or `... 0 open decisions, nothing needs you but a read.` Counts come from the receipt's `RESULT:` line and the review table, never from memory.
 1. **The gap** — the literal `gap: <axis> × <axis>` line, then one sentence on why it ranked first. Put `.context/docs-coverage-matrix.md` in a folded `<details>` block under it, verbatim: `.context/` is gitignored, so a reviewer cannot open the file, and the matrix is the evidence for the ranking.
 2. **What the page covers** — one sentence, plus one on what it deliberately leaves out.
-3. **Spend** — the step 0 disclosure in one or two sentences: live calls, which key/workspace, records written or not.
-4. **Persona verdicts** — one line each, persona → task → verdict, and how many rounds it took.
-5. **Open decisions** — the hate Decisions and anything the review table marked `Open`, each with its Lean, in the plain-words form `docs-writing` requires. Omit the heading when there are none.
-6. **Review** — the single table from `docs-writing`'s **Reporting the review in the PR**, with its `Impact` column, sorted High first. Show every `Left out` and `Open` row and every `High` row; fold the remaining `Fixed` rows in a `<details>` block headed `N more fixed`.
-7. **Receipt** — always folded. The summary line carries the result, the block carries the step 4 file verbatim:
+3. **Beyond the page** — one line per adjacent edit (file, what changed, why it belongs here), then one line per follow-up ledger row added. Omit the heading when there are neither.
+4. **Spend** — the step 0 disclosure in one or two sentences: live calls, which key/workspace, records written or not.
+5. **Persona verdicts** — one line each, persona → task → verdict, and how many rounds it took.
+6. **Open decisions** — the hate Decisions and anything the review table marked `Open`, each with its Lean, in the plain-words form `docs-writing` requires. Omit the heading when there are none.
+7. **Review** — the single table from `docs-writing`'s **Reporting the review in the PR**, with its `Impact` column, sorted High first. Show every `Left out` and `Open` row and every `High` row; fold the remaining `Fixed` rows in a `<details>` block headed `N more fixed`.
+8. **Receipt** — always folded. The summary line carries the result, the block carries the step 4 file verbatim:
 
    ````markdown
    <details>
@@ -209,7 +220,7 @@ Conventional commit, `docs:` type. Never `feat!`/`fix!`. CODEOWNERS requests rev
    </details>
    ````
 
-8. One line: any missing reviewer, whether `routine.json` changed, and that the weekly docs-autofill routine opened this.
+9. One line: any missing reviewer, whether `routine.json` changed, and that the weekly docs-autofill routine opened this.
 
 Every sentence in the body is a whole sentence — the no-truncation rule from step 3 applies here too. Short means fewer sentences, not clipped ones.
 
