@@ -21,10 +21,15 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 
+def short_model(model: str) -> str:
+    """Return the readable final component of a provider-qualified model ID."""
+    return model.rsplit('/', 1)[-1]
+
+
 def _best_worst_cells(heatmap_data: dict[str, Any]) -> tuple[dict | None, dict | None]:
     """Best/worst persona x scenario cells by success_rate, excluding cells with
-    no scored (non-errored) conversations (``n == 0``)."""
-    scored = [c for c in heatmap_data.get('cells', []) if c.get('n', 0) > 0]
+    no scored (non-errored) conversations."""
+    scored = [c for c in heatmap_data.get('cells', []) if c.get('completed_conversations', c.get('n', 0)) > 0]
     if not scored:
         return None, None
     best = max(scored, key=itemgetter('success_rate'))
@@ -71,12 +76,26 @@ def exec_summary(
     scenarios = heatmap_data.get('scenarios', [])
     success = pct(summary_data.get('success_rate', 0.0))
     avg_score = f'{summary_data.get("avg_goal_completion_score", 0.0):.2f}'
+    errors = summary_data.get('errors', 0)
+
+    if errors and errors >= total:
+        return callout(
+            f'No goal verdict is available because all <strong>{total}</strong> conversations errored.',
+            label=label,
+            confidence=None,
+        )
 
     sentence = (
         f'Across <strong>{total}</strong> conversations '
         f'({len(personas)} personas &times; {len(scenarios)} scenarios), the agent achieved a '
         f'<strong>{success}</strong> goal-completion rate at an average score of <strong>{avg_score}</strong>.'
     )
+    if errors:
+        completed = total - errors
+        sentence += (
+            f' <strong>{completed}/{total}</strong> conversations completed and '
+            f'<strong>{errors}</strong> errored; the rate and average score above use all {total} conversations.'
+        )
     best, worst = _best_worst_cells(heatmap_data)
     if best is not None and worst is not None and best is not worst:
         sentence += (
@@ -505,13 +524,16 @@ def heatmap(
     col_key: str = 'scenario',
     value_key: str = 'success_rate',
     color_scale: Sequence[tuple[float, str]] | None = None,
+    render_value: Callable[[dict, str], str] | None = None,
 ) -> str:
     """HTML-table row x column heatmap (spec §Breakdown.1). Missing cells render sunken with "—".
 
     Sim defaults (``row_key='persona'``, ``col_key='scenario'``,
     ``value_key='success_rate'``, ``color_scale=None``) keep existing sim
-    call sites and rendering unchanged.
+    call sites and rendering unchanged. ``render_value(cell, text)`` returns the
+    inner HTML of a non-empty cell, e.g. to make it a drill-down trigger.
     """
+    value_html = render_value or (lambda _cell, text: text)
     lookup = {(c[row_key], c[col_key]): c for c in cells}
     header = ''.join(f'<th class="rk-heat-col">{esc(s)}</th>' for s in col_labels)
     body_rows: list[str] = []
@@ -523,9 +545,20 @@ def heatmap(
                 tds.append('<td class="rk-heat-cell rk-heat-empty">—</td>')
                 continue
             rate = cell.get(value_key, 0.0)
+            no_completed = cell.get('completed_conversations') == 0 and cell.get('errored_conversations', 0) > 0
+            if rate is None or no_completed:
+                errored = cell.get('errored_conversations', 0)
+                title = f'No completed conversations; {errored} errored.'
+                tds.append(
+                    f'<td class="rk-heat-cell rk-heat-no-verdict" title="{esc(title)}" '
+                    f'aria-label="{esc(title)}">{value_html(cell, "n/a")}</td>'
+                )
+                continue
             bg = _interp_color(rate, stops=color_scale)
             ink = 'var(--ink-900)' if rate <= 0.55 else '#fff'
-            tds.append(f'<td class="rk-heat-cell" style="background:{bg};color:{ink}">{pct(rate)}</td>')
+            tds.append(
+                f'<td class="rk-heat-cell" style="background:{bg};color:{ink}">{value_html(cell, pct(rate))}</td>'
+            )
         body_rows.append(f'<tr><th class="rk-heat-row">{esc(p)}</th>{"".join(tds)}</tr>')
     return (
         '<table class="rk-heatmap"><thead><tr><th></th>'

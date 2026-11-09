@@ -7,6 +7,8 @@ import subprocess
 import sys
 from functools import lru_cache
 
+from evaluatorq.common.env_config import env_text
+
 _KEY_ENV = 'EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY'
 _KEYCHAIN_SERVICE = 'evaluatorq-dashboard-api-key-encryption'
 
@@ -25,7 +27,7 @@ def _fernet_type():
 def _encryption_key() -> bytes:
     """Load the encryption key from Keychain or the explicit portable env var."""
     Fernet = _fernet_type()
-    configured = os.environ.get(_KEY_ENV, '').strip()
+    configured = env_text(_KEY_ENV)
     if configured:
         key = configured.encode('ascii')
         try:

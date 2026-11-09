@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq import DataPoint, Job, job
+from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import price_usage
@@ -28,7 +28,7 @@ from evaluatorq.redteam.exceptions import CredentialError
 from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
 
 def _sanitize_job_name(value: str) -> str:
@@ -57,7 +57,7 @@ async def static_target_spans(
     run_id: str | None,
     row: int,
     target_input: str,
-) -> AsyncIterator[tuple[Any, str]]:
+) -> AsyncGenerator[tuple[Any, str], None]:
     """Open the attack and target_call spans plus the conversation thread for one static row.
 
     Every static job, deployment or agent target, wraps its target call in this
@@ -116,7 +116,7 @@ def create_deployment_job(
             'this value is not forwarded.'
         )
 
-    api_key = os.environ.get('ORQ_API_KEY')
+    api_key = env_raw('ORQ_API_KEY')
     if not api_key:
         raise CredentialError('ORQ_API_KEY environment variable is not set')
     deployment_client = resolve_orq_client(api_key)

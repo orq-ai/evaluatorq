@@ -9,13 +9,13 @@ const context = {
   D: {dims: {}},
   T: [{id: 'trace-1', ts: '2026-09-30T10:00:00Z', request: 'Fix the build', l: {outcome: ['done']}, errors: [], has_summary: true, has_tool_stats: true, tools: {}, skills: {}, commands: {}}],
   LABELS: [{name: 'outcome', kind: 'choice', criteria: {done: 'Done', partial: 'Partial'}}],
-  LBY: {outcome: {name: 'outcome', kind: 'choice', criteria: {done: 'Done', partial: 'Partial'}}},
+  LBY: {outcome: {name: 'outcome', kind: 'choice', criteria: {done: 'Done', partial: 'Partial'}, counts: {done: 1, partial: 0}, n_failed: 0}},
   C: {}, byId: {'trace-1': null}, N: 1, TOP_K: 8, OTHER: '#bdbbb5', ERR_YES: '#df5325', ERR_NO: '#9fcfc7',
 };
 context.byId['trace-1'] = context.T[0];
 const canvas = {innerHTML: '', querySelectorAll: () => []};
 const heads = {innerHTML: '', querySelectorAll: () => []};
-const tlist = {innerHTML: '', querySelectorAll: () => []};
+const tlist = {innerHTML: '', querySelectorAll: () => [], style: {setProperty(name, value) { this[name] = value; }}};
 const query = {oninput: null};
 context.$ = id => id === 'canvas' ? canvas : id === 'heads' ? heads : id === 'tlist' ? tlist : id === 'q' ? query : null;
 context.visible = () => context.T;
@@ -25,8 +25,8 @@ context.MIN_N = 5; context.PD = null; context.OUTL = context.LBY.outcome; contex
 context.isOn = () => false;
 context.clusterOf = () => { throw new Error('dimensionless traces must not be grouped'); };
 context.esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
-context.chip = () => 'Done'; context.outcomeHtml = () => 'Done'; context.frusHtml = () => '—'; context.FLAG_DEFS = [];
-context.frus = () => null; context.flagCell = () => '—';
+context.chip = () => 'Done'; context.outcomeHtml = () => 'Done'; context.frusHtml = () => '—'; context.frus = () => null; context.NA = '<span class="na">—</span>';
+Object.assign(context, {isYes: () => false, isRiskyT: () => false, riskyText: () => '', notVerified: () => false, corr3: () => false, lnum: (_name, v) => +v, fmtShare: v => v == null ? context.NA : Math.round(v * 100) + '%'});
 context.hasErr = t => t.errors.length > 0; context.isOn = () => false;
 context.lvals = () => ['done', 'partial']; context.ldisp = (_name, value) => value === 'done' ? 'Done' : value; context.lcolor = () => '#2ebd85';
 context.lval = (trace, name) => trace.l[name]?.[0] ?? null;
@@ -54,16 +54,13 @@ assert.equal(
   new Date(validDate).toLocaleString('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}),
 );
 
-function extract(startMarker, endMarker) {
-  const start = source.indexOf(startMarker), end = source.indexOf(endMarker, start);
-  assert.ok(start >= 0 && end > start, `${startMarker} is present`);
-  vm.runInContext(source.slice(start, end), context);
-}
+const extract = require('./extract.cjs')(source, context);
 extract('function renderThemes() {', 'function pickCluster(');
 extract('const CANDIDATES = [', 'let HEADS = [];');
 extract('let HEADS = [];', '/* ---------- filter bar ---------- */');
 assert.equal(typeof context.renderHeadlines, 'function', 'production renderHeadlines is evaluated from the source');
 extract('function cmpCols() {', '/* ---------- trace list ---------- */');
+extract('/* ---------- trace columns ---------- */', '/* ---------- clusters ---------- */');
 extract('function renderTraces() {', '/* ---------- right panel ---------- */');
 
 context.renderThemes();
@@ -73,7 +70,8 @@ context.renderHeadlines();
 assert.match(heads.innerHTML, /Tasks were completed/);
 assert.doesNotMatch(heads.innerHTML, /undefined/);
 context.renderTraces();
-assert.match(tlist.innerHTML, /Not grouped/);
+assert.doesNotMatch(tlist.innerHTML, /data-col="theme"/);
+assert.doesNotMatch(tlist.innerHTML, /Not grouped/);
 assert.match(tlist.innerHTML, /Fix the build/);
 assert.doesNotMatch(tlist.innerHTML, /undefined theme/);
 context.T[0].ts = null;

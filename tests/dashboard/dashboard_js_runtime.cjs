@@ -537,6 +537,7 @@ test('initial load enables Within results even after a click on it while it was 
 test('drawer history restores a prior view and closes after its exit animation', () => {
   const dialogEvents = emitter();
   const content = { innerHTML: '' };
+  const position = { hidden: true, textContent: '' };
   const dialog = {
     ...dialogEvents,
     open: false,
@@ -545,7 +546,7 @@ test('drawer history restores a prior view and closes after its exit animation',
     showModal() { this.open = true; },
     close() { this.open = false; dialogEvents.emit('close'); },
     querySelector(selector) {
-      return selector === '[data-sim-entity-content]' ? content : null;
+      return { '[data-sim-entity-content]': content, '[data-sim-entity-position]': position }[selector] ?? null;
     },
   };
   const origin = { querySelectorAll() { return [alice, bob]; } };
@@ -582,9 +583,11 @@ test('drawer history restores a prior view and closes after its exit animation',
 
   click(selector => selector === '[data-sim-entity-trigger]' ? alice : null);
   assert.equal(content.innerHTML, 'Alice details');
+  assert.deepEqual([position.hidden, position.textContent], [false, '1 / 2']);
   assert.equal(app.entries.length, 2);
   click(selector => selector === '[data-sim-entity-trigger]' ? bob : null);
   assert.equal(content.innerHTML, 'Bob details');
+  assert.equal(position.textContent, '2 / 2');
   assert.equal(app.entries.length, 3);
 
   click(selector => selector === '[data-sim-entity-back]' ? {} : null);

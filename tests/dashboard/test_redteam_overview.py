@@ -223,9 +223,9 @@ class TestRedTeamOverviewScreen:
         assert small == ''  # nothing to show: the "All N runs" caption already says the count
         assert view._run_pager('redteam', 1, 8, 8) == ''
         assert 'Per page' in view._run_pager('redteam', 1, 20, 8)
-        assert 'Per page' in view._run_pager('sim', 1, 3, 8)
-        assert 'Total 3 runs' in view._run_pager('sim', 1, 3, 8)
-        assert 'Total 1 run<' in view._run_pager('sim', 1, 1, 8)
+        assert 'Per page' not in view._run_pager('sim', 1, 3, 8)
+        assert view._run_pager('sim', 1, 3, 8) == ''
+        assert view._run_pager('sim', 1, 1, 8) == ''
 
     def test_asr_bands_and_boundaries(self) -> None:
         from evaluatorq.dashboard import view
@@ -500,8 +500,8 @@ class TestSimRealCost:
         assert ov.avg_cost == pytest.approx(0.005)
         # And the page renders it as a dollar figure, not a token count.
         r = TestClient(build_app(roots=[rt, sim])).get('/?surface=sim')
-        assert 'Avg cost/sim' in r.text
-        assert '$0.00' in r.text
+        assert 'Total spend' in r.text
+        assert '$0.0100' in r.text
 
     def test_avg_cost_ignores_costless_sims(self, tmp_path: Path) -> None:
         """Mixed store: a sim without cost_usd is 'unknown', not $0 — it must not

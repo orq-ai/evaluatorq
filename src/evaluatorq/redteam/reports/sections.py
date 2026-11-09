@@ -133,12 +133,13 @@ def _build_summary_section(report: RedTeamReport) -> ReportSection:
             'confidence_note': confidence_note,
             'narrative': report.executive_summary,
             'jury_reliability': s.jury_reliability.model_dump(mode='json') if s.jury_reliability else None,
+            'jury_health': s.jury_health.model_dump(mode='json') if s.jury_health else None,
         },
     )
 
 
 def _build_focus_areas_section(report: RedTeamReport) -> ReportSection:
-    """Build the top-5 highest-risk focus areas section."""
+    """Build top-five focus areas and retain the full ranking for finding totals."""
     results_by_category: dict[str, list[RedTeamResult]] = {}
     for r in report.results:
         results_by_category.setdefault(r.attack.category, []).append(r)
@@ -183,14 +184,15 @@ def _build_focus_areas_section(report: RedTeamReport) -> ReportSection:
             area['llm_recommendations'] = rec_lookup[cat_code]
         focus_areas.append(area)
 
-    # Sort by risk score descending, limit to top 5
+    # Keep the full ranking for consumers that compute finding totals. The
+    # existing focus_areas field retains its top-five presentation contract.
     focus_areas.sort(key=operator.itemgetter('risk_score'), reverse=True)
     top_areas = focus_areas[:5]
 
     return ReportSection(
         kind='focus_areas',
         title='Focus Areas (Top Risks)',
-        data={'focus_areas': top_areas},
+        data={'focus_areas': top_areas, 'ranked_focus_areas': focus_areas},
     )
 
 

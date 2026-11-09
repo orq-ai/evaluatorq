@@ -15,11 +15,11 @@ def _results():
     ]
 
 
-def test_sim_html_includes_narrative_and_pill():
+def test_sim_html_includes_narrative_without_performance_confidence():
     html = export_html(_results(), executive_summary=_NARRATIVE)
     assert _NARRATIVE in html
     assert 'status-badge' in html
-    assert 'CONFIDENCE' in html
+    assert 'CONFIDENCE' not in html
     assert html.index(_NARRATIVE) < html.index('<div class="kpi-band">')
 
 

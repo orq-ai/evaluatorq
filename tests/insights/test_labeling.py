@@ -158,6 +158,49 @@ async def test_label_does_not_retry_http_400(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
+async def test_failure_taxonomy_keeps_clean_failure_and_unknown_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.insights.models import TraceInsight
+    from evaluatorq.insights.pipeline import _label_results
+    from evaluatorq.insights.presets import FAILURE_TAXONOMY
+
+    replies = iter(['No failure', 'Hallucination', 'unsupported mode'])
+    requested = []
+
+    async def fake_run_classify(*, request: ClassifyRequest, **kwargs: Any) -> ClassifyOutcome:
+        requested.append(request.questions['failure_taxonomy'])
+        return ClassifyOutcome(
+            response=ClassifyResponse(answers={
+                'failure_taxonomy': ClassifyAnswer(type='choice', choice=next(replies)),
+            }),
+        )
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    clean = make_trace('clean').model_copy(update={'messages': (
+        {'role': 'user', 'content': 'What is two plus two?'},
+        {'role': 'assistant', 'content': 'Four.'},
+    )})
+    failed = make_trace('failed').model_copy(update={'messages': (
+        {'role': 'user', 'content': 'Quote the attached document. No document is attached.'},
+        {'role': 'assistant', 'content': 'The attached document says the fee is ten dollars.'},
+    )})
+    outcomes = await label_traces(
+        traces=[clean, failed, make_trace('unknown')],
+        labels=[FAILURE_TAXONOMY], compiled=None, client=_client(),
+        model='test-model', parallelism=1,
+    )
+    assert all(isinstance(question.criteria, dict) and 'No failure' in question.criteria for question in requested)
+    answers = [outcome.answers['failure_taxonomy'] for outcome in outcomes]
+    assert [answer.value for answer in answers] == ['No failure', 'Hallucination', None]
+    assert answers[0].error is None and answers[1].error is None
+    assert answers[2].error is not None
+    traces = [TraceInsight(trace_id=str(i), labels=outcome.answers)
+              for i, outcome in enumerate(outcomes)]
+    result = _label_results(traces=traces, specs=[FAILURE_TAXONOMY])['failure_taxonomy']
+    assert result.counts == {'No failure': 1, 'Hallucination': 1}
+    assert result.n_failed == 1
+
+
+@pytest.mark.asyncio
 async def test_all_labels_answered_and_matched(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_classify(
         *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any

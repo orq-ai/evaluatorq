@@ -57,6 +57,7 @@ class EvaluationSpanOptions:
 
     run_id: str
     evaluator_name: str
+    evaluator_type: str | None = None
 
 
 @asynccontextmanager
@@ -171,7 +172,19 @@ async def with_evaluation_span(
             'orq.evaluator_name': options.evaluator_name,
         },
     ) as span:
+        _set_evaluator_identity(span, evaluator_name=options.evaluator_name, evaluator_type=options.evaluator_type)
         yield span
+
+
+def _set_evaluator_identity(span: Span | None, *, evaluator_name: str | None, evaluator_type: str | None) -> None:
+    """Classify the span before execution so failed scorers retain their input panel."""
+    if span is None or evaluator_type is None:
+        return
+    span.set_attribute('orq.span_type', 'span.evaluator')
+    span.set_attribute('orq.evaluator.type', evaluator_type)
+    if evaluator_name is not None:
+        span.set_attribute('gen_ai.evaluation.name', evaluator_name)
+        span.set_attribute('orq.evaluator.key', evaluator_name)
 
 
 def set_evaluation_attributes(
@@ -182,6 +195,7 @@ def set_evaluation_attributes(
     pass_: bool | None = None,
     evaluator_name: str | None = None,
     evaluator_type: str | None = None,
+    raw_output: dict[str, Any] | None = None,
 ) -> None:
     """
     Set evaluation result attributes on a span.
@@ -192,6 +206,7 @@ def set_evaluation_attributes(
         explanation: Optional explanation of the score
         pass_: Optional pass/fail status
         evaluator_name: Name of the evaluator (used for the gen_ai.evaluation.* block)
+        raw_output: Optional detailed scorer result for the trace Output panel.
         evaluator_type: Opt-in evaluator kind, matching Orq's EvaluatorType enum
             (e.g. "llm_eval", "python_eval"). When provided, the flat
             gen_ai.evaluation.* / orq.evaluator.* attributes plus the
@@ -200,6 +215,8 @@ def set_evaluation_attributes(
             When ``None`` (the default), only the legacy orq.score/explanation/pass
             attributes are written, so red-team spans are unchanged.
     """
+    from evaluatorq.common.tracing import record_span_payload
+
     if span is None:
         return
 
@@ -233,11 +250,7 @@ def set_evaluation_attributes(
     # server-side, so it is intentionally not set here.
     if evaluator_type is None:
         return
-    span.set_attribute('orq.span_type', 'span.evaluator')
-    span.set_attribute('orq.evaluator.type', evaluator_type)
-    if evaluator_name is not None:
-        span.set_attribute('gen_ai.evaluation.name', evaluator_name)
-        span.set_attribute('orq.evaluator.key', evaluator_name)
+    _set_evaluator_identity(span, evaluator_name=evaluator_name, evaluator_type=evaluator_type)
 
     # orq.evaluator.output_type drives how the UI formats the score (see
     # deriveEvaluatorResult in orquesta-web). bool is an int subclass, so it
@@ -270,7 +283,12 @@ def set_evaluation_attributes(
     }
     if full_explanation is not None:
         verdict['reason'] = full_explanation
-    span.set_attribute('orq.evaluation.output', json.dumps(verdict, default=str))
+    record_span_payload(
+        span,
+        key='orq.evaluation.output',
+        payload=verdict,
+        optional_fields={'raw_output': raw_output} if raw_output is not None else None,
+    )
 
 
 def set_job_name_attribute(span: Span | None, job_name: str) -> None:

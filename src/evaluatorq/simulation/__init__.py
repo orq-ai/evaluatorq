@@ -61,7 +61,7 @@ if TYPE_CHECKING:
         from_chat_completions,
         from_orq_deployment,
     )
-    from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent
+    from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.agents.judge import JudgeAgent
     from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
     from evaluatorq.simulation.contracts import (
@@ -75,6 +75,8 @@ if TYPE_CHECKING:
         InputFormat,
         Judgment,
         Message,
+        MustHappenCriterion,
+        MustNotHappenCriterion,
         Persona,
         Scenario,
         SimulationDatapoint,
@@ -156,7 +158,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str | None]] = {  # noqa: RUF067
     'LLMCallConfig': ('evaluatorq.contracts', 'LLMCallConfig'),
     'from_chat_completions': ('evaluatorq.simulation.adapters', 'from_chat_completions'),
     'from_orq_deployment': ('evaluatorq.simulation.adapters', 'from_orq_deployment'),
-    'AgentConfig': ('evaluatorq.simulation.agents.base', 'AgentConfig'),
     'BaseAgent': ('evaluatorq.simulation.agents.base', 'BaseAgent'),
     'OrqResponsesTarget': ('evaluatorq.openresponses.target', 'OrqResponsesTarget'),
     'JudgeAgent': ('evaluatorq.simulation.agents.judge', 'JudgeAgent'),
@@ -239,6 +240,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str | None]] = {  # noqa: RUF067
     'CRITERION_ID_PATTERN': ('evaluatorq.simulation.contracts', 'CRITERION_ID_PATTERN'),
     'criterion_id_for': ('evaluatorq.simulation.contracts', 'criterion_id_for'),
     'CulturalContext': ('evaluatorq.simulation.contracts', 'CulturalContext'),
+    'MustHappenCriterion': ('evaluatorq.simulation.contracts', 'MustHappenCriterion'),
+    'MustNotHappenCriterion': ('evaluatorq.simulation.contracts', 'MustNotHappenCriterion'),
     'SimulationDatapoint': ('evaluatorq.simulation.contracts', 'SimulationDatapoint'),
     'EmotionalArc': ('evaluatorq.simulation.contracts', 'EmotionalArc'),
     'InputFormat': ('evaluatorq.simulation.contracts', 'InputFormat'),
@@ -343,7 +346,6 @@ __all__ = [
     'SIMULATION_EVALUATORS',
     'SIM_RUNS_DIR_NAME',
     # Agents
-    'AgentConfig',
     'AgentTarget',
     'BaseAgent',
     'CallableTarget',
@@ -366,6 +368,8 @@ __all__ = [
     'LLMCallConfig',
     'LangGraphTarget',
     'Message',
+    'MustHappenCriterion',
+    'MustNotHappenCriterion',
     # Target implementations
     'OpenAIAgentTarget',
     'OrqResponsesTarget',

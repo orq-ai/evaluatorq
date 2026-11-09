@@ -112,7 +112,7 @@ from evaluatorq.trace_finder.settings import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
     from evaluatorq.common.model_catalogue import ModelInfo
     from evaluatorq.contracts import RunManifest
@@ -325,7 +325,7 @@ def _recorded_orq_scope(run: InsightsRun) -> dict[str, Any] | None:
 @asynccontextmanager
 async def _orq_client(
     app: Any, auth: DashboardAuth, *, scope: dict[str, str | None] | None = None
-) -> AsyncIterator[Any]:
+) -> AsyncGenerator[Any, None]:
     """Build an Orq client for ``auth`` and close it; a CLI login is scoped to ``scope``, else the Settings scope.
 
     Yields:
@@ -349,7 +349,7 @@ async def _orq_client(
 
 
 @asynccontextmanager
-async def _trace_source(app: Any, run: InsightsRun) -> AsyncIterator[OrqTraceSource | str]:
+async def _trace_source(app: Any, run: InsightsRun) -> AsyncGenerator[OrqTraceSource | str, None]:
     """Open an Orq trace source for one request, in the account and scope ``run`` recorded when it has one.
 
     Yields:

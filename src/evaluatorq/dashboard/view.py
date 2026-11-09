@@ -23,18 +23,20 @@ import functools
 import hashlib
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from itertools import starmap
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
 from evaluatorq.common.model_roles import BUILTIN, ROLE_ENV, TASKS, role_model, role_source, task_override
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports.html_helpers import pct
+from evaluatorq.common.reports.icons import _TARGET_ICONS as _TARGET_ICONS
+from evaluatorq.common.reports.messages import render_message_list as render_message_list
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.simulation.metrics import TURN_METRICS
 from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
@@ -419,33 +421,6 @@ _LIFECYCLE_PILL: dict[str, tuple[str, str]] = {
 
 
 # Inline target-kind glyphs (lucide: bot / cpu / rocket), sized to the pill.
-_TARGET_ICONS: dict[str, str] = {
-    'agent': (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        'stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4M8 2h8"/>'
-        '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2M20 14h2"/>'
-        '<path d="M9 13v2M15 13v2"/></svg>'
-    ),
-    'llm': (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        'stroke-linecap="round" stroke-linejoin="round"><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 '
-        '0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 '
-        '9.94l6.14 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>'
-        '<path d="M20 3v4M22 5h-4M4 17v2M5 18H3"/></svg>'
-    ),
-    'deployment': (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        'stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 '
-        '5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 '
-        '2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>'
-        '<path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5z"/></svg>'
-    ),
-    'external': (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/>'
-        '<path d="M3 12h18M12 3a14.9 14.9 0 0 1 0 18M12 3a14.9 14.9 0 0 0 0 18"/></svg>'
-    ),
-}
 
 
 _CHEVRON = (
@@ -530,23 +505,40 @@ def _asr_cls(asr: float | None) -> str:
     return 'mid' if asr <= _ASR_HIGH else 'high'
 
 
+def _goal_status(rate: float | None) -> str:
+    """Preserve the simulation goal bands: 80% passes, 50% warns."""
+    return 'neutral' if rate is None else 'pass' if rate >= 0.8 else 'warn' if rate >= 0.5 else 'fail'
+
+
 def _sim_row(r: Any) -> str:
-    """One Agent Sim run row of the run grid."""
+    """One simulation run: achieved/total and goal rate, with errors separate."""
     err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
-    status_label = _STATUS_LABEL.get(r.status, r.status)
-    label = f'{r.name}, {_ago(r.when)}, {status_label}, score {_fmt_score(r.score)}, {r.cases} cases'
-    targets = ''.join(starmap(_target_pill, r.targets))
+    when_text, when_title = _when_label(r.when)
+    when_attrs = f' title="{esc(when_title)}"' if when_title else ''
+    rate = r.achieved / r.cases if r.cases > r.errors else None
+    rate_text = '—' if rate is None else pct(rate)
+    outcome = f'{r.achieved:,}/{r.cases:,}' if rate is not None else '—'
+    status = _run_status_pill(r.status) if r.status != 'finished' else ''
+    error_note = f'<span class="rg-sub">{r.errors:,} errored</span>' if r.errors else ''
+    outcome_class = 'rg-broke-n' if rate is not None else 'rg-broke-n is-none'
+    outcome_label = f'{r.achieved} of {r.cases} achieved the goal' if rate is not None else 'no goal verdict available'
+    all_targets = ', '.join(t[0] for t in r.targets) or 'unknown target'
+    label = (
+        f'{r.name}, {when_text}, target {all_targets}, status {r.status}, {outcome_label}, '
+        f'{r.errors} errored, goal completion {rate_text}, cost {_fmt_spend(r.cost)}'
+    )
+    targets = ''.join(_target_pill(*t, ellipsis=True) for t in r.targets)
     return (
         f'<a class="runs-grid-row" href="/r/{esc(r.rid)}" aria-label="{esc(label)}">'
-        f'<span class="rg-job"><span class="rg-name">{esc(r.name)}{err}</span>'
-        f'<span class="rg-sub">{esc(_ago(r.when))}</span></span>'
-        f'<span class="rg-targets">{targets}</span>'
-        f'<span class="rg-status">{_run_status_pill(r.status)}</span>'
-        f'<span class="run-score rg-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
+        f'<span class="rg-job"><span class="rg-name" title="{esc(r.name)}">{esc(r.name)}{err}</span>'
+        f'<span class="rg-sub"{when_attrs}>{esc(when_text)}</span></span>'
+        f'<span class="rg-targets" title="{esc(all_targets)}">{targets}</span>'
+        f'<span class="rg-status">{status}<span class="{outcome_class}">{outcome}</span>{error_note}</span>'
+        f'<span class="run-score rg-score {_goal_status(rate)}" '
+        f'title="Goals achieved across all conversations, including errors; higher is better">{rate_text}</span>'
         f'<span class="rg-num rg-cases">{r.cases:,}</span>'
-        f'<span class="rg-num rg-cost">{esc(_fmt_cost(r.cost))}</span>'
-        f'{_CHEVRON}'
-        f'</a>'
+        f'<span class="rg-num rg-cost">{esc(_fmt_spend(r.cost))}</span>'
+        f'{_CHEVRON}</a>'
     )
 
 
@@ -602,9 +594,9 @@ def _run_grid(rows: list[Any], *, redteam: bool = False) -> str:
     Shared by the Red Team + Agent Sim surfaces (identical row shape).
 
     ``redteam`` swaps Status/Score for Broke/ASR (attack success rate, lower is
-    better) and adds the one-chip target summary; the Agent Sim grid keeps its original cells.
+    better) while Agent Sim shows achieved goals and goal completion.
     """
-    status_head, score_head = ('Broke', 'ASR') if redteam else ('Status', 'Score')
+    status_head, score_head = ('Broke', 'ASR') if redteam else ('Achieved', 'Goal rate')
     head = (
         '<div class="runs-grid-head" aria-hidden="true"><span>Job</span><span>Target</span>'
         f'<span>{status_head}</span><span>{score_head}</span><span>Cases</span><span>Cost</span><span></span></div>'
@@ -616,7 +608,7 @@ def _run_grid(rows: list[Any], *, redteam: bool = False) -> str:
 def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
     """Prev/Next page nav + page-size picker for the run overview. Full-page GET
     links (no JS), shared by both surfaces. Renders just the size picker when
-    everything fits on one page, and nothing at all on the red team overview when
+    everything fits on one page, and nothing at all on either overview when
     even the smallest page holds every run."""
     last = max(1, -(-total // per_page))  # ceil division
     page = min(page, last)
@@ -631,12 +623,12 @@ def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
         return f'<a class="{cls}" href="/?surface={esc(surface)}&page={pg}&per_page={pp}"{current}>{label}</a>'
 
     sizes = ''.join(link(str(sz), pg=1, pp=sz, active=(sz == per_page)) for sz in RUN_PAGE_SIZES)
-    # A picker that cannot change anything is noise on the red team overview.
-    fits_smallest = surface == 'redteam' and total <= min(RUN_PAGE_SIZES)
+    # Hide the picker when every run fits even the smallest page.
+    fits_smallest = surface in {'redteam', 'sim'} and total <= min(RUN_PAGE_SIZES)
     left = '' if fits_smallest else f'<span class="runs-pager-sizes">Per page: {sizes}</span>'
 
     if total <= per_page:
-        if surface == 'redteam' and fits_smallest:
+        if fits_smallest:
             # The caption above the strip already says "All N runs"; nothing is left to show.
             return ''
         noun = 'run' if total == 1 else 'runs'
@@ -677,34 +669,6 @@ def _fmt_compact(n: int) -> str:
     return str(n)
 
 
-def _sim_compare_bar(choices: list[tuple[str, str]]) -> str:
-    """Render the two-run compare picker (Run A / Run B → /compare/sim).
-
-    Plain GET form, no JS. Needs at least two sim runs to be useful; with fewer
-    it renders nothing so the overview stays clean.
-    """
-    if len(choices) < 2:
-        return ''
-
-    def _opts(selected_idx: int) -> str:
-        # Default each select to a different run so the first Compare click is a
-        # real A-vs-B comparison, not run-vs-itself (all-zero deltas).
-        return ''.join(
-            f'<option value="{esc(rid)}"{" selected" if i == selected_idx else ""}>{esc(name)}</option>'
-            for i, (rid, name) in enumerate(choices)
-        )
-
-    return (
-        '<form class="cmp-bar" action="/compare/sim" method="get">'
-        '<span class="cmp-bar-label">Compare runs</span>'
-        f'<select name="a" aria-label="Run A">{_opts(0)}</select>'
-        '<span class="cmp-bar-vs">vs</span>'
-        f'<select name="b" aria-label="Run B">{_opts(1)}</select>'
-        '<button type="submit" class="btn-secondary">Compare</button>'
-        '</form>'
-    )
-
-
 def run_compare_control(rid: str, choices: list[tuple[str, str]], action: str) -> str:
     """Render the on-report compare control: this run is A, pick B from the
     other runs of its surface. ``action`` is that surface's compare URL. Empty
@@ -723,49 +687,32 @@ def run_compare_control(rid: str, choices: list[tuple[str, str]], action: str) -
     )
 
 
-def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] | None = None) -> str:
-    """Render the Agent Sim surface as the design's rich overview: 4 KPI cards
-    plus an item-level 'Recent simulations' table (RES-1022).
-
-    ``compare_choices`` is the (rid, name) list of all sim runs used to populate
-    the side-by-side compare picker; ``None`` hides the picker.
-    """
+def sim_overview_body(data: SimOverview) -> str:
+    """Simulation run overview, with goal outcomes and recorded spend."""
     from evaluatorq.common.reports.html_helpers import kpi_cards
 
-    if data.simulations_run == 0:
+    if data.total_runs == 0:
         return runs_screen_body([], 'sim')
 
     gc = '—' if data.goal_completion is None else pct(data.goal_completion)
-    gc_status = (
-        'neutral'
-        if data.goal_completion is None
-        else ('pass' if data.goal_completion >= 0.8 else 'warn' if data.goal_completion >= 0.5 else 'fail')
+    spend_card = {'label': 'Total spend', 'value': _fmt_spend(data.total_cost)}
+    if data.total_cost is not None and (sub := _spend_coverage(data)):
+        spend_card['sub'] = sub
+    goal_sub = f'{data.achieved:,} of {data.simulations_run:,} conversations achieved the goal'
+    if data.goal_completion is None:
+        goal_sub = 'No goal verdict available'
+    if data.errors:
+        goal_sub += f' · {data.errors:,} errored'
+    band = kpi_cards(
+        [
+            {'label': 'Goal completion', 'value': gc, 'status': _goal_status(data.goal_completion), 'sub': goal_sub},
+            {'label': 'Simulations run', 'value': f'{data.simulations_run:,}'},
+            {'label': 'Avg turns', 'value': '—' if data.avg_turns is None else f'{data.avg_turns:.1f}'},
+            spend_card,
+        ],
+        modifier='strip',
     )
-    avg_turns = '—' if data.avg_turns is None else f'{data.avg_turns:.1f}'
-    # Real per-sim dollar cost (cost_usd is recorded upstream). Falls back to
-    # avg tokens/sim only when no cost data is present.
-    if data.avg_cost is not None:
-        cost_label, cost_value = 'Avg cost/sim', _fmt_cost(data.avg_cost)
-        if data.avg_input_cost is not None or data.avg_output_cost is not None:
-            cost_value += f' (in {_fmt_cost(data.avg_input_cost)} / out {_fmt_cost(data.avg_output_cost)})'
-        cost_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls)
-    else:
-        cost_label = 'Avg tokens/sim'
-        cost_value = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
-    band = kpi_cards([
-        {'label': 'Simulations run', 'value': str(data.simulations_run)},
-        {'label': 'Goal completion', 'value': gc, 'status': gc_status},
-        {'label': 'Avg turns', 'value': avg_turns},
-        {'label': cost_label, 'value': cost_value},
-    ])
-
-    panel = _panel(
-        'Recent runs',
-        'Latest agent simulation runs',
-        _run_grid(data.recent) + _run_pager('sim', data.page, data.total_runs, data.per_page),
-    )
-    compare_bar = _sim_compare_bar(compare_choices or [])
-    return f'<section class="dash-wrap">{band}{compare_bar}{panel}</section>'
+    return _run_overview(data=data, surface='sim', band=band)
 
 
 def search_results(cards: list[ReportCard], query: str) -> str:
@@ -819,16 +766,25 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
         modifier='strip',
     )
 
-    pager = _run_pager('redteam', data.page, data.total_runs, data.per_page)
+    return _run_overview(data=data, surface='redteam', band=band)
+
+
+def _run_overview(*, data: SimOverview | RedTeamOverview, surface: str, band: str) -> str:
+    """Shared overview shell: scope, KPI strip, run grid, and pagination."""
+    pager = _run_pager(surface, data.page, data.total_runs, data.per_page)
     panel = _panel(
         'Recent runs',
         '',
-        _run_grid(data.recent, redteam=True) + pager,
+        _run_grid(data.recent, redteam=surface == 'redteam') + pager,
         cls='' if pager else 'panel--flush',
         title_tag='h2',
     )
-    scope = f'All {data.total_runs} runs' if data.total_runs != 1 else '1 run'
-    return f'<section class="dash-wrap rt-overview"><p class="rt-scope">{scope}</p>{band}{panel}</section>'
+    scope = f'All {data.total_runs:,} runs' if data.total_runs != 1 else '1 run'
+    surface_class = 'rt-overview' if surface == 'redteam' else 'sim-overview'
+    return (
+        f'<section class="dash-wrap run-overview {surface_class}">'
+        f'<p class="rt-scope">{scope}</p>{band}{panel}</section>'
+    )
 
 
 def _fmt_spend(cost: float | None) -> str:
@@ -836,7 +792,7 @@ def _fmt_spend(cost: float | None) -> str:
     return f'${cost:,.2f}' if cost is not None and cost >= 1 else _fmt_cost(cost)
 
 
-def _spend_coverage(data: RedTeamOverview) -> str:
+def _spend_coverage(data: RedTeamOverview | SimOverview) -> str:
     """Sub-line for a spend total that only some calls priced, e.g. '3 of 10 calls priced'."""
     text = _coverage(data.priced_calls, data.cost_calls, data.unknown_calls).strip().removeprefix('(').removesuffix(')')
     head, sep, tail = text.partition(', ')
@@ -1239,7 +1195,7 @@ def settings_body(
         if setting_value('orq_api_key_ciphertext')
         else ''
     )
-    oauth_server = setting_value('orq_oauth_server') or 'https://my.orq.ai'
+    oauth_server = setting_value('orq_oauth_server') or DEFAULT_ORQ_BASE_URL
     # Checking an expired login calls Orq, so the field loads after the page and never delays it.
     # The hidden input keeps the saved server in the form if Save is pressed before it arrives.
     oauth_control = (
@@ -1295,7 +1251,7 @@ def settings_body(
                 f'{saved_key_hint}{key_error_html}'
                 '<label class="settings-auth-detail-label" for="orq_stored_key_host">Orq server</label>'
                 f'<input id="orq_stored_key_host" name="orq_stored_key_host" type="url" '
-                f'value="{esc(setting_value("orq_profile_host") or "https://my.orq.ai")}">'
+                f'value="{esc(setting_value("orq_profile_host") or DEFAULT_ORQ_BASE_URL)}">'
             ),
         ),
     )
@@ -2148,81 +2104,6 @@ def report_view_with_filters(
     """
     swap = filter_fragment(rid, surface, body_html, form_html)
     return f'<section class="report-view">{swap}</section>'
-
-
-def render_message_list(
-    messages: list[Any],
-    *,
-    role_labels: dict[str, str],
-    class_prefix: str,
-) -> str:
-    """Render a role-labeled message list as a series of chat-bubble ``<div>``s.
-
-    Each message produces:
-
-    ```html
-    <div class="{class_prefix}-msg {class_prefix}-msg-{css_role}">
-      <span class="{class_prefix}-msg-avatar">{label}</span>
-      <div class="{class_prefix}-msg-bubble">
-        <span class="{class_prefix}-msg-role">{label}</span>
-        <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
-      </div>
-    </div>
-    ```
-
-    Where ``{css_role}`` is the raw role value when it is one of
-    ``user``, ``assistant``, ``system``, ``tool``; otherwise ``unknown``.
-    The ``{class_prefix}-msg-avatar`` span is a short glyph (e.g. "USR" /
-    "AGT" / "SYS" / "TOOL") taken straight from *role_labels* — callers that
-    want a compact avatar should pass short labels; the ``{css_role}`` class
-    is what CSS uses to put user/system on the left and assistant/tool on
-    the right (spec §Transcripts), so no separate "side" marker is needed.
-
-    Every content string is passed through ``esc()`` (HTML-escaping) to
-    prevent stored-XSS vectors. This is purely additive over the prior
-    shape (avatar span + bubble wrapper added); the ``{class_prefix}-msg
-    {class_prefix}-msg-{css_role}`` outer class and the ``-msg-role`` /
-    ``-msg-content`` elements are unchanged, so existing callers keep working.
-
-    Args:
-        messages:     Sequence of message dicts (``role`` / ``content`` keys)
-                      or objects with ``.role`` / ``.content`` attributes.
-        role_labels:  Mapping from role name → display label.  Falls back to
-                      the raw role string when a role is not in the map.
-        class_prefix: CSS class namespace (e.g. ``"sim"`` → ``sim-msg``).
-
-    Returns:
-        Concatenated HTML string (empty string when *messages* is empty).
-    """
-    known_roles = frozenset({'user', 'assistant', 'system', 'tool'})
-
-    parts: list[str] = []
-    for msg in messages:
-        # Support both dict-style and attribute-style message objects.
-        if isinstance(msg, dict):
-            role = str(msg.get('role', 'unknown'))
-            raw_content = msg.get('content', '')
-        else:
-            role = str(getattr(msg, 'role', 'unknown'))
-            raw_content = getattr(msg, 'content', '')
-
-        label = role_labels.get(role, role)
-        content_text: str = raw_content if isinstance(raw_content, str) else str(raw_content or '')
-        safe_content = esc(content_text)
-        css_role = role if role in known_roles else 'unknown'
-        safe_label = esc(label)
-
-        parts.append(
-            f'<div class="{class_prefix}-msg {class_prefix}-msg-{esc(css_role)}">'
-            f'<span class="{class_prefix}-msg-avatar">{safe_label}</span>'
-            f'<div class="{class_prefix}-msg-bubble">'
-            f'<span class="{class_prefix}-msg-role">{safe_label}</span>'
-            f'<pre class="{class_prefix}-msg-content">{safe_content}</pre>'
-            f'</div>'
-            f'</div>'
-        )
-
-    return ''.join(parts)
 
 
 def _sim_rowlist_wrapper(rid: str, inner: str) -> str:

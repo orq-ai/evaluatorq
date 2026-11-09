@@ -21,6 +21,8 @@ from typing import Any, Literal, NamedTuple
 
 from loguru import logger
 
+from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
+
 # The Orq router route classify models are served on, shared with the executor that posts to it.
 DECISIONS_PATH = '/decisions'
 
@@ -289,7 +291,7 @@ class _LLMClient:
         self.chat.completions = _Endpoint(cli, ['chat', 'create'])
         self.embeddings = _Endpoint(cli, ['embeddings', 'create'])
         self.responses = _Endpoint(cli, ['responses', 'create'])
-        self.base_url = f'{(cli.server_url or "https://my.orq.ai").rstrip("/")}/v3/router'
+        self.base_url = f'{(cli.server_url or DEFAULT_ORQ_BASE_URL).rstrip("/")}/v3/router'
         self._cli = cli
 
     async def post(self, path: str, *, cast_to: Any = object, body: dict[str, Any], options: Any = None) -> Any:

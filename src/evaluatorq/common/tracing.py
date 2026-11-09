@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import functools
 import json
-import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.env_config import env_bool
+from evaluatorq.common.env_config import env_bool, env_raw
 from evaluatorq.common.fields import get_field as _field
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.tracing.setup import get_tracer
@@ -49,7 +48,7 @@ def _default_span_max_text_chars() -> int | None:
 
     Call _default_span_max_text_chars.cache_clear() in tests after changing the env var.
     """
-    raw = os.getenv('EVALUATORQ_SPAN_MAX_TEXT_CHARS')
+    raw = env_raw('EVALUATORQ_SPAN_MAX_TEXT_CHARS')
     if raw is None or raw == '':
         return None
     try:
@@ -92,7 +91,7 @@ def truncate_for_span(text: object, *, max_chars: int | None = None) -> str:
 
 
 def capture_message_content() -> bool:
-    """Whether to write LLM message text (prompts + responses) onto spans.
+    """Whether to write message, job, and evaluator payload content onto spans.
 
     Controlled by the ``EVALUATORQ_CAPTURE_MESSAGE_CONTENT`` env var.
 
@@ -103,14 +102,65 @@ def capture_message_content() -> bool:
 
     Gates ``gen_ai.input.messages``, ``gen_ai.output.messages``, the bare
     ``input`` / ``output`` keys, and the ``orq.openresponses.request/response``
-    payloads. Public so domain span builders (redteam/openresponses) can gate
+    payloads, job ``gen_ai.input/output`` and evaluator ``orq.evaluation.input/output``.
+    Public so domain span builders (redteam/openresponses) can gate
     input-message capture too.
     """
-    return env_bool('EVALUATORQ_CAPTURE_MESSAGE_CONTENT', default=True)
+    return env_bool('EVALUATORQ_CAPTURE_MESSAGE_CONTENT')
 
 
 # Back-compat private alias (pre-existing callers/tests import the underscored name).
 _capture_message_content = capture_message_content
+
+
+def record_span_payload(
+    span: Span | None, *, key: str, payload: Any, optional_fields: dict[str, Any] | None = None
+) -> None:
+    """Record structured diagnostic data without affecting job execution.
+
+    Respect the content-capture gate and truncate string values before JSON
+    encoding, so size limits never leave malformed JSON. Pydantic models retain
+    their fields; unsupported values use the existing result JSON fallback.
+    Object payloads may carry optional fields serialized separately from the
+    required payload. Invalid optional fields are omitted without losing it.
+    """
+    if span is None or not capture_message_content():
+        return
+    from evaluatorq.types import _json_default
+
+    def limit_text(value: Any) -> Any:
+        if isinstance(value, str):
+            return truncate_for_span(value)
+        if isinstance(value, dict):
+            return {k: limit_text(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [limit_text(v) for v in value]
+        return value
+
+    def normalize(value: Any) -> Any:
+        return limit_text(json.loads(json.dumps(value, default=_json_default, ensure_ascii=False, allow_nan=False)))
+
+    try:
+        normalized = normalize(payload)
+        if optional_fields:
+            if not isinstance(normalized, dict):
+                raise TypeError('Optional span fields require an object payload')
+            try:
+                optional = normalize(optional_fields)
+            except Exception as exc:
+                logger.warning(
+                    'Could not record optional span fields {}.{} ({}); omitting these fields',
+                    key,
+                    ','.join(optional_fields),
+                    type(exc).__name__,
+                )
+            else:
+                normalized.update(optional)
+        span.set_attribute(key, json.dumps(normalized, ensure_ascii=False))
+    except Exception as exc:
+        logger.warning(
+            'Could not record span payload {} ({}); continuing without this payload', key, type(exc).__name__
+        )
 
 
 def _span_content_text(content: Any) -> str:
@@ -626,7 +676,7 @@ def propagate_trace_context() -> bool:
     when the receiving side should trace independently, or when a gateway
     rejects an unexpected ``traceparent`` header.
     """
-    return env_bool('EVALUATORQ_PROPAGATE_TRACE_CONTEXT', default=True)
+    return env_bool('EVALUATORQ_PROPAGATE_TRACE_CONTEXT')
 
 
 async def get_trace_context_headers() -> dict[str, str]:  # noqa: RUF029

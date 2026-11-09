@@ -21,6 +21,7 @@ from evaluatorq.insights.models import (
     TraceInsight,
     TraceSummary,
 )
+from evaluatorq.insights.presets import FAILURE_TAXONOMY
 from evaluatorq.insights.transcript import SHELL_TOOLS, ToolStats
 from evaluatorq.signals.models import Evidence, Precondition, SignalReport, SignalResult
 
@@ -114,6 +115,48 @@ def test_review_payload_provides_safe_server_built_trace_links(monkeypatch):
     )
     snapshot_row = _trace_rows(build_review_payload(_run([trace])))[0]
     assert snapshot_row['orq_url'] is None
+
+
+def test_review_payload_adds_legacy_counts_warning_without_changing_counts_or_answers() -> None:
+    assert isinstance(FAILURE_TAXONOMY.criteria, dict)
+    criteria = FAILURE_TAXONOMY.criteria.copy()
+    criteria.pop('No failure')
+    legacy = FAILURE_TAXONOMY.model_copy(update={'criteria': criteria})
+    revised = FAILURE_TAXONOMY
+    unrelated = LabelSpec(name='other_choice', kind='choice', instructions='Choose.', criteria={'yes': None})
+
+    def payload_for(spec: LabelSpec, value: str) -> tuple[dict[str, object], dict[str, object]]:
+        trace = _trace('taxonomy-span').model_copy(update={'labels': {
+            spec.name: LabelAnswer(value=value, confidence=0.9, probabilities=None, error=None),
+        }})
+        result = LabelResult(
+            spec=spec, counts={value: 1}, mean_confidence=0.9, n_low_confidence=0, n_failed=0
+        )
+        run = _run([_trace('base-span')]).model_copy(update={
+            'config': InsightsConfig(labels=[spec], dimensions=['intent']),
+            'traces': [trace],
+            'labels': {spec.name: result},
+        })
+        review = build_review_payload(run)
+        label_rows = review['labels']
+        assert isinstance(label_rows, list)
+        label_row = _mapping(label_rows[0])
+        return label_row, _trace_rows(review)[0]
+
+    legacy_row, legacy_trace = payload_for(legacy, 'Hallucination')
+    assert legacy_row['counts'] == {'Hallucination': 1}
+    warning = legacy_row['counts_warning']
+    assert isinstance(warning, str)
+    assert 'may include clean traces' in warning
+    assert legacy_trace['l'] == {'failure_taxonomy': ['Hallucination']}
+    assert legacy_trace['label_errors'] == {}
+
+    for spec, value in ((revised, 'No failure'), (unrelated, 'yes')):
+        label_row, trace_row = payload_for(spec, value)
+        assert label_row['counts'] == {value: 1}
+        assert label_row['counts_warning'] is None
+        assert trace_row['l'] == {spec.name: [value]}
+        assert trace_row['label_errors'] == {}
 
 
 def test_review_payload_lands_on_analysis_when_the_conversation_cannot_be_re_read(tmp_path):
@@ -323,3 +366,23 @@ def test_review_payload_names_the_source_like_the_run_form_tabs() -> None:
     ):
         payload = build_review_payload(run.model_copy(update={'population': {'mode': mode}}))
         assert _mapping(payload['run'])['source_label'] == label
+
+
+def test_review_payload_reports_a_null_answer_as_a_label_error_not_a_missing_answer() -> None:
+    trace = _trace('span-null')
+    trace.labels['user_frustration'] = LabelAnswer(value=None, confidence=None, probabilities=None, error=None)
+    row = _trace_rows(build_review_payload(_run([trace])))[0]
+
+    assert 'user_frustration' not in _mapping(row['l'])
+    assert _mapping(row['label_errors'])['user_frustration'] == 'The question returned no answer'
+    assert _mapping(row['label_errors'])['failed_question'] == 'classifier failed'
+
+
+def test_review_payload_sends_yes_no_answers_as_label_keys() -> None:
+    answered = _trace('span-yes')
+    answered.labels['failed_question'] = LabelAnswer(value=True, confidence=None, probabilities=None, error=None)
+    denied = _trace('span-no')
+    denied.labels['failed_question'] = LabelAnswer(value=False, confidence=None, probabilities=None, error=None)
+    rows = _trace_rows(build_review_payload(_run([answered, denied])))
+
+    assert [_mapping(row['l'])['failed_question'] for row in rows] == [['yes'], ['no']]
