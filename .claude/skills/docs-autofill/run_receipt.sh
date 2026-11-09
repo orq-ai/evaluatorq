@@ -34,8 +34,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT" || exit 1
 
 RECEIPT="$ROOT/.context/receipt.txt"
+SUMMARY_FILE="$ROOT/.context/receipt-summary.txt"
 WORK="$(mktemp -d)"
+ROWS="$WORK/rows.txt"   # per-block rows; assembled under the RESULT line at the end
+: >"$ROWS"
 mkdir -p "$ROOT/.context"
+rm -f "$SUMMARY_FILE"  # an interrupted run must not leave the last run's status to be pasted
 
 EVALUATORQ_DIR="$(mktemp -d)"
 export EVALUATORQ_DIR
@@ -58,7 +62,9 @@ trap 'rm -rf "$WORK" "$EVALUATORQ_DIR"' EXIT
 
 # Bail out with a receipt that says why, rather than a silent green one.
 die() {
-  printf 'RESULT: FAILED — %s\n' "$1" >>"$RECEIPT"
+  printf 'FAILED — %s\n%s\n' "$1" "$1" >"$SUMMARY_FILE"
+  printf 'RESULT: FAILED — %s\n\n' "$1" >>"$RECEIPT"
+  cat "$ROWS" >>"$RECEIPT"
   cat "$RECEIPT"
   exit 1
 }
@@ -148,11 +154,14 @@ STATE="$WORK/state.sh"   # carries exports between bash blocks (one logical shel
 : >"$STATE"
 FAILED=0
 SEEN=0
+RAN=0
+ILLUSTRATIVE=0
+NONZERO=0
 
 while IFS=$'\t' read -r idx lang start_line; do
   body="$WORK/$idx.body"
   SEEN=$((SEEN + 1))
-  printf -- '--- block %s (%s, %s:%s)\n' "$idx" "$lang" "$PAGE" "$start_line" >>"$RECEIPT"
+  row="--- block $idx ($lang, $PAGE:$start_line)"
 
   case "$lang" in
     python)
@@ -168,7 +177,8 @@ while IFS=$'\t' read -r idx lang start_line; do
       # "..." for every later block in the shared shell. These lines are
       # instructions for the reader's own project, not claims about this repo.
       if ! grep -qvE '^\s*(#|$|uv (add|pip install)\b|pip install\b|export [A-Z_0-9]+=(\.\.\.|<[^>]*>|"?your[^"]*"?)\s*(#.*)?$)' "$body"; then
-        printf 'command: —\nexit: — illustrative (environment setup for the reader'"'"'s project; not executed against this repo)\n\n' >>"$RECEIPT"
+        printf '%s — illustrative (environment setup for the reader'"'"'s project; not executed against this repo)\n' "$row" >>"$ROWS"
+        ILLUSTRATIVE=$((ILLUSTRATIVE + 1))
         continue
       fi
       # `set -e` so a failing command fails the block: without it `rc=$?` sees
@@ -189,28 +199,44 @@ while IFS=$'\t' read -r idx lang start_line; do
       # "not run by this runner" — never "not executable by nature". Whether a
       # console or yaml block could have been executed is a claim for the
       # reviewer to make, not one this script is in a position to assert.
-      printf 'command: —\nexit: — illustrative (%s block, not run by this runner)\n\n' "$lang" >>"$RECEIPT"
+      printf '%s — illustrative (%s block, not run by this runner)\n' "$row" "$lang" >>"$ROWS"
+      ILLUSTRATIVE=$((ILLUSTRATIVE + 1))
       continue
       ;;
   esac
 
-  printf 'command: %s\nexit: %s\n' "$lang" "$code" >>"$RECEIPT"
-  printf 'output (first 5 lines):\n' >>"$RECEIPT"
-  printf '%s\n' "$out" | head -5 >>"$RECEIPT"
-  printf '\n' >>"$RECEIPT"
-  [ "$code" -ne 0 ] && FAILED=1
+  RAN=$((RAN + 1))
+  printf '%s exit %s\n' "$row" "$code" >>"$ROWS"
+  # First 5 lines of output, indented; a block that printed nothing adds no lines.
+  if [ -n "${out//[[:space:]]/}" ]; then
+    printf '%s\n' "$out" | head -5 | sed 's/^/    /' >>"$ROWS"
+  fi
+  if [ "$code" -ne 0 ]; then
+    FAILED=1
+    NONZERO=$((NONZERO + 1))
+  fi
 done <"$WORK/index.tsv"
 
 [ "$SEEN" -eq "$EXTRACTED" ] || die "accounted for $SEEN of $EXTRACTED extracted blocks"
 
+# RESULT goes above the rows: it is the line the PR body's folded summary copies.
+scope=""
+[ -n "$BASE" ] && scope="added "
+counts="$EXTRACTED ${scope}blocks: $RAN ran, $ILLUSTRATIVE illustrative"
 if [ "$FAILED" -ne 0 ]; then
-  echo "RESULT: FAILED — at least one block exited nonzero" >>"$RECEIPT"
+  echo "RESULT: FAILED — $counts; at least one block exited nonzero" >>"$RECEIPT"
 else
-  if [ -n "$BASE" ]; then
-    echo "RESULT: OK — $EXTRACTED added blocks accounted for, every executable one exited 0" >>"$RECEIPT"
-  else
-    echo "RESULT: OK — $EXTRACTED blocks accounted for, every executable one exited 0" >>"$RECEIPT"
-  fi
+  echo "RESULT: OK — $counts; every block that ran exited 0" >>"$RECEIPT"
+fi
+echo >>"$RECEIPT"
+cat "$ROWS" >>"$RECEIPT"
+
+# Line 1 is the PR body's folded <summary> text, line 2 the status-line fragment:
+# the agent pastes them instead of re-deriving counts from the RESULT line.
+if [ "$FAILED" -ne 0 ]; then
+  printf 'FAILED — %s of %s blocks that ran exited nonzero\n%s of %s blocks that ran exited nonzero\n' "$NONZERO" "$RAN" "$NONZERO" "$RAN" >"$SUMMARY_FILE"
+else
+  printf '%s of %s %sblocks ran, all exit 0, %s illustrative\n%s of %s %sblocks ran, all exit 0\n' "$RAN" "$EXTRACTED" "$scope" "$ILLUSTRATIVE" "$RAN" "$EXTRACTED" "$scope" >"$SUMMARY_FILE"
 fi
 
 cat "$RECEIPT"
