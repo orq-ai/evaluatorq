@@ -10,8 +10,15 @@ import time
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
+from openai import omit
+from openai.lib._parsing import parse_chat_completion, type_to_response_format_param
 from openai.types import CompletionUsage
-from openai.types.chat import ChatCompletion, ChatCompletionMessage, ChatCompletionMessageFunctionToolCall
+from openai.types.chat import (
+    ChatCompletion,
+    ChatCompletionMessage,
+    ChatCompletionMessageFunctionToolCall,
+    ParsedChatCompletion,
+)
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message_function_tool_call import Function
 
@@ -61,7 +68,71 @@ _SUPPORTED_KEYS = frozenset({
     'extra_headers',
     'extra_body',
     'timeout',
+    'response_format',
+    'fallbacks',
 })
+
+
+_UNSUPPORTED_SCHEMA_KEYWORDS = frozenset({
+    'minimum',
+    'maximum',
+    'exclusiveMinimum',
+    'exclusiveMaximum',
+    'multipleOf',
+    'minLength',
+    'maxLength',
+    'maxItems',
+    'uniqueItems',
+})
+"""JSON Schema keywords Anthropic structured outputs reject: numerical, string and complex array constraints. ``minItems`` is kept only for 0 and 1."""
+
+
+def adapt_schema(schema: Any) -> Any:
+    """Copy a JSON schema, dropping the keywords Anthropic structured outputs reject and closing every object.
+
+    Only schema positions are walked (``properties`` values, ``items``, ``anyOf``/``allOf``/``oneOf`` members, ``$defs``), so a property that happens to be named ``minimum`` survives. Objects without ``additionalProperties`` get ``False``, which Anthropic requires.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in _UNSUPPORTED_SCHEMA_KEYWORDS:
+            continue
+        if key == 'minItems' and value not in (0, 1):
+            continue
+        if key in ('properties', '$defs', 'definitions') and isinstance(value, dict):
+            out[key] = {name: adapt_schema(sub) for name, sub in value.items()}
+        elif key in ('anyOf', 'allOf', 'oneOf') and isinstance(value, list):
+            out[key] = [adapt_schema(sub) for sub in value]
+        elif key == 'items':
+            out[key] = adapt_schema(value)
+        else:
+            out[key] = value
+    if out.get('type') == 'object' and 'additionalProperties' not in out:
+        out['additionalProperties'] = False
+    return out
+
+
+def response_format_to_output_format(response_format: Any) -> dict[str, Any] | None:
+    """Map a ``response_format`` to ``output_config.format``, or ``None`` when a plain call is right.
+
+    A Pydantic class is turned into a schema by openai's own helper (`type_to_response_format_param`), so both providers see the same schema. ``{'type': 'json_object'}`` and ``{'type': 'text'}`` send nothing: Anthropic has no JSON mode, and the callers parse the text themselves.
+    """
+    if response_format is None:
+        return None
+    param = cast(
+        'dict[str, Any]',
+        response_format if isinstance(response_format, dict) else type_to_response_format_param(response_format),
+    )
+    kind = param.get('type')
+    if kind in ('json_object', 'text'):
+        return None
+    if kind != 'json_schema':
+        raise ValueError(f'The Anthropic adapter does not support response_format type {kind!r}.')
+    schema = param['json_schema'].get('schema')
+    if schema is None:
+        raise ValueError('response_format of type json_schema needs json_schema.schema.')
+    return {'type': 'json_schema', 'schema': adapt_schema(schema)}
 
 
 def normalize_model(model: str) -> str:
@@ -227,6 +298,22 @@ def convert_tool_choice(tool_choice: Any) -> dict[str, str] | None:
     )
 
 
+def build_output_config(params: dict[str, Any]) -> dict[str, Any]:
+    """Build ``output_config`` from ``response_format`` (the ``format`` key) and ``reasoning_effort`` (the ``effort`` key)."""
+    output_config: dict[str, Any] = {}
+    output_format = response_format_to_output_format(params.get('response_format'))
+    if output_format is not None:
+        output_config['format'] = output_format
+    effort = params.get('reasoning_effort')
+    if effort is not None:
+        if effort not in _EFFORT_LEVELS:
+            raise ValueError(f'reasoning_effort={effort!r} is not supported; use one of {sorted(_EFFORT_LEVELS)}.')
+        mapped = _EFFORT_LEVELS[effort]
+        if mapped is not None:
+            output_config['effort'] = mapped
+    return output_config
+
+
 def build_messages_request(params: dict[str, Any]) -> dict[str, Any]:
     """Turn ``chat.completions.create`` keyword arguments into ``messages.create`` keyword arguments.
 
@@ -263,16 +350,14 @@ def build_messages_request(params: dict[str, Any]) -> dict[str, Any]:
     for key in ('temperature', 'top_p', 'timeout'):
         if params.get(key) is not None:
             request[key] = params[key]
-    effort = params.get('reasoning_effort')
-    if effort is not None:
-        if effort not in _EFFORT_LEVELS:
-            raise ValueError(f'reasoning_effort={effort!r} is not supported; use one of {sorted(_EFFORT_LEVELS)}.')
-        mapped = _EFFORT_LEVELS[effort]
-        if mapped is not None:
-            request['output_config'] = {'effort': mapped}
+    output_config = build_output_config(params)
+    if output_config:
+        request['output_config'] = output_config
     if params.get('extra_headers'):
         request['extra_headers'] = params['extra_headers']
     extra_body = {k: v for k, v in (params.get('extra_body') or {}).items() if k not in ORQ_ONLY_EXTRA_BODY_KEYS}
+    if params.get('fallbacks') is not None:
+        extra_body['fallbacks'] = params['fallbacks']
     if extra_body:
         request['extra_body'] = extra_body
     return request
@@ -332,4 +417,22 @@ def to_chat_completion(message: Message) -> ChatCompletion:
             )
         ],
         usage=convert_usage(message),
+    )
+
+
+def to_parsed_chat_completion(
+    completion: ChatCompletion, *, response_format: Any, tools: Any = None
+) -> ParsedChatCompletion[Any]:
+    """Build a ``ParsedChatCompletion`` the way ``openai``'s ``chat.completions.parse`` does.
+
+    Delegates to openai's own ``parse_chat_completion``, so the errors are openai's: a ``length`` finish raises ``LengthFinishReasonError`` and text that is not valid JSON for the Pydantic class raises ``pydantic.ValidationError``. A refusal is the exception: OpenAI reports a structured-output refusal as ``message.refusal`` with finish reason ``stop``, so that is what the ladder in ``common/structured_output.py`` reads, and a ``content_filter`` finish (which would raise) is not used for it.
+    """
+    choice = completion.choices[0]
+    if choice.message.refusal and choice.finish_reason == 'content_filter':
+        completion = completion.model_copy(deep=True)
+        completion.choices[0].finish_reason = 'stop'
+    return parse_chat_completion(
+        response_format=response_format if response_format is not None else omit,
+        input_tools=tools or omit,
+        chat_completion=completion,
     )

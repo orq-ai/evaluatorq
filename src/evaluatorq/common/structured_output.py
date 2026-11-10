@@ -55,6 +55,7 @@ from pydantic import BaseModel, ValidationError
 
 from evaluatorq.common.extract_json import extract_json_from_response
 from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse, execute_response
+from evaluatorq.common.llm_client import is_anthropic_client
 from evaluatorq.common.llm_errors import STATUS_ERRORS, status_code
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
@@ -744,6 +745,9 @@ async def _leg_forced_tool(call: _ChatLadderCall, *, response_format: type[T]) -
     caller_kwargs = call.extra_kwargs or {}
     if 'tools' in caller_kwargs or 'tool_choice' in caller_kwargs:
         logger.debug('%s: caller supplied tools, skipping the forced tool call leg', label)
+        return StructuredResult(None, '')
+    if is_anthropic_client(call.client):
+        logger.debug('%s: Anthropic clients cannot force a tool call, skipping the forced tool call leg', label)
         return StructuredResult(None, '')
 
     tool = pydantic_function_tool(response_format)

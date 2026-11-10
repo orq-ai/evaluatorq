@@ -5,17 +5,51 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from evaluatorq.anthropic.convert import build_messages_request, to_chat_completion
+from loguru import logger
+
+from evaluatorq.anthropic.convert import build_messages_request, to_chat_completion, to_parsed_chat_completion
+
+FALLBACK_BETA = 'server-side-fallback-2026-07-01'
+_PLATFORMS_WITHOUT_FALLBACKS = ('Bedrock', 'Vertex')
 
 
 class _ChatCompletions:
     def __init__(self, client: Any) -> None:
         self._client = client
+        self._refusal_logged = False
+
+    async def _send(self, params: dict[str, Any]) -> Any:
+        """Send one request and return the raw Anthropic message."""
+        request = build_messages_request(params)
+        if 'fallbacks' in request.get('extra_body', {}):
+            platform = type(self._client).__name__
+            if any(name in platform for name in _PLATFORMS_WITHOUT_FALLBACKS):
+                raise ValueError(
+                    f'Server-side fallbacks are available on the Claude API only, not on {platform} '
+                    '(Amazon Bedrock and Google Vertex AI). Remove extra_kwargs={"fallbacks": ...} from the LLMCallConfig.'
+                )
+            message = await self._client.beta.messages.create(**request, betas=[FALLBACK_BETA])
+        else:
+            message = await self._client.messages.create(**request)
+        if message.stop_reason == 'refusal' and not self._refusal_logged:
+            self._refusal_logged = True
+            logger.warning(
+                'The Anthropic model refused a request (stop_reason "refusal"). '
+                'Server-side fallbacks can retry it on another model: pass extra_kwargs={"fallbacks": "default"} '
+                "on the role's LLMCallConfig (Claude API only)."
+            )
+        return message
 
     async def create(self, **params: Any) -> Any:
         """Call ``messages.create`` and return a ``ChatCompletion``."""
-        message = await self._client.messages.create(**build_messages_request(params))
-        return to_chat_completion(message)
+        return to_chat_completion(await self._send(params))
+
+    async def parse(self, **params: Any) -> Any:
+        """Call ``messages.create`` with ``output_config.format`` and return a ``ParsedChatCompletion``."""
+        completion = to_chat_completion(await self._send(params))
+        return to_parsed_chat_completion(
+            completion, response_format=params.get('response_format'), tools=params.get('tools')
+        )
 
 
 class _Chat:
