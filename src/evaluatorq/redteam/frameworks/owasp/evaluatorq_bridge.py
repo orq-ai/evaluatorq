@@ -40,7 +40,7 @@ from evaluatorq.redteam.contracts import (
     normalize_category,
 )
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
-from evaluatorq.redteam.exceptions import DatasetError
+from evaluatorq.redteam.exceptions import CredentialError, DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
 from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs
 
@@ -504,6 +504,19 @@ def _validate_platform_datapoint(inputs: dict[str, Any]) -> None:
         raise ValueError(msg)
 
 
+def _orq_error_message(body: str) -> str:
+    """Return the ``message`` (or ``error``) of an ORQ JSON error body, else the raw body."""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return body
+    if isinstance(parsed, dict):
+        for key in ('message', 'error'):
+            if isinstance(parsed.get(key), str):
+                return parsed[key]
+    return body
+
+
 def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
     """Fetch all datapoints from an ORQ dataset, handling pagination."""
     orq_api_key = env_raw('ORQ_API_KEY')
@@ -512,7 +525,7 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
             'Fetching datasets from the ORQ platform requires ORQ_API_KEY to be set. '
             'Alternatively, pass a local file path as the dataset argument.'
         )
-        raise ValueError(msg)
+        raise CredentialError(msg)
     # resolve_orq_client, not a bare Orq(...): a dataset must come from the host
     # the run is pointed at (ORQ_BASE_URL), not always prod.
     import httpx
@@ -534,7 +547,7 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
             # An unknown id's 404 body fails the SDK's own schema and surfaces as a
             # ResponseValidationError whose text is a pydantic dump, so report the
             # status and body instead and keep the dump on __cause__.
-            detail = f'HTTP {e.status_code}: {e.body}' if isinstance(e, OrqError) else str(e)
+            detail = f'HTTP {e.status_code}: {_orq_error_message(e.body)}' if isinstance(e, OrqError) else str(e)
             page = f' (page after datapoint {cursor})' if cursor else ''
             msg = (
                 f'Failed to fetch red team dataset orq:{dataset_id} from the ORQ platform{page}: {detail}. '

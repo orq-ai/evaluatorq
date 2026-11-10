@@ -126,10 +126,18 @@ class TestOrqDatasetFetchError:
         def _not_found(request: httpx.Request) -> httpx.Response:
             return httpx.Response(404, json={'code': 404, 'error': 'Dataset not found'})
 
-        with pytest.raises(DatasetError, match=r'orq:not-a-real-id.*HTTP 404') as ei:
+        with pytest.raises(DatasetError, match=r'orq:not-a-real-id.*HTTP 404: Dataset not found\.') as ei:
             self._load_with_transport(monkeypatch, _not_found)
         assert isinstance(ei.value.__cause__, ResponseValidationError)
         assert 'valid string' not in str(ei.value)
+
+    def test_missing_api_key_raises_credential_error(self, monkeypatch):
+        from evaluatorq.redteam.exceptions import CredentialError
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+        monkeypatch.delenv('ORQ_API_KEY', raising=False)
+        with pytest.raises(CredentialError, match='ORQ_API_KEY'):
+            evaluatorq_bridge.load_owasp_agentic_dataset('orq:some-id')
 
     def test_network_error_raises_dataset_error(self, monkeypatch):
         import httpx
