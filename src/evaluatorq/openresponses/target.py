@@ -10,6 +10,7 @@ from loguru import logger
 from typing_extensions import Self
 
 from evaluatorq.common.llm_call import (
+    apply_pipeline_metadata,
     is_responses_reasoning_rejection,
     remember_responses_reasoning_rejection,
     strip_known_rejected_responses_reasoning,
@@ -19,7 +20,7 @@ from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS
 from evaluatorq.common.prompt_cache import caching_applies, mark_responses_input
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
-from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
+from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message, ToolInfo
 from evaluatorq.openresponses.client import build_simulation_client
@@ -256,10 +257,8 @@ class OrqResponsesTarget(AgentTarget):
         responses_input: str | list[dict[str, Any]],
         timeout_s: float | None,
     ) -> AgentResponse:
-        # Metadata is a native Responses field on every endpoint. Threads are
-        # an Orq-router extension, so direct OpenAI-compatible endpoints must
-        # not receive them in ``extra_body``.
-        metadata = pipeline_metadata()
+        # Threads are an Orq-router extension, so direct OpenAI-compatible
+        # endpoints must not receive them in ``extra_body``.
         routes_through_orq = client_routes_through_orq(self._client)
         body_extra = thread_body_param() if routes_through_orq else {}
         # Agents with memory tools reject the call outright without a memory
@@ -275,14 +274,13 @@ class OrqResponsesTarget(AgentTarget):
             call_params['tools'] = self.tools
         if self.instructions is not None:
             call_params['instructions'] = self.instructions
-        if metadata:
-            call_params['metadata'] = metadata
         if body_extra:
             call_params['extra_body'] = body_extra
         kwargs: dict[str, Any] = {
             'model': self.config.model,
             **self.config.request_params(api='responses', **call_params),
         }
+        apply_pipeline_metadata(kwargs, client=self._client, api='responses')
         # Same memo `common.llm_call.execute_response` uses, so a rejection learned
         # on either path short-circuits the other.
         strip_known_rejected_responses_reasoning(self.config.model, kwargs)

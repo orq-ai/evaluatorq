@@ -1011,11 +1011,9 @@ class LLMConfig(BaseModel):
         OpenAI client just because ``ORQ_API_KEY`` is in the environment for
         tracing/result-upload.
 
-        Run-attribution ``metadata`` is NOT merged here: calls that route through
-        execute_chat_completion/parse get it natively
-        (llm_call.apply_pipeline_metadata); native Chat/Responses call sites use
-        top-level metadata, while Orq-agent SDK calls use pipeline_metadata_param()
-        as a top-level request kwarg.
+        Run-attribution ``metadata`` is NOT merged here: OpenAI-client call sites get it
+        from ``llm_call.apply_pipeline_metadata``, and Orq SDK calls use
+        ``pipeline_metadata_param()``.
         """
         from evaluatorq.common.llm_client import client_routes_through_orq
 

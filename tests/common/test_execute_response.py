@@ -400,6 +400,33 @@ async def test_pipeline_metadata_reaches_parse_path_too(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(('extra', 'expect_metadata'), [({}, True), ({'store': False}, False)])
+async def test_direct_openai_responses_metadata_follows_store(
+    monkeypatch: pytest.MonkeyPatch, extra: dict[str, bool], expect_metadata: bool
+) -> None:
+    """The Responses API defaults store=true, so metadata is sent off-Orq unless store=False."""
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    from evaluatorq.common.thread_context import evaluatorq_pipeline
+
+    client = _orq_client()
+    client.base_url = 'https://api.openai.com/v1'
+    with evaluatorq_pipeline('red_teaming'):
+        await execute_response(
+            client=client,
+            model='m',
+            messages=[{'role': 'user', 'content': 'x'}],
+            span=None,
+            timeout_s=5.0,
+            extra_kwargs=extra,
+        )
+    kwargs = client.responses.create.call_args.kwargs
+    if expect_metadata:
+        assert kwargs['metadata'] == {'evaluatorq_pipeline': 'red_teaming'}
+    else:
+        assert 'metadata' not in kwargs
+
+
+@pytest.mark.asyncio
 async def test_caller_metadata_wins_over_pipeline_label(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
     from evaluatorq.common.thread_context import evaluatorq_pipeline
