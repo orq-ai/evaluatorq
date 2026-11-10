@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -52,7 +53,7 @@ from evaluatorq.common.model_catalogue import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping
+    from collections.abc import Callable, Iterable
 
     from openai import AsyncOpenAI
 
@@ -239,16 +240,61 @@ SUPERSEDED: dict[str, str] = {
 }
 
 
+# Host, region and serving-variant noise that makes one model look like several.
+# `openai/gpt-5.6-terra`, `azure/global.gpt-5.6-terra` and `openai/eu.gpt-5.6-terra`
+# are one model; a successor check that counts them separately reports work that
+# does not exist.
+_REGION_PREFIXES: tuple[str, ...] = ('eu.', 'us.', 'apac.', 'global.', 'au.', 'jp.')
+# Bedrock in-region routes spell the AWS region out: `aws/us-east-1.openai.gpt-5.4`.
+_AWS_REGION_PREFIX = re.compile(r'^[a-z]{2}(?:-[a-z]+)+-\d+\.')
+# Vendor tokens `model_identity` strips when one leads a dotted model name, which
+# is how Bedrock spells an id. A vendor whose name can open a legitimate model
+# name (the way 'gpt-5.6-terra' opens with a version, not a vendor) would make
+# `model_identity` truncate it, so this list is not the family list.
+_VENDOR_TOKENS: frozenset[str] = frozenset({
+    'openai',
+    'anthropic',
+    'google',
+    'zhipu',
+    'moonshot',
+    'minimax',
+    'deepseek',
+    'alibaba',
+    'meta',
+    'mistral',
+    'xai',
+})
+
+
+def model_identity(router_id: str) -> str:
+    """The model behind a router ID, with host, region, vendor and version stripped.
+
+    Two IDs sharing an identity are the same weights served twice, so seating one
+    means the other needs no separate review. Bedrock is the awkward case:
+    `aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0` and
+    `anthropic/claude-haiku-4-5-20251001` are one model, and EU Region seats the
+    first while Balanced Trio used to seat the second.
+    In-region Bedrock routes (`aws/us-east-1.openai.gpt-5.4`) and host region
+    tags (`@eu`) are stripped the same way.
+    """
+    name = _AWS_REGION_PREFIX.sub('', router_id.split('/')[-1].lower())
+    for prefix in _REGION_PREFIXES:
+        name = name.removeprefix(prefix)
+    head, _, tail = name.partition('.')
+    if tail and head in _VENDOR_TOKENS:
+        name = tail
+    # Bedrock version tags and host region tags (`munito/.../glm-5.3-flash@eu`).
+    return re.sub(r'(-v\d+:\d+|@[a-z-]+)$', '', name)
+
+
 def _lineage(router_id: str) -> tuple[str, tuple[int, ...], str] | None:
     """(stem, version, tier) from a router ID: `gpt-5.6-luna` is ('gpt-', (5, 6), '-luna').
 
-    Hosts, regions, build dates and Bedrock suffixes are stripped; dashed
+    Read off `model_identity`, so hosts, regions (including in-region Bedrock
+    routes), dotted vendors and Bedrock suffixes are stripped, then build dates; dashed
     Claude versions (`haiku-5-5`) read as dotted. None where no version parses.
     """
-    name = router_id.split('/')[-1].lower()
-    for prefix in ('eu.', 'us.', 'apac.', 'global.'):
-        name = name.removeprefix(prefix)
-    name = re.sub(r'-v\d+:\d+$', '', name)
+    name = model_identity(router_id)
     name = re.sub(r'-?\d{8}$', '', name)
     name = re.sub(r'-\d{4}$', '', name)
     if name.startswith('claude'):
@@ -260,10 +306,11 @@ def _lineage(router_id: str) -> tuple[str, tuple[int, ...], str] | None:
 
 
 def derived_successor(router_id: str, garden: Mapping[str, ScoredModel]) -> str | None:
-    """A rankable router ID in the garden with the same stem and tier and a higher version, if any.
+    """A seatable router ID in the garden with the same stem and tier and a higher version, if any.
 
-    The successor must itself be comparable (scored at its default, not free), or
-    an unrankable newer card would retire a model that still works.
+    The successor must itself be comparable (scored at its default, not free) and
+    seatable (not disabled, NEVER_SEAT, UNROUTABLE, SUPERSEDED or under the floor),
+    or a newer card nothing may be seated on would retire a model that still works.
 
     The highest version wins; ties go to the lowest router ID. Cross-tier
     successors (`glm-5.2` to `glm-5.3-flash`) are not derivable and live in
@@ -275,7 +322,8 @@ def derived_successor(router_id: str, garden: Mapping[str, ScoredModel]) -> str 
     newer = []
     for other, candidate in garden.items():
         theirs = _lineage(other)
-        if candidate.comparable and theirs and theirs[0] == mine[0] and theirs[2] == mine[2] and theirs[1] > mine[1]:
+        same_lineage = theirs is not None and theirs[0] == mine[0] and theirs[2] == mine[2]
+        if same_lineage and theirs[1] > mine[1] and candidate.comparable and seatable(candidate):
             newer.append((theirs[1], other))
     return min(newer, key=lambda pair: (tuple(-v for v in pair[0]), pair[1]))[1] if newer else None
 
@@ -298,12 +346,27 @@ def headline_contradicts_its_own_rung(model: ScoredModel) -> bool:
     )
 
 
+def _effort_ladder(v2: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    """The card's `reasoning_efforts` rungs, keeping only well-formed ones.
+
+    External data: a ladder that is not a mapping, or a rung that is not one,
+    reads as absent rather than raising and taking the whole garden down.
+    """
+    ladder = v2.get('reasoning_efforts')
+    if not isinstance(ladder, Mapping):
+        return {}
+    return {effort: entry for effort, entry in ladder.items() if isinstance(entry, Mapping)}
+
+
 def _scored_effort(v2: Mapping[str, Any]) -> str | None:
     """The effort the card's headline index was measured at, via its benchmark slug."""
     slug, index = v2.get('aa_slug'), v2.get('intelligence_index')
-    entries = (v2.get('reasoning_efforts') or {}).items()
     return next(
-        (e for e, entry in entries if entry.get('aa_slug') == slug and entry.get('intelligence_index') == index),
+        (
+            e
+            for e, entry in _effort_ladder(v2).items()
+            if entry.get('aa_slug') == slug and entry.get('intelligence_index') == index
+        ),
         None,
     )
 
@@ -346,8 +409,8 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
         headline_effort=_scored_effort(v2),
         effort_indices={
             e: entry['intelligence_index']
-            for e, entry in (v2.get('reasoning_efforts') or {}).items()
-            if isinstance(entry, dict) and entry.get('intelligence_index') is not None
+            for e, entry in _effort_ladder(v2).items()
+            if entry.get('intelligence_index') is not None
         },
         effort_parameter=effort_parameter,
         default_effort=default_effort,
@@ -650,6 +713,11 @@ def upgrade_verdict(incumbent: ScoredModel, successor: ScoredModel) -> tuple[str
     """
     if (reason := unseatable_reason(successor)) is not None:
         return 'trade', f'{successor.router_id} cannot hold a seat: {reason}. This goes to a human.'
+    if not region_compatible(successor, incumbent):
+        return 'trade', (
+            f'{successor.router_id} ({successor.region}) would move {incumbent.router_id} '
+            f'({incumbent.region}) to another region. This goes to a human.'
+        )
     # A dead incumbent is replaced by any seatable successor; dominance is moot.
     if (reason := unseatable_reason(incumbent)) is not None:
         return 'seat', f'{incumbent.router_id} cannot hold a seat ({reason}); {successor.router_id} can.'

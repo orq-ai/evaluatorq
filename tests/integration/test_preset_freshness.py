@@ -295,8 +295,10 @@ def _unreviewed_successors(listed: Mapping[str, int | None]) -> dict[str, str]:
     for router_id in all_router_ids():
         if router_id not in listed:
             continue
+        # A card with no `created` stamp cannot date its lineage.
+        if (stamp := earliest.get(model_identity(router_id))) is None:
+            continue
         family = judge_family(router_id)
-        stamp = earliest[model_identity(router_id)]
         newest_seated[family] = max(newest_seated.get(family, 0), stamp)
 
     candidates: dict[str, str] = {}
@@ -312,7 +314,10 @@ def _unreviewed_successors(listed: Mapping[str, int | None]) -> dict[str, str]:
             family = judge_family(model_id)
         except ValueError:
             continue  # unclassifiable lineage cannot be a successor to ours
-        if family in newest_seated and earliest[identity] > newest_seated[family]:
+        listed_at = earliest.get(identity)
+        if listed_at is None:
+            continue  # undated: cannot be shown newer than a seat
+        if family in newest_seated and listed_at > newest_seated[family]:
             candidates[identity] = model_id
 
     return candidates
@@ -344,6 +349,11 @@ class TestSuccessorDating:
     def test_a_model_first_listed_after_the_seat_is_a_successor(self):
         listed = {'openai/gpt-6-luna': 100 * self.DAY, 'openai/gpt-7-luna': 200 * self.DAY}
         assert _unreviewed_successors(listed)['gpt-7-luna'] == 'openai/gpt-7-luna'
+
+    def test_an_undated_listing_is_skipped_not_a_crash(self):
+        """`public_listings` returns None for a card with no `created`; one must not fail the weekly run."""
+        listed = {'openai/gpt-6-luna': None, 'openai/gpt-7-luna': None, 'openai/gpt-6-sol': 100 * self.DAY}
+        assert 'gpt-7-luna' not in _unreviewed_successors(listed)
 
     def test_seconds_and_milliseconds_stamps_date_the_same(self):
         assert _earliest_listing({'a/x': 1_700_000_000, 'b/x': 1_700_000_000_000}) == {'x': 1_700_000_000_000}
@@ -413,12 +423,15 @@ class TestFrontier:
         global frontier check would push all three seats onto whichever vendor
         is cheapest, recreating the correlated errors the panel exists to cancel.
         """
-        models = list(garden.values())
+        # Unlisted seats (reviewed routes with no card) are incumbents too, or a
+        # same-family model could dominate one without this check noticing.
+        reachable = with_aa_fills(with_unlisted_routes(garden))
+        models = list(reachable.values())
 
         stale = {}
         for preset in PRESETS.values():
             for judge in preset.judges:
-                incumbent = garden.get(judge)
+                incumbent = reachable.get(judge)
                 if incumbent is None:
                     continue
                 upgrades = in_family_upgrades(incumbent, models, judge_family, model_identity)
@@ -433,12 +446,13 @@ class TestFrontier:
 
     def test_exemptions_are_dropped_once_they_stop_applying(self, garden):
         """An exemption whose upgrade has gone away is stale reasoning."""
-        models = list(garden.values())
+        reachable = with_aa_fills(with_unlisted_routes(garden))
+        models = list(reachable.values())
 
         pointless = [
             judge
             for judge in DOMINANCE_EXEMPTIONS
-            if judge in garden and not in_family_upgrades(garden[judge], models, judge_family, model_identity)
+            if judge in reachable and not in_family_upgrades(reachable[judge], models, judge_family, model_identity)
         ]
 
         assert not pointless, (

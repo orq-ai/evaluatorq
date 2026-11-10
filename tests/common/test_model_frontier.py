@@ -230,6 +230,16 @@ class TestSelfContradictingCards:
         assert verdict == 'trade'
         assert 'never seated' in reason
 
+    def test_upgrade_verdict_never_moves_a_seat_to_another_region(self):
+        """Even a dead incumbent is not replaced by an EU-pinned successor: the swap would pin the panel."""
+        for incumbent in (scored('x/old', 40.0, 2.0), scored('x/old', 40.0, 2.0, enabled=False)):
+            successor = scored('x/eu.new', 60.0, 1.0, region='europe')
+
+            verdict, reason = upgrade_verdict(incumbent, successor)
+
+            assert verdict == 'trade'
+            assert 'another region' in reason
+
     def test_upgrade_verdict_replaces_a_dead_incumbent(self):
         """A disabled incumbent is replaced even by a successor that does not dominate it."""
         incumbent = scored('x/old', 50.0, 1.0, enabled=False)
@@ -410,6 +420,26 @@ class TestSuperseded:
 
         assert derived_successor('a/m-1', garden) is None
 
+    def test_an_unseatable_newer_card_does_not_retire_a_working_model(self):
+        """A disabled successor cannot take the seat, so the older version keeps its place in the cheap ranking."""
+        garden = {m.router_id: m for m in (scored('a/m-1', 30.0, 0.2), scored('a/m-2', 40.0, 0.2, enabled=False))}
+
+        assert derived_successor('a/m-1', garden) is None
+        assert [m.router_id for m in rank_cheapest_top(garden, lambda rid: rid.split('/')[0], 1.0)] == ['a/m-1']
+
+    @pytest.mark.parametrize(
+        ('old', 'new'),
+        [
+            ('aws/us-east-1.openai.gpt-5.4', 'aws/us-east-1.openai.gpt-5.6'),
+            ('aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0', 'aws/eu.anthropic.claude-haiku-5-5'),
+        ],
+    )
+    def test_bedrock_routes_have_a_lineage(self, old, new):
+        """In-region and dotted-vendor Bedrock ids parse, so a newer one retires the older."""
+        garden = {m.router_id: m for m in (scored(old, 30.0, 0.2), scored(new, 40.0, 0.2))}
+
+        assert derived_successor(old, garden) == new
+
     def test_superseded_models_are_refused_and_dropped_from_the_cheap_ranking(self):
         garden = {m.router_id: m for m in (scored('p/old-1', 40.0, 0.2), scored('p/old-2', 30.0, 0.2))}
         assert [m.router_id for m in rank_cheapest_top(garden, lambda rid: rid.split('/')[0] + rid[-1], 1.0)] == [
@@ -449,6 +479,17 @@ def _v2_card(v2: dict[str, Any]) -> dict[str, object]:
 
 class TestEffortCapture:
     """A host default must not relabel an AA benchmark's operating point."""
+
+    @pytest.mark.parametrize('ladder', [['high'], 'high', {'high': 'not-a-rung', 'low': None}])
+    def test_a_malformed_ladder_reads_as_absent(self, ladder):
+        """External data: a bad `reasoning_efforts` must not take the whole garden down."""
+        model = scored_model_from_card(
+            _v2_card({'aa_slug': 'm', 'intelligence_index': 40.0, 'reasoning_efforts': ladder})
+        )
+
+        assert model is not None
+        assert model.effort_indices == {}
+        assert model.headline_effort is None
 
     @pytest.mark.parametrize('host_default', ['none', 'max'])
     def test_a_host_default_does_not_prove_the_headline_was_measured_there(self, host_default):

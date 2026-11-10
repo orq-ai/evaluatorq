@@ -44,7 +44,6 @@ free to be a router, since it has no panel to correlate.
 
 from __future__ import annotations
 
-import re
 import warnings
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -55,6 +54,10 @@ from pydantic import BaseModel, Field, model_validator
 
 from evaluatorq.common.jury import AggregatorName, provider_family
 from evaluatorq.common.model_frontier import ScoredModel, load_garden_sync, with_unlisted_routes
+
+# Re-exported: model_identity moved to common.model_frontier so the frontier's
+# lineage parsing can share it without importing this module.
+from evaluatorq.common.model_frontier import model_identity as model_identity
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -102,53 +105,6 @@ def captured_at() -> str:
         stacklevel=2,
     )
     return datetime.now(timezone.utc).date().isoformat()
-
-
-# Host, region and serving-variant noise that makes one model look like several.
-# `openai/gpt-5.6-terra`, `azure/global.gpt-5.6-terra` and `openai/eu.gpt-5.6-terra`
-# are one model; a successor check that counts them separately reports work that
-# does not exist.
-_REGION_PREFIXES: tuple[str, ...] = ('eu.', 'us.', 'apac.', 'global.', 'au.', 'jp.')
-# Bedrock in-region routes spell the AWS region out: `aws/us-east-1.openai.gpt-5.4`.
-_AWS_REGION_PREFIX = re.compile(r'^[a-z]{2}(?:-[a-z]+)+-\d+\.')
-# Vendor tokens `model_identity` strips when one leads a dotted model name, which
-# is how Bedrock spells an id. A vendor whose name can open a legitimate model
-# name (the way 'gpt-5.6-terra' opens with a version, not a vendor) would make
-# `model_identity` truncate it, so this list is not the family list.
-_VENDOR_TOKENS: frozenset[str] = frozenset({
-    'openai',
-    'anthropic',
-    'google',
-    'zhipu',
-    'moonshot',
-    'minimax',
-    'deepseek',
-    'alibaba',
-    'meta',
-    'mistral',
-    'xai',
-})
-
-
-def model_identity(router_id: str) -> str:
-    """The model behind a router ID, with host, region, vendor and version stripped.
-
-    Two IDs sharing an identity are the same weights served twice, so seating one
-    means the other needs no separate review. Bedrock is the awkward case:
-    `aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0` and
-    `anthropic/claude-haiku-4-5-20251001` are one model, and EU Region seats the
-    first while Balanced Trio used to seat the second.
-    In-region Bedrock routes (`aws/us-east-1.openai.gpt-5.4`) and host region
-    tags (`@eu`) are stripped the same way.
-    """
-    name = _AWS_REGION_PREFIX.sub('', router_id.split('/')[-1].lower())
-    for prefix in _REGION_PREFIXES:
-        name = name.removeprefix(prefix)
-    head, _, tail = name.partition('.')
-    if tail and head in _VENDOR_TOKENS:
-        name = tail
-    # Bedrock version tags and host region tags (`munito/.../glm-5.3-flash@eu`).
-    return re.sub(r'(-v\d+:\d+|@[a-z-]+)$', '', name)
 
 
 def judge_family(router_id: str) -> str:
