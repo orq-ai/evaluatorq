@@ -54,7 +54,7 @@ Both string forms are parsed the same way in Python and on the CLI, and the `mod
     await red_team(target="deployment:my-key", mode="static")
     ```
 
-The first three need `ORQ_API_KEY` in the environment. Python code does not load `.env` automatically, so see [Configuration](../configuration.md). `OrqResponsesTarget` is the exception: it defaults to `require_orq=False` and falls back to `OPENAI_API_KEY`, so it runs without an Orq account until you pass `require_orq=True` or a `model="agent/<key>"`.
+The first three need `ORQ_API_KEY` in the environment. Python code does not load `.env` automatically, so see [Configuration](../configuration.md). `OrqResponsesTarget` is the exception: it defaults to `require_orq=False` and falls back to `OPENAI_API_KEY`, then to `ANTHROPIC_API_KEY` with a Claude model id, so it runs without an Orq account until you pass `require_orq=True` or a `model="agent/<key>"`. With `require_orq=True`, which `red_team(target="agent:...")` always uses, neither fallback applies and a missing `ORQ_API_KEY` raises the missing-credentials error naming `ORQ_API_KEY`.
 
 ## The quick path: `OpenAIModelTarget`
 
@@ -177,7 +177,7 @@ The wrapped function costs nothing to call, but the run around it does. The exam
 
 ```bash
 uv add "evaluatorq[redteam]"
-export ORQ_API_KEY=...          # or OPENAI_API_KEY
+export ORQ_API_KEY=...          # or OPENAI_API_KEY, or ANTHROPIC_API_KEY with Claude model ids (see Anthropic SDK clients)
 ```
 
 !!! warning "A red-team run uploads an Experiment"

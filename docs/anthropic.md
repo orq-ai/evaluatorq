@@ -14,7 +14,7 @@ The extra installs `anthropic>=0.75.0`. Nothing else in evaluatorq imports it, s
 
 ## Without injecting a client
 
-You can skip the client when the environment carries the key. With `ANTHROPIC_API_KEY` set and neither `ORQ_API_KEY` nor `OPENAI_API_KEY`, evaluatorq builds an `AsyncAnthropic` itself and wraps it, so the simulation CLI and every Python entry point work with no code. In Python, `red_team(...)` and `simulate(...)` resolve the client themselves when only `ANTHROPIC_API_KEY` is set. The red-team CLI targets are Orq agents and deployments, which need `ORQ_API_KEY`, so a Claude model as the red-team target is Python-only, through `OpenAIModelTarget` (see [Test a Claude target](#test-a-claude-target)). The command below simulates conversations with a Claude model as the target:
+You can skip the client when the environment carries the key. With `ANTHROPIC_API_KEY` set and neither `ORQ_API_KEY` nor `OPENAI_API_KEY`, evaluatorq builds an `AsyncAnthropic` itself and wraps it, so the simulation CLI and every Python entry point work with no code. In Python, `red_team()`, `simulate()` and `generate_and_simulate()` resolve the client themselves when only `ANTHROPIC_API_KEY` is set and the three roles are set to Claude ids. The red-team CLI targets are Orq agents and deployments, which need `ORQ_API_KEY`, so a Claude model as the red-team target is Python-only, through `OpenAIModelTarget` (see [Test a Claude target](#test-a-claude-target)). The command below simulates conversations with a Claude model as the target:
 
 ```bash
 export ANTHROPIC_API_KEY=...

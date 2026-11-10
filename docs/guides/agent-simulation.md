@@ -34,6 +34,15 @@ Configure the simulator and judge with `LLMCallConfig`. The former `AgentConfig`
     which installs into the interpreter you just named rather than whichever
     `pip` happens to be first on your `PATH`.
 
+=== "Anthropic"
+
+    Requires the simulation extra, the `anthropic` extra, and an `ANTHROPIC_API_KEY` with no `ORQ_API_KEY` or `OPENAI_API_KEY` set, and every model role set to a Claude id. See [Go Anthropic-direct](../configuration.md#go-anthropic-direct):
+
+    ```bash
+    uv add "evaluatorq[simulation,anthropic]"
+    export ANTHROPIC_API_KEY=sk-ant-...
+    ```
+
 ```mermaid
 sequenceDiagram
     participant U as User simulator

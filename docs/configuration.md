@@ -155,11 +155,13 @@ export EVALUATORQ_SMART_MODEL=gpt-6-sol
 eq redteam run -t agent:my-agent
 ```
 
-The classifier role defaults to a model served only by the Orq router, so Ask AI, `eq find`, Insights and the classify judge need `ORQ_API_KEY`.
+The classifier role defaults to a model served only by the Orq router, so Ask AI, `eq find`, Insights and the classify judge need `ORQ_API_KEY` unless you set the classifier role to a Claude id, see [Go Anthropic-direct](#go-anthropic-direct).
 
 ### Go Anthropic-direct
 
-With only `ANTHROPIC_API_KEY` set, evaluatorq builds an `AsyncAnthropic` client from it and wraps it in the [Anthropic adapter](anthropic.md), so red teaming and simulation call Claude directly. The key is the last one tried: `ORQ_API_KEY` wins, then `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`. Unset the first two to use Claude when they are present in your shell. The Anthropic SDK reads its own `ANTHROPIC_BASE_URL` to redirect the calls, and evaluatorq adds no variable for it. The client needs the `anthropic` extra, and a run with only `ANTHROPIC_API_KEY` set and no extra raises an `ImportError` that names `evaluatorq[anthropic]`.
+With only `ANTHROPIC_API_KEY` set, evaluatorq builds an `AsyncAnthropic` client from it and wraps it in the [Anthropic adapter](anthropic.md), so red teaming and simulation call Claude directly. The key is the last one tried: `ORQ_API_KEY` wins, then `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`. Unset the first two to use Claude when they are present in your shell. The Anthropic SDK reads `ANTHROPIC_BASE_URL` itself and evaluatorq adds no variable for it, so a value left over from another tool redirects your requests. The client needs the `anthropic` extra, and a run with only `ANTHROPIC_API_KEY` set and no extra stops with a missing-credentials error that names `evaluatorq[anthropic]`.
+
+A stray `ANTHROPIC_API_KEY` with the built-in role defaults stops the run before any work, with one error that says Anthropic was chosen because it is the only LLM key set and names the role variables to change.
 
 Every model role needs a Claude id, because the built-in defaults are `openai/` ids that an Anthropic client refuses:
 
@@ -168,10 +170,10 @@ export ANTHROPIC_API_KEY=...
 export EVALUATORQ_SMART_MODEL=claude-opus-5-5
 export EVALUATORQ_FAST_MODEL=claude-haiku-5-5
 export EVALUATORQ_CLASSIFIER_MODEL=claude-sonnet-5-5
-eq redteam run -t agent:my-agent
+eq sim run --agent-description 'A support bot for a bank' --openai-model claude-sonnet-5-5
 ```
 
-Targets that need the Orq router, such as `agent:<key>`, still need `ORQ_API_KEY`, and cost stays unpriced without it. See [Anthropic SDK clients](anthropic.md#without-injecting-a-client).
+The red-team CLI targets are Orq agents and deployments, which need `ORQ_API_KEY`, so a Claude model as the red-team target is Python-only, through `OpenAIModelTarget`. Targets that need the Orq router, such as `agent:<key>`, still need `ORQ_API_KEY`, and cost stays unpriced without it. See [Anthropic SDK clients](anthropic.md#without-injecting-a-client).
 
 ## Full environment variable reference
 
