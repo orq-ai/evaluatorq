@@ -13,6 +13,7 @@ from evaluatorq.common.content_filter import (
     is_content_filter_error,
     regenerate_on_content_filter,
 )
+from tests.common.llm_error_factories import anthropic_status
 
 
 def _cf_error(code: str = 'content_filter') -> APIStatusError:
@@ -54,6 +55,10 @@ class TestClassifiers:
 
     def test_is_content_filter_error_on_body(self):
         assert is_content_filter_error(_BodyOnlyError({'code': 'content_filter'})) is True
+
+    def test_is_content_filter_error_false_for_an_anthropic_error(self):
+        # The helper keys on the OpenAI/router error shape; an Anthropic 400 carries no such code.
+        assert is_content_filter_error(anthropic_status(400, 'content_filter')) is False
 
     def test_is_content_filter_error_false_for_other(self):
         assert is_content_filter_error(_cf_error('rate_limit')) is False

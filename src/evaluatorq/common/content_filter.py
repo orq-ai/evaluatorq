@@ -38,8 +38,9 @@ def is_content_filter_error(exc: BaseException) -> bool:
     """Return True if ``exc`` is a provider content-filter block surfaced as an error.
 
     Keys on the structured error ``code`` (exposed by the OpenAI SDK as ``exc.code`` and
-    mirrored in the JSON body), NOT on message prose, so it stays provider-agnostic for
-    any block the router normalizes to that code.
+    mirrored in the JSON body), NOT on message prose, so it recognises any block the
+    router normalizes to that code. It keys on the OpenAI/router error shape: an Anthropic
+    SDK error carries no such code and is never reported as a content-filter block.
     """
     if getattr(exc, 'code', None) == 'content_filter':
         return True

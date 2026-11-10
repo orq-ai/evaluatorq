@@ -12,6 +12,7 @@ from openai import BadRequestError
 
 from evaluatorq.common import llm_call
 from evaluatorq.common.llm_call import execute_chat_completion
+from tests.common.llm_error_factories import STATUS_FACTORIES
 
 
 def _bad_request(message: str) -> BadRequestError:
@@ -197,6 +198,31 @@ async def test_drops_reasoning_effort_and_retries_when_model_rejects_it(monkeypa
     # The (model, has_tools) pair is remembered so subsequent like-shaped calls
     # strip the param up front. This call carried no tools.
     assert ('m', False) in llm_call._REASONING_EFFORT_REJECTORS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('make', STATUS_FACTORIES)
+async def test_drops_reasoning_effort_on_a_400_from_either_sdk(
+    monkeypatch: pytest.MonkeyPatch, make: Any
+) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    monkeypatch.setattr(llm_call, '_REASONING_EFFORT_REJECTORS', set())
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        side_effect=[make(400, 'Unknown parameter: reasoning_effort'), _fake_response()]
+    )
+
+    await execute_chat_completion(
+        client=client,
+        model='m',
+        messages=[{'role': 'user', 'content': 'x'}],
+        span=None,
+        timeout_s=5.0,
+        extra_kwargs={'reasoning_effort': 'low'},
+    )
+
+    assert client.chat.completions.create.await_count == 2
+    assert 'reasoning_effort' not in client.chat.completions.create.await_args.kwargs
 
 
 @pytest.mark.asyncio
