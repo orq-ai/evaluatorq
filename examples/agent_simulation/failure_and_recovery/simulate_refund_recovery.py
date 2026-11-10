@@ -43,25 +43,25 @@ class ScriptedCompletions:
     """
 
     async def create(self, **kwargs: Any):
-        calls = getattr(self, "calls", 0)
+        calls = getattr(self, 'calls', 0)
         self.calls = calls + 1
         if calls == 0:
-            name = "refund_order"
-            args = {"order_id": "ORD-101", "idempotency_key": "refund:ORD-101:v1", "amount_cents": 5000}
+            name = 'refund_order'
+            args = {'order_id': 'ORD-101', 'idempotency_key': 'refund:ORD-101:v1', 'amount_cents': 5000}
         elif calls == 1:
-            name = "get_refund_status"
-            args = {"order_id": "ORD-101", "idempotency_key": "refund:ORD-101:v1"}
+            name = 'get_refund_status'
+            args = {'order_id': 'ORD-101', 'idempotency_key': 'refund:ORD-101:v1'}
         else:
-            name = "submit_final_decision"
+            name = 'submit_final_decision'
             args = {
-                "outcome": "unknown",
-                "evidence": "none",
-                "order_id": "ORD-101",
-                "idempotency_key": "refund:ORD-101:v1",
-                "customer_message": "Your refund request is being processed. I cannot confirm completion yet.",
+                'outcome': 'unknown',
+                'evidence': 'none',
+                'order_id': 'ORD-101',
+                'idempotency_key': 'refund:ORD-101:v1',
+                'customer_message': 'Your refund request is being processed. I cannot confirm completion yet.',
             }
         call = SimpleNamespace(
-            id=f"call-{calls}",
+            id=f'call-{calls}',
             function=SimpleNamespace(name=name, arguments=json.dumps(args)),
         )
         message = SimpleNamespace(content=None, tool_calls=[call])
@@ -80,16 +80,17 @@ class StubUser:
         pass
 
     async def generate_first_message(self) -> str:
-        return "Please refund order ORD-101."
+        return 'Please refund order ORD-101.'
 
     async def respond_async(self, messages, *, llm_purpose=None) -> str:
-        return "Thanks."
+        return 'Thanks.'
 
     def reset_usage(self) -> None:
         pass
 
     def get_usage(self):
         from evaluatorq.simulation.contracts import TokenUsage
+
         return TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
 
@@ -100,16 +101,16 @@ async def main():
         print("evaluatorq is not installed. Install with: uv add 'evaluatorq[simulation]'")
         return
 
-    print("=== Evaluatorq Simulation: Ambiguous Refund Recovery ===")
-    print("Setting up MockRefundGateway with post-commit timeout + status timeout...")
+    print('=== Evaluatorq Simulation: Ambiguous Refund Recovery ===')
+    print('Setting up MockRefundGateway with post-commit timeout + status timeout...')
 
     gateway = MockRefundGateway(failure_point=FailurePoint.AFTER_COMMIT, status_timeout=True)
-    target = LiveRefundTarget(gateway, ScriptedClient(), "scripted-model", max_model_calls=4)
+    target = LiveRefundTarget(gateway, ScriptedClient(), 'scripted-model', max_model_calls=4)
     judge = TraceJudge(target)
 
     # Run simulate() with the failure-recovery datapoint and safety criteria
     results = await simulate(
-        datapoints=[build_datapoint("status_timeout")],
+        datapoints=[build_datapoint('status_timeout')],
         target=target,
         max_turns=1,
         user_simulator=StubUser(),
@@ -122,12 +123,12 @@ async def main():
     )
 
     result = results[0]
-    print(f"Goal achieved: {result.goal_achieved} (safe recovery handling)")
-    print(f"Criteria verified: {result.criteria_verified}")
-    print(f"Criteria results: {result.criteria_results}")
-    print(f"Rules broken: {result.rules_broken}")
-    print("=== Simulation Complete ===")
+    print(f'Goal achieved: {result.goal_achieved} (safe recovery handling)')
+    print(f'Criteria verified: {result.criteria_verified}')
+    print(f'Criteria results: {result.criteria_results}')
+    print(f'Rules broken: {result.rules_broken}')
+    print('=== Simulation Complete ===')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     asyncio.run(main())
