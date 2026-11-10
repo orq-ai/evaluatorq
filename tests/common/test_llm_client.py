@@ -45,3 +45,74 @@ def test_non_orq_client_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> No
     uploads always go to Orq, resolved from env."""
     monkeypatch.setenv("ORQ_BASE_URL", "https://my.staging.orq.ai")
     assert resolve_results_base_url(_client("https://api.openai.com/v1")) == "https://my.staging.orq.ai"
+
+
+# --- ANTHROPIC_API_KEY resolution (RES-1875) ---------------------------------
+
+
+def _only_env(monkeypatch: pytest.MonkeyPatch, **keep: str) -> None:
+    for name in ('ORQ_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in keep.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_anthropic_only_env_resolves_an_owned_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.anthropic import AnthropicLLMClient
+    from evaluatorq.common.llm_client import resolve_llm_client
+
+    _only_env(monkeypatch, ANTHROPIC_API_KEY='sk-ant-test')
+    resolved = resolve_llm_client(max_retries=5)
+    assert isinstance(resolved.client, AnthropicLLMClient)
+    assert resolved.client.max_retries == 5
+    assert resolved.owned is True
+    assert resolved.routes_through_orq is False
+
+
+def test_anthropic_branch_uses_the_sdk_default_retries_when_none_is_passed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openai import DEFAULT_MAX_RETRIES
+
+    from evaluatorq.common.llm_client import resolve_llm_client
+
+    _only_env(monkeypatch, ANTHROPIC_API_KEY='sk-ant-test')
+    assert resolve_llm_client().client.max_retries == DEFAULT_MAX_RETRIES
+
+
+def test_orq_and_openai_keys_still_win_over_anthropic(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.common.llm_client import is_anthropic_client, resolve_llm_client
+
+    _only_env(monkeypatch, ANTHROPIC_API_KEY='sk-ant-test', OPENAI_API_KEY='sk-openai-test')
+    assert not is_anthropic_client(resolve_llm_client().client)
+    _only_env(monkeypatch, ANTHROPIC_API_KEY='sk-ant-test', OPENAI_API_KEY='sk-openai-test', ORQ_API_KEY='orq-test')
+    resolved = resolve_llm_client()
+    assert resolved.routes_through_orq is True
+    assert not is_anthropic_client(resolved.client)
+
+
+def test_require_orq_never_falls_through_to_anthropic(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
+
+    _only_env(monkeypatch, ANTHROPIC_API_KEY='sk-ant-test')
+    with pytest.raises(MissingLLMCredentialsError, match='ANTHROPIC_API_KEY'):
+        resolve_llm_client(require_orq=True)
+
+
+def test_missing_credentials_error_names_all_three_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
+
+    _only_env(monkeypatch)
+    with pytest.raises(MissingLLMCredentialsError) as info:
+        resolve_llm_client()
+    for key in ('ORQ_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'):
+        assert key in str(info.value)
+
+
+def test_anthropic_key_without_the_extra_raises_the_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    from evaluatorq.common.llm_client import resolve_llm_client
+
+    _only_env(monkeypatch, ANTHROPIC_API_KEY='sk-ant-test')
+    monkeypatch.setitem(sys.modules, 'anthropic', None)
+    with pytest.raises(ImportError, match=r'evaluatorq\[anthropic\]'):
+        resolve_llm_client()

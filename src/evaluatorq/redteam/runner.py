@@ -776,10 +776,17 @@ def _validate_credentials_and_deps(
     # Also check per-role clients: if either role has a pre-configured client,
     # we don't need global credentials.
     has_role_client = config.attacker.client is not None or config.evaluator.client is not None
-    if llm_client is None and not has_role_client and not env_raw('OPENAI_API_KEY') and not env_raw('ORQ_API_KEY'):
+    if (
+        llm_client is None
+        and not has_role_client
+        and not env_raw('OPENAI_API_KEY')
+        and not env_raw('ORQ_API_KEY')
+        and not env_raw('ANTHROPIC_API_KEY')
+    ):
         raise CredentialError(
             'Missing LLM credentials for attack/evaluation models. '
-            'Set OPENAI_API_KEY for direct OpenAI access, or ORQ_API_KEY to use the ORQ router.'
+            'Set OPENAI_API_KEY for direct OpenAI access, ORQ_API_KEY to use the ORQ router, '
+            'or ANTHROPIC_API_KEY to use Claude directly.'
         )
 
     # Fail fast: static/hybrid runs that pull static datapoints from HuggingFace

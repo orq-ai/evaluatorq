@@ -200,9 +200,10 @@ def _resolve_target(
         return VercelAISdkTarget(vercel_url)
 
     # openai_model
-    if not env_raw('OPENAI_API_KEY') and not env_raw('ORQ_API_KEY'):
+    if not env_raw('OPENAI_API_KEY') and not env_raw('ORQ_API_KEY') and not env_raw('ANTHROPIC_API_KEY'):
         raise typer.BadParameter(
-            '--openai-model requires OPENAI_API_KEY (or ORQ_API_KEY for the AI Router) to be set in the environment.'
+            '--openai-model requires OPENAI_API_KEY (or ORQ_API_KEY for the AI Router, or ANTHROPIC_API_KEY for Claude) '
+            'to be set in the environment.'
         )
     from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
@@ -334,6 +335,8 @@ def _provider_label() -> str:
         return 'Orq router'
     if env_raw('OPENAI_API_KEY'):
         return 'OpenAI-compatible'
+    if env_raw('ANTHROPIC_API_KEY'):
+        return 'Anthropic'
     return 'unresolved provider'
 
 

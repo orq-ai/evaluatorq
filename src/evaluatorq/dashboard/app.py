@@ -183,7 +183,11 @@ def _settings_config(
             ('Selected profile host', profile.server or DEFAULT_ORQ_BASE_URL),
         ))
     env = {row.name: row for row in env_report()}
-    for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
+    for label, var in (
+        ('ORQ API key', 'ORQ_API_KEY'),
+        ('OpenAI API key', 'OPENAI_API_KEY'),
+        ('Anthropic API key', 'ANTHROPIC_API_KEY'),
+    ):
         config.append((label, env[var].value or 'not set'))
     # Runs with an experiment URL supply their own link scope. Otherwise use
     # the selected OAuth workspace or the environment/CLI fallback.

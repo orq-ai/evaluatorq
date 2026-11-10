@@ -80,7 +80,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-It builds its own client from the environment (`ORQ_API_KEY` first, then `OPENAI_API_KEY`) unless you pass `client=`, it is stateless, and it replays the full transcript on every call — including assistant `tool_calls` and `tool` results, via `Message.to_chat_completion()`.
+It builds its own client from the environment (`ORQ_API_KEY` first, then `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`) unless you pass `client=`, it is stateless, and it replays the full transcript on every call — including assistant `tool_calls` and `tool` results, via `Message.to_chat_completion()`.
 
 What it does **not** do: it reports only its model id as context (no tools, no memory), so the tool-misuse and memory-poisoning strategy families never fire against it. When you need those, declare tools from a custom target.
 
