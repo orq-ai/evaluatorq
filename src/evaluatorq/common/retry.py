@@ -36,7 +36,7 @@ RETRY_JITTER_FRACTION = 0.25
 T = TypeVar('T')
 
 # httpx connection-error class names, kept only as a defensive fallback for a
-# raw httpx error raised outside the OpenAI SDK. SDK calls surface every
+# raw httpx error raised outside the OpenAI and Anthropic SDKs. SDK calls surface every
 # transport failure as APIConnectionError (see _is_retryable_error), so this
 # list is not the primary matcher and must not be relied on to enumerate httpx.
 _RETRYABLE_NETWORK_ERRORS = (

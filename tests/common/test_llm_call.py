@@ -222,6 +222,7 @@ async def test_drops_reasoning_effort_on_a_400_from_either_sdk(
     )
 
     assert client.chat.completions.create.await_count == 2
+    assert client.chat.completions.create.await_args is not None
     assert 'reasoning_effort' not in client.chat.completions.create.await_args.kwargs
 
 
