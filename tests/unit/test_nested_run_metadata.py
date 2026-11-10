@@ -56,6 +56,7 @@ class _Completions:
 class _Client:
     def __init__(self, requests: list[dict[str, Any]]) -> None:
         self.chat = type('_Chat', (), {'completions': _Completions(requests)})()
+        self.base_url = 'https://my.orq.ai/v3/router'
 
 
 @pytest.mark.asyncio
