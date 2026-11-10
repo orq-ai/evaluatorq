@@ -1367,6 +1367,7 @@ class OrchestratorResult(BaseModel):
     )
     backtrack_decision_failures: int = Field(
         default=0,
+        ge=0,
         description='Turns where the attacker model gave no usable keep-or-erase answer; they were kept',
     )
 
@@ -1634,7 +1635,7 @@ class JobOutputPayload(BaseModel):
     truncated_turns: list[int] = Field(default_factory=list)
     backtracked_turns: list[Turn] = Field(default_factory=list)
     backtrack_decision_failures: int = Field(
-        default=0, validation_alias=AliasChoices('backtrack_decision_failures', 'refusal_judge_failures')
+        default=0, ge=0, validation_alias=AliasChoices('backtrack_decision_failures', 'refusal_judge_failures')
     )
     finish_reason: str | None = None
     thread_id: str | None = None
@@ -1675,6 +1676,7 @@ class ExecutionDetails(BaseModel):
     )
     backtrack_decision_failures: int = Field(
         default=0,
+        ge=0,
         # Reports saved before the RES-697 rename use the old name.
         validation_alias=AliasChoices('backtrack_decision_failures', 'refusal_judge_failures'),
         description='Turns where the attacker model gave no usable keep-or-erase answer; they were kept',
