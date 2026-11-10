@@ -17,7 +17,12 @@ from loguru import logger
 from evaluatorq.anthropic import AnthropicLLMClient
 from evaluatorq.common import judge as judge_module
 from evaluatorq.common.llm_call import execute_chat_completion
-from evaluatorq.common.llm_client import as_llm_client, is_anthropic_client, resolve_llm_client
+from evaluatorq.common.llm_client import (
+    ModelClientMismatchError,
+    as_llm_client,
+    is_anthropic_client,
+    resolve_llm_client,
+)
 from evaluatorq.common.judge import ClassifyQuestion, ClassifyRequest, JudgeError, run_classify
 from evaluatorq.common.model_catalogue import ModelInfo, register_model
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, TokenUsage
@@ -328,15 +333,93 @@ def test_the_default_classifier_model_fails_loudly_and_names_the_role_variable()
         asyncio.run(client.chat.completions.create(model='typesafe/jev-latest', messages=[{'role': 'user', 'content': 'x'}]))
 
 
-def test_an_openai_default_model_reaching_run_classify_comes_back_as_an_error_outcome(
+def test_an_openai_default_model_reaching_run_classify_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_FAST_MODEL', 'openai/gpt-5-mini')
+    seen: list[str] = []
+    sink = logger.add(lambda message: seen.append(str(message)), level='WARNING')
+    monkeypatch.setattr(judge_module, '_classify_fallback_warned', set())
+    try:
+        # The classify-only default is swapped for the fast role, so the fast role variable is the one to set.
+        with pytest.raises(ModelClientMismatchError, match='EVALUATORQ_FAST_MODEL') as caught:
+            _classify(_raw(), model='typesafe/jev-latest')
+    finally:
+        logger.remove(sink)
+    assert 'EVALUATORQ_CLASSIFIER_MODEL' not in str(caught.value)
+    assert not [line for line in seen if 'judging with' in line], 'logged a replacement that cannot run'
+
+
+def test_a_wrong_model_reaching_run_judge_stops_the_run() -> None:
+    fake = _raw()
+    with pytest.raises(ModelClientMismatchError, match='Claude model id'):
+        asyncio.run(
+            judge_module.run_judge(
+                client=as_llm_client(fake),
+                model='openai/gpt-5-mini',
+                cfg=LLMCallConfig(model='openai/gpt-5-mini'),
+                prompt_template='Judge: {{x}}',
+                replacements={'x': 'y'},
+            )
+        )
+    assert fake.messages.calls == []
+
+
+def test_a_wrong_model_reaching_run_classify_judges_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_FAST_MODEL', 'openai/gpt-5-mini')
+    questions = {'q': ClassifyQuestion(kind='noul', instructions='Is it a greeting?', state={})}
+    with pytest.raises(ModelClientMismatchError):
+        asyncio.run(
+            judge_module.run_classify_judges(
+                client=as_llm_client(_raw()),
+                model='typesafe/jev-latest',
+                cfg=LLMCallConfig(model='typesafe/jev-latest'),
+                state={'text': 'hello'},
+                questions=questions,
+            )
+        )
+
+
+def _one_tool_trajectory() -> Any:
+    from evaluatorq.formats.atif import AtifTrajectory
+
+    return AtifTrajectory.model_validate(
+        {
+            'schema_version': 'ATIF-v1.8',
+            'session_id': 's',
+            'agent': {'name': 'a', 'version': '1'},
+            'steps': [
+                {
+                    'step_id': 1,
+                    'source': 'agent',
+                    'message': 'x',
+                    'tool_calls': [{'tool_call_id': 'c1', 'function_name': 'mystery', 'arguments': {}}],
+                }
+            ],
+        }
+    )
+
+
+def test_the_default_signals_config_with_an_anthropic_client_stops_instead_of_labelling_every_tool_other(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv('EVALUATORQ_FAST_MODEL', 'openai/gpt-5-mini')
-    outcome = _classify(_raw(), model='typesafe/jev-latest')
-    assert outcome.error_kind is not None
-    # The classify-only default was swapped for the fast role, so the fast role variable is the one to set.
-    assert 'EVALUATORQ_FAST_MODEL' in (outcome.error_message or '')
-    assert 'EVALUATORQ_CLASSIFIER_MODEL' not in (outcome.error_message or '')
+    from evaluatorq.signals.classify import classify_tool_roles
+
+    for role_variable in ('EVALUATORQ_SMART_MODEL', 'EVALUATORQ_FAST_MODEL', 'EVALUATORQ_CLASSIFIER_MODEL'):
+        monkeypatch.delenv(role_variable, raising=False)
+    fake = _raw()
+    with pytest.raises(ModelClientMismatchError, match='EVALUATORQ_FAST_MODEL'):
+        asyncio.run(classify_tool_roles([_one_tool_trajectory()], client=fake))
+    assert fake.messages.calls == []
+
+
+def test_the_default_signals_config_with_an_anthropic_client_stops_door_classification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evaluatorq.signals.doors import classify_tool_doors
+
+    for role_variable in ('EVALUATORQ_SMART_MODEL', 'EVALUATORQ_FAST_MODEL', 'EVALUATORQ_CLASSIFIER_MODEL'):
+        monkeypatch.delenv(role_variable, raising=False)
+    with pytest.raises(ModelClientMismatchError):
+        asyncio.run(classify_tool_doors(_one_tool_trajectory(), client=_raw()))
 
 
 # ---------------------------------------------------------------------------

@@ -126,6 +126,19 @@ def test_an_orq_backend_built_beside_an_anthropic_client_leaves_the_attacker_on_
     assert target.respond.call_count == 1
 
 
+def test_a_claude_target_that_refuses_replies_with_the_refusal_text() -> None:
+    fake = RawAnthropic([text('I cannot help with that.', stop_reason='refusal')])
+    target = OpenAIModelTarget(model='claude-sonnet-5-5', client=cast('Any', as_llm_client(fake)))
+
+    async def go() -> Any:
+        with patch('evaluatorq.redteam.backends.openai.with_llm_span', side_effect=_noop_span_cm):
+            return await target.respond([Message(role='user', content='do the bad thing')])
+
+    response = asyncio.run(go())
+    assert response.text == 'I cannot help with that.'
+    assert response.finish_reason == 'content_filter'
+
+
 @asynccontextmanager
 async def _noop_span_cm(*args: object, **kwargs: object):  # noqa: RUF029
     yield None

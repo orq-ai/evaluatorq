@@ -25,8 +25,10 @@ from openai.types.responses.response import IncompleteDetails
 
 from evaluatorq.anthropic.convert import (
     DEFAULT_MAX_TOKENS,
+    ORQ_ONLY_PARAMS,
     PROVIDER_PREFIX,
     REFUSAL_FALLBACK_TEXT,
+    TRUNCATING_STOP_REASONS,
     adapt_schema,
     apply_shared_params,
     apply_tools,
@@ -34,6 +36,7 @@ from evaluatorq.anthropic.convert import (
     build_system,
     content_blocks,
     decode_arguments,
+    finish_reason_for,
     merge_same_role,
     normalize_model,
     usage_counts,
@@ -53,7 +56,6 @@ _SUPPORTED_KEYS = frozenset({
     'max_output_tokens',
     'reasoning',
     'text',
-    'metadata',
     'extra_headers',
     'extra_body',
     'timeout',
@@ -123,17 +125,6 @@ def convert_input(
     return build_system(system_blocks), merge_same_role(out)
 
 
-def _chat_shaped_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Wrap flat Responses function tools in the Chat Completions shape so ``convert_tools`` can convert them."""
-    shaped: list[dict[str, Any]] = []
-    for tool in tools:
-        if tool.get('type') != 'function':
-            raise ValueError(f'The Anthropic adapter only supports function tools, got {tool.get("type")!r}.')
-        function = {key: tool[key] for key in ('name', 'description', 'parameters') if tool.get(key) is not None}
-        shaped.append({'type': 'function', 'function': function})
-    return shaped
-
-
 def _output_format(text: dict[str, Any] | None) -> dict[str, Any] | None:
     """Map ``text.format`` to ``output_config.format``; ``text`` and ``json_object`` send nothing, as on the Chat Completions face."""
     if not text:
@@ -169,7 +160,7 @@ def build_responses_request(params: dict[str, Any], *, text_format: Any = None) 
         TypeError: for a keyword the adapter does not translate, so nothing is silently ignored.
         ValueError: for content or a tool choice Anthropic cannot represent.
     """
-    unknown = sorted(set(params) - _SUPPORTED_KEYS)
+    unknown = sorted(set(params) - _SUPPORTED_KEYS - ORQ_ONLY_PARAMS)
     if unknown:
         raise TypeError(f'The Anthropic adapter does not support responses.create parameters: {unknown}')
 
@@ -187,8 +178,7 @@ def build_responses_request(params: dict[str, Any], *, text_format: Any = None) 
     }
     if system is not None:
         request['system'] = system
-    tools = params.get('tools')
-    apply_tools(request, _chat_shaped_tools(tools) if tools else None, params.get('tool_choice'))
+    apply_tools(request, params.get('tools'), params.get('tool_choice'))
     text = params.get('text')
     if text_format is not None:
         text = {**(text or {}), 'format': type_to_text_format_param(text_format)}
@@ -212,7 +202,7 @@ def convert_response_usage(message: Message) -> ResponseUsage:
 def to_response(message: Message) -> Response:
     """Build a genuine ``Response`` from an Anthropic ``Message``.
 
-    Text blocks are joined into one ``output_text`` part (a refusal becomes one ``refusal`` part), each ``tool_use`` becomes a ``function_call`` item, and thinking blocks are dropped. ``max_tokens`` gives ``status='incomplete'`` with ``incomplete_details.reason='max_output_tokens'``.
+    Text blocks are joined into one ``output_text`` part (a refusal becomes one ``refusal`` part), each ``tool_use`` becomes a ``function_call`` item, and thinking blocks are dropped. ``max_tokens`` and ``model_context_window_exceeded`` give ``status='incomplete'`` with ``incomplete_details.reason='max_output_tokens'``.
     """
     text = ''.join(block.text for block in message.content if block.type == 'text')
     output: list[Any] = []
@@ -247,7 +237,8 @@ def to_response(message: Message) -> Response:
         for block in message.content
         if block.type == 'tool_use'
     )
-    truncated = message.stop_reason == 'max_tokens'
+    finish_reason_for(message.stop_reason)  # logs an unknown stop reason once
+    truncated = message.stop_reason in TRUNCATING_STOP_REASONS
     model = message.model.removeprefix(PROVIDER_PREFIX)
     return Response(
         id=message.id,

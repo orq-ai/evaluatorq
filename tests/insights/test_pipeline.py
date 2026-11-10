@@ -1681,3 +1681,71 @@ async def test_insights_passes_both_clients_to_the_dimension_build_and_closes_ne
     assert run.status == 'completed'
     assert seen == {'client': chat, 'embedding_client': embed}
     assert closed == []
+
+
+@pytest.mark.asyncio
+async def test_insights_with_an_anthropic_client_and_no_embedding_client_fails_before_any_work(tmp_path: Path) -> None:
+    import anthropic
+
+    with pytest.raises(ValueError, match=r'embedding_client='):
+        await pipeline.insights(
+            _population(),
+            dimensions=('intent',),
+            runs_dir=tmp_path / 'runs',
+            llm_client=cast('Any', anthropic.AsyncAnthropic(api_key='test')),
+        )
+    assert not (tmp_path / 'runs').exists(), 'the run directory was created before the check'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('wrapped', [False, True])
+async def test_insights_rejects_an_anthropic_client_as_the_embedding_client(tmp_path: Path, wrapped: bool) -> None:
+    import anthropic
+
+    from evaluatorq.anthropic import wrap_anthropic_client
+
+    raw = anthropic.AsyncAnthropic(api_key='test')
+    with pytest.raises(ValueError, match='no embeddings API'):
+        await pipeline.insights(
+            _population(),
+            dimensions=('intent',),
+            runs_dir=tmp_path / 'runs',
+            llm_client=cast('Any', SimpleNamespace()),
+            embedding_client=cast('Any', wrap_anthropic_client(raw) if wrapped else raw),
+        )
+
+
+@pytest.mark.asyncio
+async def test_insights_wraps_a_raw_anthropic_llm_client_and_keeps_the_embedding_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import anthropic
+
+    from evaluatorq.anthropic import AnthropicLLMClient
+
+    seen: dict[str, object] = {}
+
+    async def fake_build(dimension, traces, *, client, embedding_client=None, **kwargs):
+        seen['client'] = client
+        seen['embedding_client'] = embedding_client
+        return pipeline.DimensionResult(name=dimension, source_field='x', clusters=[])
+
+    monkeypatch.setattr(pipeline, '_build_dimension', fake_build)
+    monkeypatch.setattr(pipeline, 'resolve_orq_client', lambda: object())
+    traces = [_trace(i) for i in range(6)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+    monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+    embed = SimpleNamespace()
+
+    await pipeline.insights(
+        _population(),
+        dimensions=('intent',),
+        labels=(),
+        runs_dir=tmp_path / 'runs',
+        llm_client=cast('Any', anthropic.AsyncAnthropic(api_key='test')),
+        embedding_client=cast('Any', embed),
+    )
+
+    assert isinstance(seen['client'], AnthropicLLMClient)
+    assert seen['embedding_client'] is embed

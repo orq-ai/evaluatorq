@@ -684,7 +684,7 @@ async def refusal_judge_model(client: AsyncOpenAI) -> tuple[str, bool]:
     on_router = client_routes_through_orq(client)
     if on_router and await supports_classify(model, client):
         return model, True
-    return classify_fallback_model(model, on_router=on_router, warned=_refusal_fallback_warned), False
+    return classify_fallback_model(model, on_router=on_router, client=client, warned=_refusal_fallback_warned), False
 
 
 class MultiTurnOrchestrator:

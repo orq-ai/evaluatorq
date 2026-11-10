@@ -22,6 +22,8 @@ from openai.types.chat import (
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message_function_tool_call import Function
 
+from evaluatorq.common.llm_client import ModelClientMismatchError
+
 if TYPE_CHECKING:
     from anthropic.types import Message
 
@@ -31,6 +33,8 @@ DEFAULT_MAX_TOKENS = 16000
 PROVIDER_PREFIX = 'anthropic/'
 ORQ_ONLY_EXTRA_BODY_KEYS = frozenset({'retry', 'thread', 'memory'})
 """``extra_body`` keys only the Orq router understands; Anthropic would reject them."""
+ORQ_ONLY_PARAMS = frozenset({'metadata'})
+"""Top-level call parameters only the Orq router reads (run metadata); accepted and dropped, with a debug line."""
 
 REFUSAL_FALLBACK_TEXT = 'The model declined to answer this request.'
 
@@ -39,9 +43,32 @@ _FINISH_REASONS: dict[str, str] = {
     'stop_sequence': 'stop',
     'pause_turn': 'stop',
     'max_tokens': 'length',
+    'model_context_window_exceeded': 'length',
     'tool_use': 'tool_calls',
     'refusal': 'content_filter',
 }
+
+TRUNCATING_STOP_REASONS = frozenset({'max_tokens', 'model_context_window_exceeded'})
+"""Stop reasons where the reply was cut off before the model finished."""
+
+_unknown_stop_reasons_logged: set[str] = set()
+
+
+def finish_reason_for(stop_reason: str | None) -> str:
+    """OpenAI ``finish_reason`` for an Anthropic ``stop_reason``; an unknown one is logged once and read as ``stop``."""
+    reason = stop_reason or 'end_turn'
+    mapped = _FINISH_REASONS.get(reason)
+    if mapped is not None:
+        return mapped
+    if reason not in _unknown_stop_reasons_logged:
+        _unknown_stop_reasons_logged.add(reason)
+        logger.warning(
+            'The Anthropic adapter does not know stop_reason {!r}; reporting it as finish_reason "stop". '
+            'A reply cut off for this reason would look complete.',
+            reason,
+        )
+    return 'stop'
+
 
 _EFFORT_LEVELS: dict[str, str | None] = {
     'none': None,
@@ -64,7 +91,6 @@ _SUPPORTED_KEYS = frozenset({
     'temperature',
     'top_p',
     'reasoning_effort',
-    'metadata',
     'extra_headers',
     'extra_body',
     'timeout',
@@ -156,12 +182,12 @@ def _role_variables_for(model: str) -> str:
 def normalize_model(model: str) -> str:
     """Return the bare Claude model id, stripping an ``anthropic/`` prefix.
 
-    Any other ``provider/`` prefix is a configuration mistake (an OpenAI default model reaching an Anthropic client), so it fails loudly instead of reaching the API as a 404. Bedrock inference-profile ARNs contain a slash and are passed through.
+    Any other ``provider/`` prefix is a configuration mistake (an OpenAI default model reaching an Anthropic client), so it raises `ModelClientMismatchError` instead of reaching the API as a 404. Bedrock inference-profile ARNs contain a slash and are passed through.
     """
     if model.startswith(PROVIDER_PREFIX):
         return model[len(PROVIDER_PREFIX) :]
     if '/' in model and not model.startswith('arn:'):
-        raise ValueError(
+        raise ModelClientMismatchError(
             f'An Anthropic client needs a Claude model id, got {model!r}. '
             f'Set the model explicitly, for example through {_role_variables_for(model)}, '
             'to a name such as "claude-sonnet-5-5" or "anthropic/claude-sonnet-5-5".'
@@ -293,12 +319,15 @@ def build_system(system_blocks: list[dict[str, Any]]) -> str | list[dict[str, An
 
 
 def convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert OpenAI function tools to Anthropic ``{name, description, input_schema}`` tools."""
+    """Convert function tools to Anthropic ``{name, description, input_schema}`` tools.
+
+    Takes both shapes: Chat Completions nests the definition under ``function``, Responses puts ``name``, ``description`` and ``parameters`` on the tool itself.
+    """
     converted: list[dict[str, Any]] = []
     for tool in tools:
         if tool.get('type') != 'function':
             raise ValueError(f'The Anthropic adapter only supports function tools, got {tool.get("type")!r}.')
-        function = tool['function']
+        function = tool.get('function', tool)
         item: dict[str, Any] = {
             'name': function['name'],
             'input_schema': function.get('parameters') or {'type': 'object', 'properties': {}},
@@ -317,7 +346,7 @@ def convert_tool_choice(tool_choice: Any) -> dict[str, str] | None:
         return {'type': tool_choice}
     raise ValueError(
         f'The Anthropic adapter cannot send tool_choice={tool_choice!r}: a forced or named tool choice returns '
-        'HTTP 400 on current Claude models. Use "auto" and name the tool in the prompt instead.'
+        'HTTP 400 on Claude Opus 5.5 and Sonnet 5.5. Use "auto" and name the tool in the prompt instead.'
     )
 
 
@@ -343,6 +372,10 @@ def build_output_config(output_format: dict[str, Any] | None, effort: str | None
         mapped = _EFFORT_LEVELS[effort]
         if mapped is not None:
             output_config['effort'] = mapped
+        else:
+            logger.debug(
+                'The Anthropic adapter does not send reasoning_effort={!r}: Anthropic has no such level.', effort
+            )
     return output_config
 
 
@@ -353,7 +386,7 @@ def build_messages_request(params: dict[str, Any]) -> dict[str, Any]:
         TypeError: for a keyword the adapter does not translate, so nothing is silently ignored.
         ValueError: for content or a tool choice Anthropic cannot represent.
     """
-    unknown = sorted(set(params) - _SUPPORTED_KEYS)
+    unknown = sorted(set(params) - _SUPPORTED_KEYS - ORQ_ONLY_PARAMS)
     if unknown:
         raise TypeError(f'The Anthropic adapter does not support chat.completions.create parameters: {unknown}')
 
@@ -388,6 +421,8 @@ def apply_shared_params(request: dict[str, Any], params: dict[str, Any], output_
 
     ``temperature``, ``top_p`` and ``timeout`` only when given; ``extra_headers`` as is; ``extra_body`` without the Orq-only keys, plus ``fallbacks`` (which Anthropic takes only in the body); ``output_config`` when it has content.
     """
+    for key in sorted(ORQ_ONLY_PARAMS & set(params)):
+        logger.debug('The Anthropic adapter does not send {!r}: only the Orq router reads it.', key)
     for key in ('temperature', 'top_p', 'timeout'):
         if params.get(key) is not None:
             request[key] = params[key]
@@ -396,6 +431,8 @@ def apply_shared_params(request: dict[str, Any], params: dict[str, Any], output_
     if params.get('extra_headers'):
         request['extra_headers'] = params['extra_headers']
     extra_body = {k: v for k, v in (params.get('extra_body') or {}).items() if k not in ORQ_ONLY_EXTRA_BODY_KEYS}
+    for key in sorted(ORQ_ONLY_EXTRA_BODY_KEYS & set(params.get('extra_body') or {})):
+        logger.debug('The Anthropic adapter does not send extra_body[{!r}]: only the Orq router reads it.', key)
     if params.get('fallbacks') is not None:
         extra_body['fallbacks'] = params['fallbacks']
     if extra_body:
@@ -434,7 +471,7 @@ def to_chat_completion(message: Message) -> ChatCompletion:
         for block in message.content
         if block.type == 'tool_use'
     ]
-    finish_reason = _FINISH_REASONS.get(message.stop_reason or 'end_turn', 'stop')
+    finish_reason = finish_reason_for(message.stop_reason)
     refusal = None
     if message.stop_reason == 'refusal':
         refusal = text or REFUSAL_FALLBACK_TEXT

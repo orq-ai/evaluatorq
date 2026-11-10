@@ -9,6 +9,7 @@ from loguru import logger
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.llm_client import as_llm_client, client_routes_through_orq, is_anthropic_client
+from evaluatorq.common.messages import chat_message_reply_text
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.retry import without_client_retries
@@ -182,7 +183,7 @@ class OpenAIModelTarget(AgentTarget):
                 timeout=self.timeout_ms / 1000.0,
             )
             msg = response.choices[0].message
-            content = msg.content or ''
+            content = chat_message_reply_text(msg)
             record_llm_response(span, response, output_content=content)
 
             tool_call_items: list[ToolCallOutputItem] = []

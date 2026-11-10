@@ -28,7 +28,11 @@ if TYPE_CHECKING:
     from anthropic import AsyncAnthropic, AsyncAnthropicBedrock, AsyncAnthropicVertex
     from openai import AsyncOpenAI
 
-    LLMClient = AsyncOpenAI | AsyncAnthropic | AsyncAnthropicBedrock | AsyncAnthropicVertex
+    from evaluatorq.anthropic.client import AnthropicLLMClient
+
+    LLMClient = AsyncOpenAI | AsyncAnthropic | AsyncAnthropicBedrock | AsyncAnthropicVertex | AnthropicLLMClient
+else:
+    LLMClient = Any
 
 ORQ_DEFAULT_HOST = DEFAULT_ORQ_BASE_URL
 ORQ_ROUTER_SUFFIX = '/v3/router'
@@ -44,6 +48,13 @@ def orq_base_url() -> str:
     on-prem detection from this value.
     """
     return env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL).rstrip('/')
+
+
+class ModelClientMismatchError(ValueError):
+    """A model id that the client it was sent to cannot serve, such as an OpenAI default model reaching an Anthropic client.
+
+    A run-wide configuration mistake: every call would fail the same way. Judge, classify and signals code re-raises it instead of turning it into a per-item outcome, so the run stops where the mistake is named.
+    """
 
 
 class MissingLLMCredentialsError(ValueError):
@@ -73,6 +84,13 @@ def is_anthropic_client(obj: object) -> bool:
     return getattr(obj, 'evaluatorq_provider', None) == 'anthropic'
 
 
+def _is_anthropic_sdk_client(client: object) -> bool:
+    """True for an instance of a class from the ``anthropic`` package, or of a subclass of one, that has ``messages``."""
+    if not hasattr(client, 'messages'):
+        return False
+    return any(cls.__module__ == 'anthropic' or cls.__module__.startswith('anthropic.') for cls in type(client).__mro__)
+
+
 @overload
 def as_llm_client(client: None) -> None: ...
 
@@ -84,11 +102,11 @@ def as_llm_client(client: Any) -> AsyncOpenAI: ...
 def as_llm_client(client: Any) -> AsyncOpenAI | None:
     """Return ``client`` ready for evaluatorq: a raw Anthropic SDK client is wrapped, anything else passes through.
 
-    Every public entry point that accepts an injected client calls this, so the adapter is built in one place. ``None``, an OpenAI client and an already wrapped adapter come back unchanged. A raw ``AsyncAnthropic``, ``AsyncAnthropicBedrock`` or ``AsyncAnthropicVertex`` is recognised by its module name and its ``messages`` attribute, so nothing here imports ``anthropic``; the adapter module is imported only when a raw client is seen.
+    Every public entry point that accepts an injected client calls this, so the adapter is built in one place. ``None``, an OpenAI client and an already wrapped adapter come back unchanged. A raw ``AsyncAnthropic``, ``AsyncAnthropicBedrock`` or ``AsyncAnthropicVertex`` (or a subclass of one) is recognised by the module name of a class in its MRO and its ``messages`` attribute, so nothing here imports ``anthropic``; the adapter module is imported only when a raw client is seen.
     """
     if client is None or is_anthropic_client(client):
         return client
-    if not type(client).__module__.startswith('anthropic') or not hasattr(client, 'messages'):
+    if not _is_anthropic_sdk_client(client):
         return client
     from evaluatorq.anthropic.client import wrap_anthropic_client
 
@@ -227,7 +245,9 @@ def resolve_llm_client(
 __all__ = [
     'ORQ_DEFAULT_HOST',
     'ORQ_ROUTER_SUFFIX',
+    'LLMClient',
     'MissingLLMCredentialsError',
+    'ModelClientMismatchError',
     'ResolvedClient',
     'as_llm_client',
     'client_routes_through_orq',

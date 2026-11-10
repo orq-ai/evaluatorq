@@ -21,7 +21,7 @@ from evaluatorq.common.llm_call import (
     execute_classify,
     execute_response,
 )
-from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.llm_client import ModelClientMismatchError, client_routes_through_orq, is_anthropic_client
 from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS, CONNECTION_ERRORS, STATUS_ERRORS, TIMEOUT_ERRORS
 from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, UNKNOWN_ARGUMENTS_TEXT, coerce_content_text
 from evaluatorq.common.model_catalogue import is_known_classify_model, qualified_model, supports_classify
@@ -702,12 +702,19 @@ def _classify_question_prompt(question: ClassifyQuestion) -> str:
     return render_template(_CLASSIFY_PROMPT_TEMPLATE, {'classify_question': _classify_question_text(question)})
 
 
-def classify_fallback_model(model: str, *, on_router: bool, warned: set[str] | None = None) -> str:
+def classify_fallback_model(model: str, *, on_router: bool, client: Any = None, warned: set[str] | None = None) -> str:
     """The model to judge on when ``model`` cannot be asked on the classify endpoint: the fast role.
 
     One rule for every classify caller. A client that is not on the Orq router has no ``/decisions`` endpoint, and a router whose catalogue lists no classify endpoint for ``model`` has none for it either. The question is then asked as a structured judgement on the fast role. The pin to ``model`` is skipped on purpose, because it names the classify-only model that cannot run here. The fallback is logged once per model in ``warned`` (once per process by default).
+
+    Raises:
+        ModelClientMismatchError: ``client`` is an Anthropic client and the fast role is not a Claude model id, so the replacement cannot run there either. Raised before the log line, which would otherwise claim a judgement that never happens.
     """
     fallback = role_model('fast')
+    if is_anthropic_client(client):
+        from evaluatorq.anthropic.convert import normalize_model
+
+        normalize_model(fallback)
     seen = _classify_fallback_warned if warned is None else warned
     if model not in seen:
         seen.add(model)
@@ -772,7 +779,7 @@ def _classify_fallback_messages(request: ClassifyRequest) -> list[dict[str, Any]
 
 
 async def _classify_structured(
-    *, client: AsyncOpenAI, model: str, cfg: LLMCallConfig, request: ClassifyRequest, span: Any
+    *, client: AsyncOpenAI, model: str, cfg: LLMCallConfig, request: ClassifyRequest
 ) -> tuple[ClassifyResponse | None, TokenUsage | None, str]:
     """Answer ``request`` with one structured judgement instead of the ``/decisions`` endpoint; no response when nothing validated."""
     from evaluatorq.common.structured_output import generate_structured
@@ -836,7 +843,7 @@ async def run_classify(
         read |= {'temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort', 'max_tokens'}
     warn_unread_config_fields(cfg, read, caller='run_classify')
     if not on_router and is_known_classify_model(model):
-        model = classify_fallback_model(model, on_router=False)
+        model = classify_fallback_model(model, on_router=False, client=client)
     try:
         async with with_llm_span(
             model=model,
@@ -855,7 +862,7 @@ async def run_classify(
                 response = ClassifyResponse.model_validate(payload)
             else:
                 structured, usage, raw_payload = await _classify_structured(
-                    client=client, model=model, cfg=cfg, request=request, span=span
+                    client=client, model=model, cfg=cfg, request=request
                 )
                 if structured is None:
                     return ClassifyOutcome(
@@ -899,6 +906,9 @@ async def run_classify(
         return ClassifyOutcome(
             error_kind=kind, error_message=str(exc), error_exc=exc, token_usage=_classify_failure_usage(exc, usage)
         )
+    except ModelClientMismatchError:
+        # A configuration mistake that fails every call alike: stop the run instead of recording an outcome per item.
+        raise
     except Exception as exc:
         logger.exception('Judge [{}] classify call failed (unknown): {}', model, exc)
         return ClassifyOutcome(
@@ -1078,6 +1088,8 @@ async def run_classify_judges(
             endpoint='classify',
         )
         return {key: failed.model_copy() for key in questions}
+    except ModelClientMismatchError:
+        raise
     except Exception as e:
         kind = _classify(e) if isinstance(e, CONNECTION_ERRORS + STATUS_ERRORS) else JudgeError.UNKNOWN
         logger.error('Judge [{}] classify call failed ({}): {}', model, kind.value, e)
@@ -1437,7 +1449,7 @@ async def run_judge(
     serves_classify = on_router and await supports_classify(model, client)
     if wants_classify and not on_router and is_known_classify_model(model):
         # No `/decisions` endpoint here, so a classify-only model cannot answer: ask the fast role instead.
-        model = classify_fallback_model(model, on_router=False)
+        model = classify_fallback_model(model, on_router=False, client=client)
     if not wants_classify and is_known_classify_model(model):
         # A model this package ships as classify-*only*. Prompting it buys a provider
         # rejection rather than a verdict, so fail before the call instead of after it.
@@ -1486,8 +1498,8 @@ async def run_judge(
     # Rendered only where it is sent: a classify call carries no prompt, and rendering
     # one would re-log every rejected-placeholder warning for a string nobody reads.
     user_prompt = '' if use_classify else render_template(prompt_template, replacements)
-    if wants_classify and not on_router and not user_prompt.strip():
-        # A classify caller sends no prompt; without the endpoint the question itself has to be the prompt.
+    if wants_classify and not use_classify and not user_prompt.strip():
+        # A classify caller sends no prompt; without the endpoint (off the router, or on it with a model that does not serve classify) the question itself has to be the prompt.
         user_prompt = _classify_question_prompt(classify)
     # Resolved before the span opens so the span carries the operation and the model
     # id this call actually sends — `responses openai/gpt-5-mini`, not `chat gpt-5-mini`
@@ -1539,6 +1551,8 @@ async def run_judge(
         kind = _classify(e)
         logger.error('Judge [{}] API error ({}): {}', model, kind.value, e)
         return JudgeOutcome(error_kind=kind, error_message=str(e), error_exc=e)
+    except ModelClientMismatchError:
+        raise
     except Exception as e:
         logger.exception('Judge [{}] failed (unknown): {}', model, e)
         return JudgeOutcome(error_kind=JudgeError.UNKNOWN, error_message=str(e), error_exc=e)
