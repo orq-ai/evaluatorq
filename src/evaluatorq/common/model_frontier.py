@@ -64,8 +64,9 @@ class ScoredModel(BaseModel):
     router_id: str
     intelligence_index: float = Field(
         description=(
-            'The headline Artificial Analysis index on the card. Ranked on only when the '
-            'card exposes no reasoning effort; otherwise `default_index` reads the ladder.'
+            'The headline Artificial Analysis index on the card, with no reasoning level. '
+            'Ranked on when the card exposes no reasoning effort, or has no score at its '
+            'default effort; otherwise `default_index` reads the ladder.'
         )
     )
     input_price: float = Field(description='USD per 1M input tokens.')
@@ -99,56 +100,50 @@ class ScoredModel(BaseModel):
         return self.input_price <= 0 or self.output_price <= 0
 
     @property
-    def default_index(self) -> float | None:
-        """The index at the catalogue default effort, which is where the judge runs.
+    def default_index(self) -> float:
+        """The index a model is ranked on: its score at the catalogue default effort, else its headline.
 
-        None means unrankable: the card has an effort parameter and either its
-        default is unknown or nothing was benchmarked at it. Never filled from
-        another rung, since every rung is a different operating point. A
-        headline measured at the default rung is that rung's score, even when
-        the ladder omits it (claude-opus-4-6: headline high, ladder max only).
+        The default rung is where the judge runs, so its ladder score wins when the
+        card has one. A card that never benchmarked its default (deepseek-v4-pro
+        runs at high while Artificial Analysis measures max and none) ranks on its
+        headline index instead, which carries no reasoning level;
+        `ranked_on_headline` says when that happened.
         """
-        if not self.effort_parameter:
-            return self.intelligence_index
-        if self.default_effort is None:
-            return None
-        if self.default_effort in self.effort_indices:
+        if self.effort_parameter and self.default_effort is not None and self.default_effort in self.effort_indices:
             return self.effort_indices[self.default_effort]
-        return self.intelligence_index if self.headline_effort == self.default_effort else None
+        return self.intelligence_index
+
+    @property
+    def ranked_on_headline(self) -> bool:
+        """Whether a card with an effort parameter is ranked on its headline for want of a default-rung score."""
+        if not self.effort_parameter:
+            return False
+        if self.default_effort is None:
+            return True
+        return self.default_effort not in self.effort_indices and self.headline_effort != self.default_effort
 
     @property
     def comparable(self) -> bool:
-        """Whether both axes are defined: ranked at its default, and actually priced."""
-        return self.default_index is not None and not self.free
+        """Whether the card has a position on the price axis: free cards are never ranked."""
+        return not self.free
 
     @property
     def ranked_index(self) -> float:
-        """`default_index` for a model already known to be rankable; raises for one that is not.
-
-        For the sort keys and margins that only ever see comparable models, so an
-        unrankable card fails loudly there instead of comparing as None.
-        """
-        index = self.default_index
-        if index is None:
-            raise ValueError(f'{self.router_id} has no index at its default effort, so it cannot be ranked')
-        return index
+        """Alias of `default_index`, kept for the sort keys and margins that read it."""
+        return self.default_index
 
     @property
     def pareto_score(self) -> float | None:
-        """Default-effort intelligence index per blended USD per 1M tokens, higher is better.
-
-        None where the card is not comparable (unknown default or free).
-        """
-        index = self.default_index
-        if index is None or self.free:
+        """Ranked intelligence index per blended USD per 1M tokens, higher is better. None for a free card."""
+        if self.free:
             return None
-        return index / self.price
+        return self.default_index / self.price
 
     def dominates(self, other: ScoredModel) -> bool:
         """At least as good on both axes, strictly better on one."""
-        mine, theirs = self.default_index, other.default_index
-        if mine is None or theirs is None or self.free or other.free:
+        if self.free or other.free:
             return False
+        mine, theirs = self.default_index, other.default_index
         at_least_as_good = mine >= theirs and self.price <= other.price
         strictly_better = mine > theirs or self.price < other.price
         return at_least_as_good and strictly_better
@@ -234,7 +229,7 @@ SUPERSEDED: dict[str, str] = {
     # Rankable once a headline measured at the default rung counts (2026-10-26).
     'anthropic/claude-opus-4-6': 'superseded by claude-opus-5 and claude-opus-5-5 on the same route.',
     'anthropic/claude-sonnet-4-6': 'superseded by claude-sonnet-5 on the same route.',
-    # gpt-5.4-mini is listed but unscored at its default (none), so derived_successor skips it.
+    # Recorded by hand when gpt-5.4-mini had no score at its default (none) and could not be derived.
     'openai/gpt-5-mini': 'superseded by openai/gpt-5.4-mini (listed, unscored at its default none); 2026-10-27.',
     'azure/gpt-5-mini': 'superseded by openai/gpt-5.4-mini (listed, unscored at its default none); 2026-10-27.',
 }
@@ -308,7 +303,7 @@ def _lineage(router_id: str) -> tuple[str, tuple[int, ...], str] | None:
 def derived_successor(router_id: str, garden: Mapping[str, ScoredModel]) -> str | None:
     """A seatable router ID in the garden with the same stem and tier and a higher version, if any.
 
-    The successor must itself be comparable (scored at its default, not free) and
+    The successor must itself be comparable (priced, not free) and
     seatable (not disabled, NEVER_SEAT, UNROUTABLE, SUPERSEDED or under the floor),
     or a newer card nothing may be seated on would retire a model that still works.
 
@@ -571,9 +566,8 @@ UNLISTED_ROUTES: dict[str, dict[str, Any]] = {
         'default_effort': 'medium',
         'effort_indices': {},
         # AA v5.0.1 max (artificialanalysis.ai/models/gpt-6-1-terra, 2026-11-10).
-        # A different index version from the v4.3 garden: carried as the headline
-        # only, never ranked; default_index stays None, so the seat is held in
-        # REVIEWED_UNBENCHMARKED_SEATS rather than scored.
+        # No medium rung, so it ranks on this headline, which is a different
+        # index version from the v4.3 garden.
         'headline_effort': 'max',
         'intelligence_index': 51.0,
     },
@@ -584,7 +578,7 @@ UNLISTED_ROUTES: dict[str, dict[str, Any]] = {
 # Artificial Analysis API. Accepted only where the AA-measured rung is the
 # catalogue default; the live ladder wins whenever it has the rung. Fill
 # nothing from another rung: DeepSeek flash and pro default to high or medium
-# and AA measures only max and none, so they stay unrankable on purpose.
+# and AA measures only max and none, so they rank on their headline index.
 AA_FILLS: dict[str, dict[str, Any]] = {
     'zai/glm-5.3-flash': {
         'effort': 'max',
@@ -631,7 +625,7 @@ def rank_cheapest_top(
 ) -> list[ScoredModel]:
     """The best cheap model of each family, strongest first: the Cheap Aggregate derivation.
 
-    Eligible: comparable (default-effort index known, not free), seatable (not
+    Eligible: comparable (not free), seatable (not
     NEVER_SEAT, UNROUTABLE, SUPERSEDED or under the floor), enabled, not
     EU-pinned, without a newer version of itself in the garden
     (`derived_successor`), and a 3:1 blend strictly under `max_blend`. Prices are the garden's own, so pass
@@ -658,13 +652,6 @@ def unseatable_reason(model: ScoredModel) -> str | None:
         return 'disabled in the model catalogue'
     if model.free:
         return f'free (input {model.input_price}, output {model.output_price} per 1M)'
-    if model.default_index is None:
-        if model.default_effort is None:
-            return 'unrankable: catalogue default effort is unknown'
-        return (
-            f'unrankable: no benchmark at its catalogue default effort {model.default_effort!r} '
-            f'(measured rungs: {sorted(model.effort_indices)})'
-        )
     if model.default_index < MIN_SEAT_INDEX:
         return f'index {model.default_index} is under the {MIN_SEAT_INDEX} floor'
     if headline_contradicts_its_own_rung(model):
@@ -686,8 +673,8 @@ def pareto_frontier(models: list[ScoredModel]) -> list[ScoredModel]:
     """Comparable models nothing else beats on both axes, strongest first.
 
     Everything off the frontier is a worse deal than something else in the same
-    garden, which is why a preset containing one is dead weight. Free and
-    unrankable cards have no position on the axes and are left out.
+    garden, which is why a preset containing one is dead weight. Free cards
+    have no position on the price axis and are left out.
     """
     comparable = [m for m in models if m.comparable]
     frontier = [m for m in comparable if not any(other.dominates(m) for other in comparable)]

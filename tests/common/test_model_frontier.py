@@ -51,13 +51,12 @@ def graded(router_id: str, default: str | None, ladder: dict[str, float], price:
     return scored(router_id, 99.0, price, effort_parameter=True, default_effort=default, effort_indices=ladder)
 
 
-def test_derive_trio_never_seats_an_unranked_or_free_model():
-    """A frontier assembled outside build_pools may carry models with no default-rung score or no price."""
+def test_derive_trio_never_seats_a_free_model():
+    """A frontier assembled outside build_pools may carry models with no price."""
     ranked = [scored('a/top', 60.0, 30.0), scored('b/mid', 50.0, 10.0), scored('c/low', 40.0, 3.0)]
-    unranked = graded('d/unranked', 'medium', {'high': 70.0}, price=1.0)
     free = scored('e/free', 65.0, 0.0)
 
-    members, relaxed = derive_trio([*ranked, unranked, free], identity_of=lambda router_id: router_id)
+    members, relaxed = derive_trio([*ranked, free], identity_of=lambda router_id: router_id)
 
     assert [m.router_id for m in members] == ['a/top', 'b/mid', 'c/low']
     assert relaxed is False
@@ -112,13 +111,21 @@ class TestDefaultEffortRanking:
 
         assert m.default_index == pytest.approx(16.9)
 
-    def test_no_benchmark_at_the_default_is_unrankable_not_borrowed(self):
-        """gemini-3.6-flash: default medium, benchmarked only at high."""
-        m = graded('google/gemini-3.6-flash', 'medium', {'high': 50.1})
+    def test_no_benchmark_at_the_default_ranks_on_the_headline_not_another_rung(self):
+        """deepseek-v4-pro: default high, benchmarked only at max and none, headline 36.0."""
+        m = scored(
+            'deepseek/deepseek-v4-pro',
+            36.0,
+            0.5,
+            effort_parameter=True,
+            default_effort='high',
+            headline_effort='max',
+            effort_indices={'max': 36.5, 'none': 20.4},
+        )
 
-        assert m.default_index is None
-        assert not seatable(m)
-        assert 'medium' in (unseatable_reason(m) or '')
+        assert m.default_index == pytest.approx(36.0)
+        assert m.ranked_on_headline
+        assert seatable(m)
 
     def test_a_headline_measured_at_the_default_ranks_when_the_ladder_omits_it(self):
         """claude-opus-4-6: headline 37.8 at high, default high, ladder lists only max."""
@@ -139,19 +146,29 @@ class TestDefaultEffortRanking:
 
         assert unseatable_reason(m) == 'disabled in the model catalogue'
 
-    def test_an_unknown_default_is_unrankable(self):
-        m = graded('mistral/mistral-medium-latest', None, {'none': 30.0, 'high': 40.0})
+    def test_an_unknown_default_ranks_on_the_headline(self):
+        m = scored(
+            'mistral/mistral-medium-latest',
+            33.0,
+            1.0,
+            effort_parameter=True,
+            default_effort=None,
+            effort_indices={'none': 30.0, 'high': 40.0},
+        )
 
-        assert m.default_index is None
-        assert not seatable(m)
+        assert m.default_index == pytest.approx(33.0)
+        assert m.ranked_on_headline
 
-    def test_an_unrankable_card_neither_dominates_nor_is_dominated(self):
-        unrankable = graded('x/a', 'medium', {'high': 90.0}, price=0.01)
+    def test_a_card_scored_at_its_default_is_not_ranked_on_the_headline(self):
+        assert not graded('x/a', 'medium', {'medium': 38.1, 'max': 51.2}).ranked_on_headline
+
+    def test_a_free_card_neither_dominates_nor_is_dominated(self):
+        free = scored('x/a', 90.0, 0.0)
         ranked = scored('x/b', 40.0, 5.0)
 
-        assert not unrankable.dominates(ranked)
-        assert not ranked.dominates(unrankable)
-        assert pareto_frontier([unrankable, ranked]) == [ranked]
+        assert not free.dominates(ranked)
+        assert not ranked.dominates(free)
+        assert pareto_frontier([free, ranked]) == [ranked]
 
     def test_dominance_reads_the_default_rung(self):
         """At its best a wins; at its default b does, for the same price."""
@@ -176,14 +193,14 @@ class TestPrice:
 
         assert m.pareto_score == pytest.approx(20.0)
 
-    def test_pareto_score_is_none_where_the_card_is_not_comparable(self):
+    def test_pareto_score_is_none_only_for_a_free_card(self):
         free = ScoredModel(router_id='x/a', intelligence_index=40.0, input_price=0.0, output_price=5.0)
         unknown_default = ScoredModel(
             router_id='x/b', intelligence_index=40.0, input_price=1.0, output_price=5.0, effort_parameter=True
         )
 
         assert free.pareto_score is None
-        assert unknown_default.pareto_score is None
+        assert unknown_default.pareto_score == pytest.approx(40.0 / unknown_default.price)
 
     def test_a_card_free_on_either_side_is_excluded_everywhere(self):
         free = ScoredModel(router_id='nvidia/kimi-k3', intelligence_index=57.1, input_price=0.0, output_price=1.0)
@@ -338,10 +355,10 @@ class TestRankCheapestTop:
 
         assert self.rank(garden) == ['ok/m']
 
-    def test_a_card_with_an_unknown_default_effort_is_not_ranked(self):
+    def test_a_card_with_an_unknown_default_effort_ranks_on_its_headline(self):
         garden = self.garden(graded('a/x', None, {'high': 50.0}, price=0.2), scored('b/y', 20.0, 0.2))
 
-        assert self.rank(garden) == ['b/y']
+        assert self.rank(garden) == ['a/x', 'b/y']
 
 
 def test_default_ceiling_is_the_published_max_blend():
@@ -351,15 +368,9 @@ def test_default_ceiling_is_the_published_max_blend():
 
 
 class TestUnlistedRoutes:
-    def test_every_entry_ranks_at_its_default_effort(self):
-        """Or is a reviewed unbenchmarked hold, which must not be rankable by accident."""
-        from evaluatorq.jury_presets import REVIEWED_UNBENCHMARKED_SEATS
-
+    def test_every_entry_is_comparable(self):
         for router_id, model in with_unlisted_routes({}).items():
             assert model.router_id in UNLISTED_ROUTES
-            if router_id in REVIEWED_UNBENCHMARKED_SEATS:
-                assert model.default_index is None, router_id
-                continue
             assert model.comparable, router_id
 
     def test_the_live_catalogue_leads_when_it_lists_the_route(self):
@@ -415,10 +426,10 @@ class TestSuperseded:
         # A different tier word is a different product line, never a successor.
         assert derived_successor('openai/gpt-6-luna', garden) is None
 
-    def test_an_unrankable_newer_card_does_not_retire_a_working_model(self):
+    def test_a_newer_card_ranked_on_its_headline_is_a_successor(self):
         garden = {m.router_id: m for m in (scored('a/m-1', 30.0, 0.2), graded('a/m-2', 'high', {'max': 40.0}))}
 
-        assert derived_successor('a/m-1', garden) is None
+        assert derived_successor('a/m-1', garden) == 'a/m-2'
 
     def test_an_unseatable_newer_card_does_not_retire_a_working_model(self):
         """A disabled successor cannot take the seat, so the older version keeps its place in the cheap ranking."""
@@ -464,7 +475,9 @@ class TestAaFills:
         router_id = next(iter(AA_FILLS))
         other = graded(router_id, 'high', {})
 
-        assert with_aa_fills({router_id: other})[router_id].default_index is None
+        filled = with_aa_fills({router_id: other})[router_id]
+        assert filled.effort_indices == {}
+        assert filled.default_index == other.intelligence_index
 
 
 def _v2_card(v2: dict[str, Any]) -> dict[str, object]:
