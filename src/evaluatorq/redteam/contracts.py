@@ -14,6 +14,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
 
+from loguru import logger
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -24,6 +25,7 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, TypedDict
 
+from evaluatorq.common.jury import duplicate_judges_message
 from evaluatorq.common.messages import EMPTY_ASSISTANT_TEXT
 from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.redact import scrub_known_secrets
@@ -688,6 +690,13 @@ class EvaluatorConfig(LLMCallConfig):
             model = payload.get('model')
             if model is not None:
                 judges = list(payload.get('judges') or [])
+                # The rewrite below drops repeats of `model`, so the after-validator
+                # never sees them; report those here. Other repeats survive the
+                # rewrite and are reported once, by the after-validator.
+                if (duplicates := duplicate_judges_message([j for j in judges if j == model])) is not None:
+                    if payload.get('strict_panel'):
+                        raise ValueError(duplicates)
+                    logger.warning(duplicates)
                 payload['judges'] = [model, *[j for j in judges if j != model]]
             return payload
         return data
@@ -709,6 +718,11 @@ class EvaluatorConfig(LLMCallConfig):
 
     @model_validator(mode='after')
     def _check_min_successful_judges(self) -> 'EvaluatorConfig':
+        # The repeats are dropped below, so this is the last place they can be seen.
+        if (duplicates := duplicate_judges_message(self.judges)) is not None:
+            if self.strict_panel:
+                raise ValueError(duplicates)
+            logger.warning(duplicates)
         panel: list[str] = []
         for j in self.judges:
             if j and j not in panel:
@@ -1018,6 +1032,9 @@ class LLMConfig(BaseModel):
 # Module-level default for the non-model knobs (timeouts, retries). Its model fields are
 # import-time snapshots and must not be read; build `LLMConfig()` to resolve them by role.
 PIPELINE_CONFIG = LLMConfig()
+
+# A split red-team panel fails closed: a tie marks the attack VULNERABLE.
+RED_TEAM_TIE_OUTCOME = 'fail-closed to VULNERABLE'
 
 
 def evaluator_model_for(model: str | None, cfg: LLMCallConfig | EvaluatorConfig | None) -> str:

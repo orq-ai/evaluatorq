@@ -9,6 +9,11 @@
       "connector_uuid": "0adf0e98-5a5c-44e9-bec9-d7d4a2f28af3",
       "name": "Slack",
       "url": "https://mcp.slack.com/mcp"
+    },
+    {
+      "connector_uuid": "aacaa548-7a2f-4349-9186-09b54886acfd",
+      "name": "Linear",
+      "url": "https://mcp.linear.app/mcp"
     }
   ],
   "job_config": {
