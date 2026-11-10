@@ -19,9 +19,13 @@ def test_masked_cli_profile_uses_private_local_key(tmp_path: Path, monkeypatch) 
     credential_file.chmod(0o600)
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
     monkeypatch.setattr(orq_client.shutil, 'which', lambda _: '/usr/bin/orq')
-    monkeypatch.setattr(orq_client.subprocess, 'run', lambda *args, **kwargs: subprocess.CompletedProcess(
-        args[0], 0, json.dumps({'profiles': [{'name': 'research', 'api_key': 'key-****', 'active': False}]}), ''
-    ))
+    monkeypatch.setattr(
+        orq_client.subprocess,
+        'run',
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, json.dumps({'profiles': [{'name': 'research', 'api_key': 'key-****', 'active': False}]}), ''
+        ),
+    )
 
     profiles = orq_client.list_orq_profiles()
 

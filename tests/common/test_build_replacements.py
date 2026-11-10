@@ -31,7 +31,12 @@ def test_flat_keys_tolerate_non_serializable():
     class Weird:
         pass
 
-    r = build_eval_replacements(input_messages=[{'role': 'user', 'content': Weird()}], output_messages=[], expected_output=None, system_instructions=None)
+    r = build_eval_replacements(
+        input_messages=[{'role': 'user', 'content': Weird()}],
+        output_messages=[],
+        expected_output=None,
+        system_instructions=None,
+    )
     # must not raise; json.dumps with default=str renders the object via str()
     assert 'Weird object at' in json.loads(r['input.all_messages'])[0]['content']
 

@@ -1,4 +1,5 @@
 """Terminal-level tests for interrupting shared confirmation prompts."""
+
 from __future__ import annotations
 
 import os

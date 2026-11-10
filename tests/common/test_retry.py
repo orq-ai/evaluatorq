@@ -65,9 +65,9 @@ from evaluatorq.common.retry import RETRY_MAX_WAIT_S, RETRY_MIN_WAIT_S, with_ret
 
 def _connection_error_with_cause() -> APIConnectionError:
     """An APIConnectionError wrapping an httpx.ConnectError, as the SDK raises it."""
-    request = httpx.Request("POST", "https://router.example/v3/router")
+    request = httpx.Request('POST', 'https://router.example/v3/router')
     err = APIConnectionError(request=request)
-    err.__cause__ = httpx.ConnectError("connection reset", request=request)
+    err.__cause__ = httpx.ConnectError('connection reset', request=request)
     return err
 
 
@@ -79,7 +79,7 @@ async def test_network_error_with_cause_is_retried(monkeypatch: pytest.MonkeyPat
     async def _instant(_seconds: float) -> None:
         return None
 
-    monkeypatch.setattr(retry_module.asyncio, "sleep", _instant)
+    monkeypatch.setattr(retry_module.asyncio, 'sleep', _instant)
     calls = 0
 
     async def flaky() -> str:
@@ -87,9 +87,9 @@ async def test_network_error_with_cause_is_retried(monkeypatch: pytest.MonkeyPat
         calls += 1
         if calls == 1:
             raise _connection_error_with_cause()
-        return "ok"
+        return 'ok'
 
-    assert await with_retry(flaky, max_attempts=3, label="test") == "ok"
+    assert await with_retry(flaky, max_attempts=3, label='test') == 'ok'
     assert calls == 2
 
 
@@ -97,7 +97,7 @@ def _connection_error_wrapping(cause: Exception) -> APIConnectionError:
     """An APIConnectionError wrapping an arbitrary httpx transport error, as the
     SDK raises it. The __cause__ class name is deliberately NOT in the httpx
     allowlist, so retry must come from the SDK class, not the name match."""
-    request = httpx.Request("POST", "https://router.example/v3/router")
+    request = httpx.Request('POST', 'https://router.example/v3/router')
     err = APIConnectionError(request=request)
     err.__cause__ = cause
     return err
@@ -113,18 +113,18 @@ async def test_remote_protocol_error_is_retried(monkeypatch: pytest.MonkeyPatch)
     async def _instant(_seconds: float) -> None:
         return None
 
-    monkeypatch.setattr(retry_module.asyncio, "sleep", _instant)
-    request = httpx.Request("POST", "https://router.example/v3/router")
+    monkeypatch.setattr(retry_module.asyncio, 'sleep', _instant)
+    request = httpx.Request('POST', 'https://router.example/v3/router')
     calls = 0
 
     async def flaky() -> str:
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise _connection_error_wrapping(httpx.RemoteProtocolError("server disconnected", request=request))
-        return "ok"
+            raise _connection_error_wrapping(httpx.RemoteProtocolError('server disconnected', request=request))
+        return 'ok'
 
-    assert await with_retry(flaky, max_attempts=3, label="test") == "ok"
+    assert await with_retry(flaky, max_attempts=3, label='test') == 'ok'
     assert calls == 2
 
 
@@ -137,8 +137,8 @@ async def test_api_timeout_error_is_retried(monkeypatch: pytest.MonkeyPatch) -> 
     async def _instant(_seconds: float) -> None:
         return None
 
-    monkeypatch.setattr(retry_module.asyncio, "sleep", _instant)
-    request = httpx.Request("POST", "https://router.example/v3/router")
+    monkeypatch.setattr(retry_module.asyncio, 'sleep', _instant)
+    request = httpx.Request('POST', 'https://router.example/v3/router')
     calls = 0
 
     async def flaky() -> str:
@@ -146,9 +146,9 @@ async def test_api_timeout_error_is_retried(monkeypatch: pytest.MonkeyPatch) -> 
         calls += 1
         if calls == 1:
             raise APITimeoutError(request=request)
-        return "ok"
+        return 'ok'
 
-    assert await with_retry(flaky, max_attempts=3, label="test") == "ok"
+    assert await with_retry(flaky, max_attempts=3, label='test') == 'ok'
     assert calls == 2
 
 
@@ -163,16 +163,16 @@ async def test_asyncio_timeout_is_never_retried() -> None:
         raise asyncio.TimeoutError
 
     with pytest.raises(asyncio.TimeoutError):
-        await with_retry(hung, max_attempts=5, label="test")
+        await with_retry(hung, max_attempts=5, label='test')
     assert calls == 1
 
 
 def _status_error(status: int):
     from openai import APIStatusError
 
-    request = httpx.Request("POST", "https://router.example/v3/router")
+    request = httpx.Request('POST', 'https://router.example/v3/router')
     response = httpx.Response(status, request=request)
-    return APIStatusError(f"status {status}", response=response, body=None)
+    return APIStatusError(f'status {status}', response=response, body=None)
 
 
 @pytest.mark.asyncio
@@ -183,14 +183,14 @@ async def test_backoff_curve_doubles_and_caps(monkeypatch: pytest.MonkeyPatch) -
     async def _record(seconds: float) -> None:
         sleeps.append(seconds)
 
-    monkeypatch.setattr(retry_module.asyncio, "sleep", _record)
-    monkeypatch.setattr(retry_module.random, "uniform", lambda _a, _b: 0.0)
+    monkeypatch.setattr(retry_module.asyncio, 'sleep', _record)
+    monkeypatch.setattr(retry_module.random, 'uniform', lambda _a, _b: 0.0)
 
     async def always_503() -> str:
         raise _status_error(503)
 
     with pytest.raises(Exception):
-        await with_retry(always_503, max_attempts=7, label="test")
+        await with_retry(always_503, max_attempts=7, label='test')
 
     assert sleeps == [2.0, 4.0, 8.0, 16.0, 32.0, RETRY_MAX_WAIT_S]
     assert sleeps[0] == RETRY_MIN_WAIT_S
@@ -208,14 +208,14 @@ async def test_jitter_bounded_at_quarter_of_wait(monkeypatch: pytest.MonkeyPatch
         uniform_calls.append((a, b))
         return 0.0
 
-    monkeypatch.setattr(retry_module.asyncio, "sleep", _instant)
-    monkeypatch.setattr(retry_module.random, "uniform", _uniform)
+    monkeypatch.setattr(retry_module.asyncio, 'sleep', _instant)
+    monkeypatch.setattr(retry_module.random, 'uniform', _uniform)
 
     async def always_503() -> str:
         raise _status_error(503)
 
     with pytest.raises(Exception):
-        await with_retry(always_503, max_attempts=3, label="test")
+        await with_retry(always_503, max_attempts=3, label='test')
 
     assert uniform_calls == [(0, 2.0 * 0.25), (0, 4.0 * 0.25)]
 

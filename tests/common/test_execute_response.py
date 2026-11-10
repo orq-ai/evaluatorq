@@ -129,9 +129,7 @@ async def test_drops_reasoning_and_retries_once_on_rejection(monkeypatch: pytest
     # concern, so the logger is stubbed rather than exercising that bug here.
     monkeypatch.setattr('evaluatorq.common.llm_call.logger', MagicMock())
     client = _client()
-    client.responses.create = AsyncMock(
-        side_effect=[_bad_request("Unknown parameter: 'reasoning'"), _fake_response()]
-    )
+    client.responses.create = AsyncMock(side_effect=[_bad_request("Unknown parameter: 'reasoning'"), _fake_response()])
 
     response, _usage = await execute_response(
         client=client,

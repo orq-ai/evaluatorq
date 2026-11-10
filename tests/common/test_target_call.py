@@ -16,6 +16,7 @@ from evaluatorq.common.target_call import (
 )
 from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, TextOutputItem
 
+
 class _Target:
     """Minimal AgentTarget double: respond() returns queued items or raises them."""
 
@@ -41,9 +42,7 @@ def _ok(text: str) -> AgentResponse:
 
 
 def _err(msg: str) -> AgentResponse:
-    return AgentResponse(
-        text=msg, error=AgentResponseError(message=msg, error_type='target_error', code='x')
-    )
+    return AgentResponse(text=msg, error=AgentResponseError(message=msg, error_type='target_error', code='x'))
 
 
 @pytest.mark.asyncio
@@ -61,7 +60,9 @@ async def test_close_target_logs_and_swallows_cleanup_failure(monkeypatch: pytes
 @pytest.mark.asyncio
 async def test_success_first_try():
     t = _Target([_ok('hi')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is True
     assert r.error is None
     assert r.attempts == 1
@@ -72,7 +73,9 @@ async def test_success_first_try():
 @pytest.mark.asyncio
 async def test_retry_then_succeed():
     t = _Target([_err('boom'), _ok('hi')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is True
     assert r.attempts == 2
     assert t.calls == 2
@@ -81,7 +84,9 @@ async def test_retry_then_succeed():
 @pytest.mark.asyncio
 async def test_error_marker_exhausted():
     t = _Target([_err('boom'), _err('boom'), _err('boom')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is False
     assert r.error is not None
     assert r.attempts == 3
@@ -97,7 +102,9 @@ async def test_timeout_becomes_synthetic_error():
         async def respond(self, messages):
             return await _hang(messages)
 
-    r = await call_target_with_retry(_Hang(), [Message(role='user', content='q')], target_agent_timeout_ms=10, max_target_retries=0)
+    r = await call_target_with_retry(
+        _Hang(), [Message(role='user', content='q')], target_agent_timeout_ms=10, max_target_retries=0
+    )
     assert r.succeeded is False
     assert r.error is not None
     assert r.error.error_type == 'timeout'
@@ -107,7 +114,9 @@ async def test_timeout_becomes_synthetic_error():
 @pytest.mark.asyncio
 async def test_generic_exception_mapped_and_classified():
     t = _Target([ConnectionError('connection reset')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=0)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=0
+    )
     assert r.succeeded is False
     assert r.error is not None
     # classify_error_type maps 'connection' -> 'network_error'
@@ -121,8 +130,10 @@ async def test_generic_exception_mapped_and_classified():
 async def test_map_error_none_falls_back_to_default():
     t = _Target([RuntimeError('weird')])
     r = await call_target_with_retry(
-        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=0,
-
+        t,
+        [Message(role='user', content='q')],
+        target_agent_timeout_ms=1000,
+        max_target_retries=0,
         map_error=lambda exc: None,
     )
     assert r.succeeded is False
@@ -181,7 +192,9 @@ async def test_cancelled_error_propagates():
             raise asyncio.CancelledError()
 
     with pytest.raises(asyncio.CancelledError):
-        await call_target_with_retry(_Cancel(), [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+        await call_target_with_retry(
+            _Cancel(), [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+        )
 
 
 def test_default_map_error_shape():
@@ -207,7 +220,9 @@ class _ClientError(Exception):
 @pytest.mark.asyncio
 async def test_client_error_is_not_retried():
     t = _Target([_ClientError(400), _ok('unreachable')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is False
     assert r.attempts == 1
     assert t.calls == 1
@@ -216,7 +231,9 @@ async def test_client_error_is_not_retried():
 @pytest.mark.asyncio
 async def test_permission_error_is_not_retried():
     t = _Target([_ClientError(403), _ok('unreachable')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is False
     assert r.attempts == 1
     assert t.calls == 1
@@ -225,7 +242,9 @@ async def test_permission_error_is_not_retried():
 @pytest.mark.asyncio
 async def test_rate_limit_429_still_retried():
     t = _Target([_ClientError(429), _ok('hi')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is True
     assert r.attempts == 2
     assert t.calls == 2
@@ -234,7 +253,9 @@ async def test_rate_limit_429_still_retried():
 @pytest.mark.asyncio
 async def test_server_error_500_still_retried():
     t = _Target([_ClientError(500), _ClientError(500), _ClientError(500)])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is False
     assert r.attempts == 3
     assert t.calls == 3
@@ -296,7 +317,9 @@ def test_extract_status_code_shapes():
 async def test_httpx_style_client_error_is_not_retried():
     # Vercel targets raise httpx.HTTPStatusError: status lives on .response.
     t = _Target([_HttpxStyleError(400), _ok('unreachable')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is False
     assert r.attempts == 1
     assert t.calls == 1
@@ -306,7 +329,9 @@ async def test_httpx_style_client_error_is_not_retried():
 async def test_wrapped_client_error_is_not_retried():
     # Adapters may wrap the SDK error; the status hides under __cause__.
     t = _Target([_wrapped(403), _ok('unreachable')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is False
     assert r.attempts == 1
     assert t.calls == 1
@@ -315,10 +340,13 @@ async def test_wrapped_client_error_is_not_retried():
 @pytest.mark.asyncio
 async def test_aiohttp_style_429_still_retried():
     t = _Target([_AiohttpStyleError(429), _ok('hi')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is True
     assert r.attempts == 2
     assert t.calls == 2
+
 
 @pytest.mark.asyncio
 async def test_implicitly_chained_client_error_is_not_retried():
@@ -326,7 +354,9 @@ async def test_implicitly_chained_client_error_is_not_retried():
     # extractor must still find it so the call fails fast instead of burning
     # all retries.
     t = _Target([_implicitly_wrapped(400), _ok('unreachable')])
-    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    r = await call_target_with_retry(
+        t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+    )
     assert r.succeeded is False
     assert r.attempts == 1
     assert t.calls == 1
@@ -449,7 +479,9 @@ async def test_self_timed_target_own_limit_uses_nonretryable_error() -> None:
 @pytest.mark.asyncio
 async def test_self_timed_target_cancellation_propagates() -> None:
     task = asyncio.create_task(
-        call_target_with_retry(_Slow(5), [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=0)
+        call_target_with_retry(
+            _Slow(5), [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=0
+        )
     )
     await asyncio.sleep(0.05)
     task.cancel()

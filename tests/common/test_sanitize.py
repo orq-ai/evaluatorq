@@ -12,26 +12,26 @@ from evaluatorq.common.sanitize import delimit, xml_escape
 
 
 def test_delimit_basic():
-    assert delimit("hello") == "<data>hello</data>"
+    assert delimit('hello') == '<data>hello</data>'
 
 
 def test_delimit_escapes_ampersand():
-    result = delimit("a & b")
-    assert "&amp;" in result
-    assert "<data>a &amp; b</data>" == result
+    result = delimit('a & b')
+    assert '&amp;' in result
+    assert '<data>a &amp; b</data>' == result
 
 
 def test_delimit_escapes_data_tags():
-    result = delimit("test <data>injection</data> here")
-    assert "<data>" not in result.replace("<data>", "", 1).replace("</data>", "", 1)
-    assert "&lt;data&gt;" in result
-    assert "&lt;/data&gt;" in result
+    result = delimit('test <data>injection</data> here')
+    assert '<data>' not in result.replace('<data>', '', 1).replace('</data>', '', 1)
+    assert '&lt;data&gt;' in result
+    assert '&lt;/data&gt;' in result
 
 
 def test_delimit_case_insensitive():
-    result = delimit("<DATA>test</DATA>")
-    assert "&lt;data&gt;" in result
-    assert "&lt;/data&gt;" in result
+    result = delimit('<DATA>test</DATA>')
+    assert '&lt;data&gt;' in result
+    assert '&lt;/data&gt;' in result
 
 
 @pytest.mark.parametrize('payload', ['</data >', '< /data>', '<data foo="x">'])
@@ -114,12 +114,12 @@ def test_delimit_rejects_superlinear_tag_prefix_scans(payload: str):
 
 
 def test_delimit_empty_string():
-    assert delimit("") == "<data></data>"
+    assert delimit('') == '<data></data>'
 
 
 def test_preserves_non_data_tags():
-    result = delimit("<b>bold</b>")
-    assert "<b>bold</b>" in result
+    result = delimit('<b>bold</b>')
+    assert '<b>bold</b>' in result
 
 
 # ---------------------------------------------------------------------------
@@ -128,24 +128,24 @@ def test_preserves_non_data_tags():
 
 
 def test_delimit_custom_tag():
-    result = delimit("hello", tag="target_response")
-    assert result == "<target_response>hello</target_response>"
+    result = delimit('hello', tag='target_response')
+    assert result == '<target_response>hello</target_response>'
 
 
 def test_delimit_custom_tag_escapes_matching_tags():
-    result = delimit("a <target_response>injection</target_response> b", tag="target_response")
+    result = delimit('a <target_response>injection</target_response> b', tag='target_response')
     # The outer boundary tags should be the only unescaped ones
-    inner = result.removeprefix("<target_response>").removesuffix("</target_response>")
-    assert "<target_response>" not in inner
-    assert "</target_response>" not in inner
-    assert "&lt;target_response&gt;" in inner
-    assert "&lt;/target_response&gt;" in inner
+    inner = result.removeprefix('<target_response>').removesuffix('</target_response>')
+    assert '<target_response>' not in inner
+    assert '</target_response>' not in inner
+    assert '&lt;target_response&gt;' in inner
+    assert '&lt;/target_response&gt;' in inner
 
 
 def test_delimit_custom_tag_case_insensitive():
-    result = delimit("<TARGET_RESPONSE>test</TARGET_RESPONSE>", tag="target_response")
-    inner = result.removeprefix("<target_response>").removesuffix("</target_response>")
-    assert "<target_response>" not in inner.lower()
+    result = delimit('<TARGET_RESPONSE>test</TARGET_RESPONSE>', tag='target_response')
+    inner = result.removeprefix('<target_response>').removesuffix('</target_response>')
+    assert '<target_response>' not in inner.lower()
 
 
 @pytest.mark.parametrize('tag', ['target-', 'target1', 'target_'])
@@ -159,8 +159,8 @@ def test_delimit_custom_tag_escapes_all_legal_trailing_characters(tag: str):
 
 
 def test_delimit_custom_tag_does_not_escape_other_tags():
-    result = delimit("<data>keep</data>", tag="target_response")
-    assert "<data>keep</data>" in result
+    result = delimit('<data>keep</data>', tag='target_response')
+    assert '<data>keep</data>' in result
 
 
 # ---------------------------------------------------------------------------
@@ -169,28 +169,28 @@ def test_delimit_custom_tag_does_not_escape_other_tags():
 
 
 def test_delimit_rejects_empty_tag():
-    with pytest.raises(ValueError, match="Invalid tag name"):
-        delimit("hello", tag="")
+    with pytest.raises(ValueError, match='Invalid tag name'):
+        delimit('hello', tag='')
 
 
 def test_delimit_rejects_tag_starting_with_digit():
-    with pytest.raises(ValueError, match="Invalid tag name"):
-        delimit("hello", tag="1tag")
+    with pytest.raises(ValueError, match='Invalid tag name'):
+        delimit('hello', tag='1tag')
 
 
 def test_delimit_rejects_tag_with_angle_brackets():
-    with pytest.raises(ValueError, match="Invalid tag name"):
-        delimit("hello", tag="tag<>")
+    with pytest.raises(ValueError, match='Invalid tag name'):
+        delimit('hello', tag='tag<>')
 
 
 def test_delimit_rejects_tag_with_spaces():
-    with pytest.raises(ValueError, match="Invalid tag name"):
-        delimit("hello", tag="my tag")
+    with pytest.raises(ValueError, match='Invalid tag name'):
+        delimit('hello', tag='my tag')
 
 
 def test_delimit_rejects_tag_with_slash():
-    with pytest.raises(ValueError, match="Invalid tag name"):
-        delimit("hello", tag="foo/bar")
+    with pytest.raises(ValueError, match='Invalid tag name'):
+        delimit('hello', tag='foo/bar')
 
 
 # ---------------------------------------------------------------------------
@@ -201,14 +201,14 @@ def test_delimit_rejects_tag_with_slash():
 def test_delimit_escape_ordering_prevents_bypass():
     """Ampersand must be escaped BEFORE tags — otherwise pre-escaped tag
     sequences like ``&lt;data&gt;`` survive as a breakout vector."""
-    result = delimit("&lt;data&gt;")
+    result = delimit('&lt;data&gt;')
     # & → &amp; first, so the pre-escaped sequence becomes &amp;lt;data&amp;gt;
-    assert "<data>&amp;lt;data&amp;gt;</data>" == result
+    assert '<data>&amp;lt;data&amp;gt;</data>' == result
 
 
 def test_delimit_escape_ordering_closing_tag():
-    result = delimit("&lt;/data&gt;")
-    assert "<data>&amp;lt;/data&amp;gt;</data>" == result
+    result = delimit('&lt;/data&gt;')
+    assert '<data>&amp;lt;/data&amp;gt;</data>' == result
 
 
 # ---------------------------------------------------------------------------
@@ -217,24 +217,24 @@ def test_delimit_escape_ordering_closing_tag():
 
 
 def test_xml_escape_basic():
-    assert xml_escape("a & b") == "a &amp; b"
+    assert xml_escape('a & b') == 'a &amp; b'
 
 
 def test_xml_escape_angle_brackets():
-    assert xml_escape("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
+    assert xml_escape('<script>alert(1)</script>') == '&lt;script&gt;alert(1)&lt;/script&gt;'
 
 
 def test_xml_escape_empty():
-    assert xml_escape("") == ""
+    assert xml_escape('') == ''
 
 
 def test_xml_escape_no_special_chars():
-    assert xml_escape("hello world") == "hello world"
+    assert xml_escape('hello world') == 'hello world'
 
 
 def test_xml_escape_all_special():
     result = xml_escape('a & b < c > d')
-    assert result == "a &amp; b &lt; c &gt; d"
+    assert result == 'a &amp; b &lt; c &gt; d'
 
 
 # ---------------------------------------------------------------------------
@@ -258,27 +258,27 @@ async def test_datapoint_system_prompt_always_rebuilt():
     )
 
     persona = Persona(
-        name="Test User",
+        name='Test User',
         patience=0.5,
         assertiveness=0.5,
         politeness=0.5,
         technical_level=0.5,
         communication_style=CommunicationStyle.casual,
-        background="A test persona.",
+        background='A test persona.',
     )
     scenario = Scenario(
-        name="Test Scenario",
-        goal="Achieve a test goal",
-        context="Some context",
+        name='Test Scenario',
+        goal='Achieve a test goal',
+        context='Some context',
     )
 
-    stale_prompt = "stale cached prompt — should NOT be used"
+    stale_prompt = 'stale cached prompt — should NOT be used'
     dp = SimulationDatapoint(
-        id="dp_test",
+        id='dp_test',
         persona=persona,
         scenario=scenario,
         user_system_prompt=stale_prompt,
-        first_message="Hi",
+        first_message='Hi',
     )
 
     expected_prompt = build_datapoint_system_prompt(persona, scenario)
@@ -286,13 +286,11 @@ async def test_datapoint_system_prompt_always_rebuilt():
 
     # Patch just enough to avoid real LLM calls
     with (
+        patch('evaluatorq.simulation.runner.simulation.SimulationRunner._get_shared_client') as mock_client,
         patch(
-            "evaluatorq.simulation.runner.simulation.SimulationRunner._get_shared_client"
-        ) as mock_client,
-        patch(
-            "evaluatorq.simulation.agents.user_simulator.UserSimulatorAgent.generate_first_message",
+            'evaluatorq.simulation.agents.user_simulator.UserSimulatorAgent.generate_first_message',
             new_callable=AsyncMock,
-            return_value="Hi there",
+            return_value='Hi there',
         ),
     ):
         mock_client.return_value = MagicMock()
@@ -300,27 +298,25 @@ async def test_datapoint_system_prompt_always_rebuilt():
         from evaluatorq.simulation.runner.simulation import SimulationRunner
 
         runner = SimulationRunner(
-            target=lambda msgs: "agent reply",
-            model="test-model",
+            target=lambda msgs: 'agent reply',
+            model='test-model',
             max_turns=1,
         )
 
         # We only need to verify what system_prompt the UserSimulatorAgent
         # receives.  Patch its __init__ to capture it.
         captured_prompts: list[object] = []
-        original_init = (
-            __import__(
-                "evaluatorq.simulation.agents.user_simulator",
-                fromlist=["UserSimulatorAgent"],
-            ).UserSimulatorAgent.__init__
-        )
+        original_init = __import__(
+            'evaluatorq.simulation.agents.user_simulator',
+            fromlist=['UserSimulatorAgent'],
+        ).UserSimulatorAgent.__init__
 
         def spy_init(self, config, **kwargs):
-            captured_prompts.append(kwargs.get("system_prompt"))
+            captured_prompts.append(kwargs.get('system_prompt'))
             return original_init(self, config, **kwargs)
 
         with patch(
-            "evaluatorq.simulation.runner.simulation.UserSimulatorAgent.__init__",
+            'evaluatorq.simulation.runner.simulation.UserSimulatorAgent.__init__',
             spy_init,
         ):
             # We don't care about the full run completing — an error after

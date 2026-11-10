@@ -248,9 +248,7 @@ async def test_numeric_default_is_mean() -> None:
 )
 async def test_numeric_aggregators(aggregator: NumericAggName, expected: float) -> None:
     judge, panel = _numeric_panel({'a': 0.0, 'b': 0.6, 'c': 0.9})
-    result = await run_jury(
-        judge_fn=judge, panel=panel, verdict_kind=VerdictKind.NUMERIC, aggregator=aggregator
-    )
+    result = await run_jury(judge_fn=judge, panel=panel, verdict_kind=VerdictKind.NUMERIC, aggregator=aggregator)
     assert result.verdict == pytest.approx(expected)
     # std rides along even when the verdict isn't the mean (median/min/max)
     assert result.jury.stats is not None and result.jury.stats.std > 0
@@ -295,9 +293,7 @@ async def test_custom_callable_aggregator_sees_votes() -> None:
     def pick_b(votes):
         return next((v.value for v in votes if v.model == 'b'), None)
 
-    result = await run_jury(
-        judge_fn=judge, panel=list(values), verdict_kind=VerdictKind.CATEGORICAL, aggregator=pick_b
-    )
+    result = await run_jury(judge_fn=judge, panel=list(values), verdict_kind=VerdictKind.CATEGORICAL, aggregator=pick_b)
     assert result.verdict == 'blue'
 
 
@@ -320,9 +316,7 @@ async def test_mode_explicit_picks_most_common() -> None:
     async def judge(model: str) -> Prediction:
         return Prediction(value=values[model], explanation='')
 
-    result = await run_jury(
-        judge_fn=judge, panel=list(values), verdict_kind=VerdictKind.CATEGORICAL, aggregator='mode'
-    )
+    result = await run_jury(judge_fn=judge, panel=list(values), verdict_kind=VerdictKind.CATEGORICAL, aggregator='mode')
     assert result.verdict == 'x'
     assert result.jury.tie is False
 
