@@ -996,6 +996,7 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "anthropic" },
     { name = "crewai", marker = "python_full_version >= '3.11'" },
     { name = "cryptography" },
     { name = "huggingface-hub" },
@@ -1018,6 +1019,9 @@ all = [
     { name = "umap-learn" },
     { name = "uvicorn" },
     { name = "vl-convert-python" },
+]
+anthropic = [
+    { name = "anthropic" },
 ]
 crewai = [
     { name = "crewai", marker = "python_full_version >= '3.11'" },
@@ -1107,6 +1111,8 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", marker = "extra == 'all'", specifier = ">=0.75.0" },
+    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.75.0" },
     { name = "crewai", marker = "python_full_version >= '3.11' and extra == 'all'", specifier = ">=0.70.0" },
     { name = "crewai", marker = "python_full_version >= '3.11' and extra == 'crewai'", specifier = ">=0.70.0" },
     { name = "cryptography", marker = "extra == 'all'", specifier = ">=42.0.0" },
@@ -1157,7 +1163,7 @@ requires-dist = [
     { name = "vl-convert-python", marker = "extra == 'redteam'", specifier = ">=1.6.0" },
     { name = "vl-convert-python", marker = "extra == 'simulation'", specifier = ">=1.6.0" },
 ]
-provides-extras = ["all", "crewai", "dashboard", "insights", "langchain", "langgraph", "openai-agents", "orq", "otel", "pydantic-ai", "redteam", "simulation"]
+provides-extras = ["all", "anthropic", "crewai", "dashboard", "insights", "langchain", "langgraph", "openai-agents", "orq", "otel", "pydantic-ai", "redteam", "simulation"]
 
 [package.metadata.requires-dev]
 dev = [

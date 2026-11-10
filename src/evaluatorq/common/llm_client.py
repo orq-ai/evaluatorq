@@ -62,6 +62,14 @@ class ResolvedClient(NamedTuple):
     """``True`` when requests hit the Orq router (``…/v3/router``)."""
 
 
+def is_anthropic_client(obj: object) -> bool:
+    """True for an Anthropic SDK adapter (``evaluatorq.anthropic``), detected by its marker.
+
+    Reads a class attribute instead of importing the adapter, so it works when the ``anthropic`` extra is not installed.
+    """
+    return getattr(obj, 'evaluatorq_provider', None) == 'anthropic'
+
+
 def client_routes_through_orq(client: AsyncOpenAI | None) -> bool:
     """True when ``client``'s ``base_url`` points at the Orq router.
 
