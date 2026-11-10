@@ -168,7 +168,12 @@ def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -
     _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
 
 
-def apply_pipeline_metadata(params: dict[str, Any], *, routes_through_orq: bool) -> None:
+def apply_pipeline_metadata(
+    params: dict[str, Any],
+    *,
+    routes_through_orq: bool,
+    store_default: bool = False,
+) -> None:
     """Tag the invocation with the active run surface + run id via ``metadata``.
 
     Mutates ``params`` in place; no-op when no run is bound. Caller-supplied
@@ -176,14 +181,16 @@ def apply_pipeline_metadata(params: dict[str, Any], *, routes_through_orq: bool)
     ``create()`` sites that build their own kwargs dict call this instead of
     routing through `execute_chat_completion`.
 
-    Added only when ``routes_through_orq`` is true or the caller set a truthy
-    ``store``. OpenAI's own Chat Completions API defaults to ``store=false`` and
-    rejects ``metadata`` then with a 400, and we do not set ``store=True`` for the
-    caller because that would keep attacker and target conversations at OpenAI.
+    Added only when ``routes_through_orq`` is true or ``store`` is truthy, where
+    ``store`` falls back to ``store_default`` when the caller did not set it. OpenAI's
+    Chat Completions API defaults to ``store=false`` and rejects ``metadata`` then with
+    a 400 (``store_default=False``); the Responses API defaults to ``store=true`` and
+    accepts it (``store_default=True``). We never set ``store=True`` for the caller,
+    because that would keep attacker and target conversations at OpenAI.
     Only set when non-empty: an explicit ``metadata=None`` would serialize as
     ``"metadata": null`` rather than being stripped from the body.
     """
-    if not (routes_through_orq or params.get('store')):
+    if not (routes_through_orq or params.get('store', store_default)):
         return
     md = pipeline_metadata()
     if md:
@@ -473,7 +480,7 @@ async def execute_response(
     )
 
     strip_known_rejected_responses_reasoning(model, params)
-    apply_pipeline_metadata(params, routes_through_orq=client_routes_through_orq(client))
+    apply_pipeline_metadata(params, routes_through_orq=client_routes_through_orq(client), store_default=True)
 
     if record_input:
         record_llm_input(span, messages)

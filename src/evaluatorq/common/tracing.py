@@ -570,6 +570,11 @@ async def with_llm_span(  # noqa: RUF029
         serialized = _serialize_messages(input_messages)
         genai_attrs['gen_ai.input.messages'] = serialized
         genai_attrs['input'] = serialized
+    # Run attribution on every LLM span, whatever the endpoint; caller attributes win.
+    from evaluatorq.common.thread_context import pipeline_metadata
+
+    for key, value in pipeline_metadata().items():
+        genai_attrs[f'orq.{key}'] = value
     if attributes:
         genai_attrs.update(attributes)
     # Domain-specific key mapping (e.g. orq.redteam.llm_purpose -> orq.llm.purpose)

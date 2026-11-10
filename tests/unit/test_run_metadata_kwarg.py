@@ -43,6 +43,21 @@ def test_applied_off_orq_when_caller_enables_store() -> None:
     assert params['metadata'] == {'evaluatorq_run_id': 'r1'}
 
 
+def test_store_default_true_applies_off_orq_unless_store_false() -> None:
+    """Responses defaults store=true; only an explicit store=False withholds metadata."""
+    with evaluatorq_run_id('r1'):
+        default: dict[str, Any] = {}
+        apply_pipeline_metadata(default, routes_through_orq=False, store_default=True)
+        off: dict[str, Any] = {'store': False}
+        apply_pipeline_metadata(off, routes_through_orq=False, store_default=True)
+        chat: dict[str, Any] = {}
+        apply_pipeline_metadata(chat, routes_through_orq=False)
+
+    assert default['metadata'] == {'evaluatorq_run_id': 'r1'}
+    assert 'metadata' not in off
+    assert 'metadata' not in chat
+
+
 def test_caller_supplied_metadata_wins_on_conflict() -> None:
     """A caller's own metadata key survives; the bound keys fill in around it."""
     params = {'metadata': {'evaluatorq_run_id': 'caller-id', 'custom': 'x'}}

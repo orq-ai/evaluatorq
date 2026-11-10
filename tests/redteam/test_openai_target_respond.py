@@ -201,8 +201,8 @@ async def test_reasoning_effort_switches_the_token_budget_field():
 
 
 @pytest.mark.asyncio
-async def test_without_reasoning_effort_the_token_budget_stays_max_tokens():
-    """The non-reasoning path is unchanged — older models only accept `max_tokens`."""
+async def test_without_reasoning_effort_the_token_budget_is_max_completion_tokens():
+    """gpt-5.x rejects `max_tokens`, so the budget is `max_completion_tokens` with or without an effort."""
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=_make_openai_response())
     target = _make_target(client)
@@ -211,6 +211,6 @@ async def test_without_reasoning_effort_the_token_budget_stays_max_tokens():
         await target.respond([Message(role="user", content="hello")])
 
     sent = client.chat.completions.create.call_args.kwargs
-    assert sent["max_tokens"] == target.max_tokens
-    assert "max_completion_tokens" not in sent
+    assert sent["max_completion_tokens"] == target.max_tokens
+    assert "max_tokens" not in sent
     assert "reasoning_effort" not in sent

@@ -152,7 +152,8 @@ class TestFirstMessageGeneratorPipelineMetadata:
         _, kwargs = client.responses.create.call_args
         assert 'metadata' not in kwargs
 
-    async def test_omits_metadata_when_not_orq_routed(self) -> None:
+    async def test_sends_metadata_when_not_orq_routed(self) -> None:
+        """The Responses API defaults store=true, so direct OpenAI accepts metadata."""
         client = _first_message_client('hi there')
         client.base_url = 'https://api.openai.com/v1'
         gen = FirstMessageGenerator(model='gpt-4o', client=client)
@@ -161,7 +162,10 @@ class TestFirstMessageGeneratorPipelineMetadata:
             await gen.generate(_persona(), _scenario())
 
         _, kwargs = client.responses.create.call_args
-        assert 'metadata' not in kwargs
+        assert kwargs['metadata'] == {
+            'evaluatorq_pipeline': 'agent_simulation',
+            'evaluatorq_run_id': 'generation-run',
+        }
 
 
 class _ConcreteAgent(BaseAgent):
@@ -212,7 +216,7 @@ class TestCallResponsesPipelineMetadata:
         _, kwargs = client.responses.create.call_args
         assert 'metadata' not in kwargs
 
-    async def test_direct_openai_omits_metadata_and_thread(self) -> None:
+    async def test_direct_openai_sends_metadata_without_thread(self) -> None:
         client = _responses_client()
         client.base_url = 'https://api.openai.com/v1'
         config = LLMCallConfig(model='gpt-4o', api='responses', client=client)
@@ -222,5 +226,5 @@ class TestCallResponsesPipelineMetadata:
             await agent._call_llm([Message(role='user', content='hi')])
 
         _, kwargs = client.responses.create.call_args
-        assert 'metadata' not in kwargs
+        assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation', 'evaluatorq_run_id': 'run-1'}
         assert 'thread' not in kwargs.get('extra_body', {})
