@@ -20,9 +20,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
-from openai import BadRequestError
-
 from evaluatorq.common.cli_oauth import DECISIONS_PATH
+from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS
 from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.model_input import classifier_question_wire_payloads
@@ -124,7 +123,7 @@ def _strip_known_rejected_reasoning(model: str, params: dict[str, Any]) -> None:
 _UNSUPPORTED_PARAMETER_MARKERS = ('unsupported', 'not supported', 'unrecognized', 'unknown parameter')
 
 
-def _is_reasoning_effort_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
+def _is_reasoning_effort_rejection(params: dict[str, Any], exc: BaseException) -> bool:
     """True if `exc` is the reasoning_effort-unsupported 400 for this call.
 
     A rejected value is not an unsupported parameter, and only the second one is
@@ -156,7 +155,7 @@ def strip_known_rejected_responses_reasoning(model: str, params: dict[str, Any])
         _announce_strip('responses', model, key, 'the reasoning block')
 
 
-def is_responses_reasoning_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
+def is_responses_reasoning_rejection(params: dict[str, Any], exc: BaseException) -> bool:
     """True if ``exc`` is the reasoning-unsupported 400 for this Responses call."""
     err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
     return 'reasoning' in params and 'reasoning' in err_body
@@ -261,7 +260,7 @@ async def execute_chat_completion(
 
     try:
         response = await _bounded_call(client.chat.completions.create(**params), timeout_s)
-    except BadRequestError as exc:
+    except BAD_REQUEST_ERRORS as exc:
         # "where possible": endpoints that don't support reasoning_effort 400 on
         # it — drop the param and retry once rather than failing the call. Gate on
         # the error body so an unrelated 400 (bad tools schema, context length, …)
@@ -343,7 +342,7 @@ async def execute_chat_parse(
 
     try:
         response = await _bounded_call(client.chat.completions.parse(**params), timeout_s)
-    except BadRequestError as exc:
+    except BAD_REQUEST_ERRORS as exc:
         if not _is_reasoning_effort_rejection(params, exc):
             raise
         _REASONING_EFFORT_REJECTORS.add(_reasoning_key(model, params))
@@ -486,7 +485,7 @@ async def execute_response(
 
     try:
         response = await _call()
-    except BadRequestError as exc:
+    except BAD_REQUEST_ERRORS as exc:
         # Same drop-and-retry-once contract as the chat path, for the Responses
         # `reasoning` block. An unrelated 400 propagates to the caller.
         if not is_responses_reasoning_rejection(params, exc):

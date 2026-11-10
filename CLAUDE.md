@@ -154,6 +154,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Classifying agent simulation results as errored across saved reports and typed reports | `simulation.metrics.is_errored_result` | per-surface error checks |
 | Representing an Insights conversation with trace metadata | `common.trace_document.TraceDocument`; convert with `ensure_trace_document`, render with `to_chat_messages`, persist coverage with `source_coverage` | a second stored message list beside the ATIF trajectory, or unrestricted capture payloads in saved review data |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
+| Catching or classifying an LLM SDK error | `common.llm_errors` (`STATUS_ERRORS`, `CONNECTION_ERRORS`, `BAD_REQUEST_ERRORS`, `status_code`), which covers the OpenAI and Anthropic SDKs | `except openai.APIStatusError` and friends: an Anthropic client's errors slip past them |
 | Untrusted trace text (a shell command, tool arguments or output) going to an external classifier | `common.redact.scrub_known_secrets` (local, pure, no network) before the text is rendered or sent | an ad-hoc credential regex, or sending the raw text |
 | Rendering a transcript as Responses `input` | `openresponses.input_items.messages_to_responses_input` | a hand-built `{'role', 'content'}` list — an assistant turn needs `output_text` parts or the Orq router **silently drops it** |
 

@@ -50,11 +50,12 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, NamedTuple, TypeVar, cast
 
-from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError, pydantic_function_tool
+from openai import AsyncOpenAI, LengthFinishReasonError, pydantic_function_tool
 from pydantic import BaseModel, ValidationError
 
 from evaluatorq.common.extract_json import extract_json_from_response
 from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse, execute_response
+from evaluatorq.common.llm_errors import STATUS_ERRORS, status_code
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
@@ -236,12 +237,12 @@ _TOOL_KEYWORDS = (
 )
 
 
-def _looks_like_capability_rejection(exc: APIStatusError, keywords: tuple[str, ...]) -> bool:
+def _looks_like_capability_rejection(exc: BaseException, keywords: tuple[str, ...]) -> bool:
     err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
     return any(kw in err_body for kw in keywords)
 
 
-def _rejection_message(exc: APIStatusError) -> str:
+def _rejection_message(exc: BaseException) -> str:
     # Provider bodies can echo prompts; name only fixed capability clues in logs.
     body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
     if 'oneof' in body:
@@ -252,7 +253,7 @@ def _rejection_message(exc: APIStatusError) -> str:
     return 'provider rejected the requested capability'
 
 
-def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
+def _looks_like_schema_rejection(exc: BaseException) -> bool:
     return _looks_like_capability_rejection(exc, _SCHEMA_KEYWORDS)
 
 
@@ -500,10 +501,10 @@ async def _generate_structured_via_responses(
                 ),
                 label=label,
             )
-        except APIStatusError as e:
-            if e.status_code == 404:
+        except STATUS_ERRORS as e:
+            if status_code(e) == 404:
                 cause = 'no Responses endpoint (HTTP 404)'
-            elif e.status_code == 400 and _looks_like_schema_rejection(e):
+            elif status_code(e) == 400 and _looks_like_schema_rejection(e):
                 cause = f'Responses structured output rejected (HTTP 400: {_rejection_message(e)})'
             else:
                 raise
@@ -649,8 +650,8 @@ async def _parse_rung(
             lambda: execute_chat_parse(**call.executor_kwargs(**rung)),
             label=retry_label,
         )
-    except APIStatusError as e:
-        if e.status_code != 400 or not _looks_like_capability_rejection(e, rejection_keywords):
+    except STATUS_ERRORS as e:
+        if status_code(e) != 400 or not _looks_like_capability_rejection(e, rejection_keywords):
             raise
         logger.warning('%s: %s (provider said: %s)', label, rejected, _rejection_message(e))
         return None, None
@@ -712,8 +713,8 @@ async def _leg_json_schema(call: _ChatLadderCall, *, response_format: type[T]) -
             lambda: execute_chat_completion(**call.executor_kwargs(response_format=schema_format)),
             label=f'{label} (json_schema fallback)',
         )
-    except APIStatusError as e:
-        if e.status_code != 400 or not _looks_like_schema_rejection(e):
+    except STATUS_ERRORS as e:
+        if status_code(e) != 400 or not _looks_like_schema_rejection(e):
             raise
         logger.warning('%s: json_schema not accepted, trying a forced tool call', label)
         return StructuredResult(None, '')

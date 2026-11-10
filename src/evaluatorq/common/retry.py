@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING, TypeVar
 
 import httpx
 from loguru import logger
-from openai import APIConnectionError, APIStatusError
+
+from evaluatorq.common.llm_errors import CONNECTION_ERRORS, STATUS_ERRORS, status_code
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
@@ -83,10 +84,10 @@ def _is_retryable_error(
 ) -> bool:
     """Check if an error is retryable (API status or transport failure)."""
     # API errors with retryable status codes.
-    if isinstance(err, APIStatusError):
-        return _is_retryable_status(err.status_code, retry_statuses)
+    if isinstance(err, STATUS_ERRORS):
+        return _is_retryable_status(status_code(err), retry_statuses)
 
-    # Transport failures. The OpenAI SDK raises APIConnectionError (and its
+    # Transport failures. The OpenAI and Anthropic SDKs raise APIConnectionError (and its
     # APITimeoutError subclass) ONLY for transport-level failures — connection
     # reset, read/write error, proxy error, DNS, timeout, and a server that
     # disconnects mid-response (httpx.RemoteProtocolError) — wrapping the
@@ -94,7 +95,7 @@ def _is_retryable_error(
     # every one of them at once, where an httpx class-name allowlist silently
     # drops the next error type the SDK wraps (e.g. RemoteProtocolError, the
     # ordinary way a long router call dies mid-flight).
-    if isinstance(err, APIConnectionError):
+    if isinstance(err, CONNECTION_ERRORS):
         return True
 
     # A raw httpx call (the Orq trace endpoints, which have no SDK method) raises

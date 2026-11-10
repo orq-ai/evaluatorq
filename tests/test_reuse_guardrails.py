@@ -1371,3 +1371,48 @@ def test_env_raw_default_detector_resolves_constants() -> None:
         "from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL\nN = 'X'\nenv_raw(N, DEFAULT_ORQ_BASE_URL)\n"
     )
     assert _env_raw_defaults(source) == [(3, 'X', 'https://my.orq.ai')]
+
+
+OPENAI_ERROR_NAMES = frozenset({
+    'APIError',
+    'APIStatusError',
+    'APIConnectionError',
+    'APITimeoutError',
+    'BadRequestError',
+    'OpenAIError',
+    'RateLimitError',
+    'NotFoundError',
+    'AuthenticationError',
+    'PermissionDeniedError',
+    'InternalServerError',
+    'UnprocessableEntityError',
+    'ConflictError',
+})
+
+
+def test_llm_sdk_errors_are_caught_through_llm_errors() -> None:
+    """Only ``common/llm_errors.py`` may name an ``openai`` exception class.
+
+    An ``except openai.APIStatusError`` lets an Anthropic client's errors slip past it.
+    """
+    allowed = SRC / 'common' / 'llm_errors.py'
+    offenders: list[str] = []
+    for path in sorted(SRC.rglob('*.py')):
+        if path == allowed:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            names: list[str] = []
+            if isinstance(node, ast.ImportFrom) and node.module == 'openai':
+                names = [a.name for a in node.names if a.name in OPENAI_ERROR_NAMES]
+            elif (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == 'openai'
+                and node.attr in OPENAI_ERROR_NAMES
+            ):
+                names = [node.attr]
+            offenders.extend(f'{path.relative_to(SRC)}:{getattr(node, "lineno", 0)} ({name})' for name in names)
+    assert not offenders, (
+        'These modules name an openai exception class directly; use evaluatorq.common.llm_errors '
+        f'(STATUS_ERRORS, CONNECTION_ERRORS, BAD_REQUEST_ERRORS, status_code) instead: {offenders}'
+    )

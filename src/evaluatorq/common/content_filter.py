@@ -20,7 +20,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 from loguru import logger
-from openai import APIConnectionError, APIStatusError
+
+from evaluatorq.common.llm_errors import CONNECTION_ERRORS, STATUS_ERRORS
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -68,7 +69,7 @@ async def regenerate_on_content_filter(
     for attempt in range(attempts):
         try:
             response = await call(attempt)
-        except (APIConnectionError, APIStatusError) as e:
+        except CONNECTION_ERRORS + STATUS_ERRORS as e:
             if is_content_filter_error(e) and attempt < attempts - 1:
                 logger.warning(f'{label} content-filtered (error form); regenerating ({attempt + 1}/{attempts - 1})')
                 continue

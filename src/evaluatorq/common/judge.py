@@ -13,7 +13,6 @@ from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from loguru import logger
-from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from evaluatorq.common.llm_call import (
@@ -23,6 +22,7 @@ from evaluatorq.common.llm_call import (
     execute_response,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS, CONNECTION_ERRORS, STATUS_ERRORS, TIMEOUT_ERRORS
 from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, UNKNOWN_ARGUMENTS_TEXT, coerce_content_text
 from evaluatorq.common.model_catalogue import is_known_classify_model, qualified_model, supports_classify
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
@@ -440,10 +440,10 @@ def _strip_code_fences(text: str) -> str:
     return inner.strip()
 
 
-def _classify(exc: Exception) -> JudgeError:
-    if isinstance(exc, APIConnectionError):
+def _classify(exc: BaseException) -> JudgeError:
+    if isinstance(exc, CONNECTION_ERRORS):
         return JudgeError.API_CONNECTION
-    if isinstance(exc, APIStatusError):
+    if isinstance(exc, STATUS_ERRORS):
         return JudgeError.API_STATUS
     return JudgeError.UNKNOWN
 
@@ -723,7 +723,7 @@ async def run_classify(
                     },
                 )
             return ClassifyOutcome(response=response, token_usage=usage, raw_content=response.model_dump_json())
-    except (asyncio.TimeoutError, APITimeoutError) as exc:
+    except (asyncio.TimeoutError, *TIMEOUT_ERRORS) as exc:
         logger.error('Judge [{}] classify call timed out after {}ms', model, cfg.timeout_ms)
         return ClassifyOutcome(
             error_kind=JudgeError.TIMEOUT,
@@ -738,7 +738,7 @@ async def run_classify(
             token_usage=usage,
             raw_content=raw_payload,
         )
-    except (APIConnectionError, APIStatusError) as exc:
+    except CONNECTION_ERRORS + STATUS_ERRORS as exc:
         kind = _classify(exc)
         logger.error('Judge [{}] classify API error ({}): {}', model, kind.value, exc)
         return ClassifyOutcome(error_kind=kind, error_message=str(exc), error_exc=exc)
@@ -912,7 +912,7 @@ async def run_classify_judges(
 
     try:
         outcome = await with_retry(classify_once, max_attempts=cfg.retry_count + 1, label=f'judge[{model}]')
-    except (asyncio.TimeoutError, APITimeoutError) as e:
+    except (asyncio.TimeoutError, *TIMEOUT_ERRORS) as e:
         logger.error('Judge [{}] classify call timed out after {}ms', model, cfg.timeout_ms)
         failed = JudgeOutcome(
             error_kind=JudgeError.TIMEOUT,
@@ -923,7 +923,7 @@ async def run_classify_judges(
         )
         return {key: failed.model_copy() for key in questions}
     except Exception as e:
-        kind = _classify(e) if isinstance(e, APIConnectionError | APIStatusError) else JudgeError.UNKNOWN
+        kind = _classify(e) if isinstance(e, CONNECTION_ERRORS + STATUS_ERRORS) else JudgeError.UNKNOWN
         logger.error('Judge [{}] classify call failed ({}): {}', model, kind.value, e)
         failed = JudgeOutcome(error_kind=kind, error_message=str(e), error_exc=e, endpoint='classify')
         return {key: failed.model_copy() for key in questions}
@@ -971,7 +971,7 @@ async def _chat_verdict(
                 extra_body=cfg.extra_body or None,
                 extra_kwargs=cfg.extra_kwargs or None,
             )
-        except BadRequestError as exc:
+        except BAD_REQUEST_ERRORS as exc:
             err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
             # Only fall back when the error looks like a structured-output
             # rejection. A miss here intentionally re-raises rather than
@@ -1132,7 +1132,7 @@ async def _attempt(
                         response_model=response_model,
                     ),
                 )
-        except BadRequestError as exc:
+        except BAD_REQUEST_ERRORS as exc:
             # The endpoint or one of its params was rejected: degrade to chat for
             # the rest of *this* judgement (a retry must not re-pay the same 400).
             # Only a 400 that names the endpoint or its params downgrades the model
@@ -1360,7 +1360,7 @@ async def run_judge(
             max_attempts=cfg.retry_count + 1,
             label=f'judge[{model}]',
         )
-    except (asyncio.TimeoutError, APITimeoutError):
+    except (asyncio.TimeoutError, *TIMEOUT_ERRORS):
         logger.error('Judge [{}] timed out after {}ms', model, cfg.timeout_ms)
         return JudgeOutcome(
             error_kind=JudgeError.TIMEOUT,
@@ -1372,7 +1372,7 @@ async def run_judge(
             'Judge [{}] returned malformed JSON: {} | raw (truncated): {}', model, e, repr(raw_content[0])[:500]
         )
         return JudgeOutcome(error_kind=JudgeError.PARSE, error_message=str(e), raw_content=raw_content[0])
-    except (APIConnectionError, APIStatusError) as e:
+    except CONNECTION_ERRORS + STATUS_ERRORS as e:
         kind = _classify(e)
         logger.error('Judge [{}] API error ({}): {}', model, kind.value, e)
         return JudgeOutcome(error_kind=kind, error_message=str(e), error_exc=e)

@@ -38,7 +38,6 @@ from typing import TYPE_CHECKING, Any, Literal
 import httpx
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
-from openai import APIError, APIStatusError
 from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import JSONResponse, RedirectResponse, Response
@@ -47,6 +46,8 @@ from evaluatorq.common.cli_oauth import OrqCLIError, list_oauth_sessions
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, mask_secret
 from evaluatorq.common.env_config import report as env_report
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
+from evaluatorq.common.llm_errors import API_ERRORS, STATUS_ERRORS
+from evaluatorq.common.llm_errors import status_code as sdk_status_code
 from evaluatorq.common.orq_client import OrqProfile, close_orq_client, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
@@ -282,7 +283,7 @@ async def _auth_status(req: Request) -> JSONResponse:
                 'method': auth.method,
                 'message': f'{auth.label} was rejected. Open Settings to choose or renew a credential.',
             })
-        expected_provider_failure = status_code is not None or isinstance(exc, (httpx.HTTPError, APIError))
+        expected_provider_failure = status_code is not None or isinstance(exc, (httpx.HTTPError, *API_ERRORS))
         if not expected_provider_failure:
             logger.opt(exception=True).error(
                 'Unexpected dashboard auth status probe failure for {}: {}', auth.label, exc
@@ -430,7 +431,7 @@ async def _settings_models(req: Request) -> NotStr:
         try:
             async with model_choices.catalogue_client(auth) as client:
                 groups = await model_choices.models_by_provider(client, kind=kind, strict=True)
-        except (ImportError, OSError, RuntimeError, ValueError, APIError, httpx.HTTPError) as exc:
+        except (ImportError, OSError, RuntimeError, ValueError, *API_ERRORS, httpx.HTTPError) as exc:
             groups = {}
             logger.warning('Could not load the model catalogue for {}: {}', field, exc)
             note = ''
@@ -450,8 +451,8 @@ def _settings_model_auth_failure(exc: Exception) -> bool:
     """Whether a catalogue error clearly means the selected credential needs attention."""
     if isinstance(exc, MissingLLMCredentialsError):
         return True
-    if isinstance(exc, APIStatusError):
-        return exc.status_code in (401, 403)
+    if isinstance(exc, STATUS_ERRORS):
+        return sdk_status_code(exc) in (401, 403)
     if getattr(exc, 'status_code', None) in (401, 403):
         return True
     return isinstance(exc, OrqCLIError) and exc.failure_kind in ('authentication', 'setup')
