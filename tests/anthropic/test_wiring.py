@@ -520,11 +520,14 @@ class RolePlayMessages(ScriptedMessages):
 
     def __init__(self) -> None:
         super().__init__([])
-        self.by_role: dict[str, int] = {'target': 0, 'evaluator': 0, 'capabilities': 0}
+        self.by_role: dict[str, int] = {'attacker': 0, 'target': 0, 'evaluator': 0, 'capabilities': 0}
 
     async def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         system = _system_text(kwargs)
+        if 'red team security researcher' in system:
+            self.by_role['attacker'] += 1
+            return text('Could you walk me through how you handle configuration questions?')
         if 'security evaluator' in system:
             self.by_role['evaluator'] += 1
             return text(_verdict_reply(kwargs))
@@ -568,7 +571,8 @@ def test_red_team_runs_end_to_end_on_an_anthropic_client(monkeypatch: pytest.Mon
         red_team(
             target,
             mode='dynamic',
-            vulnerabilities=['goal_hijacking'],
+            vulnerabilities=['prompt_injection'],
+            strategies=['crescendo_injection'],
             generate_strategies=False,
             max_dynamic_datapoints=1,
             max_turns=1,
@@ -584,3 +588,24 @@ def test_red_team_runs_end_to_end_on_an_anthropic_client(monkeypatch: pytest.Mon
     assert all(count >= 1 for count in messages.by_role.values()), messages.by_role
     assert built == []
     assert {call['model'] for call in messages.calls} == {'claude-sonnet-5-5'}
+
+
+def test_the_owasp_evaluator_wraps_a_raw_anthropic_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    import anthropic
+
+    from evaluatorq.anthropic.client import AnthropicLLMClient
+    from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+    wrapped: list[object] = []
+    real = evaluatorq_bridge.as_llm_client
+
+    def spy(client: Any) -> Any:
+        result = real(client)
+        wrapped.append(result)
+        return result
+
+    monkeypatch.setattr(evaluatorq_bridge, 'as_llm_client', spy)
+    raw = anthropic.AsyncAnthropic(api_key='x')
+    evaluatorq_bridge.create_owasp_evaluator(llm_client=cast('Any', raw))
+    assert len(wrapped) == 1
+    assert isinstance(wrapped[0], AnthropicLLMClient)
