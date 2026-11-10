@@ -10,7 +10,7 @@ Reach for this when you have an Anthropic, Bedrock or Vertex account and no Orq 
 uv add "evaluatorq[anthropic]"
 ```
 
-The extra installs `anthropic>=0.75.0`. Nothing else in evaluatorq imports it, so a base install is unaffected. Passing an Anthropic client without the extra fails at the point you construct the client, because `import anthropic` fails first.
+The extra installs `anthropic>=0.75.0`. Nothing else in evaluatorq imports it, so a base install is unaffected. Without the extra, your own `from anthropic import AsyncAnthropic` raises `ModuleNotFoundError`, because the package is not installed.
 
 ## Pass the client
 
@@ -27,10 +27,10 @@ Every entry point that takes an injected client accepts an Anthropic client dire
 
 ## Set a Claude model for every role
 
-An Anthropic client cannot serve evaluatorq's default models. The defaults are `openai/gpt-6-sol` for the `smart` role, `openai/gpt-6-luna` for `fast` and `typesafe/jev-latest` for `classifier`, and the adapter refuses any `provider/` prefix other than `anthropic/`. It fails before the request, with a message that names the role variable resolving to the bad model:
+An Anthropic client cannot serve evaluatorq's default models. The defaults are `openai/gpt-6-sol` for the `smart` role, `openai/gpt-6-luna` for `fast` and `typesafe/jev-latest` for `classifier`, and the adapter refuses any `provider/` prefix other than `anthropic/`. It raises `ModelClientMismatchError` (a `ValueError`) before the request, with a message that names the role variable resolving to the bad model. The error stops the run: judges, classify calls and the signal classifiers re-raise it instead of recording a failed outcome for every item.
 
 ```pytb
-ValueError: An Anthropic client needs a Claude model id, got 'openai/gpt-6-sol'. Set the model explicitly, for example through the EVALUATORQ_SMART_MODEL role variable, to a name such as "claude-sonnet-5-5" or "anthropic/claude-sonnet-5-5".
+ModelClientMismatchError: An Anthropic client needs a Claude model id, got 'openai/gpt-6-sol'. Set the model explicitly, for example through the EVALUATORQ_SMART_MODEL role variable, to a name such as "claude-sonnet-5-5" or "anthropic/claude-sonnet-5-5".
 ```
 
 Set the three chat roles once and every surface follows. The bare id and the `anthropic/` form are both accepted.
@@ -105,7 +105,7 @@ The adapter translates only what Anthropic's Messages API can express, and it ra
 | You send | What happens |
 |---|---|
 | An embeddings call (`client.embeddings.create`) | `NotImplementedError`: Anthropic has no embeddings API. Pass an OpenAI-compatible `embedding_client` |
-| `tool_choice` other than `auto` or `none` | `ValueError`: a forced or named tool choice returns 400 on Opus 5.5 and Sonnet 5.5. The structured-output ladder skips its forced-tool rung on an Anthropic client |
+| `tool_choice` other than `auto` or `none` | `ValueError`: a forced or named tool choice returns HTTP 400 on Claude Opus 5.5 and Sonnet 5.5, so use `auto` and name the tool in the prompt instead. The structured-output ladder skips its forced-tool rung on an Anthropic client |
 | An image content part, or any content part that is not text | `ValueError` naming the part type |
 | A parameter the adapter does not translate, such as an unknown `chat.completions.create` or `responses.create` keyword | `TypeError` listing the keywords |
 | A non-function tool | `ValueError` |
@@ -115,6 +115,8 @@ Sampling settings are sent only when you set them: `temperature` and `top_p` are
 ## Refusals
 
 When Claude stops with `stop_reason='refusal'`, the adapter returns `finish_reason='content_filter'` with the text in `message.refusal`. The red-team attacker treats that like any content-filtered reply: it regenerates up to `max_content_filter_retries` times (default 2), then the attack fails with the error code `adversarial.content_filter`.
+
+When the target under test is the Claude model and it refuses, the refusal text is the target's reply, so the judge scores what the model said instead of an empty turn.
 
 The first refusal an Anthropic client sees logs one warning that names server-side fallbacks as a way to retry on another model.
 
@@ -132,11 +134,11 @@ llm_config = LLMConfig(
 )
 ```
 
-evaluatorq sends the request to the beta Messages endpoint with the header `server-side-fallback-2026-07-01`. Fallbacks exist on the Claude API and on Google Cloud when Anthropic manages the deployment. Bedrock and a Vertex client you provision yourself reject them, and the adapter raises a `ValueError` before sending when the client is a Bedrock or Vertex one. That includes every `AsyncAnthropicVertex` client, so use `AsyncAnthropic` to reach the Claude API when you want fallbacks. Haiku 5.5 has no fallback model, so do not set `fallbacks` on a role that runs it.
+evaluatorq sends the request to the beta Messages endpoint with the header `server-side-fallback-2026-07-01`. The adapter sends fallbacks only for `AsyncAnthropic`. It rejects Bedrock and Vertex clients with a `ValueError` before sending, and it cannot tell an Anthropic-managed Google Cloud deployment from one you manage yourself, so every `AsyncAnthropicVertex` client is rejected. Use `AsyncAnthropic` to reach the Claude API when you want fallbacks. Haiku 5.5 has no fallback model, so do not set `fallbacks` on a role that runs it.
 
 ## Classify without the Orq router
 
-Classify questions normally go to the Orq router's `/decisions` endpoint. An Anthropic client does not route through Orq, so each question is answered by one structured judgement on the model you set for the classifier role. A classify-only model such as `typesafe/jev-latest` cannot run there, so it is replaced by the fast role model, with one warning per process.
+Classify questions normally go to the Orq router's `/decisions` endpoint. An Anthropic client does not route through Orq, so one structured judgement on the model you set for the classifier role answers all the questions in a classify request. A classify-only model such as `typesafe/jev-latest` cannot run there, so it is replaced by the fast role model, with one warning per model per process. When the fast role is not a Claude model id either, the call raises `ModelClientMismatchError` and logs no replacement.
 
 ## Insights needs an embedding client
 
@@ -166,7 +168,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Without `embedding_client`, the embedding step calls `embeddings.create` on the Anthropic client, which raises the `NotImplementedError` from the table above. Insights reports it as an `EmbeddingError` carrying that message, and the run ends with `status='error'`. Reading the traces still needs `ORQ_API_KEY`.
+`insights()` checks this before it reads any trace. With an Anthropic `llm_client`, any `dimensions` and no `embedding_client`, it raises a `ValueError` that names `embedding_client=`. An Anthropic client passed as `embedding_client` is rejected with a `ValueError` too. Pass `dimensions=()` to skip clustering, which needs no embeddings. Reading the traces still needs `ORQ_API_KEY`.
 
 ## Prompt caching, cost and retries
 

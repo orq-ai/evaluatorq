@@ -208,7 +208,7 @@ class LLMCallConfig(BaseModel):
         'is the only authority — an unsupported value comes back as a provider 400, which the '
         '`common.llm_call` executors turn into a drop-and-retry-once.',
     )
-    # Typed as AsyncOpenAI only: pydantic validates this field at runtime and the Anthropic SDK is an optional extra. A raw Anthropic client is accepted by the entry points' own `client=` parameters, not here.
+    # Typed as AsyncOpenAI for the type checker and `Any` at runtime, because pydantic cannot validate the optional Anthropic SDK types. The validator below wraps a raw Anthropic client in the adapter, so it works in this field too.
     client: _Client = None
     retry_count: int = Field(
         default=1,

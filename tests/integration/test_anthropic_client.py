@@ -73,6 +73,19 @@ async def test_responses_create_returns_output_text(client):
 
 
 @pytest.mark.asyncio
+async def test_server_side_fallbacks_are_accepted_by_the_beta_endpoint(client):
+    # Haiku 5.5 has no fallback model, so this uses a model that does.
+    completion = await client.chat.completions.create(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Reply with the single word: pong"}],
+        max_tokens=64,
+        fallbacks="default",
+    )
+    assert completion.choices[0].finish_reason in ("stop", "length")
+    assert "pong" in (completion.choices[0].message.content or "").lower()
+
+
+@pytest.mark.asyncio
 async def test_red_team_attack_runs_on_an_anthropic_client(monkeypatch):
     for variable in ("EVALUATORQ_SMART_MODEL", "EVALUATORQ_FAST_MODEL", "EVALUATORQ_CLASSIFIER_MODEL"):
         monkeypatch.setenv(variable, MODEL)

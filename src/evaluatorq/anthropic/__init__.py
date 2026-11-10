@@ -1,6 +1,16 @@
 """Use an Anthropic SDK client wherever evaluatorq accepts an OpenAI-shaped LLM client.
 
-Install the extra (``pip install 'evaluatorq[anthropic]'``), then wrap the client:
+Install the extra (``pip install 'evaluatorq[anthropic]'``), then pass the raw client to any entry point that takes a client:
+
+```python
+from anthropic import AsyncAnthropic
+
+from evaluatorq.redteam import red_team
+
+report = await red_team(target='agent:my-agent', llm_client=AsyncAnthropic())
+```
+
+Every entry point wraps the client itself. Call `wrap_anthropic_client` only to use the adapter directly:
 
 ```python
 from anthropic import AsyncAnthropic
