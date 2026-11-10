@@ -1249,6 +1249,7 @@ def test_single_judge_names_a_bare_non_verdict(content: str, cause: str):
     assert result.raw_output is not None
     assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['message'] == cause
     assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['code'] == 'no_verdict'
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['error_type'] == 'no_verdict'
 
 
 def test_single_judge_clean_abstention_is_not_an_error():
