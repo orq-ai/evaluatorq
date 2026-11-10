@@ -80,7 +80,7 @@ A **task** is one named use of a role. A task override pins that single use to a
 |---|---|---|
 | `redteam.attacker` | `smart` | Attack generation, including the adaptive orchestrator. |
 | `redteam.evaluator` | `smart` | Red-team and OWASP evaluators. |
-| `redteam.refusal_judge` | `classifier` | The refusal check that decides whether backtracking erases a turn. It falls back to the `fast` role when the model has no reachable classify endpoint, off the Orq router or when the catalogue lists none. |
+| `redteam.refusal_judge` | `classifier` | The refusal check that decides whether backtracking erases a turn. It falls back to the `fast` role only when it names a classify-only model, such as the default jev, with no reachable classify endpoint: off the Orq router or when the catalogue lists none. A chat model pinned to this task runs as pinned, with no fallback. |
 | `sim.user` | `fast` | The simulated user. |
 | `sim.judge` | `smart` | The simulation judge. |
 | `sim.generator` | `fast` | Persona, scenario, first-message and datapoint generation, simulation recommendations and executive summary. |

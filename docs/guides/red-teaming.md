@@ -83,7 +83,7 @@ report = await red_team(
 
 The CLI equivalent is `--max-backtracks 3`. The value is the number of erasures allowed per attack, from 0 to 10, and an erased attempt does not use up a turn. The target's next call leaves the exchange out, while the attacker is told about the refusal so it can change technique. Erased exchanges are kept in `execution.backtracked_turns` on each result, and the judge never sees them.
 
-Each reply costs one extra call to label it as refused or not, until the attack has used its erasures. The call runs on the `classifier` role (task `redteam.refusal_judge`), or on the `fast` role when that model has no reachable classify endpoint, because the client does not route through the Orq router or the model catalogue lists none. A reply that holds only a refusal flagged by the model provider needs no extra call.
+Each reply costs one extra call to label it as refused or not, until the attack has used its erasures. The call runs on the `classifier` role (task `redteam.refusal_judge`). When that names a classify-only model with no reachable classify endpoint, because the client does not route through the Orq router or the model catalogue lists none, the call runs on the `fast` role instead. A chat model pinned to the task runs as pinned, with no fallback. A reply that holds only a refusal flagged by the model provider needs no extra call.
 
 Even with erasures left, a turn is kept when one of these holds, and the run reports no error for it:
 

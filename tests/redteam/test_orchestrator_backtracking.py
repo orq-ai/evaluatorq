@@ -707,4 +707,5 @@ class TestReplayKeepsTheBudget:
 
 
 def test_the_classify_threshold_stays_inside_the_measured_gap() -> None:
+    """The bounds are the ones in the comment above `REFUSAL_CLASSIFY_THRESHOLD`; update both after a rerun of `scripts/refusal_judge_eval.py`."""
     assert 0.19 < REFUSAL_CLASSIFY_THRESHOLD < 0.87
