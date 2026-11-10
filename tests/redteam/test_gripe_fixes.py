@@ -101,21 +101,47 @@ class TestDatasetDownloadError:
 class TestOrqDatasetFetchError:
     """A wrong orq:<dataset-id> surfaces a clean DatasetError naming the id (RES-1870)."""
 
-    def test_sdk_error_raises_dataset_error_with_id(self, monkeypatch):
-        from unittest.mock import MagicMock
+    @staticmethod
+    def _load_with_transport(monkeypatch, handler):
+        import httpx
+        from orq_ai_sdk import Orq
 
-        from evaluatorq.redteam.exceptions import DatasetError
         from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
 
-        sdk_error = RuntimeError('body.code Input should be a valid string')
-        client = MagicMock()
-        client.datasets.list_datapoints.side_effect = sdk_error
+        client = Orq(
+            api_key='test-key',
+            server_url='http://orq.test',
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
         monkeypatch.setattr(evaluatorq_bridge, 'resolve_orq_client', lambda _key: client)
+        return evaluatorq_bridge.load_owasp_agentic_dataset('orq:not-a-real-id')
+
+    def test_unknown_id_raises_dataset_error_with_id_and_status(self, monkeypatch):
+        import httpx
+        from orq_ai_sdk.models import ResponseValidationError
+
+        from evaluatorq.redteam.exceptions import DatasetError
+
+        def _not_found(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, json={'code': 404, 'error': 'Dataset not found'})
+
+        with pytest.raises(DatasetError, match=r'orq:not-a-real-id.*HTTP 404') as ei:
+            self._load_with_transport(monkeypatch, _not_found)
+        assert isinstance(ei.value.__cause__, ResponseValidationError)
+        assert 'valid string' not in str(ei.value)
+
+    def test_network_error_raises_dataset_error(self, monkeypatch):
+        import httpx
+
+        from evaluatorq.redteam.exceptions import DatasetError
+
+        def _refused(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError('connection refused', request=request)
 
         with pytest.raises(DatasetError, match='orq:not-a-real-id') as ei:
-            evaluatorq_bridge.load_owasp_agentic_dataset('orq:not-a-real-id')
-        assert ei.value.__cause__ is sdk_error
+            self._load_with_transport(monkeypatch, _refused)
+        assert isinstance(ei.value.__cause__, httpx.ConnectError)
 
 
 class TestLoadFromFileError:

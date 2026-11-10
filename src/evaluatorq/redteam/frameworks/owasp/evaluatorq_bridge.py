@@ -515,6 +515,9 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
         raise ValueError(msg)
     # resolve_orq_client, not a bare Orq(...): a dataset must come from the host
     # the run is pointed at (ORQ_BASE_URL), not always prod.
+    import httpx
+    from orq_ai_sdk.models import NoResponseError, OrqError
+
     client = resolve_orq_client(orq_api_key)
     all_datapoints: list[DataPoint] = []
     skipped = 0
@@ -527,12 +530,14 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
                 limit=100,
                 starting_after=cursor,
             )
-        except Exception as e:
-            # An unknown id comes back as a raw SDK ResponseValidationError (the
-            # error body fails the SDK's own schema), so catch broadly, as the
-            # HuggingFace path does.
+        except (OrqError, NoResponseError, httpx.HTTPError) as e:
+            # An unknown id's 404 body fails the SDK's own schema and surfaces as a
+            # ResponseValidationError whose text is a pydantic dump, so report the
+            # status and body instead and keep the dump on __cause__.
+            detail = f'HTTP {e.status_code}: {e.body}' if isinstance(e, OrqError) else str(e)
+            page = f' (page after datapoint {cursor})' if cursor else ''
             msg = (
-                f'Failed to fetch red team dataset orq:{dataset_id} from the ORQ platform: {e}. '
+                f'Failed to fetch red team dataset orq:{dataset_id} from the ORQ platform{page}: {detail}. '
                 'Check that the dataset id exists in the workspace your ORQ_API_KEY belongs to, '
                 'and that ORQ_BASE_URL points at the right host.'
             )
