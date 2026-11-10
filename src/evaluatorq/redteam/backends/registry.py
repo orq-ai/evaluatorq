@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
+from evaluatorq.common.llm_client import as_llm_client
 from evaluatorq.common.retry import without_client_retries
 from evaluatorq.redteam.backends._retry import warn_ignored_target_retries
 from evaluatorq.redteam.exceptions import BackendError, CredentialError
@@ -123,7 +124,7 @@ def _create_openai_backend(
     # so a future LLMConfig target token cap only has to change this line.
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
     return OpenAIBackend(
-        client=llm_client,
+        client=as_llm_client(llm_client),
         system_prompt=system_prompt,
         timeout_ms=timeout_ms,
         max_tokens=DEFAULT_TARGET_MAX_TOKENS,
@@ -173,7 +174,7 @@ def _create_openresponses_backend(
             retry_on_codes=pipeline_config.retry_on_codes,
         )
     return OpenResponsesBackend(
-        client=without_client_retries(llm_client) if llm_client is not None else None,
+        client=without_client_retries(as_llm_client(llm_client)) if llm_client is not None else None,
         instructions=instructions,
         timeout_ms=timeout_ms,
         reasoning_effort=pipeline_config.target_reasoning_effort if pipeline_config else None,
