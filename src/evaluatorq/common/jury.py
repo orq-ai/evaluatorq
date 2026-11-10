@@ -46,6 +46,14 @@ NO_VERDICT_REASON_LIMIT = 200
 NO_VERDICT_CODE = 'no_verdict'
 
 
+def _cap_reason(reason: str) -> str:
+    """Strip a reason and cut it to `NO_VERDICT_REASON_LIMIT` characters, ending in an ellipsis."""
+    reason = reason.strip()
+    if len(reason) > NO_VERDICT_REASON_LIMIT:
+        reason = reason[: NO_VERDICT_REASON_LIMIT - 1].rstrip() + '…'
+    return reason
+
+
 def no_verdict_message(reason: str) -> str:
     """The error for a judge that returned value=None without abstaining.
 
@@ -53,9 +61,7 @@ def no_verdict_message(reason: str) -> str:
     the result's own explanation with one judge. This copy reaches saved results, so it
     only needs to identify the cause.
     """
-    reason = reason.strip()
-    if len(reason) > NO_VERDICT_REASON_LIMIT:
-        reason = reason[: NO_VERDICT_REASON_LIMIT - 1].rstrip() + '…'
+    reason = _cap_reason(reason)
     return f'judge returned no verdict: {reason}' if reason else 'judge returned no verdict'
 
 
@@ -72,6 +78,49 @@ def no_verdict_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[s
         'error_type': NO_VERDICT_CODE,
         'code': NO_VERDICT_CODE,
     }
+
+
+NON_BINARY_VERDICT_CODE = 'non_binary_verdict'
+
+
+def non_binary_verdict_message(value: VerdictValue | None) -> str:
+    """The error for a judge that returned a number or string where a pass/fail verdict is needed.
+
+    The value's repr is capped like a no-verdict reason: it reaches saved results, so it
+    only needs to identify the cause.
+    """
+    return f'judge returned a non-pass/fail verdict: {_cap_reason(repr(value))}'
+
+
+def non_binary_verdict_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any]:
+    """The evaluation error for a non-bool verdict on a pass/fail path, for a single-judge raw_output.
+
+    Mirrors `no_verdict_error_payload`: the type and code are fixed here because
+    `outcome.error_kind` is unset for a judge that answered.
+    """
+    value = outcome.payload.value if outcome.payload is not None else None
+    return {
+        **judge_error_payload(outcome, evaluator_id),
+        'message': non_binary_verdict_message(value),
+        'error_type': NON_BINARY_VERDICT_CODE,
+        'code': NON_BINARY_VERDICT_CODE,
+    }
+
+
+def single_verdict_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any] | None:
+    """The evaluation error for a single judge that answered without a pass/fail verdict, else None.
+
+    A bare non-verdict is a dead judge, as the adaptive single-judge path records it; a number
+    or string is not a pass/fail verdict either. A clean abstention is neither.
+    """
+    if outcome.payload is None:
+        return None
+    value = outcome.payload.value
+    if value is None:
+        return None if outcome.payload.abstain else no_verdict_error_payload(outcome, evaluator_id)
+    if not isinstance(value, bool):
+        return non_binary_verdict_error_payload(outcome, evaluator_id)
+    return None
 
 
 def _unswap(value: VerdictValue | None) -> VerdictValue | None:

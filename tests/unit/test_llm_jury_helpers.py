@@ -458,3 +458,14 @@ def test_no_verdict_message_caps_a_long_reason():
     # A reason exactly at the limit is kept whole.
     exact = 'y' * NO_VERDICT_REASON_LIMIT
     assert no_verdict_message(exact) == prefix + exact
+
+
+def test_non_binary_verdict_message_is_exact_and_caps_the_repr():
+    from evaluatorq.common.jury import NO_VERDICT_REASON_LIMIT, non_binary_verdict_message
+
+    prefix = 'judge returned a non-pass/fail verdict: '
+    assert non_binary_verdict_message(0.5) == prefix + '0.5'
+    assert non_binary_verdict_message('maybe') == prefix + "'maybe'"
+    # The repr is capped like a no-verdict reason: LIMIT - 1 characters, then an ellipsis.
+    capped = non_binary_verdict_message('x' * 5000)
+    assert capped == prefix + ("'" + 'x' * (NO_VERDICT_REASON_LIMIT - 2)) + '…'

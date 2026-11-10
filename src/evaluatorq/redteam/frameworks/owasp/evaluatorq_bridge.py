@@ -19,9 +19,10 @@ from evaluatorq.common.jury import (
     VerdictKind,
     append_jury_summary,
     attach_jury_raw_output,
-    no_verdict_error_payload,
+    non_binary_verdict_message,
     panel_composition_messages,
     run_jury,
+    single_verdict_error_payload,
 )
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
@@ -247,6 +248,13 @@ async def _owasp_judge_fn(
             # parsed — dropping them here undercounts the run's cost.
             token_usage=outcome.token_usage,
         )
+    if outcome.payload.value is not None and not isinstance(outcome.payload.value, bool):
+        # A number or string cannot be a pass/fail vote: a failed repetition, not a silent None.
+        return Prediction(
+            error=non_binary_verdict_message(outcome.payload.value),
+            explanation=outcome.payload.explanation,
+            token_usage=outcome.token_usage,
+        )
     return Prediction(
         value=outcome.payload.value,
         explanation=outcome.payload.explanation,
@@ -368,9 +376,9 @@ def create_owasp_evaluator(
 
                 passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
                 raw_output: dict[str, Any] = {'raw_content': outcome.raw_content}
-                if outcome.payload.value is None and not outcome.payload.abstain:
-                    # A dead judge, as the adaptive single-judge path records it.
-                    raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = no_verdict_error_payload(outcome, category)
+                verdict_error = single_verdict_error_payload(outcome, category)
+                if verdict_error is not None:
+                    raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = verdict_error
                 set_span_attrs(
                     evaluation_span,
                     {'orq.redteam.passed': _span_pass_state(passed), 'output': outcome.payload.explanation},

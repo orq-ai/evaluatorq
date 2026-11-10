@@ -10,9 +10,10 @@ from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replace
 from evaluatorq.common.jury import (
     Prediction,
     VerdictKind,
-    no_verdict_error_payload,
+    non_binary_verdict_message,
     panel_composition_messages,
     run_jury,
+    single_verdict_error_payload,
 )
 from evaluatorq.common.jury import provider_family as provider_family
 from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
@@ -262,6 +263,13 @@ class OWASPEvaluator:
                     error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
                     token_usage=outcome.token_usage,
                 )
+            if outcome.payload.value is not None and not isinstance(outcome.payload.value, bool):
+                # A number or string cannot be a pass/fail vote: a failed repetition, not a silent None.
+                return Prediction(
+                    error=non_binary_verdict_message(outcome.payload.value),
+                    explanation=outcome.payload.explanation,
+                    token_usage=outcome.token_usage,
+                )
             return Prediction(
                 value=outcome.payload.value,
                 explanation=outcome.payload.explanation,
@@ -338,10 +346,12 @@ class OWASPEvaluator:
 
         passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
         no_verdict: dict[str, Any] = {}
-        if outcome.payload.value is None and not outcome.payload.abstain:
-            # A bare non-verdict is a dead judge, as on a panel, where JuryVote.error names
-            # it. Without this the error rollup misses it whenever only one judge runs.
-            no_verdict[EVAL_ERROR_RAW_OUTPUT_KEY] = no_verdict_error_payload(outcome, evaluator_id)
+        # A bare non-verdict or a non-bool value is not a pass/fail verdict, as on a panel,
+        # where JuryVote.error names it. Without this the error rollup misses it whenever
+        # only one judge runs.
+        verdict_error = single_verdict_error_payload(outcome, evaluator_id)
+        if verdict_error is not None:
+            no_verdict[EVAL_ERROR_RAW_OUTPUT_KEY] = verdict_error
         return AttackEvaluationResult(
             passed=passed,
             explanation=outcome.payload.explanation,
