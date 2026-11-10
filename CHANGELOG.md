@@ -91,6 +91,8 @@ All notable changes to `evaluatorq` are documented here.
 - **Added: a pairwise compare page at `/compare/pairwise`.** Pick a second pairwise run from the report header to see both verdicts, judge agreement, and every matched comparison with changed winners tagged, paired by question text.
 ### Notable defaults
 
+- **OWASP evaluator entities no longer carry a `0.1` temperature default, so no sampling parameter is sent unless you configure one.** `LlmEvaluatorEntity.temperature` now defaults to `None`; the field is kept, and no evaluator run path reads it.
+
 - **The results upload timeout is 120 s, up from 30 s.** It is fixed: a longer wait than the proxy in front of the upload endpoint allows would fail anyway. (BACK-2363)
 
 - **Job and evaluator traces capture their input/output payloads by default.** Jobs use `gen_ai.input/output`; evaluators use `orq.evaluation.input/output`, including simulation criterion details. `EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false` suppresses these payloads. Python scorers without an explicit `evaluator_type` now render as `python_eval` evaluator spans. Failed scorers retain their input and report an error; result scoring is unchanged.
