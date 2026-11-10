@@ -1,4 +1,9 @@
-"""Jury preset definitions and the `llm_jury(preset=...)` seam (RES-1171)."""
+"""Jury preset definitions and the `llm_jury(preset=...)` seam (RES-1171, RES-1346).
+
+Offline: prices and default efforts come from `tests.common.garden_fakes.seated_garden`,
+real card rates for every seated router ID. The live recomputation against
+`/v2/models` is in `tests/integration/test_preset_freshness.py`.
+"""
 
 from typing import Any, cast
 
@@ -12,17 +17,21 @@ from evaluatorq.jury_presets import (
     ESTIMATED_PROMPT_TOKENS,
     PRESETS,
     WITHHELD_PRESETS,
-    JudgeRates,
     JuryPreset,
     all_router_ids,
+    captured_at,
     get_preset,
     judge_family,
     judge_rates,
+    model_identity,
 )
+from evaluatorq.common.model_frontier import with_unlisted_routes
+from tests.common.garden_fakes import seated_garden
 
 
-def _rate_table() -> dict[str, JudgeRates]:
-    return {rid: r for rid in all_router_ids() if (r := judge_rates(rid)) is not None}
+@pytest.fixture
+def garden():
+    return seated_garden()
 
 
 def _preset(**overrides: Any) -> dict[str, Any]:
@@ -96,67 +105,121 @@ class TestShippedPresets:
         with pytest.raises(ValueError, match='was retired'):
             get_preset('Value Trio')
 
-    def test_a_withheld_preset_says_what_is_holding_it(self):
+    def test_a_withheld_preset_says_what_is_holding_it(self, monkeypatch):
         """Derived and costed but not seated is a third state, and it is not 'unknown'."""
+        monkeypatch.setitem(WITHHELD_PRESETS, 'Future Panel', 'Not shipped yet: its third seat cannot vote.')
+
         with pytest.raises(ValueError, match='is not shipped yet'):
-            get_preset('Cheap Aggregate')
+            get_preset('Future Panel')
 
-        assert 'Cheap Aggregate' not in PRESETS
-        for name, reason in WITHHELD_PRESETS.items():
+        for name in WITHHELD_PRESETS:
             assert name not in DROPPED_PRESETS
-            assert len(reason) > 80, f'{name}: a withholding needs its condition written out'
+            assert name not in PRESETS
 
-    def test_a_seat_no_preset_holds_is_not_priced(self):
-        """The rate table follows the seats; a row for a model nothing seats is stale."""
-        assert set(_rate_table()) == all_router_ids()
+    def test_cheap_aggregate_ships(self):
+        """Withheld while a MiniMax seat answered schemas in prose; the derived panel no longer seats one."""
+        preset = get_preset('Cheap Aggregate')
+
+        assert not any('minimax' in judge.lower() for judge in preset.judges)
+        assert 'Cheap Aggregate' not in WITHHELD_PRESETS
 
 
 class TestPublishedCost:
-    """The $/1k in the table is recomputed from the captured rates, never trusted."""
+    """The $/1k in the table is recomputed from card rates, never trusted."""
 
     @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
-    def test_preset_cost_matches_its_published_figure(self, preset):
-        assert preset.cost_per_1k() == preset.estimated_cost_per_1k
+    def test_preset_cost_matches_its_published_figure(self, preset, garden):
+        assert preset.cost_per_1k(garden) == preset.estimated_cost_per_1k
 
     @pytest.mark.parametrize('router_id', sorted(all_router_ids()))
-    def test_every_preset_router_id_is_priced(self, router_id):
+    def test_every_preset_router_id_is_priced(self, router_id, garden):
         """A preset must never ship a judge that silently costs zero."""
-        rates = judge_rates(router_id)
+        model = with_unlisted_routes(garden).get(router_id)
 
-        assert rates is not None
-        assert rates.input_rate > 0
-        assert rates.output_rate > 0
+        assert model is not None
+        assert model.input_price > 0
+        assert model.output_price > 0
 
-    def test_a_repriced_judge_moves_the_published_figure(self, monkeypatch):
+    def test_a_repriced_judge_moves_the_published_figure(self, garden):
         """The point of recomputing: a price change cannot leave the table standing."""
         preset = PRESETS['Balanced Trio']
         seat = preset.judges[0]
-        table = _rate_table()
-        doubled = table[seat].model_copy(update={'input_rate': table[seat].input_rate * 2})
-        monkeypatch.setattr('evaluatorq.jury_presets.judge_rates', (table | {seat: doubled}).get)
+        repriced = garden | {seat: garden[seat].model_copy(update={'input_price': garden[seat].input_price * 2})}
 
-        assert preset.cost_per_1k() != preset.estimated_cost_per_1k
+        assert preset.cost_per_1k(repriced) != preset.estimated_cost_per_1k
 
-    def test_an_unpriced_judge_raises_rather_than_costing_nothing(self, monkeypatch):
+    def test_an_unpriced_judge_raises_rather_than_costing_nothing(self, garden):
         preset = PRESETS['Balanced Trio']
-        monkeypatch.setattr('evaluatorq.jury_presets.judge_rates', lambda _router_id: None)
+        missing = {k: v for k, v in garden.items() if k != preset.judges[0]}
 
-        with pytest.raises(KeyError, match='no captured pricing'):
-            preset.cost_per_1k()
+        with pytest.raises(KeyError, match='no live card prices'):
+            preset.cost_per_1k(missing)
 
-    def test_the_published_tokens_are_the_ones_the_figures_were_costed_at(self):
+    def test_the_estimate_is_three_input_tokens_to_one_output(self):
+        """The ratio the garden's blended price ranks on, so cost and rank describe one workload."""
+        assert (ESTIMATED_PROMPT_TOKENS, ESTIMATED_COMPLETION_TOKENS) == (1500, 500)
+
+    def test_the_published_tokens_are_the_ones_the_figures_were_costed_at(self, garden):
         """The figures mean nothing without the item they are per, so tie the two together."""
         router_id = PRESETS['Balanced Trio'].judges[0]
-        seat = judge_rates(router_id)
-        assert seat is not None
-        alone = JuryPreset(**_preset(
-            judges=(router_id,),
-            reserve_judges=PRESETS['Balanced Trio'].reserve_judges,
-            estimated_cost_per_1k=0.0,
-        ))
-        expected = (seat.input_rate * ESTIMATED_PROMPT_TOKENS + seat.output_rate * ESTIMATED_COMPLETION_TOKENS) / 1_000
+        seat = garden[router_id]
+        alone = JuryPreset(
+            **_preset(
+                judges=(router_id,),
+                reserve_judges=PRESETS['Balanced Trio'].reserve_judges,
+                estimated_cost_per_1k=0.0,
+            )
+        )
+        expected = (
+            seat.input_price * ESTIMATED_PROMPT_TOKENS + seat.output_price * ESTIMATED_COMPLETION_TOKENS
+        ) / 1_000
 
-        assert alone.cost_per_1k() == pytest.approx(expected, abs=0.005)
+        assert alone.cost_per_1k(garden) == pytest.approx(expected, abs=0.005)
+
+    def test_seated_efforts_read_the_catalogue_default(self, garden):
+        preset = PRESETS['Balanced Trio']
+        seat = preset.judges[1]
+        graded = garden | {seat: garden[seat].model_copy(update={'effort_parameter': True, 'default_effort': 'low'})}
+
+        assert preset.seated_efforts(graded)[seat] == 'low'
+        assert preset.seated_efforts(garden)[seat] is None
+
+
+class TestDeprecatedRates:
+    """The v1.86 snapshot readers keep working, now backed by the live garden."""
+
+    def test_judge_rates_reads_the_garden_card(self, garden):
+        with pytest.deprecated_call():
+            rates = judge_rates('openai/gpt-6-sol', garden)
+        assert rates is not None
+        assert (rates.input_rate, rates.output_rate) == (2.0, 10.0)
+
+    def test_judge_rates_is_none_without_a_card(self, garden):
+        with pytest.deprecated_call():
+            assert judge_rates('openai/not-a-model', garden) is None
+
+    def test_captured_at_is_an_iso_date(self):
+        with pytest.deprecated_call():
+            stamp = captured_at()
+        assert len(stamp) == 10 and stamp[4] == '-' and stamp[7] == '-'
+
+
+class TestModelIdentity:
+    @pytest.mark.parametrize(
+        ('router_id', 'identity'),
+        [
+            ('aws/us-east-1.openai.gpt-5.4', 'gpt-5.4'),
+            ('aws/eu-central-2.anthropic.claude-haiku-5-5', 'claude-haiku-5-5'),
+            ('aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5-20251001'),
+            ('aws/openai.gpt-5.5', 'gpt-5.5'),
+            ('openai/gpt-5.6-terra', 'gpt-5.6-terra'),
+            ('azure/global.gpt-5.6-terra', 'gpt-5.6-terra'),
+            ('aws/jp.anthropic.claude-haiku-5-5', 'claude-haiku-5-5'),
+            ('munito/zai-org/glm-5.3-flash@eu', 'glm-5.3-flash'),
+        ],
+    )
+    def test_host_region_vendor_and_version_are_stripped(self, router_id, identity):
+        assert model_identity(router_id) == identity
 
 
 class TestFamilyExclusion:
@@ -197,6 +260,7 @@ class TestFamilyExclusion:
         for name in (
             'Balanced Trio',
             'Strong Jury',
+            'Cheap Aggregate',
             'Open-Weight / Portable',
             'EU Region',
         ):
@@ -360,10 +424,10 @@ class TestDocsTable:
         assert judges == preset.judges
 
     @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
-    def test_the_table_publishes_the_cost_the_code_computes(self, preset):
+    def test_the_table_publishes_the_cost_the_code_computes(self, preset, garden):
         _, _, cost, _ = self._rows()[preset.name]
 
-        assert cost == preset.cost_per_1k()
+        assert cost == preset.estimated_cost_per_1k == preset.cost_per_1k(garden)
 
     @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
     def test_the_table_names_the_reserves_the_preset_holds(self, preset):

@@ -1,15 +1,21 @@
-"""LLM-as-a-jury preset definitions (RES-1171).
+"""LLM-as-a-jury preset definitions (RES-1171, RES-1346).
 
 The single source for what a named jury preset means: which judges, which
 aggregation mode, and which reserve judges replace them when one is retired,
-deprecated or repriced. `llm_jury(preset=...)` builds a panel from here, and a
-test recomputes every published figure from `common/data/jury_judge_rates.json`,
-so the table in the docs cannot drift away from what the code seats.
+deprecated or repriced. `llm_jury(preset=...)` builds a panel from here.
+
+Nothing about a seat is committed except the decision to seat it. Rates and
+default efforts are read from the live model garden (`common.model_frontier`,
+which reads `/v2/models`), and the live drift suite recomputes every published
+figure against it, so a repricing or a changed default shows up as a failing
+check rather than in a refreshed file's diff. The freshness registers at the
+bottom of this file are the written record that suite reads: every newer
+model, aged seat and unbenchmarked default is seated or argued for in words.
 
 Seats are chosen here. Compare intelligence at the catalogue default reasoning
-effort against price within each lineage. Explicitly reviewed host-and-effort
-trades may retain a seat without a benchmark at its new default; the Wafer Kimi
-seat is such a trade, not a measured dominance claim.
+effort against price within each lineage. A seat without a benchmark at its
+default is held only in `REVIEWED_UNBENCHMARKED_SEATS`, with the card
+fingerprint that expires the hold.
 Seats are compared in-family, because the lineage diversity is the point:
 judged against the whole catalogue most seats look dominated, and acting on that
 would collapse every panel onto whichever vendor is cheapest this month and
@@ -36,23 +42,31 @@ pinned here even where the arithmetic behind them has moved. A single judge is
 free to be a router, since it has no panel to correlate.
 """
 
-import json
+from __future__ import annotations
+
 import re
+import warnings
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
-from functools import lru_cache
-from pathlib import Path
 from types import MappingProxyType
-from typing import Any, cast
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, model_validator
 
 from evaluatorq.common.jury import AggregatorName, provider_family
+from evaluatorq.common.model_frontier import ScoredModel, load_garden_sync, with_unlisted_routes
 
-_RATES_PATH = Path(__file__).parent / 'common' / 'data' / 'jury_judge_rates.json'
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+
+def _reachable(garden: Mapping[str, ScoredModel] | None) -> dict[str, ScoredModel]:
+    """The garden a seat is priced and ranked in: live unless passed, plus the reviewed unlisted routes."""
+    return with_unlisted_routes(dict(garden) if garden is not None else load_garden_sync())
 
 
 class JudgeRates(BaseModel):
-    """What a seated judge bills per 1M tokens and the effort it runs at."""
+    """What a judge bills per 1M tokens and the effort it runs at. Deprecated; read `ScoredModel` from the garden."""
 
     model_config = {'frozen': True}
 
@@ -61,33 +75,42 @@ class JudgeRates(BaseModel):
     default_reasoning_effort: str | None
 
 
-@lru_cache(maxsize=1)
-def _load_rates() -> MappingProxyType[str, JudgeRates]:
-    """The committed rate table, read once and handed out read-only.
+def judge_rates(router_id: str, garden: Mapping[str, ScoredModel] | None = None) -> JudgeRates | None:
+    """Deprecated: the live card rates for a judge, or None when the garden has no card for it.
 
-    Frozen on purpose. This is cached process-wide, so a caller who mutated the
-    returned mapping would silently reprice every published preset for the life
-    of the process.
+    Rates used to come from a committed monthly snapshot; they are now read from
+    `/v2/models`. Use `load_garden()` and read the `ScoredModel` instead.
     """
-    raw = cast('dict[str, Any]', json.loads(_RATES_PATH.read_text(encoding='utf-8')))
-    return MappingProxyType({rid: JudgeRates(**fields) for rid, fields in raw['judges'].items()})
-
-
-def judge_rates(router_id: str) -> JudgeRates | None:
-    """The captured rates for a seated judge, or None for a model no preset seats."""
-    return _load_rates().get(router_id)
+    warnings.warn(
+        'judge_rates() is deprecated; rates are live now. Read the ScoredModel from common.model_frontier.load_garden().',
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    model = _reachable(garden).get(router_id)
+    if model is None:
+        return None
+    return JudgeRates(
+        input_rate=model.input_price, output_rate=model.output_price, default_reasoning_effort=model.default_effort
+    )
 
 
 def captured_at() -> str:
-    """When the rates were captured, for anyone deciding whether to trust the table."""
-    return cast('str', json.loads(_RATES_PATH.read_text(encoding='utf-8'))['captured_at'])
+    """Deprecated: today's UTC date, since rates are read live on every call rather than captured."""
+    warnings.warn(
+        'captured_at() is deprecated; rates are read live from /v2/models, so there is no capture date.',
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return datetime.now(timezone.utc).date().isoformat()
 
 
 # Host, region and serving-variant noise that makes one model look like several.
 # `openai/gpt-5.6-terra`, `azure/global.gpt-5.6-terra` and `openai/eu.gpt-5.6-terra`
 # are one model; a successor check that counts them separately reports work that
 # does not exist.
-_REGION_PREFIXES: tuple[str, ...] = ('eu.', 'us.', 'apac.', 'global.')
+_REGION_PREFIXES: tuple[str, ...] = ('eu.', 'us.', 'apac.', 'global.', 'au.', 'jp.')
+# Bedrock in-region routes spell the AWS region out: `aws/us-east-1.openai.gpt-5.4`.
+_AWS_REGION_PREFIX = re.compile(r'^[a-z]{2}(?:-[a-z]+)+-\d+\.')
 # Vendor tokens `model_identity` strips when one leads a dotted model name, which
 # is how Bedrock spells an id. A vendor whose name can open a legitimate model
 # name (the way 'gpt-5.6-terra' opens with a version, not a vendor) would make
@@ -115,14 +138,17 @@ def model_identity(router_id: str) -> str:
     `aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0` and
     `anthropic/claude-haiku-4-5-20251001` are one model, and EU Region seats the
     first while Balanced Trio used to seat the second.
+    In-region Bedrock routes (`aws/us-east-1.openai.gpt-5.4`) and host region
+    tags (`@eu`) are stripped the same way.
     """
-    name = router_id.split('/')[-1].lower()
+    name = _AWS_REGION_PREFIX.sub('', router_id.split('/')[-1].lower())
     for prefix in _REGION_PREFIXES:
         name = name.removeprefix(prefix)
     head, _, tail = name.partition('.')
     if tail and head in _VENDOR_TOKENS:
         name = tail
-    return re.sub(r'-v\d+:\d+$', '', name)
+    # Bedrock version tags and host region tags (`munito/.../glm-5.3-flash@eu`).
+    return re.sub(r'(-v\d+:\d+|@[a-z-]+)$', '', name)
 
 
 def judge_family(router_id: str) -> str:
@@ -152,11 +178,11 @@ class JuryPreset(BaseModel):
     numeric_aggregation: AggregatorName = 'mean_std'
     use_when: str
     estimated_cost_per_1k: float = Field(
-        description='USD per 1,000 pointwise items at 1,500 input / 1,500 output tokens, uncached.'
+        description='USD per 1,000 pointwise items at 1,500 input / 500 output tokens, uncached.'
     )
 
     @model_validator(mode='after')
-    def _panel_is_well_formed(self) -> 'JuryPreset':
+    def _panel_is_well_formed(self) -> JuryPreset:
         """Even panels split, and a repeated judge is one voter casting two votes."""
         if len(self.judges) % 2 == 0:
             raise ValueError(f'{self.name}: panel size {len(self.judges)} is even')
@@ -168,17 +194,20 @@ class JuryPreset(BaseModel):
             raise ValueError(f'{self.name}: reserves share a lineage with each other')
         return self
 
-    def seated_efforts(self) -> dict[str, str | None]:
+    def seated_efforts(self, garden: Mapping[str, ScoredModel] | None = None) -> dict[str, str | None]:
         """The reasoning effort each judge runs at: its catalogue default.
 
-        A preset sends no effort, so each seat runs at the provider default. None
-        means the catalogue names no effort parameter for that model.
+        A preset sends no effort, so each seat runs at the provider default,
+        which is also the rung it is ranked at. None means the card exposes no
+        effort parameter, or no card is reachable. Reads the live garden unless
+        one is passed; async callers `await load_garden()` and pass it.
 
         `llm_jury` takes one `reasoning_effort` for the whole panel, so passing
         one overrides every seat's default; per-judge call settings are a schema
         change and its own ticket (RES-1347).
         """
-        return {judge: (r.default_reasoning_effort if (r := judge_rates(judge)) else None) for judge in self.judges}
+        reachable = _reachable(garden)
+        return {judge: (m.default_effort if (m := reachable.get(judge)) else None) for judge in self.judges}
 
     def duplicated_lineages(self) -> dict[str, tuple[str, ...]]:
         """Lineages seated more than once, whose errors correlate.
@@ -193,71 +222,138 @@ class JuryPreset(BaseModel):
             seated.setdefault(judge_family(judge), []).append(judge)
         return {family: tuple(js) for family, js in seated.items() if len(js) > 1}
 
-    def cost_per_1k(self) -> float:
-        """The panel's $/1k recomputed from the captured billing rates.
+    def cost_per_1k(self, garden: Mapping[str, ScoredModel] | None = None) -> float:
+        """The panel's $/1k recomputed from live card rates.
 
         `estimated_cost_per_1k` is the figure the docs publish; this is where it
-        has to come from. A test asserts the two agree, so a repricing in the
-        snapshot fails CI rather than quietly making a published table wrong.
+        has to come from. The live drift suite asserts the two agree, so a
+        repricing fails that suite rather than quietly making a published table
+        wrong. Reads the live garden unless one is passed.
+
+        Raises:
+            KeyError: A seat has no card in the garden and no reviewed unlisted route.
         """
+        reachable = _reachable(garden)
         total = Decimal(0)
         for judge in self.judges:
-            rates = judge_rates(judge)
-            if rates is None:
-                raise KeyError(f'{self.name}: no captured pricing for {judge!r}; re-run the rate capture')
-            total += Decimal(str(rates.input_rate)) * Decimal(ESTIMATED_PROMPT_TOKENS)
-            total += Decimal(str(rates.output_rate)) * Decimal(ESTIMATED_COMPLETION_TOKENS)
+            model = reachable.get(judge)
+            if model is None:
+                raise KeyError(f'{self.name}: no live card prices {judge!r}; reseat it or add an UNLISTED_ROUTES entry')
+            total += Decimal(str(model.input_price)) * Decimal(ESTIMATED_PROMPT_TOKENS)
+            total += Decimal(str(model.output_price)) * Decimal(ESTIMATED_COMPLETION_TOKENS)
         # Decimal, and one rounding at the end. A figure that lands exactly on a
         # half-cent would otherwise be decided by binary-float representation and
-        # banker's rounding rather than by a price, and a recapture that moved
-        # nothing could flip the table.
-        return float((total / Decimal(1_000)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        # banker's rounding rather than by a price. Rates are per 1M tokens, so
+        # one item costs total / 1e6 and a thousand cost total / 1e3.
+        return float((total / Decimal(1_000_000) * Decimal(1_000)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
 
 BALANCED_TRIO = JuryPreset(
     name='Balanced Trio',
     judges=(
+        # Held by claude-haiku-4-5 until the age check went in (2026-08-25) and
+        # named what the frontier checks structurally cannot see: Anthropic has
+        # shipped no small model since October 2025, so no in-family upgrade
+        # was ever going to be found and the seat aged 314 days in silence. It
+        # was also the weakest buy in the library, 23.7 at a $2.00 blend beside
+        # luna on this same panel at 38.1 for $0.45. The only argument for
+        # keeping it was an Anthropic vote, and this panel is sold on three
+        # families rather than three brands, which deepseek satisfies at 43.1
+        # for $0.544 while taking the panel from $6.11 to $4.64.
         'deepseek/deepseek-v4-pro',
+        # Accepted evaluatorq reseat on coherent measured AA v4.3.2 medium:
+        # GPT-6 Luna 29.9251773515762 vs GPT-5.6 Luna 25.0358741440784,
+        # $0.20 vs $0.45 blended. Never compare the unversioned cached pair.
         'openai/gpt-6-luna',
+        # Reseated from gemini-3.5-flash on the 2026-08-25 re-capture: the
+        # successor is stronger at its default effort (50.1 against 45.4) and
+        # cheaper ($3.00 against $3.375 blended).
         'google/gemini-3.6-flash',
     ),
-    # Same lineage as the seat it backs, so a promotion keeps the panel at three
-    # families.
+    # Same lineage as the seat it backs, on purpose: a retirement is usually a
+    # version bump, and flash keeps the panel at three families where a
+    # fourth-vendor reserve would quietly reshape it.
     reserve_judges=('deepseek/deepseek-flash',),
     use_when='Default subjective eval. Three families, three error surfaces.',
-    estimated_cost_per_1k=16.36,
+    estimated_cost_per_1k=7.49,
 )
 
 STRONG_JURY = JuryPreset(
     name='Strong Jury',
     judges=(
         'anthropic/claude-opus-5-5',
+        # Retain the evaluatorq quality seat under the existing 2-point gate:
+        # same-version AA v4.3.2 medium is 39.2363585889147 for GPT-5.6
+        # Sol vs 39.8118971749522 for GPT-6 Sol. The successor is cheaper,
+        # but its 0.5755-point gain is below the different-model threshold.
         'openai/gpt-5.6-sol',
+        # Reseated from gemini-3.1-pro-preview by the in-family frontier check,
+        # then from gemini-3.5-flash on the re-capture: stronger at default
+        # effort and cheaper.
         'google/gemini-3.6-flash',
     ),
     reserve_judges=('deepseek/deepseek-v4-pro',),
     use_when='Customer-facing benchmarks, preference data, anything that compounds.',
-    estimated_cost_per_1k=85.5,
+    estimated_cost_per_1k=38.00,
+)
+
+CHEAP_AGGREGATE = JuryPreset(
+    name='Cheap Aggregate',
+    # Derived, not hand-picked: the best default-effort index of each model
+    # family whose 3:1 blend is under MAX_BLEND, from the live catalogue plus
+    # the reviewed UNLISTED_ROUTES and AA_FILLS registers, minus anything
+    # superseded by a newer version of itself (model_frontier.rank_cheapest_top).
+    # test_cheap_aggregate_matches_the_live_derivation fails with a readable
+    # diff when the live ranking moves; a change here is a deliberate edit.
+    # Ranked 2026-10-26: glm-5.3-flash 41.8, gemini-3.8-flash 39.8,
+    # claude-haiku-5-5 34.5; gpt-6-luna 29.9 is next.
+    judges=(
+        # Default effort max; the live card has no ladder, so 41.8 is the AA
+        # API value for the same slug (AA_FILLS). PRICE HOLD: the card says
+        # $0.075/$0.25 per 1M ($0.119 blend), while judge-endpoint usage was
+        # billed at $0.15/$0.50 ($0.2375 blend), twice the card. The live card
+        # leads here and the estimate uses it; at the billed rate this seat
+        # costs $0.475 per 1k instead of $0.2375 and the panel estimate is
+        # $3.88 instead of $3.64. Replace the registry rate the day Zai billing
+        # is confirmed.
+        'zai/glm-5.3-flash',
+        'google-ai/gemini-3.8-flash',
+        'anthropic/claude-haiku-5-5',
+    ),
+    # Next-ranked family under the ceiling. kimi-k2.6 held this seat for a day
+    # and is superseded by kimi-k3 ($6 blend, over the ceiling).
+    reserve_judges=('openai/gpt-6-luna',),
+    use_when='High volume regression eval, nightly reruns, HITL triage feeders.',
+    estimated_cost_per_1k=3.64,
 )
 
 OPEN_WEIGHT_PORTABLE = JuryPreset(
     name='Open-Weight / Portable',
     judges=(
+        # Held by gpt-oss-120b until the family entered NEVER_SEAT (PR #330
+        # review, 2026-08-24); the panel's own reserve steps up.
         'deepseek/deepseek-v4-pro',
-        # Accepted host trade: Wafer defaults to none, not Baseten's max.
-        'wafer/Kimi-K3',
+        # Back on Baseten at its max default (measured 43.6) from 2026-11-10.
+        # The 2026-10-05 move to Wafer at an unbenchmarked `none` default was
+        # bought with a $12.75 output rate; Wafer now bills $15.00 like
+        # Baseten, so the trade kept the unmeasured default and lost the price.
+        'baseten/kimi-k3',
         'zai/glm-5.2',
     ),
-    reserve_judges=('minimax/MiniMax-M2.7',),
+    reserve_judges=('greenpt/qwen3.6-35b-a3b',),
     use_when='No dependence on a closed frontier vendor; migration path to self-hosting.',
-    estimated_cost_per_1k=37.66,
+    estimated_cost_per_1k=17.39,
 )
 
 EU_REGION = JuryPreset(
     name='EU Region',
     judges=(
-        'aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0',
-        'google/eu.gemini-3.5-flash',
+        # Reseated 2026-11-10 by the in-family frontier check: Haiku 5.5 medium
+        # 34.5 at $0.11/$0.55 against Haiku 4.5 15.4 at $1.10/$5.50, and
+        # Gemini 3.7 Flash medium 39.6 at $0.825/$4.125 against 3.5 Flash
+        # 33.6 at $1.50/$9.00, both on the EU endpoints.
+        'aws/eu.anthropic.claude-haiku-5-5',
+        'google/eu.gemini-3.7-flash',
         # Same weights as openai/eu.gpt-5.6-luna, 10% cheaper. The OpenAI EU
         # endpoint bills 0.22/1.32 against Azure's 0.20/1.20.
         'azure/eu.gpt-5.6-luna',
@@ -266,31 +362,38 @@ EU_REGION = JuryPreset(
     use_when=(
         'Data residency: every judge serves from an EU region. Anthropic, Google and OpenAI, which is what the EU catalog can field at the current generation: the DeepSeek seat carrying Balanced Trio has no EU endpoint newer than v3.1, so this is not that panel relocated.'
     ),
-    estimated_cost_per_1k=27.75,
+    estimated_cost_per_1k=4.64,
 )
 
 SINGLE_PROVIDER_TRIO = JuryPreset(
     name='Single-Provider Trio',
+    # The three tiers of the newest OpenAI generation (user decision
+    # 2026-11-10): 6.1 Sol and 6.1 Terra, and GPT-6 Luna since no 6.1 Luna is
+    # listed. 6.1 Sol medium 47.8 at $2/$10 (EU sibling ladder); 6.1 Terra has
+    # no v4.3 score yet and is held in REVIEWED_UNBENCHMARKED_SEATS.
     judges=(
-        'openai/gpt-5.6-sol',
-        'openai/gpt-5.6-terra',
+        'openai/gpt-6.1-sol',
+        'openai/gpt-6.1-terra',
         'openai/gpt-6-luna',
     ),
-    reserve_judges=('openai/gpt-5.4-nano',),
+    # Same generation, off the panel: GPT-6 Sol medium 39.8 at $2/$10.
+    reserve_judges=('openai/gpt-6-sol',),
     use_when=(
-        'Workspaces locked to one provider contract. The three real tiers of '
-        'the current OpenAI lineup rather than one tier plus two minis, so no '
-        'family diversity: errors correlate and OpenAI-generated outputs face a '
-        'self-preference risk the panel cannot vote away.'
+        'Workspaces locked to one provider contract. The three tiers of the '
+        'current OpenAI generation, so no family diversity: errors correlate '
+        'and OpenAI-generated outputs face a self-preference risk the panel '
+        'cannot vote away.'
     ),
-    estimated_cost_per_1k=57.9,
+    estimated_cost_per_1k=12.40,
 )
+
 
 PRESETS: MappingProxyType[str, JuryPreset] = MappingProxyType({
     preset.name: preset
     for preset in (
         BALANCED_TRIO,
         STRONG_JURY,
+        CHEAP_AGGREGATE,
         OPEN_WEIGHT_PORTABLE,
         EU_REGION,
         SINGLE_PROVIDER_TRIO,
@@ -298,30 +401,177 @@ PRESETS: MappingProxyType[str, JuryPreset] = MappingProxyType({
 })
 
 # Flat estimate behind every published cost, the same for every seat whatever
-# its reasoning effort.
+# its reasoning effort: 3:1 input to output, the ratio the garden's blended
+# price is ranked on. Measured usage runs above this when a judge reasons
+# without being asked (RES-996), so treat it as a floor.
 ESTIMATED_PROMPT_TOKENS = 1500
-ESTIMATED_COMPLETION_TOKENS = 1500
+ESTIMATED_COMPLETION_TOKENS = 500
 
 
 # Presets derived and costed, but not seated in PRESETS because a seat cannot
 # do the job today. Distinct from DROPPED_PRESETS: nothing here was judged a bad
 # panel, and each entry names the one thing that has to be true for it to ship.
-WITHHELD_PRESETS: dict[str, str] = {
-    'Cheap Aggregate': (
-        'Not shipped yet. Five small judges across five lineages, concluding on '
-        'three of five. One seat does not vote: `minimax/MiniMax-M2.7` answers a '
-        '`json_schema` response format with prose, and the fallback that would '
-        'resend the schema as instructions sits behind `except BadRequestError`, '
-        'so it never fires on a 200 that simply has the wrong shape. The model '
-        'itself complies when the schema reaches it as instructions. That leaves '
-        'four voting seats, an even panel, which `_panel_is_well_formed` exists '
-        'to reject and passes only because it counts declared seats rather than '
-        'voting ones. Seating the reserve, `zai/glm-5.2`, is not a fix: at $8.70 '
-        'per 1k for that seat alone it defeats a budget panel. Ships once the '
-        'judge path falls back on an unparseable 200 as well as on a rejected '
-        'request.'
+WITHHELD_PRESETS: dict[str, str] = {}
+
+# Days a seat may sit in the garden before it has to be argued for again.
+# Generations have been turning over in roughly eight weeks, so a seat past
+# this has watched two or three rounds of its own band ship without moving.
+MAX_SEAT_AGE_DAYS = 180
+
+# Seats knowingly held past MAX_SEAT_AGE_DAYS, keyed by model identity.
+#
+# The other registers all answer "something newer exists, why not it?".  This
+# one answers the question nothing else asks: a lineage can simply stop
+# shipping, and then no in-family upgrade is ever found, no successor is ever
+# flagged, and a seat quietly ages out while every freshness test passes.
+#
+# Age here is time since first listing in the garden, taken across every host
+# of the same weights, so a second host relisting a model does not reset it.
+AGED_SEATS: dict[str, str] = {
+    'deepseek-v4-pro': (
+        'Listed 2026-04-24. DeepSeek has listed no newer Pro since; its later '
+        'releases are V4/V4.1 Flash, a cheaper tier the Balanced Trio reserve '
+        'already covers. Retire this entry the day a V4.1 or V5 Pro is listed.'
+    ),
+    'claude-haiku-4-5-20251001': (
+        'Listed 2025-10, held only by the derived Anthropic Only pool, and only '
+        'on a project-scoped key: anthropic/claude-haiku-5-5 is in the public '
+        "catalogue but not in this project's /v2/models, and the pool "
+        'derivation reads /v2/models alone, so it still reaches for 4.5. '
+        'Retire this entry once the drift suite runs on a workspace key; '
+        'test_aged_seat_entries_are_dropped_once_the_seat_is_young_again says when.'
     ),
 }
+
+
+# Explicitly reviewed holds, not measured-quality recommendations. The default
+# and measured-rung fingerprint expire the decision when the card changes.
+# Seats that SUPERSEDED would refuse, held on a written reason. Keyed by router
+# ID; test_every_judge_and_reserve_is_seatable honours exactly these.
+HELD_SUPERSEDED: dict[str, str] = {
+    'zai/glm-5.2': (
+        'Open-Weight / Portable keeps GLM 5.2 although zai/glm-5.3-flash is 41.8 against 33.7 '
+        'live and cheaper on the card: the 5.3 Flash price is held on billing provenance '
+        '(card $0.075/$0.25 per 1M, judge-endpoint usage billed $0.15/$0.50), and Cheap '
+        'Aggregate now seats it on the card rate. Decide whether Portable follows.'
+    ),
+}
+
+REVIEWED_UNBENCHMARKED_SEATS: dict[str, tuple[str, tuple[str, ...], str]] = {
+    'openai/gpt-6.1-terra': (
+        'medium',
+        (),
+        (
+            'Seated by user decision 2026-11-10 so Single-Provider Trio runs the '
+            'current generation. No v4.3 score exists for it or its EU sibling; '
+            'AA publishes medium 38 and max 51 on v5.0.1 only, which is not spliced '
+            'into the v4.3 garden. Drop the hold when a v4.3 card or a coherent '
+            'v5.0.1 garden scores it.'
+        ),
+    ),
+    'deepseek/deepseek-v4-pro': (
+        'high',
+        ('max', 'none'),
+        (
+            'The 2026-11-10 card runs at high but measures only max 36.0 and none '
+            '20.4; the high rung it was seated on is gone from the ladder. Held '
+            'as a data blocker on Balanced Trio, Portable and the Strong Jury '
+            'reserve: no newer DeepSeek Pro is listed, and reseating three panels '
+            'on a missing rung is a jury decision, not a freshness fix.'
+        ),
+    ),
+    'google/gemini-3.6-flash': (
+        'medium',
+        ('high',),
+        (
+            'Keep the evaluatorq PR263 baseline pending a measured medium score. '
+            'The attached high 50.1 is not the score where this judge runs; '
+            'Gemini 3.7 also lacks its medium benchmark. No quality rank claimed.'
+        ),
+    ),
+}
+
+
+# Successors already looked at and deliberately not seated. A model reaching the
+# garden is not a reason to put it in front of customers, but it is a reason to
+# say why not: this dict is that record, and the freshness test fails on any
+# successor missing from it. Seat the model or write the line; silence is the
+# one thing that is not allowed.
+# Shared reasons for the 2026-11-10 review of the public catalogue. Public
+# `artificial_analysis_intelligence_index` values quoted below name no effort,
+# so they explain a dismissal but never rank a seat (finding 10 of the research
+# repo's LLM jury presets 2-pager).
+_OLDER_GENERATION = (
+    'An older generation than the seat in its lineage, first listed here late; '
+    'a listing date is not a release date. Public catalogue 2026-11-10.'
+)
+_NOT_A_JUDGE = 'Not a general text judge (translation, vision, omni, image or classify-only endpoint). Public catalogue 2026-11-10.'
+_UNSCORED = (
+    'No AA index on the public card and no card in the project-scoped /v2/models '
+    '(2026-11-10), so there is nothing to rank it on. Review again once scored.'
+)
+_ALIBABA_RESERVE = (
+    "Alibaba only holds Portable's reserve, chosen for cost (greenpt/qwen3.6-35b-a3b, "
+    '$0.30/$1.80). This one is pricier per 1M or europe-pinned, so it is not a '
+    'cheaper reserve. Public catalogue 2026-11-10.'
+)
+
+REVIEWED_SUCCESSORS: dict[str, str] = {
+    'qwen3.7-flash': (
+        'alibaba/qwen3.7-flash is europe-pinned and unscored in the live catalogue (2026-10-26); the Portable reserve cannot take a region-pinned or unscored seat.'
+    ),
+    'qwen3.8-flash': (
+        'alibaba/qwen3.8-flash is europe-pinned and unscored in the live catalogue (2026-10-26), so it has no index to rank on and no non-EU route.'
+    ),
+    'qwen-3.8-27b': (
+        "cerebras/qwen-3.8-27b scores 33.7 live but at $0.99/$1.49 per 1k; a reserve held for price, not strength, so it stays out. Revisit if Portable's reserve is ever chosen by pareto rather than by cost."
+    ),
+    'qwen3.8-flash-next': (
+        'tensorix/qwen/qwen3.8-flash-next is europe-pinned and unscored in the live catalogue (2026-10-26).'
+    ),
+    'qwen-mt-flash': _NOT_A_JUDGE,
+    'qwen-mt-lite': _NOT_A_JUDGE,
+    'qwen3-vl-flash-2025-10-15': _NOT_A_JUDGE,
+    'qwen3-vl-235b-a22b-instruct': _NOT_A_JUDGE,
+    'qwen3.8-omni-flash': _NOT_A_JUDGE,
+    'qwen3.5-2b': _NOT_A_JUDGE,
+    'decision-model-preview': _NOT_A_JUDGE,
+    'qwen-plus-2025-12-01': _OLDER_GENERATION,
+    'qwen3.5-flash-2026-02-23': _OLDER_GENERATION,
+    'qwen3-30b-a3b-instruct-2507': _OLDER_GENERATION,
+    'qwen3.6-flash': _UNSCORED,
+    'qwen3.6-flash-2026-04-16': _UNSCORED,
+    'qwen3.7-flash-2026-07-15': _UNSCORED,
+    'qwen3.6-27b': _ALIBABA_RESERVE,
+    'qwen3.6-plus-2026-04-02': _ALIBABA_RESERVE,
+    'qwen3.7-plus': _ALIBABA_RESERVE,
+    'qwen3.7-plus-2026-05-26': _ALIBABA_RESERVE,
+    'qwen3.7-max': _ALIBABA_RESERVE,
+    'qwen3.7-max-2026-05-20': _ALIBABA_RESERVE,
+    'qwen3.7-max-2026-06-08': _ALIBABA_RESERVE,
+    'qwen3.8-27b': _ALIBABA_RESERVE,
+    'qwen3.8-27b-fp8': _ALIBABA_RESERVE,
+    'qwen3.8-2.4t-a95b': _ALIBABA_RESERVE,
+    'qwen3.8-max': _ALIBABA_RESERVE,
+    'glm-4-32b-0414-128k': _OLDER_GENERATION,
+    'glm-4.5-airx': _OLDER_GENERATION,
+    'glm-4.5-x': _OLDER_GENERATION,
+    'claude-fable-5-2': '$8/$40 per 1M on every host, no AA index on the public card and no card in /v2/models (2026-11-10). Five times the Opus 5.5 rate it would compete with; review for Strong Jury once scored.',
+    'claude-mythos-5-2': 'Same as claude-fable-5-2: $8/$40 per 1M, unscored (2026-11-10). Review for Strong Jury once scored.',
+    'deepseek-v4.1-flash-1017': _UNSCORED,
+    'kimi-k2.8-preview': _UNSCORED,
+    'kimi-k3.1-pro-highspeed': 'A faster K3.1 Pro at $4/$20 per 1M, unscored (2026-11-10). If K3.1 Pro is seated, this is its premium variant, not a separate decision.',
+    'kimi-k3.1-pro': '$2/$10 per 1M on moonshotai, cheaper than the seated K3 ($3/$15), but unscored on the public card and absent from /v2/models (2026-11-10). The likeliest Portable upgrade: re-review the moment it is scored.',
+    'gemini-nano-banana-2.1': _NOT_A_JUDGE,
+    'gemma-4-12b': 'munito EU host only, public AA index 9.4, under the 15.0 floor. 2026-11-10.',
+    'qwen3.8-max-0902': "Public AA index 45.4 at $1.65/$4.95 per 1M, europe/us/apac. Alibaba holds only Portable's cost-chosen reserve ($0.30/$1.80), so a stronger, pricier Qwen is not a reserve upgrade; it would be a fourth-family judge, which no panel has a seat for. 2026-11-10.",
+    'glm-5.3-fast': "Public AA index 44.8 at $2.10/$6.60 per 1M against Portable's glm-5.2 at $1.40/$4.40: stronger, pricier, and already the subject of the glm-5.2 HELD_SUPERSEDED decision. 2026-11-10.",
+    'glm-5.3-flashx': 'Same 41.8 public index as the seated glm-5.3-flash at $0.37/$1.25 against $0.075/$0.25: same score, five times the price. 2026-11-10.',
+    'deepseek-v4.1-flash-fast': 'Baseten fast variant at $0.60/$2.40 per 1M, public AA index 39.5; twice deepseek-v4.1-flash and four times the deepseek-flash reserve ($0.14/$0.28). 2026-11-10.',
+    'kimi-k3-fast': 'The same K3 weights on Fireworks at $4.50/$22.50 per 1M against Baseten $3/$15: same score, pricier. 2026-11-10.',
+    'gemini-4-argon': "Public AA index 52.6 at $2/$10 per 1M, against Strong Jury's gemini-3.6-flash at $1.50/$7.50. No card in the project-scoped /v2/models, so no default-effort rung to rank on (2026-11-10). The strongest unreviewed candidate in the catalogue: rank it for Strong Jury once the drift suite has a workspace key.",
+}
+
 
 # Presets that shipped in a draft and were then retired, with the reason on
 # record. A shape that disappears silently leaves its users guessing, so removal
