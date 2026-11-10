@@ -175,8 +175,12 @@ async def _build_dimension(  # noqa: C901
     parallelism: int,
     classifier_model: str,
     usage: UsageLedger | None = None,
+    embedding_client: AsyncOpenAI | None = None,
 ) -> DimensionResult:
-    """Run one dimension's embed → cluster → describe → merge → reduce pipeline."""
+    """Run one dimension's embed → cluster → describe → merge → reduce pipeline.
+
+    Embeddings go through `embedding_client` when given, else through `client`.
+    """
     import numpy as np
 
     from evaluatorq.insights.cluster import centroids, cluster_two_level, nearest_neighbours
@@ -242,7 +246,9 @@ async def _build_dimension(  # noqa: C901
             trace.errors[f'dimension:{dimension}'] = warning
             continue
         texts = [usable[i][1] for i in indices]
-        embedded = await embed_texts(texts, client=client, model=embedding_model, cache=cache, usage=usage)
+        embedded = await embed_texts(
+            texts, client=embedding_client or client, model=embedding_model, cache=cache, usage=usage
+        )
         vectors = np.asarray([embedded[text] for text in texts], dtype=float)
         tree = await asyncio.to_thread(
             cluster_two_level,
@@ -457,9 +463,14 @@ async def insights(  # noqa: C901
     _orq_scope: Mapping[str, str | None] | None = None,
     _on_saved: Callable[[Path], None] | None = None,
     llm_client: AsyncOpenAI | None = None,
+    embedding_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
 ) -> InsightsRun:
     """Run trace Insights and persist the partial or complete result with a manifest.
+
+    `embedding_client` serves only the embedding calls, for providers whose chat
+    client has no embeddings API. When `None`, embeddings use the chat client.
+    Like `llm_client`, an injected `embedding_client` is never closed here.
 
     `coding_analysis` retains the legacy full coding bundle. `coding_labels`
     selects a subset of coding labels while keeping the coding-agent gate.
@@ -796,6 +807,7 @@ async def insights(  # noqa: C901
                             client=client,
                             cache=cache_store,
                             embedding_model=embedding_model,
+                            embedding_client=embedding_client,
                             summary_model=summary_model,
                             max_clusters=max_clusters,
                             max_subclusters=max_subclusters,

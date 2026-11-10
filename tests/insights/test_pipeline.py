@@ -1587,3 +1587,97 @@ async def test_dimension_persists_one_review_layout_across_sentiment_groups(
         assert trace.coords_2d == ({} if projection_fails else {'sentiment': (index + 100, index + 200)})
         assert 'sentiment' in trace.assignments
     assert any('2D' in warning for warning in result.warnings) is projection_fails
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('separate', [True, False])
+async def test_embeddings_use_embedding_client_and_chat_calls_use_llm_client(
+    monkeypatch: pytest.MonkeyPatch, separate: bool
+) -> None:
+    from openai import AsyncOpenAI  # noqa: F401 - names the cast target below
+
+    from evaluatorq.insights import reduce
+    from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.describe import ClusterName
+    from evaluatorq.insights.models import TraceInsight
+
+    traces = [
+        TraceInsight(
+            trace_id=f't{i}', span_id=f's{i}', timestamp=datetime.now(timezone.utc), summary=_summary(),
+        )
+        for i in range(6)
+    ]
+    llm_client = cast('AsyncOpenAI', SimpleNamespace(name='chat'))
+    embedding_client = cast('AsyncOpenAI', SimpleNamespace(name='embed'))
+    embed_clients: list[object] = []
+    chat_clients: list[object] = []
+
+    async def embeddings(texts, *, client, **kwargs):
+        embed_clients.append(client)
+        return {text: [1.0, 0.0] for text in set(texts)}
+
+    async def descriptions(members, *, client, **kwargs):
+        chat_clients.append(client)
+        return {cluster_id: ClusterName(name=f'group {cluster_id}', description='group details') for cluster_id in members}
+
+    async def top_descriptions(children, *, client, **kwargs):
+        chat_clients.append(client)
+        return {top_id: ClusterName(name=f'top {top_id}', description='top details') for top_id in children}
+
+    monkeypatch.setattr(pipeline, 'embed_texts', embeddings)
+    monkeypatch.setattr(pipeline, 'describe_clusters', descriptions)
+    monkeypatch.setattr(pipeline, 'describe_top_level', top_descriptions)
+    monkeypatch.setattr(reduce, 'reduce_3d', lambda *args, **kwargs: None)
+    cache = InsightsCache(enabled=False)
+    try:
+        await pipeline._build_dimension(
+            'intent', traces, client=llm_client, cache=cache, embedding_model='unused', summary_model='unused',
+            max_clusters=15, max_subclusters=15, outlier_zscore=None, parallelism=10,
+            classifier_model='typesafe/jev-latest', embedding_client=embedding_client if separate else None,
+        )
+    finally:
+        cache.close()
+
+    assert embed_clients == [embedding_client if separate else llm_client]
+    assert chat_clients and all(client is llm_client for client in chat_clients)
+
+
+@pytest.mark.asyncio
+async def test_insights_forwards_embedding_client_and_never_closes_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: dict[str, object] = {}
+    closed: list[str] = []
+
+    class _Client:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def close(self) -> None:
+            closed.append(self.name)
+
+    async def fake_build(dimension, traces, *, client, embedding_client=None, **kwargs):
+        seen['client'] = client
+        seen['embedding_client'] = embedding_client
+        return pipeline.DimensionResult(name=dimension, source_field='x', clusters=[])
+
+    monkeypatch.setattr(pipeline, '_build_dimension', fake_build)
+    monkeypatch.setattr(pipeline, 'resolve_orq_client', lambda: object())
+    traces = [_trace(i) for i in range(6)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+    monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+    chat, embed = _Client('chat'), _Client('embed')
+
+    run = await pipeline.insights(
+        _population(),
+        dimensions=('intent',),
+        labels=(),
+        runs_dir=tmp_path / 'runs',
+        llm_client=cast('Any', chat),
+        embedding_client=cast('Any', embed),
+    )
+
+    assert run.status == 'completed'
+    assert seen == {'client': chat, 'embedding_client': embed}
+    assert closed == []

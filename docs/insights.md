@@ -71,6 +71,35 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+### Embed with a separate client
+
+Pass `embedding_client` when the client you give `llm_client` has no embeddings API, as with several non-OpenAI providers. It must be an `AsyncOpenAI` client that serves `embeddings.create`, and it handles only the embedding calls; every chat and structured call keeps using `llm_client`. Without it, embeddings use the same client as everything else. evaluatorq never closes an `embedding_client` you pass, and cached vectors are keyed by that client's `base_url`, so switching endpoints never reuses vectors from another one. If the embedding client cannot serve the `embedding_model` you name, the dimension stages fail and the run ends with `status="error"`.
+
+```python
+import asyncio
+
+from openai import AsyncOpenAI
+
+from evaluatorq.insights import InsightsPopulation, insights
+
+
+async def main() -> None:
+    # chat_client talks to a provider with no embeddings API; OpenAI serves the vectors.
+    chat_client = AsyncOpenAI(base_url="https://llm.example.com/v1", api_key="...")
+    embedding_client = AsyncOpenAI()  # reads OPENAI_API_KEY
+    run = await insights(
+        population=InsightsPopulation(window_days=7, limit=200),
+        llm_client=chat_client,
+        embedding_client=embedding_client,
+        embedding_model="text-embedding-3-small",
+    )
+    print(run.status)
+
+
+asyncio.run(main())
+```
+
+
 `filters` is one dictionary for facet and numeric conditions. Older callers can still pass the legacy facet and numeric arguments, but do not mix those with `filters`. Unknown keys and conflicting inputs are rejected.
 
 | Filter kind | Accepted keys | Values |
