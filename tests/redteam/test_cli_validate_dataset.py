@@ -73,6 +73,53 @@ def test_truncates_sample_validation_errors_after_twenty(tmp_path: Path) -> None
     assert '  ... and 2 more' in result.stderr
 
 
+@pytest.mark.parametrize(
+    ('category', 'expected'),
+    [
+        ('sensitive_information_disclosure', "'sensitive_information_disclosure' is not a category"),
+        ('LLM03', "Use 'ASI04'."),
+    ],
+)
+def test_rejects_category_a_run_would_not_request(tmp_path: Path, category: str, expected: str) -> None:
+    sample = _valid_sample('row-7')
+    sample['input']['category'] = category
+    dataset = _write_dataset(tmp_path, {'samples': [_valid_sample(), sample]})
+
+    result = runner.invoke(app, ['validate-dataset', str(dataset)])
+
+    assert result.exit_code == 1, result.output
+    assert 'FAIL: 1 validation error(s):' in result.stderr
+    assert "sample[1] (id='row-7').input.category" in result.stderr
+    assert expected in result.stderr
+
+
+def test_accepts_lowercase_and_prefixed_category(tmp_path: Path) -> None:
+    lower, prefixed = _valid_sample('a'), _valid_sample('b')
+    lower['input']['category'] = 'asi01'
+    prefixed['input']['category'] = 'OWASP-LLM01'
+    dataset = _write_dataset(tmp_path, {'samples': [lower, prefixed]})
+
+    result = runner.invoke(app, ['validate-dataset', str(dataset)])
+
+    assert result.exit_code == 0, result.output
+    assert 'OK: All 2 samples are valid.' in result.output
+
+
+def test_rejects_unresolvable_vulnerability(tmp_path: Path) -> None:
+    sample = _valid_sample()
+    del sample['input']['category']
+    sample['input']['vulnerability'] = 'sensitive_information_disclosure'
+    dataset = _write_dataset(tmp_path, {'samples': [sample]})
+
+    result = runner.invoke(app, ['validate-dataset', str(dataset)])
+
+    assert result.exit_code == 1, result.output
+    assert (
+        "sample[0] (id='sample-1').input: Value error, Unknown vulnerability 'sensitive_information_disclosure'"
+        in result.stderr
+    )
+
+
 def test_reports_default_huggingface_download_failure(monkeypatch: Any) -> None:
     def raise_download(**_: object) -> str:
         raise RuntimeError('network down')

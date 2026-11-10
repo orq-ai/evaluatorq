@@ -881,16 +881,31 @@ def _load_raw_dataset(dataset: str | None) -> Any:
 def _collect_sample_errors(samples: Any) -> list[str]:
     from pydantic import ValidationError as _ValidationError
 
-    from evaluatorq.redteam.contracts import RedTeamSample
+    from evaluatorq.redteam.adaptive.strategy_registry import list_available_categories
+    from evaluatorq.redteam.contracts import RedTeamSample, normalize_category
+    from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe
 
+    requested = set(list_available_categories())
     errors: list[str] = []
     for i, sample in enumerate(samples):
+        meta = sample.get('input') if isinstance(sample, dict) else None
+        sample_id = meta.get('id') if isinstance(meta, dict) else None
+        row = f'sample[{i}] (id={sample_id!r})' if sample_id else f'sample[{i}]'
         try:
-            RedTeamSample.model_validate(sample)
-        except _ValidationError as e:  # noqa: PERF203
+            parsed = RedTeamSample.model_validate(sample)
+        except _ValidationError as e:
             for err in e.errors():
                 loc = ' -> '.join(str(loc_part) for loc_part in err['loc'])
-                errors.append(f'  sample[{i}].{loc}: {err["msg"]}')
+                errors.append(f'  {row}.{loc}: {err["msg"]}')
+            continue
+        category = parsed.input.category
+        if normalize_category(category.upper()) not in requested:
+            vuln = resolve_category_safe(category)
+            hint = f" Use '{get_primary_category(vuln)}'." if vuln is not None else ''
+            errors.append(
+                f'  {row}.input.category: {category!r} is not a category '
+                f'a red team run requests, so this row would not run.{hint}'
+            )
     return errors
 
 
@@ -905,9 +920,10 @@ def validate_dataset(
 ) -> None:
     """Validate the shape of a red team dataset.
 
-    Checks that every sample has the required fields and that messages
-    are well-formed.  Does NOT enforce enum membership for open-set
-    fields like attack_technique or delivery_method.
+    Checks that every sample has the required fields, that messages
+    are well-formed, and that every row's category is one a run requests.
+    Does NOT enforce enum membership for open-set fields like
+    attack_technique or delivery_method.
     """
     raw = _load_raw_dataset(dataset)
 
