@@ -1394,18 +1394,49 @@ LLM_SDK_ERROR_NAMES = frozenset({
 _LLM_SDK_MODULES = frozenset({'openai', 'anthropic', 'openai._exceptions', 'anthropic._exceptions'})
 
 
+def _dotted_name(node: ast.expr) -> str | None:
+    """``a.b.c`` for a chain of ``Name``/``Attribute`` nodes, else ``None``."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return '.'.join(reversed(parts))
+
+
 def _llm_sdk_error_references(source: str) -> list[tuple[int, str]]:
-    """Return ``(line, name)`` for each SDK exception class named from ``openai`` or ``anthropic``."""
+    """Return ``(line, name)`` for each SDK exception class named from ``openai`` or ``anthropic``.
+
+    Module aliases are resolved, so ``import openai as sdk`` then ``sdk.APIError`` and
+    ``from openai import _exceptions as errors`` then ``errors.APIError`` are both reported.
+    """
+    tree = ast.parse(source)
+    # Local name -> the SDK module it is bound to.
+    aliases = {'openai': 'openai', 'anthropic': 'anthropic'}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name in _LLM_SDK_MODULES and a.asname:
+                    aliases[a.asname] = a.name
+        elif isinstance(node, ast.ImportFrom) and node.module in {'openai', 'anthropic'}:
+            for a in node.names:
+                if a.name == '_exceptions':
+                    aliases[a.asname or a.name] = f'{node.module}._exceptions'
     found: list[tuple[int, str]] = []
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in _LLM_SDK_MODULES:
             found.extend((node.lineno, a.name) for a in node.names if a.name in LLM_SDK_ERROR_NAMES)
         elif isinstance(node, ast.Attribute) and node.attr in LLM_SDK_ERROR_NAMES:
-            base = node.value
-            if isinstance(base, ast.Attribute) and base.attr == '_exceptions':
-                base = base.value
-            if isinstance(base, ast.Name) and base.id in {'openai', 'anthropic'}:
+            base = _dotted_name(node.value)
+            if base is None:
+                continue
+            head, _, rest = base.partition('.')
+            module = aliases.get(head)
+            if module is not None and f'{module}.{rest}'.rstrip('.') in _LLM_SDK_MODULES:
                 found.append((node.lineno, node.attr))
+    found.sort()
     return found
 
 
@@ -1448,4 +1479,25 @@ def test_llm_sdk_error_detector_flags_both_sdks_and_private_modules() -> None:
         (5, 'APIError'),
         (8, 'APIStatusError'),
         (10, 'BadRequestError'),
+    ]
+
+
+def test_llm_sdk_error_detector_resolves_module_aliases() -> None:
+    source = (
+        'import openai as sdk\n'
+        'import anthropic._exceptions as aerr\n'
+        'from openai import _exceptions as oerr\n'
+        'import json as openai_like\n'
+        'try:\n'
+        '    pass\n'
+        'except (sdk.APIError, aerr.RateLimitError, oerr.BadRequestError, sdk._exceptions.ConflictError):\n'
+        '    pass\n'
+        'except openai_like.APIError:\n'
+        '    pass\n'
+    )
+    assert _llm_sdk_error_references(source) == [
+        (7, 'APIError'),
+        (7, 'BadRequestError'),
+        (7, 'ConflictError'),
+        (7, 'RateLimitError'),
     ]
