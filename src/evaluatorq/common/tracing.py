@@ -18,6 +18,7 @@ from loguru import logger
 from evaluatorq.common.env_config import env_bool, env_raw
 from evaluatorq.common.fields import get_field as _field
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
@@ -570,9 +571,7 @@ async def with_llm_span(  # noqa: RUF029
         serialized = _serialize_messages(input_messages)
         genai_attrs['gen_ai.input.messages'] = serialized
         genai_attrs['input'] = serialized
-    # Run attribution on every LLM span, whatever the endpoint; caller attributes win.
-    from evaluatorq.common.thread_context import pipeline_metadata
-
+    # Run attribution on every span regardless of endpoint; caller attributes win.
     for key, value in pipeline_metadata().items():
         genai_attrs[f'orq.{key}'] = value
     if attributes:

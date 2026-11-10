@@ -10,12 +10,16 @@ from loguru import logger
 
 from evaluatorq import DataPoint, Job, job
 from evaluatorq.common.env_config import env_raw
-from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
+from evaluatorq.common.thread_context import (
+    build_static_thread_id,
+    conversation_thread,
+    pipeline_metadata_param,
+    thread_body_param,
+)
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
     record_llm_response,
@@ -142,9 +146,8 @@ def create_deployment_job(
                 'key': deployment_key,
                 'messages': messages,
             }
-            # This leg bypasses the shared chat-completion helper, so run
-            # metadata is applied explicitly (a deployment invoke is always Orq).
-            apply_pipeline_metadata(invoke_kwargs, routes_through_orq=True)
+            # An Orq SDK invoke, not an OpenAI client: always Orq-routed.
+            invoke_kwargs.update(pipeline_metadata_param())
             invoke_kwargs.update(thread_body_param())
             # Propagate W3C trace context so the deployment's server-side
             # execution nests under this span. Captured inside the span so

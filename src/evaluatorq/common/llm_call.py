@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from openai import BadRequestError
 
@@ -171,27 +171,27 @@ def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -
 def apply_pipeline_metadata(
     params: dict[str, Any],
     *,
-    routes_through_orq: bool,
-    store_default: bool = False,
+    client: Any,
+    api: Literal['chat', 'responses'],
 ) -> None:
-    """Tag the invocation with the active run surface + run id via ``metadata``.
+    """Tag the request with the active run surface and run id via ``metadata``.
 
     Mutates ``params`` in place; no-op when no run is bound. Caller-supplied
-    metadata (via ``extra_kwargs``) wins on key conflict. Public: direct
-    ``create()`` sites that build their own kwargs dict call this instead of
-    routing through `execute_chat_completion`.
-
-    Added only when ``routes_through_orq`` is true or ``store`` is truthy, where
-    ``store`` falls back to ``store_default`` when the caller did not set it. OpenAI's
-    Chat Completions API defaults to ``store=false`` and rejects ``metadata`` then with
-    a 400 (``store_default=False``); the Responses API defaults to ``store=true`` and
-    accepts it (``store_default=True``). We never set ``store=True`` for the caller,
-    because that would keep attacker and target conversations at OpenAI.
-    Only set when non-empty: an explicit ``metadata=None`` would serialize as
-    ``"metadata": null`` rather than being stripped from the body.
+    metadata wins on key conflict. Added only when ``client`` routes through the Orq
+    router or ``store`` is on, read from ``params['store']``, then
+    ``params['extra_body']['store']``, then the API default (off for Chat Completions,
+    on for Responses). Chat Completions defaults to ``store=false`` and rejects
+    ``metadata`` then with a 400. ``store`` is never set for the caller, because that
+    would keep attacker and target conversations at the provider.
     """
-    if not (routes_through_orq or params.get('store', store_default)):
-        return
+    if not client_routes_through_orq(client):
+        if 'store' in params:
+            store = params['store']
+        else:
+            body = params.get('extra_body') or {}
+            store = body.get('store', api == 'responses')
+        if not store:
+            return
     md = pipeline_metadata()
     if md:
         params['metadata'] = {**md, **(params.get('metadata') or {})}
@@ -261,7 +261,7 @@ async def execute_chat_completion(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    apply_pipeline_metadata(params, routes_through_orq=client_routes_through_orq(client))
+    apply_pipeline_metadata(params, client=client, api='chat')
 
     record_llm_input(span, messages)
 
@@ -343,7 +343,7 @@ async def execute_chat_parse(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    apply_pipeline_metadata(params, routes_through_orq=client_routes_through_orq(client))
+    apply_pipeline_metadata(params, client=client, api='chat')
 
     record_llm_input(span, messages)
 
@@ -480,7 +480,7 @@ async def execute_response(
     )
 
     strip_known_rejected_responses_reasoning(model, params)
-    apply_pipeline_metadata(params, routes_through_orq=client_routes_through_orq(client), store_default=True)
+    apply_pipeline_metadata(params, client=client, api='responses')
 
     if record_input:
         record_llm_input(span, messages)

@@ -150,10 +150,7 @@ class OpenAIModelTarget(AgentTarget):
             if caching_applies(self.client, self.model)
             else raw_messages,
         )
-        # Tag the target invocation so its Orq trace is attributable to the run:
-        # the pipeline surface + run id via the standard `metadata` property, and the
-        # run thread via the `thread` extra_body field. Both are sent only through
-        # the Orq router: direct OpenAI rejects `metadata` unless `store` is on.
+        # The run thread is router-only; `apply_pipeline_metadata` owns the metadata rule.
         create_kwargs: dict[str, Any] = {
             'model': self.model,
             'messages': completion_messages,
@@ -163,7 +160,7 @@ class OpenAIModelTarget(AgentTarget):
         }
         if self.reasoning_effort:
             create_kwargs['reasoning_effort'] = self.reasoning_effort
-        apply_pipeline_metadata(create_kwargs, routes_through_orq=routes_through_orq)
+        apply_pipeline_metadata(create_kwargs, client=self.client, api='chat')
         if routes_through_orq:
             thread = thread_body_param()
             if thread:

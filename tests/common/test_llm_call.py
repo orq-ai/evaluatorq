@@ -11,7 +11,7 @@ import pytest
 from openai import BadRequestError
 
 from evaluatorq.common import llm_call
-from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse
 
 
 def _bad_request(message: str) -> BadRequestError:
@@ -406,3 +406,61 @@ async def test_caller_metadata_wins_over_pipeline_label(monkeypatch: pytest.Monk
         kwargs = await _run(client, extra_kwargs={'metadata': {'evaluatorq_pipeline': 'caller', 'k': 'v'}})
     # caller-supplied value wins on key conflict; both keys present
     assert kwargs['metadata'] == {'evaluatorq_pipeline': 'caller', 'k': 'v'}
+
+
+@pytest.mark.asyncio
+async def test_chat_parse_sends_no_metadata_to_direct_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    from evaluatorq.common.thread_context import evaluatorq_pipeline
+
+    client = MagicMock()
+    client.base_url = 'https://api.openai.com/v1'
+    client.chat.completions.parse = AsyncMock(return_value=_fake_response())
+    with evaluatorq_pipeline('red_teaming'):
+        await execute_chat_parse(
+            client=client, model='m', messages=[{'role': 'user', 'content': 'x'}], span=None, timeout_s=5.0
+        )
+    assert 'metadata' not in client.chat.completions.parse.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_chat_parse_sends_metadata_to_orq_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    from evaluatorq.common.thread_context import evaluatorq_pipeline
+
+    client = _orq_client()
+    client.chat.completions.parse = AsyncMock(return_value=_fake_response())
+    with evaluatorq_pipeline('red_teaming'):
+        await execute_chat_parse(
+            client=client, model='m', messages=[{'role': 'user', 'content': 'x'}], span=None, timeout_s=5.0
+        )
+    assert client.chat.completions.parse.call_args.kwargs['metadata'] == {'evaluatorq_pipeline': 'red_teaming'}
+
+
+@pytest.mark.asyncio
+async def test_store_in_extra_body_enables_chat_metadata_off_orq(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    from evaluatorq.common.thread_context import evaluatorq_pipeline
+
+    client = MagicMock()
+    client.base_url = 'https://api.openai.com/v1'
+    client.chat.completions.create = AsyncMock(return_value=_fake_response())
+    await execute_chat_completion(
+        client=client,
+        model='m',
+        messages=[{'role': 'user', 'content': 'x'}],
+        span=None,
+        timeout_s=5.0,
+        extra_body={'store': True},
+    )
+    assert 'metadata' not in client.chat.completions.create.call_args.kwargs
+    with evaluatorq_pipeline('red_teaming'):
+        await execute_chat_completion(
+            client=client,
+            model='m',
+            messages=[{'role': 'user', 'content': 'x'}],
+            span=None,
+            timeout_s=5.0,
+            extra_body={'store': True},
+        )
+    assert client.chat.completions.create.call_args.kwargs['metadata'] == {'evaluatorq_pipeline': 'red_teaming'}

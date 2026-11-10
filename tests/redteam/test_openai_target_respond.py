@@ -214,3 +214,28 @@ async def test_without_reasoning_effort_the_token_budget_is_max_completion_token
     assert sent["max_completion_tokens"] == target.max_tokens
     assert "max_tokens" not in sent
     assert "reasoning_effort" not in sent
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_off_orq_sends_no_metadata_and_no_max_tokens():
+    from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
+
+    client = MagicMock()
+    client.base_url = "https://api.openai.com/v1"
+    client.chat.completions.create = AsyncMock(return_value=_make_openai_response())
+    target = OpenAIModelTarget(
+        model="gpt-5.1", system_prompt="SYS", client=client, reasoning_effort="high"
+    )
+
+    with (
+        patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
+        evaluatorq_pipeline("red_teaming"),
+        evaluatorq_run_id("r1"),
+    ):
+        await target.respond([Message(role="user", content="hello")])
+
+    sent = client.chat.completions.create.call_args.kwargs
+    assert sent["reasoning_effort"] == "high"
+    assert sent["max_completion_tokens"] == target.max_tokens
+    assert "max_tokens" not in sent
+    assert "metadata" not in sent

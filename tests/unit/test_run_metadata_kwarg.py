@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -10,10 +11,13 @@ from openai import AsyncOpenAI
 from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 
+_ORQ: Any = SimpleNamespace(base_url='https://my.orq.ai/v3/router')
+_DIRECT: Any = SimpleNamespace(base_url='https://api.openai.com/v1')
+
 
 def test_no_op_when_nothing_bound() -> None:
     params: dict[str, Any] = {'model': 'gpt-4o-mini'}
-    apply_pipeline_metadata(params, routes_through_orq=True)
+    apply_pipeline_metadata(params, client=_ORQ, api='chat')
 
     assert params == {'model': 'gpt-4o-mini'}
 
@@ -21,7 +25,7 @@ def test_no_op_when_nothing_bound() -> None:
 def test_applies_bound_pipeline_and_run_id() -> None:
     params: dict[str, Any] = {'model': 'gpt-4o-mini'}
     with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('r1'):
-        apply_pipeline_metadata(params, routes_through_orq=True)
+        apply_pipeline_metadata(params, client=_ORQ, api='chat')
 
     assert params['metadata'] == {'evaluatorq_pipeline': 'red_teaming', 'evaluatorq_run_id': 'r1'}
 
@@ -30,7 +34,7 @@ def test_not_applied_off_orq_without_store() -> None:
     """Direct OpenAI rejects `metadata` unless `store` is on, so it is withheld."""
     params: dict[str, Any] = {'model': 'gpt-4o-mini'}
     with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('r1'):
-        apply_pipeline_metadata(params, routes_through_orq=False)
+        apply_pipeline_metadata(params, client=_DIRECT, api='chat')
 
     assert 'metadata' not in params
 
@@ -38,31 +42,50 @@ def test_not_applied_off_orq_without_store() -> None:
 def test_applied_off_orq_when_caller_enables_store() -> None:
     params: dict[str, Any] = {'model': 'gpt-4o-mini', 'store': True}
     with evaluatorq_run_id('r1'):
-        apply_pipeline_metadata(params, routes_through_orq=False)
+        apply_pipeline_metadata(params, client=_DIRECT, api='chat')
 
     assert params['metadata'] == {'evaluatorq_run_id': 'r1'}
 
 
-def test_store_default_true_applies_off_orq_unless_store_false() -> None:
+def test_responses_applies_off_orq_unless_store_is_off() -> None:
     """Responses defaults store=true; only an explicit store=False withholds metadata."""
     with evaluatorq_run_id('r1'):
         default: dict[str, Any] = {}
-        apply_pipeline_metadata(default, routes_through_orq=False, store_default=True)
+        apply_pipeline_metadata(default, client=_DIRECT, api='responses')
         off: dict[str, Any] = {'store': False}
-        apply_pipeline_metadata(off, routes_through_orq=False, store_default=True)
+        apply_pipeline_metadata(off, client=_DIRECT, api='responses')
+        off_body: dict[str, Any] = {'extra_body': {'store': False}}
+        apply_pipeline_metadata(off_body, client=_DIRECT, api='responses')
         chat: dict[str, Any] = {}
-        apply_pipeline_metadata(chat, routes_through_orq=False)
+        apply_pipeline_metadata(chat, client=_DIRECT, api='chat')
 
     assert default['metadata'] == {'evaluatorq_run_id': 'r1'}
     assert 'metadata' not in off
+    assert 'metadata' not in off_body
     assert 'metadata' not in chat
+
+
+def test_store_in_extra_body_is_read_off_orq() -> None:
+    on: dict[str, Any] = {'extra_body': {'store': True}}
+    with evaluatorq_run_id('r1'):
+        apply_pipeline_metadata(on, client=_DIRECT, api='chat')
+
+    assert on['metadata'] == {'evaluatorq_run_id': 'r1'}
+
+
+def test_top_level_store_wins_over_extra_body() -> None:
+    params: dict[str, Any] = {'store': False, 'extra_body': {'store': True}}
+    with evaluatorq_run_id('r1'):
+        apply_pipeline_metadata(params, client=_DIRECT, api='chat')
+
+    assert 'metadata' not in params
 
 
 def test_caller_supplied_metadata_wins_on_conflict() -> None:
     """A caller's own metadata key survives; the bound keys fill in around it."""
     params = {'metadata': {'evaluatorq_run_id': 'caller-id', 'custom': 'x'}}
     with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('bound-id'):
-        apply_pipeline_metadata(params, routes_through_orq=True)
+        apply_pipeline_metadata(params, client=_ORQ, api='chat')
 
     assert params['metadata'] == {
         'evaluatorq_run_id': 'caller-id',
@@ -78,7 +101,7 @@ def test_never_sets_metadata_to_none() -> None:
     ``None`` survives into the request body — so the key must be absent, not None.
     """
     params: dict[str, Any] = {'model': 'gpt-4o-mini'}
-    apply_pipeline_metadata(params, routes_through_orq=True)
+    apply_pipeline_metadata(params, client=_ORQ, api='chat')
 
     assert 'metadata' not in params
 
