@@ -98,6 +98,26 @@ class TestDatasetDownloadError:
         assert issubclass(DatasetError, RedTeamError)
 
 
+class TestOrqDatasetFetchError:
+    """A wrong orq:<dataset-id> surfaces a clean DatasetError naming the id (RES-1870)."""
+
+    def test_sdk_error_raises_dataset_error_with_id(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from evaluatorq.redteam.exceptions import DatasetError
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+        sdk_error = RuntimeError('body.code Input should be a valid string')
+        client = MagicMock()
+        client.datasets.list_datapoints.side_effect = sdk_error
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+        monkeypatch.setattr(evaluatorq_bridge, 'resolve_orq_client', lambda _key: client)
+
+        with pytest.raises(DatasetError, match='orq:not-a-real-id') as ei:
+            evaluatorq_bridge.load_owasp_agentic_dataset('orq:not-a-real-id')
+        assert ei.value.__cause__ is sdk_error
+
+
 class TestLoadFromFileError:
     """_load_from_file's JSON parse/validation surfaces a clean DatasetError (gripe #4)."""
 

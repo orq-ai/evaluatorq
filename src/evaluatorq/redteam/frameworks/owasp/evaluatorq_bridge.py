@@ -521,11 +521,22 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
     cursor: str | None = None
 
     while True:
-        response = client.datasets.list_datapoints(
-            dataset_id=dataset_id,
-            limit=100,
-            starting_after=cursor,
-        )
+        try:
+            response = client.datasets.list_datapoints(
+                dataset_id=dataset_id,
+                limit=100,
+                starting_after=cursor,
+            )
+        except Exception as e:
+            # An unknown id comes back as a raw SDK ResponseValidationError (the
+            # error body fails the SDK's own schema), so catch broadly, as the
+            # HuggingFace path does.
+            msg = (
+                f'Failed to fetch red team dataset orq:{dataset_id} from the ORQ platform: {e}. '
+                'Check that the dataset id exists in the workspace your ORQ_API_KEY belongs to, '
+                'and that ORQ_BASE_URL points at the right host.'
+            )
+            raise DatasetError(msg) from e
 
         for dp in response.data:
             inputs = dict(dp.inputs) if dp.inputs else {}
