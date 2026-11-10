@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
 
 from loguru import logger
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -976,9 +977,9 @@ class LLMConfig(BaseModel):
     max_objectives_per_llm_call: int = Field(default=8, ge=1)
     # Probe turns for blackbox capability inference. Each is a live target call.
     max_probe_turns: int = Field(default=8, ge=1)
-    # Refused turns a Crescendo attack may erase from the target's view, per attack.
-    # Each is an extra target call on top of max_turns, plus one judge call per turn
-    # while budget remains. 0 turns it off. Needs caller-owned target history.
+    # Turns a Crescendo attack may erase from the target's view, per attack.
+    # Each is an extra target call on top of max_turns, plus one attacker decision
+    # call per turn while an erasure is available. 0 turns it off. Needs caller-owned target history.
     max_backtracks: int = Field(default=0, ge=0, le=10)
 
     # --- Cleanup timeout ------------------------------------------------------
@@ -1362,11 +1363,11 @@ class OrchestratorResult(BaseModel):
     )
     backtracked_turns: list[Turn] = Field(
         default_factory=list,
-        description='Refused exchanges erased from the target conversation; never part of the judged transcript',
+        description='Exchanges erased from the target conversation; never part of the judged transcript',
     )
-    refusal_judge_failures: int = Field(
+    backtrack_decision_failures: int = Field(
         default=0,
-        description='Turns the refusal judge could not label; they were kept without knowing whether they were refused',
+        description='Turns where the attacker model gave no usable keep-or-erase answer; they were kept',
     )
 
     @model_validator(mode='after')
@@ -1632,7 +1633,7 @@ class JobOutputPayload(BaseModel):
     error_turn: int | None = None
     truncated_turns: list[int] = Field(default_factory=list)
     backtracked_turns: list[Turn] = Field(default_factory=list)
-    refusal_judge_failures: int = 0
+    backtrack_decision_failures: int = 0
     finish_reason: str | None = None
     thread_id: str | None = None
     response_traces: list[ResponseTrace] = Field(default_factory=list)
@@ -1668,11 +1669,13 @@ class ExecutionDetails(BaseModel):
     seed_context: list[Message] = Field(default_factory=list)
     backtracked_turns: list[Turn] = Field(
         default_factory=list,
-        description='Refused exchanges erased from the target conversation; never part of the judged transcript',
+        description='Exchanges erased from the target conversation; never part of the judged transcript',
     )
-    refusal_judge_failures: int = Field(
+    backtrack_decision_failures: int = Field(
         default=0,
-        description='Turns the refusal judge could not label; they were kept without knowing whether they were refused',
+        # Reports saved by v1.84.0 to v1.85.x use the old name.
+        validation_alias=AliasChoices('backtrack_decision_failures', 'refusal_judge_failures'),
+        description='Turns where the attacker model gave no usable keep-or-erase answer; they were kept',
     )
 
 

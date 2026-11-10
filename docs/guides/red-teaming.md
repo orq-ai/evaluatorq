@@ -67,7 +67,7 @@ Replay is not a separate mode. It re-runs a previous run's exact attacks against
 
 ### Backtracking
 
-**Backtracking** erases a turn the target refused, so the attacker tries again in a conversation where the refusal never happened. It is off by default and applies only to attacks that use the Crescendo delivery method. Reach for it when a target's refusals end attacks that a different opening might have got past.
+**Backtracking** erases a turn the attacker judges a dead end, usually a refusal, so the attacker tries again in a conversation where that exchange never happened. It is off by default and applies only to attacks that use the Crescendo delivery method. Reach for it when a target's refusals end attacks that a different opening might have got past.
 
 ```python
 from evaluatorq.redteam import red_team
@@ -81,15 +81,14 @@ report = await red_team(
 )
 ```
 
-The CLI equivalent is `--max-backtracks 3`. The value is the number of erasures allowed per attack, from 0 to 10, and an erased attempt does not use up a turn. The target's next call leaves the exchange out, while the attacker is told about the refusal so it can change technique. Erased exchanges are kept in `execution.backtracked_turns` on each result, and the judge never sees them.
+The CLI equivalent is `--max-backtracks 3`. The value is the number of erasures allowed per attack, from 0 to 10, and an erased attempt does not use up a turn. The target's next call leaves the exchange out, while the attacker still sees it so it can change technique. Erased exchanges are kept in `execution.backtracked_turns` on each result, and the judge never sees them.
 
-Each reply costs one extra call to label it as refused or not, until the attack has used its erasures. The call runs on the `classifier` role (task `redteam.refusal_judge`). When that names a classify-only model with no reachable classify endpoint, because the client does not route through the Orq router or the model catalogue lists none, the call runs on the `fast` role instead. A chat model pinned to the task runs as pinned, with no fallback. A reply that holds only a refusal flagged by the model provider needs no extra call.
+After each reply the attacker model decides, in one extra call, whether to keep the turn or erase it. It is told to erase a reply that would make the target more likely to keep refusing, and to keep one, even a refusal, that leaves context useful to later turns. The erasures are released across the attack rather than all at once: by the end of turn t, counting from 0, an attack may have used at most ceil(budget × (t + 1) / max_turns) of them. With `max_backtracks=3` and 8 turns, that is one erasure in turns 0 and 1, two by turn 2 and all three by turn 5, so a target that refuses the opening message cannot drain the budget on it. No decision call is made on a turn where no erasure is available.
 
-Even with erasures left, a turn is kept when one of these holds, and the run reports no error for it:
+A turn is always kept, and the run reports no error for it, when one of these holds:
 
-- The reply holds anything beyond the refusal itself, such as what was asked for, related information, or a specific fact the target let slip beside the refusal. Those replies stay so the judge can score them, and the label is cautious on purpose, so a long refusal can be kept.
-- The reply is empty, or the attacker has already declared the objective achieved.
-- The labelling call fails or gives no clear answer. The turn is kept, the run continues, and the report's `pipeline_warnings` says how many turns this affected.
+- The attacker has already declared the objective achieved.
+- The decision call fails or gives no usable answer. The turn is kept, the run continues, and the report's `pipeline_warnings` says how many turns this affected.
 - The target called a tool during the turn and the call shows in the reply. Erasing the text would not undo the tool's effect.
 
 Backtracking needs a target that receives the full conversation on every call, which includes `agent:<key>` strings. `ORQAgentTarget`, `LangGraphTarget` and `PydanticAITarget` keep the history themselves, so a turn cannot be erased from them, and the run raises `RedTeamError` before any attack starts. A `mode="static"` run skips this check because no static attack can backtrack.

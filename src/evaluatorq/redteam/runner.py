@@ -251,10 +251,10 @@ def _backtracking_warnings(results: list[RedTeamResult], *, max_backtracks: int)
             f'max_backtracks={max_backtracks} had no effect: no multi-turn attack in this run used the '
             'Crescendo delivery method.'
         )
-    if failures := sum(r.execution.refusal_judge_failures for r in dynamic if r.execution is not None):
+    if failures := sum(r.execution.backtrack_decision_failures for r in dynamic if r.execution is not None):
         warnings.append(
-            f'The refusal judge gave no usable verdict on {failures} turn(s). Those turns were kept, so '
-            'backtracking may have erased fewer refusals than it could. Check the model behind task redteam.refusal_judge (classifier role, or fast role on fallback) and credentials.'
+            f'The attacker model gave no usable keep-or-erase answer on {failures} turn(s). Those turns were '
+            'kept, so backtracking may have erased fewer refusals than it could. Check the attacker model and credentials.'
         )
     return warnings
 
