@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from openai import omit
@@ -267,7 +267,7 @@ def to_response(message: Message) -> Response:
         created_at=float(time.time()),
         model=f'{PROVIDER_PREFIX}{model}',
         output=output,
-        status=cast('Literal["completed", "incomplete"]', 'incomplete' if truncated else 'completed'),
+        status='incomplete' if truncated else 'completed',
         incomplete_details=IncompleteDetails(reason='max_output_tokens') if truncated else None,
         parallel_tool_calls=True,
         tool_choice='auto',
