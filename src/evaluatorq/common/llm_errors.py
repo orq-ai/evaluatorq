@@ -3,7 +3,9 @@
 Each tuple names the matching exception class from the ``openai`` SDK and, when
 it is installed, from the ``anthropic`` SDK, so an ``except`` clause or an
 ``isinstance`` check recognises an error from either one. ``anthropic`` is an
-optional extra: when it is absent the tuples hold only the OpenAI classes.
+optional extra: when it is not installed the tuples hold only the OpenAI classes.
+An installed ``anthropic`` that cannot be imported raises at import time instead
+of being skipped.
 
 ``openai.LengthFinishReasonError`` is deliberately not here. It is a
 client-side parse error, not an API error, and stays imported from ``openai``.
@@ -11,8 +13,9 @@ client-side parse error, not an API error, and stays imported from ``openai``.
 
 from __future__ import annotations
 
+import importlib.util
+
 import openai
-from loguru import logger
 
 API_ERRORS: tuple[type[BaseException], ...] = (openai.APIError,)
 STATUS_ERRORS: tuple[type[BaseException], ...] = (openai.APIStatusError,)
@@ -21,32 +24,16 @@ TIMEOUT_ERRORS: tuple[type[BaseException], ...] = (openai.APITimeoutError,)
 BAD_REQUEST_ERRORS: tuple[type[BaseException], ...] = (openai.BadRequestError,)
 SDK_ERRORS: tuple[type[BaseException], ...] = (openai.OpenAIError,)
 
-try:
+# Gate on installation, not importability: an installed but broken anthropic fails loudly here.
+if importlib.util.find_spec('anthropic') is not None:
     import anthropic
 
-    _ANTHROPIC_ERRORS = (
-        anthropic.APIError,
-        anthropic.APIStatusError,
-        anthropic.APIConnectionError,
-        anthropic.APITimeoutError,
-        anthropic.BadRequestError,
-        anthropic.AnthropicError,
-    )
-except ImportError:  # anthropic is an optional extra
-    pass
-except AttributeError as exc:  # installed, but not the API this module expects
-    logger.warning(
-        'The installed anthropic package lacks an expected error class ({}); '
-        'only OpenAI error classes are recognised, so Anthropic errors will not be caught as LLM errors',
-        exc,
-    )
-else:
-    API_ERRORS += (_ANTHROPIC_ERRORS[0],)
-    STATUS_ERRORS += (_ANTHROPIC_ERRORS[1],)
-    CONNECTION_ERRORS += (_ANTHROPIC_ERRORS[2],)
-    TIMEOUT_ERRORS += (_ANTHROPIC_ERRORS[3],)
-    BAD_REQUEST_ERRORS += (_ANTHROPIC_ERRORS[4],)
-    SDK_ERRORS += (_ANTHROPIC_ERRORS[5],)
+    API_ERRORS = (openai.APIError, anthropic.APIError)
+    STATUS_ERRORS = (openai.APIStatusError, anthropic.APIStatusError)
+    CONNECTION_ERRORS = (openai.APIConnectionError, anthropic.APIConnectionError)
+    TIMEOUT_ERRORS = (openai.APITimeoutError, anthropic.APITimeoutError)
+    BAD_REQUEST_ERRORS = (openai.BadRequestError, anthropic.BadRequestError)
+    SDK_ERRORS = (openai.OpenAIError, anthropic.AnthropicError)
 
 
 def status_code(exc: BaseException) -> int | None:
