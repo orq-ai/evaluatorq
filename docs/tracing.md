@@ -368,12 +368,13 @@ Span attributes on `orq.judge`:
 | `judge.latency_ms` | Wall-clock time for this judge's repetitions |
 | `judge.error` | Error string when the judge failed (truncated per `EVALUATORQ_SPAN_MAX_TEXT_CHARS`) |
 | `judge.repetitions_failed` | Count of repetitions that failed to produce a usable verdict (an error, or a non-decisive non-abstained pass; a clean abstention is not counted), out of the configured repetition count |
+| `judge.repetitions_coerced` | Count of repetitions whose verdict was coerced to an abstention (the judge sent `abstain=true` with a value), out of the configured repetition count |
 
 No token usage or cost here: those are recorded once, on the `chat` spans underneath, and rolled up by the consumer. Stamping them on every ancestor as well made the same tokens appear three times in one trace.
 
 `judge.label_swapped` is only ever set (`True`/`False`) in comparative mode — in plain `run_jury()` deliberations it is absent, since each judge votes once.
 
-One judge attribute lives a level *down*, on the `chat` / `responses` span that made the call rather than on `orq.judge`: `judge.verdict_coerced`. It is set to `abstain_with_value` when the model returned `abstain=true` together with a non-null `value` — a self-contradictory verdict, kept as an abstention with the value dropped. It is absent on a well-formed verdict, so counting it per judge model in the trace store answers "can this model follow the verdict schema". Nothing aggregates it today — it does not reach `JuryVote`, the run manifest or any report, so a coerced verdict is indistinguishable from a clean abstention once it leaves the judge call. Query the spans, not the run artifact.
+One judge attribute also lives a level *down*, on the `chat` / `responses` span that made the call: `judge.verdict_coerced`. It is set to `abstain_with_value` when the model returned `abstain=true` together with a non-null `value` — a self-contradictory verdict, kept as an abstention with the value dropped. It is absent on a well-formed verdict, so counting it per judge model in the trace store answers "can this model follow the verdict schema". The count per judge is `judge.repetitions_coerced` on `orq.judge` and `JuryVote.repetitions_coerced` in the result, and each `JuryRepetition` carries `verdict_coerced`. No report renders them yet, so query the spans or read the result's `jury` output.
 
 Span attributes on `orq.jury`:
 
