@@ -384,7 +384,8 @@ def test_works_with_anthropic_uninstalled():
             evaluatorq_provider = 'anthropic'
         assert is_anthropic_client(C()) and not is_anthropic_client(object())
         from evaluatorq.anthropic import wrap_anthropic_client
-        wrap_anthropic_client(type('Fake', (), {'messages': type('M', (), {'create': None})()})())
+        async def make_create(**kwargs): ...
+        wrap_anthropic_client(type('Fake', (), {'messages': type('M', (), {'create': staticmethod(make_create)})()})())
         """
     )
     result = subprocess.run([sys.executable, '-I', '-c', code], capture_output=True, text=True)

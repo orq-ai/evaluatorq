@@ -136,10 +136,16 @@ def response_format_to_output_format(response_format: Any) -> dict[str, Any] | N
 
 
 def _role_variables_for(model: str) -> str:
-    """The role variable(s) that currently resolve to ``model``; every role variable when none does (the model was set per call)."""
+    """The role variable(s) that currently resolve to ``model``; the non-embedding role variables plus the per-call ``model=`` argument when none does (the model was set per call)."""
     from evaluatorq.common.model_roles import ROLE_ENV, ROLES, role_model
 
-    names = [ROLE_ENV[role] for role in ROLES if role_model(role) == model] or list(ROLE_ENV.values())
+    names = [ROLE_ENV[role] for role in ROLES if role_model(role) == model]
+    if not names:
+        # Embedding is left out: an embedding model never reaches a Claude chat call.
+        names = [env for role, env in ROLE_ENV.items() if role != 'embedding']
+        return 'the model= argument of the call, or ' + (
+            'the ' + ', '.join(names[:-1]) + f' or {names[-1]} role variables'
+        )
     return (
         f'the {names[0]} role variable'
         if len(names) == 1

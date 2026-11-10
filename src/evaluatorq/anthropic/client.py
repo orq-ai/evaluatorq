@@ -98,6 +98,14 @@ class _Embeddings:
         )
 
 
+def _creates_asynchronously(create: Any) -> bool:
+    """True when ``messages.create`` is a coroutine function; the SDK wraps it in a plain function, so look through ``__wrapped__``."""
+    try:
+        return inspect.iscoroutinefunction(inspect.unwrap(create))
+    except ValueError:
+        return False
+
+
 class AnthropicLLMClient:
     """Wraps ``AsyncAnthropic``, ``AsyncAnthropicBedrock`` or ``AsyncAnthropicVertex``.
 
@@ -111,6 +119,11 @@ class AnthropicLLMClient:
         if not hasattr(getattr(client, 'messages', None), 'create'):
             raise TypeError(
                 f'AnthropicLLMClient needs an Anthropic SDK client with messages.create, got {type(client).__name__}.'
+            )
+        if not _creates_asynchronously(client.messages.create):
+            raise TypeError(
+                f'AnthropicLLMClient needs an async Anthropic client, got {type(client).__name__}. '
+                'Use AsyncAnthropic, AsyncAnthropicBedrock or AsyncAnthropicVertex.'
             )
         self._client = client
         self._refusal_log = _refusal_log if _refusal_log is not None else _RefusalLog()

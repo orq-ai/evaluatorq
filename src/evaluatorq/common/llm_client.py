@@ -231,6 +231,7 @@ __all__ = [
     'ResolvedClient',
     'as_llm_client',
     'client_routes_through_orq',
+    'is_anthropic_client',
     'resolve_llm_client',
     'resolve_results_base_url',
 ]

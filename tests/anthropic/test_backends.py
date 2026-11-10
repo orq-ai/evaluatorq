@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from typing import Any, cast
 from unittest.mock import patch
 
 import anthropic
+import httpx
 import pytest
 
 from evaluatorq.anthropic import AnthropicLLMClient
 from evaluatorq.common.llm_client import as_llm_client
-from evaluatorq.contracts import Message
-from evaluatorq.common.thread_context import evaluatorq_pipeline
 from evaluatorq.common.retry import without_client_retries
+from evaluatorq.common.thread_context import evaluatorq_pipeline
+from evaluatorq.contracts import Message
 from evaluatorq.redteam.backends.openai import OpenAIBackend, OpenAIModelTarget
+from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
+from evaluatorq.redteam.backends.orq import ORQBackend
 from evaluatorq.redteam.backends.registry import resolve_backend
 
 from .test_wiring import RawAnthropic, _orchestrator, _run_attack, _SPANS, _target, scripted, text
@@ -99,8 +103,6 @@ def test_router_gated_extra_body_never_reaches_anthropic() -> None:
 
 
 def test_the_openresponses_backend_rejects_an_anthropic_client_at_construction() -> None:
-    from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
-
     for client in (RawAnthropic(), as_llm_client(RawAnthropic())):
         with pytest.raises(ValueError, match="backend='openai'") as info:
             OpenResponsesBackend(client=cast('Any', client))
@@ -109,12 +111,10 @@ def test_the_openresponses_backend_rejects_an_anthropic_client_at_construction()
         resolve_backend(backend='openresponses', llm_client=cast('Any', RawAnthropic()))
 
 
-def test_the_orq_backend_ignores_an_anthropic_client_and_the_attacker_uses_the_adapter(
+def test_an_orq_backend_built_beside_an_anthropic_client_leaves_the_attacker_on_the_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv('ORQ_API_KEY', 'orq-not-used')
-    from evaluatorq.redteam.backends.orq import ORQBackend
-
     fake = scripted([text('Here is the attack prompt.')])
     backend = resolve_backend(backend='orq', llm_client=cast('Any', as_llm_client(fake)))
     assert isinstance(backend, ORQBackend)
@@ -126,9 +126,31 @@ def test_the_orq_backend_ignores_an_anthropic_client_and_the_attacker_uses_the_a
     assert target.respond.call_count == 1
 
 
-from contextlib import asynccontextmanager  # noqa: E402
-
-
 @asynccontextmanager
 async def _noop_span_cm(*args: object, **kwargs: object):  # noqa: RUF029
     yield None
+
+
+def test_an_anthropic_target_labels_its_errors_and_context_as_anthropic() -> None:
+    target = OpenAIModelTarget(model='claude-sonnet-5-5', client=cast('Any', as_llm_client(RawAnthropic())))
+    error = anthropic.InternalServerError(
+        'boom', response=httpx.Response(500, request=httpx.Request('POST', 'https://x')), body=None
+    )
+    code, message = target.map_error(error)
+    assert code == 'anthropic.http.500'
+    assert 'InternalServerError' in message
+    assert asyncio.run(target.get_agent_context()).description == 'Anthropic model target'
+
+
+def test_an_openai_target_keeps_its_openai_labels() -> None:
+    target = OpenAIModelTarget(model='gpt-5-mini', client=cast('Any', _FakeOpenAI()))
+    assert target.map_error(RuntimeError('x')) == ('openai.unknown', 'RuntimeError: x')
+    assert asyncio.run(target.get_agent_context()).description == 'OpenAI model target'
+
+
+class _FakeOpenAI:
+    base_url = 'https://api.openai.com/v1'
+    max_retries = 0
+
+    def with_options(self, **kwargs: Any) -> _FakeOpenAI:
+        return self

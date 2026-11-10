@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
-from evaluatorq.common.llm_client import as_llm_client, client_routes_through_orq
+from evaluatorq.common.llm_client import as_llm_client, client_routes_through_orq, is_anthropic_client
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.retry import without_client_retries
@@ -50,22 +50,22 @@ def create_async_llm_client(role_config=None, *, max_retries: int | None = None)
     return _create(role_config, max_retries=max_retries)
 
 
-def _openai_map_error(exc: Exception) -> tuple[str, str]:
-    """Map an OpenAI exception to a normalized (error_code, error_message) tuple."""
+def _openai_map_error(exc: Exception, provider: str = 'openai') -> tuple[str, str]:
+    """Map an OpenAI (or, with ``provider='anthropic'``, Anthropic) exception to a normalized (error_code, error_message) tuple."""
     name = type(exc).__name__.lower()
     status_code = extract_status_code(exc)
     provider_code = extract_provider_error_code(exc)
     if status_code is not None:
-        return f'openai.http.{status_code}', f'{type(exc).__name__}: {exc}'
+        return f'{provider}.http.{status_code}', f'{type(exc).__name__}: {exc}'
     if provider_code:
-        return f'openai.code.{provider_code}', f'{type(exc).__name__}: {exc}'
+        return f'{provider}.code.{provider_code}', f'{type(exc).__name__}: {exc}'
     if 'ratelimit' in name:
-        return 'openai.rate_limit', f'{type(exc).__name__}: {exc}'
+        return f'{provider}.rate_limit', f'{type(exc).__name__}: {exc}'
     if 'authentication' in name:
-        return 'openai.auth', f'{type(exc).__name__}: {exc}'
+        return f'{provider}.auth', f'{type(exc).__name__}: {exc}'
     if 'timeout' in name:
-        return 'openai.timeout', f'{type(exc).__name__}: {exc}'
-    return 'openai.unknown', f'{type(exc).__name__}: {exc}'
+        return f'{provider}.timeout', f'{type(exc).__name__}: {exc}'
+    return f'{provider}.unknown', f'{type(exc).__name__}: {exc}'
 
 
 class OpenAIModelTarget(AgentTarget):
@@ -248,13 +248,13 @@ class OpenAIModelTarget(AgentTarget):
         return AgentContext(
             key=self.model,
             display_name=self.model,
-            description='OpenAI model target',
+            description='Anthropic model target' if is_anthropic_client(self.client) else 'OpenAI model target',
             model=self.model,
         )
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
         """Map an OpenAI exception to a normalized error code and message tuple."""
-        return _openai_map_error(exc)
+        return _openai_map_error(exc, 'anthropic' if is_anthropic_client(self.client) else 'openai')
 
 
 class OpenAIBackend(Backend):
@@ -309,4 +309,4 @@ class OpenAIBackend(Backend):
         logger.debug('OpenAI backend has no memory store; cleanup is a no-op')
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
-        return _openai_map_error(exc)
+        return _openai_map_error(exc, 'anthropic' if is_anthropic_client(self._client) else 'openai')

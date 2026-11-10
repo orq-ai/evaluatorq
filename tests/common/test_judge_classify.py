@@ -924,9 +924,9 @@ async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question
 
     assert len(calls) == 2
     assert all('Judge the supplied state' in call['prompt_template'] for call in calls)
-    prompt_contexts = [json.loads(call['replacements']['classify_question']) for call in calls]
-    assert {context['instructions'] for context in prompt_contexts} == {'tone?', 'risk?'}
-    assert all(context['state'] == 'reply' for context in prompt_contexts)
+    texts = [call['replacements']['classify_question'] for call in calls]
+    assert {t for t in texts if 'tone?' in t} and {t for t in texts if 'risk?' in t}
+    assert all('<state>"reply"</state>' in t for t in texts), 'the state is delimited as data'
     client.post.assert_not_called()
     assert outcomes['tone'].payload is not None
     assert outcomes['tone'].payload.value == 'answered-tone?'
