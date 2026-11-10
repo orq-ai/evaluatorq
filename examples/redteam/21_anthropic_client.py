@@ -15,7 +15,7 @@ Prerequisites:
     - ANTHROPIC_API_KEY set in environment
 
 Usage:
-    ANTHROPIC_API_KEY=sk-ant-... python 06_anthropic_client.py
+    ANTHROPIC_API_KEY=sk-ant-... python 21_anthropic_client.py
 """
 
 import asyncio

@@ -54,11 +54,11 @@ Model IDs are passed to the endpoint unchanged — there is no automatic prefixi
 | 03 | `03_hybrid_mode.py` | Static dataset + dynamic generation combined |
 | 04 | `04_filter_categories.py` | Narrow scope to specific OWASP categories |
 | 05 | `05_custom_llm_client.py` | Route through a custom endpoint or proxy |
-| 06 | `06_anthropic_client.py` | Run attacker, evaluator and target on an Anthropic SDK client |
 | 06 | `06_multi_target.py` | Compare permissive vs restrictive system prompts |
 | 07 | `07_report_inspection.py` | Parse reports, filter results, export JSON |
 | 08 | `08_quick_smoke_test.py` | Fast CI-friendly run with exit code gating |
 | 09 | `09_custom_hooks.py` | Custom `PipelineHooks` for logging and control |
+| 21 | `21_anthropic_client.py` | Run attacker, evaluator and target on an Anthropic SDK client |
 
 ### ORQ Platform
 

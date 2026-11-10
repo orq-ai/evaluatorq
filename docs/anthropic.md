@@ -84,7 +84,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-The `openresponses` red-team backend, which targets Orq agents through the Orq router, raises a `ValueError` when it is given an Anthropic client and tells you to use `backend='openai'`, the backend behind `OpenAIModelTarget`. The `orq` backend still works: an `agent:<key>` target runs on Orq as usual, and the Anthropic client drives only the attacker and the evaluator. A runnable version of this example is `examples/redteam/06_anthropic_client.py`.
+The `openresponses` red-team backend, which targets Orq agents through the Orq router, raises a `ValueError` when it is given an Anthropic client and tells you to use `backend='openai'`, the backend behind `OpenAIModelTarget`. The `orq` backend still works: an `agent:<key>` target runs on Orq as usual, and the Anthropic client drives only the attacker and the evaluator. A runnable version of this example is `examples/redteam/21_anthropic_client.py`.
 
 For agent simulation, pass the client once through `llm_config`:
 
