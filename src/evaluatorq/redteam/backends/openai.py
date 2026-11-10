@@ -34,6 +34,8 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionMessageParam
 
+    from evaluatorq.common.llm_client import LLMClient
+
 
 def create_async_llm_client(role_config=None, *, max_retries: int | None = None) -> AsyncOpenAI:
     """Lazy proxy to `create_async_llm_client`.
@@ -92,7 +94,7 @@ class OpenAIModelTarget(AgentTarget):
         model: str,
         system_prompt: str | None = None,
         *,
-        client: AsyncOpenAI | None = None,
+        client: LLMClient | None = None,
         max_tokens: int | None = None,
         timeout_ms: int | None = None,
         reasoning_effort: str | None = None,
@@ -281,7 +283,7 @@ class OpenAIBackend(Backend):
     def __init__(
         self,
         *,
-        client: AsyncOpenAI | None = None,
+        client: LLMClient | None = None,
         system_prompt: str | None = None,
         max_tokens: int | None = None,
         timeout_ms: int | None = None,
