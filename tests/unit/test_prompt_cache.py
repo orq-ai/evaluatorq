@@ -301,9 +301,11 @@ def test_caching_applies_is_false_without_a_client() -> None:
 
 @pytest.mark.parametrize('model', ['claude-sonnet-5-5', 'anthropic/claude-sonnet-5-5', 'gpt-5-mini', 'custom-id'])
 def test_caching_applies_to_an_anthropic_client_whatever_the_model_id(model: str) -> None:
+    from anthropic import AsyncAnthropic
+
     from evaluatorq.anthropic import AnthropicLLMClient
 
-    wrapped = AnthropicLLMClient(MagicMock(base_url='https://api.anthropic.com'))
+    wrapped = AnthropicLLMClient(AsyncAnthropic(api_key='test-key'))
     assert caching_applies(typing.cast('typing.Any', wrapped), model) is True
 
 
