@@ -9,6 +9,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import math
 import time
 from collections.abc import AsyncGenerator, Callable, Iterator
 from contextlib import asynccontextmanager
@@ -652,7 +653,7 @@ def erasure_allowance(max_backtracks: int, turn: int, max_turns: int) -> int:
     The budget is released in proportion to the turns used, rounded up, and unused erasures carry
     over, so an attack cannot spend its whole budget on the first message.
     """
-    return min(max_backtracks, -(-max_backtracks * (turn + 1) // max_turns))
+    return math.ceil(max_backtracks * (turn + 1) / max_turns)
 
 
 class MultiTurnOrchestrator:
@@ -1687,9 +1688,11 @@ class MultiTurnOrchestrator:
                     turn_usage: TokenUsage | None = tgt_result.usage
                     target_usage_acc = _accumulate_target_usage(target_usage_acc, turn_usage)
 
+                    can_erase = not objective_achieved and len(backtracked_turns) < erasure_allowance(
+                        max_backtracks, turn, max_turns
+                    )
                     decision = await self._try_backtrack(
-                        can_erase=len(backtracked_turns) < erasure_allowance(max_backtracks, turn, max_turns)
-                        and not objective_achieved,
+                        can_erase=can_erase,
                         erasures_left=max_backtracks - len(backtracked_turns),
                         attack_prompt=attack_prompt,
                         attacker=current_attacker,
