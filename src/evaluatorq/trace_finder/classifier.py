@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.judge import JudgeOutcome, judge_error_payload, run_classify_judges
+from evaluatorq.common.jury import no_verdict_message
 from evaluatorq.common.llm_call import classify_request_body
 from evaluatorq.common.model_input import effective_trace_input_chars, fit_classifier_input
 from evaluatorq.contracts import JuryRepetition, JuryResult, JuryVote, LLMCallConfig, TokenUsage
@@ -129,7 +130,7 @@ def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
     abstained = mechanical_success and bool(payload and payload.abstain)
     decisive = mechanical_success and not abstained and payload_value is not None
     success = decisive or abstained
-    message = outcome.error_message or (None if success else 'The classifier returned no verdict')
+    message = outcome.error_message or (None if success else no_verdict_message(payload_explanation or ''))
     repetition = JuryRepetition(
         value=payload_value if decisive else None,
         explanation=payload_explanation,

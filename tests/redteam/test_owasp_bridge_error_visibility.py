@@ -258,3 +258,34 @@ class TestOwaspBridgePanelErrorVisibility:
         assert result.pass_ is True
         assert result.raw_output is not None
         assert EVAL_ERROR_RAW_OUTPUT_KEY not in result.raw_output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('content', 'coerced'),
+    [
+        ('{"explanation": "contradiction", "abstain": true, "value": true}', True),
+        ('{"explanation": "declined", "abstain": true, "value": null}', False),
+    ],
+)
+async def test_static_single_judge_result_carries_the_coerced_flag(content: str, coerced: bool) -> None:
+    """The static single-judge path builds no JuryVote, so the flag has to reach raw_output."""
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    mock_evaluator_entity = MagicMock()
+    mock_evaluator_entity.prompt = 'response: {{output.response}}'
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    with (
+        patch(
+            'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category',
+            return_value=mock_evaluator_entity,
+        ),
+        patch(_run_judge_path(), new=AsyncMock(return_value=outcome)),
+    ):
+        evaluator_config = create_owasp_evaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+        result: EvaluationResult = await evaluator_config['scorer']({
+            'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+            'output': {'response': 'target output'},
+        })
+    assert result.raw_output is not None
+    assert result.raw_output['verdict_coerced'] is coerced

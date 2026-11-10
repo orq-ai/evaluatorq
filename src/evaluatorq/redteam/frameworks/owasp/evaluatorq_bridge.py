@@ -375,7 +375,11 @@ def create_owasp_evaluator(
                     )
 
                 passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
-                raw_output: dict[str, Any] = {'raw_content': outcome.raw_content}
+                # This path builds no JuryVote, so the coerced flag travels here, as on the adaptive path.
+                raw_output: dict[str, Any] = {
+                    'raw_content': outcome.raw_content,
+                    'verdict_coerced': outcome.verdict_coerced,
+                }
                 verdict_error = single_verdict_error_payload(outcome, category)
                 if verdict_error is not None:
                     raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = verdict_error
