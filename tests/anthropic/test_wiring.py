@@ -482,7 +482,7 @@ def test_red_team_runs_end_to_end_on_an_anthropic_client(monkeypatch: pytest.Mon
 
     messages = RolePlayMessages()
     fake = RawAnthropic()
-    fake.messages = messages  # type: ignore[assignment]
+    cast('Any', fake).messages = messages
     # The target uses the openai backend's model target with the Anthropic adapter as its client.
     target = OpenAIModelTarget(model='claude-sonnet-5-5', client=as_llm_client(fake))
 

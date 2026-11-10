@@ -53,7 +53,7 @@ async def test_filter_selection_accepts_exact_catalogue_values_from_classify(fac
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
-        async with AsyncOpenAI(api_key='test', base_url='https://router.test/v1', http_client=http_client) as client:
+        async with AsyncOpenAI(api_key='test', base_url='https://router.test/v3/router', http_client=http_client) as client:
             result = await select_filters_with_response(
                 client=client,
                 model='typesafe/jev-latest',
@@ -77,7 +77,7 @@ async def test_no_filter_choice_does_not_hide_literal_none_values(choice: str, s
         return httpx.Response(200, json={'answers': {'model': {'type': 'choice', 'choice': choice}}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
-        async with AsyncOpenAI(api_key='test', base_url='https://router.test/v1', http_client=http_client) as client:
+        async with AsyncOpenAI(api_key='test', base_url='https://router.test/v3/router', http_client=http_client) as client:
             result = await select_filters_with_response(
                 client=client,
                 model='typesafe/jev-latest',
