@@ -9,6 +9,7 @@ from typing import Any
 from loguru import logger
 
 from evaluatorq.anthropic.convert import build_messages_request, to_chat_completion, to_parsed_chat_completion
+from evaluatorq.anthropic.responses import build_responses_request, to_parsed_response, to_response
 
 FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 _PLATFORMS_WITHOUT_FALLBACKS = ('Bedrock', 'Vertex')
@@ -21,14 +22,15 @@ class _RefusalLog:
     logged: bool = False
 
 
-class _ChatCompletions:
+class _Sender:
+    """Sends one built request to Anthropic and logs a refusal once; shared by the Chat Completions and Responses faces."""
+
     def __init__(self, client: Any, refusal_log: _RefusalLog) -> None:
         self._client = client
         self._refusal_log = refusal_log
 
-    async def _send(self, params: dict[str, Any]) -> Any:
-        """Send one request and return the raw Anthropic message."""
-        request = build_messages_request(params)
+    async def send(self, request: dict[str, Any]) -> Any:
+        """Send ``request`` through ``messages.create`` (or the beta endpoint for fallbacks) and return the raw Anthropic message."""
         if 'fallbacks' in request.get('extra_body', {}):
             platform = type(self._client).__name__
             if any(name in platform for name in _PLATFORMS_WITHOUT_FALLBACKS):
@@ -48,6 +50,14 @@ class _ChatCompletions:
             )
         return message
 
+
+class _ChatCompletions:
+    def __init__(self, sender: _Sender) -> None:
+        self._sender = sender
+
+    async def _send(self, params: dict[str, Any]) -> Any:
+        return await self._sender.send(build_messages_request(params))
+
     async def create(self, **params: Any) -> Any:
         """Call ``messages.create`` and return a ``ChatCompletion``."""
         return to_chat_completion(await self._send(params))
@@ -61,8 +71,22 @@ class _ChatCompletions:
 
 
 class _Chat:
-    def __init__(self, client: Any, refusal_log: _RefusalLog) -> None:
-        self.completions = _ChatCompletions(client, refusal_log)
+    def __init__(self, sender: _Sender) -> None:
+        self.completions = _ChatCompletions(sender)
+
+
+class _Responses:
+    def __init__(self, sender: _Sender) -> None:
+        self._sender = sender
+
+    async def create(self, **params: Any) -> Any:
+        """Call ``messages.create`` and return an ``openai.types.responses.Response``."""
+        return to_response(await self._sender.send(build_responses_request(params)))
+
+    async def parse(self, *, text_format: Any, **params: Any) -> Any:
+        """Like ``create`` with ``text.format`` built from ``text_format``; returns a ``ParsedResponse`` with ``output_parsed``."""
+        request = build_responses_request(params, text_format=text_format)
+        return to_parsed_response(await self._sender.send(request), text_format=text_format, tools=params.get('tools'))
 
 
 class _Embeddings:
@@ -77,7 +101,7 @@ class _Embeddings:
 class AnthropicLLMClient:
     """Wraps ``AsyncAnthropic``, ``AsyncAnthropicBedrock`` or ``AsyncAnthropicVertex``.
 
-    Exposes the attributes evaluatorq reads from an ``AsyncOpenAI`` client: ``chat.completions.create``, ``base_url``, ``api_key``, ``max_retries``, ``with_options`` and ``close``.
+    Exposes the attributes evaluatorq reads from an ``AsyncOpenAI`` client: ``chat.completions.create`` and ``parse``, ``responses.create`` and ``parse``, ``base_url``, ``api_key``, ``max_retries``, ``with_options`` and ``close``.
     """
 
     evaluatorq_provider = 'anthropic'
@@ -90,7 +114,9 @@ class AnthropicLLMClient:
             )
         self._client = client
         self._refusal_log = _refusal_log if _refusal_log is not None else _RefusalLog()
-        self.chat = _Chat(client, self._refusal_log)
+        sender = _Sender(client, self._refusal_log)
+        self.chat = _Chat(sender)
+        self.responses = _Responses(sender)
         self.embeddings = _Embeddings()
 
     @property

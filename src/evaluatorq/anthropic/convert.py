@@ -159,8 +159,13 @@ def _text_part(part: dict[str, Any]) -> dict[str, Any]:
     return block
 
 
-def _content_blocks(content: Any, *, role: str) -> list[dict[str, Any]]:
-    """Convert message ``content`` (string or parts) into Anthropic text blocks."""
+def content_blocks(
+    content: Any, *, role: str, text_types: tuple[str, ...] = ('text',), surface: str = 'chat.completions.create'
+) -> list[dict[str, Any]]:
+    """Convert message ``content`` (string or parts) into Anthropic text blocks.
+
+    ``text_types`` names the part types that carry text: ``text`` for Chat Completions, ``input_text`` and ``output_text`` for Responses.
+    """
     if content is None:
         return []
     if isinstance(content, str):
@@ -168,7 +173,7 @@ def _content_blocks(content: Any, *, role: str) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     for part in content:
         part_type = part.get('type') if isinstance(part, dict) else getattr(part, 'type', None)
-        if part_type == 'text':
+        if part_type in text_types:
             block = _text_part(part)
             if block['text']:
                 blocks.append(block)
@@ -176,29 +181,29 @@ def _content_blocks(content: Any, *, role: str) -> list[dict[str, Any]]:
             blocks.append({'type': 'text', 'text': part.get('refusal', '')})
         else:
             raise ValueError(
-                f'The Anthropic adapter cannot convert a {part_type!r} content part in a {role} message; only text parts are supported.'
+                f'The Anthropic adapter cannot convert a {part_type!r} content part in a {role} message of {surface}; only text parts are supported.'
             )
     return blocks
 
 
 def _plain_text(content: Any) -> str:
-    return ''.join(block['text'] for block in _content_blocks(content, role='tool'))
+    return ''.join(block['text'] for block in content_blocks(content, role='tool'))
 
 
-def _decode_arguments(call: dict[str, Any]) -> dict[str, Any]:
-    raw = (call.get('function') or {}).get('arguments') or ''
+def decode_arguments(raw: str | None, call_id: Any) -> dict[str, Any]:
+    """Decode a tool call's JSON ``arguments`` string into the object Anthropic's ``tool_use.input`` takes."""
     if not raw:
         return {}
     try:
         decoded = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(f'Tool call {call.get("id")!r} has arguments that are not valid JSON: {exc}') from exc
+        raise ValueError(f'Tool call {call_id!r} has arguments that are not valid JSON: {exc}') from exc
     if not isinstance(decoded, dict):
-        raise TypeError(f'Tool call {call.get("id")!r} has arguments that are not a JSON object.')
+        raise TypeError(f'Tool call {call_id!r} has arguments that are not a JSON object.')
     return decoded
 
 
-def _merge_same_role(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def merge_same_role(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Join adjacent turns of the same role into one, keeping block order (tool results come first in a user turn)."""
     merged: list[dict[str, Any]] = []
     for turn in turns:
@@ -234,21 +239,21 @@ def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[st
             continue
         flush_results()
         if role in ('system', 'developer'):
-            system_blocks.extend(_content_blocks(message.get('content'), role=role))
+            system_blocks.extend(content_blocks(message.get('content'), role=role))
         elif role == 'user':
-            blocks = _content_blocks(message.get('content'), role='user')
+            blocks = content_blocks(message.get('content'), role='user')
             if blocks:
                 out.append({'role': 'user', 'content': blocks})
             else:
                 logger.debug('Dropping a user message with empty content before sending it to Anthropic.')
         elif role == 'assistant':
-            blocks = _content_blocks(message.get('content'), role='assistant')
+            blocks = content_blocks(message.get('content'), role='assistant')
             for call in message.get('tool_calls') or []:
                 blocks.append({
                     'type': 'tool_use',
                     'id': call['id'],
                     'name': call['function']['name'],
-                    'input': _decode_arguments(call),
+                    'input': decode_arguments((call.get('function') or {}).get('arguments'), call.get('id')),
                 })
             if blocks:
                 out.append({'role': 'assistant', 'content': blocks})
@@ -257,7 +262,7 @@ def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[st
         else:
             raise ValueError(f'The Anthropic adapter cannot convert a message with role {role!r}.')
     flush_results()
-    out = _merge_same_role(out)
+    out = merge_same_role(out)
 
     system: str | list[dict[str, Any]] | None
     if not system_blocks:
@@ -298,13 +303,11 @@ def convert_tool_choice(tool_choice: Any) -> dict[str, str] | None:
     )
 
 
-def build_output_config(params: dict[str, Any]) -> dict[str, Any]:
-    """Build ``output_config`` from ``response_format`` (the ``format`` key) and ``reasoning_effort`` (the ``effort`` key)."""
+def build_output_config(output_format: dict[str, Any] | None, effort: str | None) -> dict[str, Any]:
+    """Build ``output_config`` from an ``output_config.format`` (or ``None``) and an OpenAI reasoning effort (the ``effort`` key)."""
     output_config: dict[str, Any] = {}
-    output_format = response_format_to_output_format(params.get('response_format'))
     if output_format is not None:
         output_config['format'] = output_format
-    effort = params.get('reasoning_effort')
     if effort is not None:
         if effort not in _EFFORT_LEVELS:
             raise ValueError(f'reasoning_effort={effort!r} is not supported; use one of {sorted(_EFFORT_LEVELS)}.')
@@ -347,10 +350,24 @@ def build_messages_request(params: dict[str, Any]) -> dict[str, Any]:
             request['tool_choice'] = choice
     elif params.get('tool_choice') not in (None, 'auto', 'none'):
         convert_tool_choice(params['tool_choice'])
+    apply_shared_params(
+        request,
+        params,
+        build_output_config(
+            response_format_to_output_format(params.get('response_format')), params.get('reasoning_effort')
+        ),
+    )
+    return request
+
+
+def apply_shared_params(request: dict[str, Any], params: dict[str, Any], output_config: dict[str, Any]) -> None:
+    """Copy the keys both surfaces send alike into ``request``.
+
+    ``temperature``, ``top_p`` and ``timeout`` only when given; ``extra_headers`` as is; ``extra_body`` without the Orq-only keys, plus ``fallbacks`` (which Anthropic takes only in the body); ``output_config`` when it has content.
+    """
     for key in ('temperature', 'top_p', 'timeout'):
         if params.get(key) is not None:
             request[key] = params[key]
-    output_config = build_output_config(params)
     if output_config:
         request['output_config'] = output_config
     if params.get('extra_headers'):
@@ -360,19 +377,23 @@ def build_messages_request(params: dict[str, Any]) -> dict[str, Any]:
         extra_body['fallbacks'] = params['fallbacks']
     if extra_body:
         request['extra_body'] = extra_body
-    return request
 
 
-def convert_usage(message: Message) -> CompletionUsage:
-    """Fold Anthropic's split input counters into OpenAI's ``prompt_tokens`` accounting."""
+def usage_counts(message: Message) -> tuple[int, int, int, int]:
+    """Fold Anthropic's split input counters into ``(prompt, completion, cache_read, cache_write)``; prompt includes both cache counters."""
     usage = message.usage
     cache_read = usage.cache_read_input_tokens or 0
     cache_write = usage.cache_creation_input_tokens or 0
-    prompt = usage.input_tokens + cache_read + cache_write
+    return usage.input_tokens + cache_read + cache_write, usage.output_tokens, cache_read, cache_write
+
+
+def convert_usage(message: Message) -> CompletionUsage:
+    """Build OpenAI ``CompletionUsage`` from an Anthropic message's usage."""
+    prompt, completion, cache_read, cache_write = usage_counts(message)
     return CompletionUsage.model_validate({
         'prompt_tokens': prompt,
-        'completion_tokens': usage.output_tokens,
-        'total_tokens': prompt + usage.output_tokens,
+        'completion_tokens': completion,
+        'total_tokens': prompt + completion,
         'prompt_tokens_details': {'cached_tokens': cache_read},
         'cache_creation_input_tokens': cache_write,
     })
