@@ -32,8 +32,10 @@ def build_simulation_client(
        ``ORQ_BASE_URL/v3/router`` (default: ``https://my.orq.ai/v3/router``).
     4. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
        traffic goes to OpenAI directly, not to the Orq router.
+    5. ``ANTHROPIC_API_KEY`` env var — an Anthropic client wrapped in the
+       OpenAI-shaped adapter (needs the ``evaluatorq[anthropic]`` extra).
 
-    When ``require_orq`` is True, step 4 is disabled: the client must route
+    When ``require_orq`` is True, steps 4 and 5 are disabled: the client must route
     through Orq (used by ORQ-agent targets whose ``agent/<key>`` model id only
     resolves on the Orq router).
 

@@ -37,6 +37,7 @@ def create_async_llm_client(
     1. ``role_config.client`` if provided
     2. ORQ env (``ORQ_API_KEY`` + optional ``ORQ_BASE_URL``, defaults to https://my.orq.ai)
     3. Standard OpenAI env (``OPENAI_API_KEY`` + optional ``OPENAI_BASE_URL``)
+    4. ``ANTHROPIC_API_KEY`` (needs the ``evaluatorq[anthropic]`` extra)
 
     When using ORQ, the router suffix ``/v3/router`` is appended automatically
     to produce the OpenAI-compatible completions endpoint.
@@ -48,7 +49,11 @@ def create_async_llm_client(
     ``without_client_retries`` (``evaluatorq.common.retry``) enforces that at
     retry-owning boundaries by cloning injected clients with ``max_retries=0``.
     """
-    from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
+    from evaluatorq.common.llm_client import (
+        MissingExtraError,
+        MissingLLMCredentialsError,
+        resolve_llm_client,
+    )
 
     config_client = role_config.client if role_config is not None else None
     try:
@@ -58,6 +63,8 @@ def create_async_llm_client(
             honor_openai_base_url=True,
             max_retries=max_retries,
         ).client
+    except MissingExtraError as exc:
+        raise BackendError(str(exc)) from exc
     except ImportError as exc:
         msg = (
             'openai package is required for LLM-based attack generation. '

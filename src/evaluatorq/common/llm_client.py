@@ -61,6 +61,13 @@ class ModelClientMismatchError(ValueError):
     """
 
 
+class MissingExtraError(ImportError):
+    """A provider key is set but the optional package that serves it is not installed.
+
+    Subclasses ``ImportError`` so existing ``except ImportError`` sites keep working; the red-team wrapper lets it through so the message names the right extra instead of ``openai``.
+    """
+
+
 class MissingLLMCredentialsError(ValueError):
     """No ``ORQ_API_KEY``/``OPENAI_API_KEY``/``ANTHROPIC_API_KEY`` and no injected client.
 
@@ -250,7 +257,7 @@ def resolve_llm_client(
         try:
             from anthropic import AsyncAnthropic
         except ImportError as exc:
-            raise ImportError(
+            raise MissingExtraError(
                 'ANTHROPIC_API_KEY is set but the anthropic package is not installed. '
                 "Install it with `pip install 'evaluatorq[anthropic]'`."
             ) from exc
