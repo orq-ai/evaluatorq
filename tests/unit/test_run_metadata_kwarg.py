@@ -13,7 +13,7 @@ from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run
 
 def test_no_op_when_nothing_bound() -> None:
     params: dict[str, Any] = {'model': 'gpt-4o-mini'}
-    apply_pipeline_metadata(params)
+    apply_pipeline_metadata(params, routes_through_orq=True)
 
     assert params == {'model': 'gpt-4o-mini'}
 
@@ -21,21 +21,24 @@ def test_no_op_when_nothing_bound() -> None:
 def test_applies_bound_pipeline_and_run_id() -> None:
     params: dict[str, Any] = {'model': 'gpt-4o-mini'}
     with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('r1'):
-        apply_pipeline_metadata(params)
+        apply_pipeline_metadata(params, routes_through_orq=True)
 
     assert params['metadata'] == {'evaluatorq_pipeline': 'red_teaming', 'evaluatorq_run_id': 'r1'}
 
 
-def test_applies_regardless_of_endpoint() -> None:
-    """`metadata` is a standard OpenAI field, so it is sent off-Orq too.
-
-    This is the behavior the guard used to suppress: a red team pointed at a
-    direct OpenAI target got no run correlation even though its trace still
-    reached Orq via OTel.
-    """
+def test_not_applied_off_orq_without_store() -> None:
+    """Direct OpenAI rejects `metadata` unless `store` is on, so it is withheld."""
     params: dict[str, Any] = {'model': 'gpt-4o-mini'}
+    with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('r1'):
+        apply_pipeline_metadata(params, routes_through_orq=False)
+
+    assert 'metadata' not in params
+
+
+def test_applied_off_orq_when_caller_enables_store() -> None:
+    params: dict[str, Any] = {'model': 'gpt-4o-mini', 'store': True}
     with evaluatorq_run_id('r1'):
-        apply_pipeline_metadata(params)
+        apply_pipeline_metadata(params, routes_through_orq=False)
 
     assert params['metadata'] == {'evaluatorq_run_id': 'r1'}
 
@@ -44,7 +47,7 @@ def test_caller_supplied_metadata_wins_on_conflict() -> None:
     """A caller's own metadata key survives; the bound keys fill in around it."""
     params = {'metadata': {'evaluatorq_run_id': 'caller-id', 'custom': 'x'}}
     with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('bound-id'):
-        apply_pipeline_metadata(params)
+        apply_pipeline_metadata(params, routes_through_orq=True)
 
     assert params['metadata'] == {
         'evaluatorq_run_id': 'caller-id',
@@ -60,7 +63,7 @@ def test_never_sets_metadata_to_none() -> None:
     ``None`` survives into the request body — so the key must be absent, not None.
     """
     params: dict[str, Any] = {'model': 'gpt-4o-mini'}
-    apply_pipeline_metadata(params)
+    apply_pipeline_metadata(params, routes_through_orq=True)
 
     assert 'metadata' not in params
 

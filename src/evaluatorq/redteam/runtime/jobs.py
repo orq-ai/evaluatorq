@@ -143,8 +143,8 @@ def create_deployment_job(
                 'messages': messages,
             }
             # This leg bypasses the shared chat-completion helper, so run
-            # metadata is applied explicitly.
-            apply_pipeline_metadata(invoke_kwargs)
+            # metadata is applied explicitly (a deployment invoke is always Orq).
+            apply_pipeline_metadata(invoke_kwargs, routes_through_orq=True)
             invoke_kwargs.update(thread_body_param())
             # Propagate W3C trace context so the deployment's server-side
             # execution nests under this span. Captured inside the span so

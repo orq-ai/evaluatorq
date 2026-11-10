@@ -27,6 +27,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
+from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.contracts import StrEnum
 from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig, TokenUsage
@@ -159,7 +160,7 @@ class ToolChainingPlanner:
             response_format=_DecompositionSchema,
             extra_body=cfg.retry_extra_body(self._client),
         )
-        apply_pipeline_metadata(call_params)
+        apply_pipeline_metadata(call_params, routes_through_orq=client_routes_through_orq(self._client))
         response = await asyncio.wait_for(
             self._client.chat.completions.parse(**call_params),
             timeout=cfg.attacker.timeout_ms / 1000.0,

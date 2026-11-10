@@ -151,10 +151,9 @@ class OpenAIModelTarget(AgentTarget):
             else raw_messages,
         )
         # Tag the target invocation so its Orq trace is attributable to the run:
-        # the pipeline surface + run id via the standard `metadata` property (sent
-        # on every endpoint — this is the direct-OpenAI backend, and its traces
-        # still reach Orq via OTel), and the run thread via the `thread` extra_body
-        # field, which IS router-only and so stays guarded.
+        # the pipeline surface + run id via the standard `metadata` property, and the
+        # run thread via the `thread` extra_body field. Both are sent only through
+        # the Orq router: direct OpenAI rejects `metadata` unless `store` is on.
         create_kwargs: dict[str, Any] = {
             'model': self.model,
             'messages': completion_messages,
@@ -166,7 +165,7 @@ class OpenAIModelTarget(AgentTarget):
             create_kwargs['max_completion_tokens'] = self.max_tokens
         else:
             create_kwargs['max_tokens'] = self.max_tokens
-        apply_pipeline_metadata(create_kwargs)
+        apply_pipeline_metadata(create_kwargs, routes_through_orq=routes_through_orq)
         if routes_through_orq:
             thread = thread_body_param()
             if thread:

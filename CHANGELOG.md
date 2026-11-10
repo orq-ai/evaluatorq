@@ -91,6 +91,8 @@ All notable changes to `evaluatorq` are documented here.
 - **Added: a pairwise compare page at `/compare/pairwise`.** Pick a second pairwise run from the report header to see both verdicts, judge agreement, and every matched comparison with changed winners tagged, paired by question text.
 ### Notable defaults
 
+- **Run metadata is sent only when the client routes through the Orq router, or when you set `store=True` yourself.** The `evaluatorq_run_id` and `evaluatorq_pipeline` request `metadata` used to go to every endpoint, and direct OpenAI rejects `metadata` unless `store` is on (`400 The 'metadata' parameter is only allowed when 'store' is enabled`), so a `red_team()` run against OpenAI failed on its first call. Direct-OpenAI runs now omit it and work, and evaluatorq does not turn `store` on for you because that would keep attacker and target conversations at OpenAI. (RES-1873)
+
 - **The results upload timeout is 120 s, up from 30 s.** It is fixed: a longer wait than the proxy in front of the upload endpoint allows would fail anyway. (BACK-2363)
 
 - **Job and evaluator traces capture their input/output payloads by default.** Jobs use `gen_ai.input/output`; evaluators use `orq.evaluation.input/output`, including simulation criterion details. `EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false` suppresses these payloads. Python scorers without an explicit `evaluator_type` now render as `python_eval` evaluator spans. Failed scorers retain their input and report an error; result scoring is unchanged.

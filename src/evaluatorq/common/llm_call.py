@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, cast
 from openai import BadRequestError
 
 from evaluatorq.common.cli_oauth import DECISIONS_PATH
+from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.model_input import classifier_question_wire_payloads
@@ -167,22 +168,23 @@ def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -
     _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
 
 
-def apply_pipeline_metadata(params: dict[str, Any]) -> None:
+def apply_pipeline_metadata(params: dict[str, Any], *, routes_through_orq: bool) -> None:
     """Tag the invocation with the active run surface + run id via ``metadata``.
 
     Mutates ``params`` in place; no-op when no run is bound. Caller-supplied
     metadata (via ``extra_kwargs``) wins on key conflict. Public: direct
-    ``create()`` sites that build their own kwargs dict (structured output,
-    first-message generation) call this instead of routing through
-    `execute_chat_completion`.
+    ``create()`` sites that build their own kwargs dict call this instead of
+    routing through `execute_chat_completion`.
 
-    Sent regardless of endpoint. ``metadata`` is a first-class field on OpenAI's
-    own Chat Completions / Responses APIs, so it is safe off-Orq — unlike the
-    router-only ``thread`` body param, which callers still gate on
-    ``client_routes_through_orq``. Only set when non-empty: an explicit
-    ``metadata=None`` would serialize as ``"metadata": null`` rather than being
-    stripped from the body.
+    Added only when ``routes_through_orq`` is true or the caller set a truthy
+    ``store``. OpenAI's own Chat Completions API defaults to ``store=false`` and
+    rejects ``metadata`` then with a 400, and we do not set ``store=True`` for the
+    caller because that would keep attacker and target conversations at OpenAI.
+    Only set when non-empty: an explicit ``metadata=None`` would serialize as
+    ``"metadata": null`` rather than being stripped from the body.
     """
+    if not (routes_through_orq or params.get('store')):
+        return
     md = pipeline_metadata()
     if md:
         params['metadata'] = {**md, **(params.get('metadata') or {})}
@@ -252,7 +254,7 @@ async def execute_chat_completion(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    apply_pipeline_metadata(params)
+    apply_pipeline_metadata(params, routes_through_orq=client_routes_through_orq(client))
 
     record_llm_input(span, messages)
 
@@ -334,7 +336,7 @@ async def execute_chat_parse(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    apply_pipeline_metadata(params)
+    apply_pipeline_metadata(params, routes_through_orq=client_routes_through_orq(client))
 
     record_llm_input(span, messages)
 
@@ -471,7 +473,7 @@ async def execute_response(
     )
 
     strip_known_rejected_responses_reasoning(model, params)
-    apply_pipeline_metadata(params)
+    apply_pipeline_metadata(params, routes_through_orq=client_routes_through_orq(client))
 
     if record_input:
         record_llm_input(span, messages)

@@ -1013,8 +1013,8 @@ class LLMConfig(BaseModel):
 
         Run-attribution ``metadata`` is NOT merged here: calls that route through
         execute_chat_completion/parse get it natively
-        (llm_call.apply_pipeline_metadata); native Chat/Responses call sites use
-        top-level metadata, while Orq-agent SDK calls use pipeline_metadata_param()
+        (llm_call.apply_pipeline_metadata, Orq-routed clients only); native Responses
+        call sites use top-level metadata, while Orq-agent SDK calls use pipeline_metadata_param()
         as a top-level request kwarg.
         """
         from evaluatorq.common.llm_client import client_routes_through_orq
