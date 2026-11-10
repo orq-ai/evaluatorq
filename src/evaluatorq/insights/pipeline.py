@@ -247,7 +247,11 @@ async def _build_dimension(  # noqa: C901
             continue
         texts = [usable[i][1] for i in indices]
         embedded = await embed_texts(
-            texts, client=embedding_client or client, model=embedding_model, cache=cache, usage=usage
+            texts,
+            client=embedding_client if embedding_client is not None else client,
+            model=embedding_model,
+            cache=cache,
+            usage=usage,
         )
         vectors = np.asarray([embedded[text] for text in texts], dtype=float)
         tree = await asyncio.to_thread(

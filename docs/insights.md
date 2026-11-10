@@ -71,6 +71,19 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+`filters` is one dictionary for facet and numeric conditions. Older callers can still pass the legacy facet and numeric arguments, but do not mix those with `filters`. Unknown keys and conflicting inputs are rejected.
+
+| Filter kind | Accepted keys | Values |
+|---|---|---|
+| Categorical | `project`, `project_id`, `model`, `provider`, `status`, `product`, `trace_type`, `agent_name`, `tool_name` | Lists or sets of values. `project_id` takes one string. |
+| Numeric | `tokens_min`, `tokens_max`, `duration_ms_min`, `duration_ms_max` | Inclusive lower and upper bounds. |
+
+Finder exports and local snapshots set the population themselves, so they cannot be combined with filters, a query, a time window, or a limit. Use `InsightsPopulation.from_finder_export(path)` for an `eq find --json` export, or `InsightsPopulation.from_snapshot(path)` for a local JSON file validated as `trace_finder.models.Snapshot`.
+
+Finder exports pin matched trace IDs and include the query window used to reload messages from Orq. Older exports without a recorded window must be exported again. A local snapshot contains messages and needs no Orq trace fetch.
+
+Explicit `start` and `end` bounds need timezone offsets, and `start` cannot be later than `end`; invalid bounds fail before traces load. Model requests still require an Orq credential.
+
 ### Embed with a separate client
 
 Pass `embedding_client` when the client you give `llm_client` has no embeddings API, as with several non-OpenAI providers. It must be an `AsyncOpenAI` client that serves `embeddings.create`, and it handles only the embedding calls; every chat and structured call keeps using `llm_client`. Without it, embeddings use the same client as everything else. evaluatorq never closes an `embedding_client` you pass, and cached vectors are keyed by that client's `base_url`, so switching endpoints never reuses vectors from another one. If the embedding client cannot serve the `embedding_model` you name, the dimension stages fail and the run ends with `status="error"`.
@@ -91,6 +104,8 @@ async def main() -> None:
         population=InsightsPopulation(window_days=7, limit=200),
         llm_client=chat_client,
         embedding_client=embedding_client,
+        summary_model="openai/gpt-6-sol",
+        classifier_model="typesafe/jev-latest",
         embedding_model="text-embedding-3-small",
     )
     print(run.status)
@@ -98,20 +113,6 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
-
-
-`filters` is one dictionary for facet and numeric conditions. Older callers can still pass the legacy facet and numeric arguments, but do not mix those with `filters`. Unknown keys and conflicting inputs are rejected.
-
-| Filter kind | Accepted keys | Values |
-|---|---|---|
-| Categorical | `project`, `project_id`, `model`, `provider`, `status`, `product`, `trace_type`, `agent_name`, `tool_name` | Lists or sets of values. `project_id` takes one string. |
-| Numeric | `tokens_min`, `tokens_max`, `duration_ms_min`, `duration_ms_max` | Inclusive lower and upper bounds. |
-
-Finder exports and local snapshots set the population themselves, so they cannot be combined with filters, a query, a time window, or a limit. Use `InsightsPopulation.from_finder_export(path)` for an `eq find --json` export, or `InsightsPopulation.from_snapshot(path)` for a local JSON file validated as `trace_finder.models.Snapshot`.
-
-Finder exports pin matched trace IDs and include the query window used to reload messages from Orq. Older exports without a recorded window must be exported again. A local snapshot contains messages and needs no Orq trace fetch.
-
-Explicit `start` and `end` bounds need timezone offsets, and `start` cannot be later than `end`; invalid bounds fail before traces load. Model requests still require an Orq credential.
 
 ## Run from the CLI
 
