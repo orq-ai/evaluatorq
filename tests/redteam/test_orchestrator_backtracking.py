@@ -668,6 +668,7 @@ class TestReplayKeepsTheBudget:
 
 
 def test_reports_saved_under_the_old_field_name_keep_their_failure_count() -> None:
-    from evaluatorq.redteam.contracts import ExecutionDetails
+    from evaluatorq.redteam.contracts import ExecutionDetails, JobOutputPayload
 
     assert ExecutionDetails.model_validate({'refusal_judge_failures': 2}).backtrack_decision_failures == 2
+    assert JobOutputPayload.model_validate({'refusal_judge_failures': 2}).backtrack_decision_failures == 2

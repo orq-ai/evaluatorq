@@ -254,7 +254,7 @@ def _backtracking_warnings(results: list[RedTeamResult], *, max_backtracks: int)
     if failures := sum(r.execution.backtrack_decision_failures for r in dynamic if r.execution is not None):
         warnings.append(
             f'The attacker model gave no usable keep-or-erase answer on {failures} turn(s). Those turns were '
-            'kept, so backtracking may have erased fewer refusals than it could. Check the attacker model and credentials.'
+            'kept, so backtracking may have erased fewer turns than it could. Check the attacker model and credentials.'
         )
     return warnings
 

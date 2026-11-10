@@ -1633,7 +1633,9 @@ class JobOutputPayload(BaseModel):
     error_turn: int | None = None
     truncated_turns: list[int] = Field(default_factory=list)
     backtracked_turns: list[Turn] = Field(default_factory=list)
-    backtrack_decision_failures: int = 0
+    backtrack_decision_failures: int = Field(
+        default=0, validation_alias=AliasChoices('backtrack_decision_failures', 'refusal_judge_failures')
+    )
     finish_reason: str | None = None
     thread_id: str | None = None
     response_traces: list[ResponseTrace] = Field(default_factory=list)
