@@ -34,6 +34,8 @@ PRICES: dict[str, tuple[float, float]] = {
     'aws/eu.anthropic.claude-haiku-5-5': (0.11, 0.55),
     'baseten/kimi-k3': (3.0, 15.0),
     'greenpt/qwen3.6-35b-a3b': (0.30, 1.80),
+    'baseten/deepseek-v4.1-flash': (0.30, 1.20),
+    'mistral/mistral-large-4': (0.68, 2.09),
     'tensorix/qwen/qwen3-coder-30b-a3b-instruct': (0.06, 0.25),
 }
 

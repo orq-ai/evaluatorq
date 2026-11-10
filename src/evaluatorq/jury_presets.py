@@ -10,12 +10,11 @@ which reads `/v2/models`), and the live drift suite recomputes every published
 figure against it, so a repricing or a changed default shows up as a failing
 check rather than in a refreshed file's diff. The freshness registers at the
 bottom of this file are the written record that suite reads: every newer
-model, aged seat and unbenchmarked default is seated or argued for in words.
+model and aged seat is seated or argued for in words.
 
 Seats are chosen here. Compare intelligence at the catalogue default reasoning
-effort against price within each lineage. A seat without a benchmark at its
-default is held only in `REVIEWED_UNBENCHMARKED_SEATS`, with the card
-fingerprint that expires the hold.
+effort against price within each lineage. A card with no score at its default
+effort ranks on its headline index, which has no reasoning level.
 Seats are compared in-family, because the lineage diversity is the point:
 judged against the whole catalogue most seats look dominated, and acting on that
 would collapse every panel onto whichever vendor is cheapest this month and
@@ -214,43 +213,42 @@ BALANCED_TRIO = JuryPreset(
         # was also the weakest buy in the library, 23.7 at a $2.00 blend beside
         # luna on this same panel at 38.1 for $0.45. The only argument for
         # keeping it was an Anthropic vote, and this panel is sold on three
-        # families rather than three brands, which deepseek satisfies at 43.1
-        # for $0.544 while taking the panel from $6.11 to $4.64.
-        'deepseek/deepseek-v4-pro',
+        # families rather than three brands, which deepseek satisfies.
+        # Reseated 2026-11-10 from deepseek-v4-pro (headline 36.0, $0.544
+        # blend): v4.1 Flash is 39.5 for $0.525. Neither card scores its high
+        # default, so both rank on the headline index (no reasoning level).
+        'baseten/deepseek-v4.1-flash',
         # Accepted evaluatorq reseat on coherent measured AA v4.3.2 medium:
         # GPT-6 Luna 29.9251773515762 vs GPT-5.6 Luna 25.0358741440784,
         # $0.20 vs $0.45 blended. Never compare the unversioned cached pair.
         'openai/gpt-6-luna',
-        # Reseated from gemini-3.5-flash on the 2026-08-25 re-capture: the
-        # successor is stronger at its default effort (50.1 against 45.4) and
-        # cheaper ($3.00 against $3.375 blended).
-        'google/gemini-3.6-flash',
+        # Reseated 2026-11-10 from gemini-3.6-flash (headline 34.0, $3.00
+        # blend; no medium score): 3.8 Flash scores 39.8 at its medium default
+        # for $1.50.
+        'google-ai/gemini-3.8-flash',
     ),
     # Same lineage as the seat it backs, on purpose: a retirement is usually a
     # version bump, and flash keeps the panel at three families where a
     # fourth-vendor reserve would quietly reshape it.
     reserve_judges=('deepseek/deepseek-flash',),
     use_when='Default subjective eval. Three families, three error surfaces.',
-    estimated_cost_per_1k=7.49,
+    estimated_cost_per_1k=4.45,
 )
 
 STRONG_JURY = JuryPreset(
     name='Strong Jury',
     judges=(
         'anthropic/claude-opus-5-5',
-        # Retain the evaluatorq quality seat under the existing 2-point gate:
-        # same-version AA v4.3.2 medium is 39.2363585889147 for GPT-5.6
-        # Sol vs 39.8118971749522 for GPT-6 Sol. The successor is cheaper,
-        # but its 0.5755-point gain is below the different-model threshold.
-        'openai/gpt-5.6-sol',
-        # Reseated from gemini-3.1-pro-preview by the in-family frontier check,
-        # then from gemini-3.5-flash on the re-capture: stronger at default
-        # effort and cheaper.
-        'google/gemini-3.6-flash',
+        # Reseated 2026-11-10 from gpt-5.6-sol (medium 39.2, $8.00 blend):
+        # GPT-6.1 Sol is 47.8 at medium for $4.00, clear of the 2-point gate.
+        'openai/gpt-6.1-sol',
+        # Reseated 2026-11-10 from gemini-3.6-flash, as on Balanced Trio.
+        'google-ai/gemini-3.8-flash',
     ),
-    reserve_judges=('deepseek/deepseek-v4-pro',),
+    # Reseated 2026-11-10 from deepseek-v4-pro, as on Balanced Trio.
+    reserve_judges=('baseten/deepseek-v4.1-flash',),
     use_when='Customer-facing benchmarks, preference data, anything that compounds.',
-    estimated_cost_per_1k=38.00,
+    estimated_cost_per_1k=27.00,
 )
 
 CHEAP_AGGREGATE = JuryPreset(
@@ -261,8 +259,9 @@ CHEAP_AGGREGATE = JuryPreset(
     # superseded by a newer version of itself (model_frontier.rank_cheapest_top).
     # test_cheap_aggregate_matches_the_live_derivation fails with a readable
     # diff when the live ranking moves; a change here is a deliberate edit.
-    # Ranked 2026-10-26: glm-5.3-flash 41.8, gemini-3.8-flash 39.8,
-    # claude-haiku-5-5 34.5; gpt-6-luna 29.9 is next.
+    # Ranked 2026-11-10, with headline fallback for cards unscored at their
+    # default: glm-5.3-flash 41.8, gemini-3.8-flash 39.8, deepseek-v4.1-flash
+    # 39.5 (headline); mistral-large-4 38.4 (headline) is next.
     judges=(
         # Default effort max; the live card has no ladder, so 41.8 is the AA
         # API value for the same slug (AA_FILLS). PRICE HOLD: the card says
@@ -270,35 +269,38 @@ CHEAP_AGGREGATE = JuryPreset(
         # billed at $0.15/$0.50 ($0.2375 blend), twice the card. The live card
         # leads here and the estimate uses it; at the billed rate this seat
         # costs $0.475 per 1k instead of $0.2375 and the panel estimate is
-        # $3.88 instead of $3.64. Replace the registry rate the day Zai billing
+        # $4.53 instead of $4.29. Replace the registry rate the day Zai billing
         # is confirmed.
         'zai/glm-5.3-flash',
         'google-ai/gemini-3.8-flash',
-        'anthropic/claude-haiku-5-5',
+        'baseten/deepseek-v4.1-flash',
     ),
-    # Next-ranked family under the ceiling. kimi-k2.6 held this seat for a day
-    # and is superseded by kimi-k3 ($6 blend, over the ceiling).
-    reserve_judges=('openai/gpt-6-luna',),
+    # Next-ranked family under the ceiling.
+    reserve_judges=('mistral/mistral-large-4',),
     use_when='High volume regression eval, nightly reruns, HITL triage feeders.',
-    estimated_cost_per_1k=3.64,
+    estimated_cost_per_1k=4.29,
 )
 
 OPEN_WEIGHT_PORTABLE = JuryPreset(
     name='Open-Weight / Portable',
     judges=(
         # Held by gpt-oss-120b until the family entered NEVER_SEAT (PR #330
-        # review, 2026-08-24); the panel's own reserve steps up.
-        'deepseek/deepseek-v4-pro',
+        # review, 2026-08-24), then deepseek-v4-pro; reseated 2026-11-10 to
+        # v4.1 Flash, as on Balanced Trio.
+        'baseten/deepseek-v4.1-flash',
         # Back on Baseten at its max default (measured 43.6) from 2026-11-10.
         # The 2026-10-05 move to Wafer at an unbenchmarked `none` default was
         # bought with a $12.75 output rate; Wafer now bills $15.00 like
         # Baseten, so the trade kept the unmeasured default and lost the price.
         'baseten/kimi-k3',
-        'zai/glm-5.2',
+        # Reseated 2026-11-10 from glm-5.2 (33.7, $2.15 blend), which
+        # SUPERSEDED already retired: 41.8 at max on the card rate. Same
+        # billing hold as Cheap Aggregate's seat.
+        'zai/glm-5.3-flash',
     ),
     reserve_judges=('greenpt/qwen3.6-35b-a3b',),
     use_when='No dependence on a closed frontier vendor; migration path to self-hosting.',
-    estimated_cost_per_1k=17.39,
+    estimated_cost_per_1k=13.29,
 )
 
 EU_REGION = JuryPreset(
@@ -326,7 +328,7 @@ SINGLE_PROVIDER_TRIO = JuryPreset(
     # The three tiers of the newest OpenAI generation (user decision
     # 2026-11-10): 6.1 Sol and 6.1 Terra, and GPT-6 Luna since no 6.1 Luna is
     # listed. 6.1 Sol medium 47.8 at $2/$10 (EU sibling ladder); 6.1 Terra has
-    # no v4.3 score yet and is held in REVIEWED_UNBENCHMARKED_SEATS.
+    # no medium score and ranks on its v5.0.1 headline.
     judges=(
         'openai/gpt-6.1-sol',
         'openai/gpt-6.1-terra',
@@ -384,11 +386,6 @@ MAX_SEAT_AGE_DAYS = 180
 # Age here is time since first listing in the garden, taken across every host
 # of the same weights, so a second host relisting a model does not reset it.
 AGED_SEATS: dict[str, str] = {
-    'deepseek-v4-pro': (
-        'Listed 2026-04-24. DeepSeek has listed no newer Pro since; its later '
-        'releases are V4/V4.1 Flash, a cheaper tier the Balanced Trio reserve '
-        'already covers. Retire this entry the day a V4.1 or V5 Pro is listed.'
-    ),
     'claude-haiku-4-5-20251001': (
         'Listed 2025-10, held only by the derived Anthropic Only pool, and only '
         'on a project-scoped key: anthropic/claude-haiku-5-5 is in the public '
@@ -404,49 +401,7 @@ AGED_SEATS: dict[str, str] = {
 # and measured-rung fingerprint expire the decision when the card changes.
 # Seats that SUPERSEDED would refuse, held on a written reason. Keyed by router
 # ID; test_every_judge_and_reserve_is_seatable honours exactly these.
-HELD_SUPERSEDED: dict[str, str] = {
-    'zai/glm-5.2': (
-        'Open-Weight / Portable keeps GLM 5.2 although zai/glm-5.3-flash is 41.8 against 33.7 '
-        'live and cheaper on the card: the 5.3 Flash price is held on billing provenance '
-        '(card $0.075/$0.25 per 1M, judge-endpoint usage billed $0.15/$0.50), and Cheap '
-        'Aggregate now seats it on the card rate. Decide whether Portable follows.'
-    ),
-}
-
-REVIEWED_UNBENCHMARKED_SEATS: dict[str, tuple[str, tuple[str, ...], str]] = {
-    'openai/gpt-6.1-terra': (
-        'medium',
-        (),
-        (
-            'Seated by user decision 2026-11-10 so Single-Provider Trio runs the '
-            'current generation. No v4.3 score exists for it or its EU sibling; '
-            'AA publishes medium 38 and max 51 on v5.0.1 only, which is not spliced '
-            'into the v4.3 garden. Drop the hold when a v4.3 card or a coherent '
-            'v5.0.1 garden scores it.'
-        ),
-    ),
-    'deepseek/deepseek-v4-pro': (
-        'high',
-        ('max', 'none'),
-        (
-            'The 2026-11-10 card runs at high but measures only max 36.0 and none '
-            '20.4; the high rung it was seated on is gone from the ladder. Held '
-            'as a data blocker on Balanced Trio, Portable and the Strong Jury '
-            'reserve: no newer DeepSeek Pro is listed, and reseating three panels '
-            'on a missing rung is a jury decision, not a freshness fix.'
-        ),
-    ),
-    'google/gemini-3.6-flash': (
-        'medium',
-        ('high',),
-        (
-            'Keep the evaluatorq PR263 baseline pending a measured medium score. '
-            'The attached high 50.1 is not the score where this judge runs; '
-            'Gemini 3.7 also lacks its medium benchmark. No quality rank claimed.'
-        ),
-    ),
-}
-
+HELD_SUPERSEDED: dict[str, str] = {}
 
 # Successors already looked at and deliberately not seated. A model reaching the
 # garden is not a reason to put it in front of customers, but it is a reason to
@@ -461,7 +416,7 @@ _OLDER_GENERATION = (
     'An older generation than the seat in its lineage, first listed here late; '
     'a listing date is not a release date. Public catalogue 2026-11-10.'
 )
-_NOT_A_JUDGE = 'Not a general text judge (translation, vision, omni, image or classify-only endpoint). Public catalogue 2026-11-10.'
+_NOT_A_JUDGE = 'Not a general text judge (translation, vision, omni, image, speech or classify-only endpoint). Public catalogue 2026-11-10.'
 _UNSCORED = (
     'No AA index on the public card and no card in the project-scoped /v2/models '
     '(2026-11-10), so there is nothing to rank it on. Review again once scored.'
@@ -492,6 +447,14 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'qwen3.8-omni-flash': _NOT_A_JUDGE,
     'qwen3.5-2b': _NOT_A_JUDGE,
     'decision-model-preview': _NOT_A_JUDGE,
+    'voxtral-mini-transcribe-3': _NOT_A_JUDGE,
+    'voxtral-mini-transcribe-3-0': _NOT_A_JUDGE,
+    'voxtral-mini-transcribe-realtime-3': _NOT_A_JUDGE,
+    'voxtral-mini-transcribe-realtime-3-0': _NOT_A_JUDGE,
+    'voxtral-mini-tts-3': _NOT_A_JUDGE,
+    'voxtral-mini-tts-3-0': _NOT_A_JUDGE,
+    'voxtral-small-transcribe-3': _NOT_A_JUDGE,
+    'voxtral-small-transcribe-3-0': _NOT_A_JUDGE,
     'qwen-plus-2025-12-01': _OLDER_GENERATION,
     'qwen3.5-flash-2026-02-23': _OLDER_GENERATION,
     'qwen3-30b-a3b-instruct-2507': _OLDER_GENERATION,

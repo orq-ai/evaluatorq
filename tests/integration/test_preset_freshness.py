@@ -25,9 +25,7 @@ import pytest
 
 from evaluatorq.common.model_catalogue import model_cards
 from evaluatorq.common.model_frontier import (
-    NEVER_SEAT,
     UNLISTED_ROUTES,
-    UNROUTABLE,
     ScoredModel,
     catalog_scope,
     headline_contradicts_its_own_rung,
@@ -45,7 +43,6 @@ from evaluatorq.jury_presets import (
     MAX_SEAT_AGE_DAYS,
     PRESETS,
     REVIEWED_SUCCESSORS,
-    REVIEWED_UNBENCHMARKED_SEATS,
     all_router_ids,
     judge_family,
     model_identity,
@@ -202,17 +199,6 @@ def _assert_every_judge_and_reserve_is_seatable(garden: dict[str, ScoredModel]) 
             if reason and router_id in HELD_SUPERSEDED and reason.startswith('superseded'):
                 continue
             if reason:
-                reviewed = REVIEWED_UNBENCHMARKED_SEATS.get(router_id)
-                if (
-                    reviewed is not None
-                    and reason.startswith('unrankable: no benchmark')
-                    and model.default_effort == reviewed[0]
-                    and tuple(sorted(model.effort_indices)) == reviewed[1]
-                    and model.enabled is not False
-                    and model.router_id not in UNROUTABLE
-                    and not any(family in model.router_id for family in NEVER_SEAT)
-                ):
-                    continue
                 refused[f'{preset.name}: {router_id}'] = reason
 
     assert not refused, f'presets recommend unseatable models: {refused}'
@@ -220,44 +206,8 @@ def _assert_every_judge_and_reserve_is_seatable(garden: dict[str, ScoredModel]) 
 
 @live
 def test_every_judge_and_reserve_is_seatable(garden):
-    """The floor, NEVER_SEAT, and ranking at the catalogue default bind the juries too.
-
-    A judge with no benchmark at the effort it runs at is reported here rather
-    than ranked on a rung it never runs at.
-    """
+    """The floor, NEVER_SEAT, SUPERSEDED and UNROUTABLE bind the juries too."""
     _assert_every_judge_and_reserve_is_seatable(garden)
-
-
-@live
-def test_unbenchmarked_holds_expire_when_the_card_changes(garden):
-    """A held default is a data blocker, never a licence to ignore new data."""
-    reachable = with_unlisted_routes(garden)
-    for router_id, (default, rungs, reason) in REVIEWED_UNBENCHMARKED_SEATS.items():
-        assert router_id in all_router_ids(), f'{router_id} is no longer seated; drop its hold'
-        model = reachable[router_id]
-        assert model.default_index is None, f'{router_id} now has a default score; review and drop its hold'
-        assert model.default_effort == default, f'{router_id} default changed; review its hold'
-        assert tuple(sorted(model.effort_indices)) == rungs, f'{router_id} measured rungs changed; review its hold'
-        assert reason.strip()
-
-
-@live
-@pytest.mark.parametrize(
-    'changes',
-    [
-        {'enabled': False},
-        {'input_price': 0.0},
-        # An effort no held card measures, so the hold's fingerprint cannot match.
-        {'default_effort': 'minimal'},
-        {'effort_indices': {'none': 10.0}},
-    ],
-)
-def test_an_unbenchmarked_hold_does_not_mask_other_failures(garden, changes):
-    # The first hold with a live card: an unlisted route's fields are fixed in code.
-    held = next(r for r in REVIEWED_UNBENCHMARKED_SEATS if r in garden)
-    updated = garden | {held: garden[held].model_copy(update=changes)}
-    with pytest.raises(AssertionError, match=held):
-        _assert_every_judge_and_reserve_is_seatable(updated)
 
 
 def _earliest_listing(listed: Mapping[str, int | None]) -> dict[str, int]:
@@ -404,7 +354,14 @@ def test_reviewed_successors_are_dropped_once_they_stop_being_successors(listed)
     )
 
 
-DOMINANCE_EXEMPTIONS: dict[str, str] = {}
+DOMINANCE_EXEMPTIONS: dict[str, str] = {
+    'openai/gpt-6.1-sol': (
+        'openai/gpt-6.1-terra ranks on a 51.0 headline that is AA v5.0.1 max, '
+        'not the v4.3 index every other card carries, so its "upgrade" over '
+        'Sol (v4.3 medium 47.8) compares two scales. Drop once Terra has a '
+        'v4.3 score or the garden moves to v5. 2026-11-10.'
+    ),
+}
 """Seats knowingly kept despite a computed in-family upgrade.
 
 Same disposition-register contract as REVIEWED_SUCCESSORS: seat it or write down
