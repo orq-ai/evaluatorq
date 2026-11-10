@@ -1413,29 +1413,51 @@ def _llm_sdk_error_references(source: str) -> list[tuple[int, str]]:
     ``from openai import _exceptions as errors`` then ``errors.APIError`` are both reported.
     """
     tree = ast.parse(source)
-    # Local name -> the SDK module it is bound to.
+    # Local name -> the SDK module it is bound to, as of the node being visited. Module-level
+    # bindings are followed in source order, so a later non-SDK import or assignment of the same
+    # name drops the alias; a function-local shadow is not tracked.
     aliases = {'openai': 'openai', 'anthropic': 'anthropic'}
-    for node in ast.walk(tree):
+    found: list[tuple[int, str]] = []
+
+    def bind(name: str, module: str | None) -> None:
+        if module is None:
+            aliases.pop(name, None)
+        else:
+            aliases[name] = module
+
+    def visit(node: ast.AST) -> None:
         if isinstance(node, ast.Import):
             for a in node.names:
-                if a.name in _LLM_SDK_MODULES and a.asname:
-                    aliases[a.asname] = a.name
-        elif isinstance(node, ast.ImportFrom) and node.module in {'openai', 'anthropic'}:
+                if a.asname:
+                    bind(a.asname, a.name if a.name in _LLM_SDK_MODULES else None)
+                else:
+                    head = a.name.partition('.')[0]
+                    bind(head, head if head in {'openai', 'anthropic'} else None)
+            return
+        if isinstance(node, ast.ImportFrom):
             for a in node.names:
-                if a.name == '_exceptions':
-                    aliases[a.asname or a.name] = f'{node.module}._exceptions'
-    found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module in _LLM_SDK_MODULES:
-            found.extend((node.lineno, a.name) for a in node.names if a.name in LLM_SDK_ERROR_NAMES)
-        elif isinstance(node, ast.Attribute) and node.attr in LLM_SDK_ERROR_NAMES:
+                if node.module in _LLM_SDK_MODULES and a.name in LLM_SDK_ERROR_NAMES:
+                    found.append((node.lineno, a.name))
+                is_sdk = node.module in {'openai', 'anthropic'} and a.name == '_exceptions'
+                bind(a.asname or a.name, f'{node.module}._exceptions' if is_sdk else None)
+            return
+        if isinstance(node, ast.Attribute) and node.attr in LLM_SDK_ERROR_NAMES:
             base = _dotted_name(node.value)
-            if base is None:
-                continue
-            head, _, rest = base.partition('.')
-            module = aliases.get(head)
-            if module is not None and f'{module}.{rest}'.rstrip('.') in _LLM_SDK_MODULES:
-                found.append((node.lineno, node.attr))
+            if base is not None:
+                head, _, rest = base.partition('.')
+                module = aliases.get(head)
+                if module is not None and f'{module}.{rest}'.rstrip('.') in _LLM_SDK_MODULES:
+                    found.append((node.lineno, node.attr))
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    bind(target.id, None)
+
+    for stmt in tree.body:
+        visit(stmt)
     found.sort()
     return found
 
@@ -1501,3 +1523,16 @@ def test_llm_sdk_error_detector_resolves_module_aliases() -> None:
         (7, 'ConflictError'),
         (7, 'RateLimitError'),
     ]
+
+
+def test_llm_sdk_error_detector_forgets_rebound_aliases() -> None:
+    source = (
+        'import openai as sdk\n'
+        'a = sdk.APIError\n'
+        'import json as sdk\n'
+        'b = sdk.APIError\n'
+        'import anthropic as other\n'
+        'other = object()\n'
+        'c = other.APIError\n'
+    )
+    assert _llm_sdk_error_references(source) == [(2, 'APIError')]
