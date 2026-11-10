@@ -12,6 +12,7 @@ client-side parse error, not an API error, and stays imported from ``openai``.
 from __future__ import annotations
 
 import openai
+from loguru import logger
 
 API_ERRORS: tuple[type[BaseException], ...] = (openai.APIError,)
 STATUS_ERRORS: tuple[type[BaseException], ...] = (openai.APIStatusError,)
@@ -22,15 +23,30 @@ SDK_ERRORS: tuple[type[BaseException], ...] = (openai.OpenAIError,)
 
 try:
     import anthropic
+
+    _ANTHROPIC_ERRORS = (
+        anthropic.APIError,
+        anthropic.APIStatusError,
+        anthropic.APIConnectionError,
+        anthropic.APITimeoutError,
+        anthropic.BadRequestError,
+        anthropic.AnthropicError,
+    )
 except ImportError:  # anthropic is an optional extra
     pass
+except AttributeError as exc:  # installed, but not the API this module expects
+    logger.warning(
+        'The installed anthropic package lacks an expected error class ({}); '
+        'only OpenAI error classes are recognised, so Anthropic errors will not be caught as LLM errors',
+        exc,
+    )
 else:
-    API_ERRORS += (anthropic.APIError,)
-    STATUS_ERRORS += (anthropic.APIStatusError,)
-    CONNECTION_ERRORS += (anthropic.APIConnectionError,)
-    TIMEOUT_ERRORS += (anthropic.APITimeoutError,)
-    BAD_REQUEST_ERRORS += (anthropic.BadRequestError,)
-    SDK_ERRORS += (anthropic.AnthropicError,)
+    API_ERRORS += (_ANTHROPIC_ERRORS[0],)
+    STATUS_ERRORS += (_ANTHROPIC_ERRORS[1],)
+    CONNECTION_ERRORS += (_ANTHROPIC_ERRORS[2],)
+    TIMEOUT_ERRORS += (_ANTHROPIC_ERRORS[3],)
+    BAD_REQUEST_ERRORS += (_ANTHROPIC_ERRORS[4],)
+    SDK_ERRORS += (_ANTHROPIC_ERRORS[5],)
 
 
 def status_code(exc: BaseException) -> int | None:

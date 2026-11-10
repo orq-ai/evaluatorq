@@ -1373,13 +1373,14 @@ def test_env_raw_default_detector_resolves_constants() -> None:
     assert _env_raw_defaults(source) == [(3, 'X', 'https://my.orq.ai')]
 
 
-OPENAI_ERROR_NAMES = frozenset({
+LLM_SDK_ERROR_NAMES = frozenset({
     'APIError',
     'APIStatusError',
     'APIConnectionError',
     'APITimeoutError',
     'BadRequestError',
     'OpenAIError',
+    'AnthropicError',
     'RateLimitError',
     'NotFoundError',
     'AuthenticationError',
@@ -1390,29 +1391,61 @@ OPENAI_ERROR_NAMES = frozenset({
 })
 
 
-def test_llm_sdk_errors_are_caught_through_llm_errors() -> None:
-    """Only ``common/llm_errors.py`` may name an ``openai`` exception class.
+_LLM_SDK_MODULES = frozenset({'openai', 'anthropic', 'openai._exceptions', 'anthropic._exceptions'})
 
-    An ``except openai.APIStatusError`` lets an Anthropic client's errors slip past it.
+
+def _llm_sdk_error_references(source: str) -> list[tuple[int, str]]:
+    """Return ``(line, name)`` for each SDK exception class named from ``openai`` or ``anthropic``."""
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom) and node.module in _LLM_SDK_MODULES:
+            found.extend((node.lineno, a.name) for a in node.names if a.name in LLM_SDK_ERROR_NAMES)
+        elif isinstance(node, ast.Attribute) and node.attr in LLM_SDK_ERROR_NAMES:
+            base = node.value
+            if isinstance(base, ast.Attribute) and base.attr == '_exceptions':
+                base = base.value
+            if isinstance(base, ast.Name) and base.id in {'openai', 'anthropic'}:
+                found.append((node.lineno, node.attr))
+    return found
+
+
+def test_llm_sdk_errors_are_caught_through_llm_errors() -> None:
+    """Only ``common/llm_errors.py`` may name an ``openai`` or ``anthropic`` exception class.
+
+    An ``except openai.APIStatusError`` lets an Anthropic client's errors slip past it, and the reverse.
     """
     allowed = SRC / 'common' / 'llm_errors.py'
-    offenders: list[str] = []
-    for path in sorted(SRC.rglob('*.py')):
-        if path == allowed:
-            continue
-        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
-            names: list[str] = []
-            if isinstance(node, ast.ImportFrom) and node.module == 'openai':
-                names = [a.name for a in node.names if a.name in OPENAI_ERROR_NAMES]
-            elif (
-                isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Name)
-                and node.value.id == 'openai'
-                and node.attr in OPENAI_ERROR_NAMES
-            ):
-                names = [node.attr]
-            offenders.extend(f'{path.relative_to(SRC)}:{getattr(node, "lineno", 0)} ({name})' for name in names)
+    offenders = [
+        f'{path.relative_to(SRC)}:{line} ({name})'
+        for path in sorted(SRC.rglob('*.py'))
+        if path != allowed
+        for line, name in _llm_sdk_error_references(path.read_text(encoding='utf-8'))
+    ]
     assert not offenders, (
-        'These modules name an openai exception class directly; use evaluatorq.common.llm_errors '
+        'These modules name an LLM SDK exception class directly; use evaluatorq.common.llm_errors '
         f'(STATUS_ERRORS, CONNECTION_ERRORS, BAD_REQUEST_ERRORS, status_code) instead: {offenders}'
     )
+
+
+def test_llm_sdk_error_detector_flags_both_sdks_and_private_modules() -> None:
+    source = (
+        'import anthropic\n'
+        'import openai\n'
+        'from anthropic import RateLimitError\n'
+        'from openai._exceptions import APIStatusError\n'
+        'from anthropic._exceptions import APIError\n'
+        'try:\n'
+        '    pass\n'
+        'except anthropic.APIStatusError:\n'
+        '    pass\n'
+        'except openai._exceptions.BadRequestError:\n'
+        '    pass\n'
+        'x = openai.AsyncOpenAI\n'
+    )
+    assert _llm_sdk_error_references(source) == [
+        (3, 'RateLimitError'),
+        (4, 'APIStatusError'),
+        (5, 'APIError'),
+        (8, 'APIStatusError'),
+        (10, 'BadRequestError'),
+    ]

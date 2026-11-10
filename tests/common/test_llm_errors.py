@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import types
 
 import anthropic
 import httpx
@@ -117,4 +118,32 @@ def test_tuples_contain_only_openai_when_anthropic_absent(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(llm_errors)
+    assert len(llm_errors.API_ERRORS) == 2
+
+
+def test_incompatible_anthropic_degrades_to_openai_only_with_a_warning(monkeypatch):
+    from loguru import logger
+
+    messages: list[str] = []
+    handler_id = logger.add(lambda m: messages.append(str(m)), level='WARNING')
+    monkeypatch.setitem(sys.modules, 'anthropic', types.ModuleType('anthropic'))
+    try:
+        reloaded = importlib.reload(llm_errors)
+        for name in (
+            'API_ERRORS',
+            'STATUS_ERRORS',
+            'CONNECTION_ERRORS',
+            'TIMEOUT_ERRORS',
+            'BAD_REQUEST_ERRORS',
+            'SDK_ERRORS',
+        ):
+            members = getattr(reloaded, name)
+            assert len(members) == 1, name
+            assert members[0].__module__.split('.')[0] == 'openai', name
+    finally:
+        logger.remove(handler_id)
+        monkeypatch.undo()
+        importlib.reload(llm_errors)
+    assert len(messages) == 1
+    assert 'only OpenAI error classes are recognised' in messages[0]
     assert len(llm_errors.API_ERRORS) == 2
