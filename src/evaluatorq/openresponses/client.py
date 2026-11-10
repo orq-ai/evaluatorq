@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.llm_client import LLMClient
+
 
 def build_simulation_client(
-    config_client: AsyncOpenAI | None = None,
+    config_client: LLMClient | None = None,
     *,
     extra_api_key: str | None = None,
     require_orq: bool = False,

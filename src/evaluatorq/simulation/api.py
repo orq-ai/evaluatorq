@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from evaluatorq.common.env_config import env_raw
-from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.llm_client import as_llm_client, resolve_results_base_url
 from evaluatorq.common.llm_limit import active_llm_parallelism, llm_concurrency_limit
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM, resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from opentelemetry.trace import Span
 
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.simulation.agents.base import BaseAgent
@@ -269,7 +270,7 @@ async def simulate(
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
     experiment_description: str | None = None,
@@ -363,7 +364,7 @@ async def simulate(
             events. Sync or async; ``async def`` is preferred (a sync hook
             works but emits a one-time ``DeprecationWarning``). Defaults to
             ``DefaultHooks`` (loguru baseline).
-        generation_client: Optional pre-built ``AsyncOpenAI`` used for datapoint
+        generation_client: Optional pre-built ``AsyncOpenAI`` (or Anthropic SDK client) used for datapoint
             generation (first-message). When omitted, generation falls back to
             the same env-based provider resolution as
             `generate_and_simulate` (``ORQ_API_KEY`` → ``OPENAI_API_KEY``).
@@ -585,7 +586,7 @@ async def _simulate_run(
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     upload_results: bool = True,
     experiment_description: str | None = None,
     orq_folder_path: str | None = None,
@@ -735,7 +736,7 @@ async def generate_and_simulate(
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
     experiment_description: str | None = None,
@@ -950,7 +951,7 @@ async def _generate_datapoints_inner(
     num_personas: int,
     num_scenarios: int,
     llm_config: LLMCallConfig,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     hooks: SimulationHooks | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
@@ -1043,7 +1044,7 @@ async def _generate_and_simulate_run(
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     upload_results: bool = True,
     experiment_description: str | None = None,
     orq_folder_path: str | None = None,
@@ -1214,7 +1215,7 @@ async def generate(
     num_scenarios: int = 5,
     llm_config: LLMCallConfig | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     generation_instructions: str = '',
@@ -1338,7 +1339,7 @@ async def generate_personas(
     context: str = '',
     generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
 ) -> list[Persona]:
     """Generate one ``Persona`` per archetype seed (e.g. ``"angry customer"``).
 
@@ -1365,7 +1366,7 @@ async def generate_personas(
     # opens `orq.simulation.persona_generation` with a child LLM span, and on the
     # sim paths those already nest under the run's root span.
     gen = PersonaGenerator(
-        client=generation_client,
+        client=as_llm_client(generation_client),
         config=sim_llm_config(llm_config),
     )
     try:
@@ -1397,7 +1398,7 @@ async def generate_persona(
     context: str = '',
     generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
 ) -> Persona:
     """Generate one ``Persona`` from a short archetype seed (e.g. ``"angry customer"``).
 
@@ -1425,7 +1426,7 @@ async def generate_scenarios(
     context: str = '',
     generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
 ) -> list[Scenario]:
     """Generate one ``Scenario`` per situation seed (e.g. ``"disputes a refund denial"``).
 
@@ -1446,7 +1447,7 @@ async def generate_scenarios(
     description = agent_description or 'a general-purpose conversational assistant'
     # No run id bound here — see the note in generate_personas.
     gen = ScenarioGenerator(
-        client=generation_client,
+        client=as_llm_client(generation_client),
         config=sim_llm_config(llm_config),
     )
     try:
@@ -1478,7 +1479,7 @@ async def generate_scenario(
     context: str = '',
     generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
 ) -> Scenario:
     """Generate one ``Scenario`` from a short situation seed.
 

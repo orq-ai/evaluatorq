@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
@@ -89,8 +89,13 @@ def test_as_llm_client_wraps_a_raw_anthropic_client_and_leaves_everything_else_a
 
 
 def test_as_llm_client_wraps_the_real_sdk_classes() -> None:
-    for cls in (anthropic.AsyncAnthropic,):
-        assert is_anthropic_client(as_llm_client(cls(api_key='k')))
+    clients = (
+        anthropic.AsyncAnthropic(api_key='k'),
+        anthropic.AsyncAnthropicBedrock(aws_region='eu-west-1', aws_access_key='a', aws_secret_key='b'),
+        anthropic.AsyncAnthropicVertex(region='europe-west1', project_id='p', access_token='t'),
+    )
+    for client in clients:
+        assert is_anthropic_client(as_llm_client(client)), type(client).__name__
 
 
 def test_resolve_llm_client_wraps_an_injected_anthropic_client_and_does_not_own_it() -> None:
@@ -222,6 +227,96 @@ def test_a_bad_structured_reply_is_a_parse_outcome_not_a_crash() -> None:
     assert outcome.error_kind is JudgeError.PARSE
 
 
+def _server_error() -> anthropic.InternalServerError:
+    request = httpx.Request('POST', 'https://api.anthropic.com/v1/messages')
+    response = httpx.Response(500, request=request)
+    return anthropic.InternalServerError('overloaded', response=response, body=None)
+
+
+def _no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def instant(_: float) -> None:
+        return None
+
+    monkeypatch.setattr('evaluatorq.common.retry.asyncio.sleep', instant)
+
+
+def test_generate_structured_keeps_its_default_retry_budget_and_honours_max_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic import BaseModel
+
+    from evaluatorq.common.retry import MAX_RETRY_ATTEMPTS
+    from evaluatorq.common.structured_output import generate_structured
+
+    _no_backoff(monkeypatch)
+
+    class Verdict(BaseModel):
+        ok: bool
+
+    def attempts(**kwargs: Any) -> int:
+        fake = scripted([_server_error()])
+        with pytest.raises(anthropic.InternalServerError):
+            asyncio.run(
+                generate_structured(
+                    as_llm_client(fake),
+                    model='claude-sonnet-5-5',
+                    messages=[{'role': 'user', 'content': 'x'}],
+                    response_format=Verdict,
+                    max_tokens=100,
+                    label='t',
+                    **kwargs,
+                )
+            )
+        return len(fake.messages.calls)
+
+    assert attempts() == MAX_RETRY_ATTEMPTS
+    assert attempts(max_attempts=1) == 1
+
+
+def test_run_classify_fallback_leaves_retry_to_the_caller(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One request per outer attempt: the structured fallback must not add a second retry layer under the caller's."""
+    from evaluatorq.common.retry import with_retry
+
+    _no_backoff(monkeypatch)
+    fake = scripted([_server_error()])
+    client = as_llm_client(fake)
+
+    async def attempt() -> Any:
+        outcome = await run_classify(
+            client=client,
+            model='claude-sonnet-5-5',
+            cfg=LLMCallConfig(model='claude-sonnet-5-5'),
+            request=_choice_request(),
+        )
+        if outcome.error_exc is not None:
+            raise outcome.error_exc
+        return outcome
+
+    with pytest.raises(anthropic.InternalServerError):
+        asyncio.run(with_retry(attempt, max_attempts=3))
+    assert len(fake.messages.calls) == 3
+
+
+def test_a_failed_fallback_classify_still_reports_the_usage_it_was_billed() -> None:
+    truncated = text('{"answer_0"', stop_reason='max_tokens', usage=Usage(input_tokens=120, output_tokens=30))
+    outcome = _classify(scripted([truncated]))
+    assert outcome.error_kind is not None
+    assert outcome.token_usage is not None
+    assert (outcome.token_usage.input_tokens, outcome.token_usage.output_tokens) == (120, 30)
+
+
+def test_run_classify_fallback_forwards_the_sampling_fields_the_caller_set() -> None:
+    fake = scripted([text('{"answer_0": "warm", "answer_1": 0.9}')])
+    cfg = LLMCallConfig(model='claude-sonnet-5-5', temperature=0.3, reasoning_effort='low')
+    outcome = asyncio.run(
+        run_classify(client=as_llm_client(fake), model='claude-sonnet-5-5', cfg=cfg, request=_choice_request())
+    )
+    assert outcome.error_kind is None, outcome.error_message
+    sent = fake.messages.calls[0]
+    assert sent['temperature'] == 0.3
+    assert sent['output_config']['effort'] == 'low'
+
+
 # ---------------------------------------------------------------------------
 # Classifier model default
 # ---------------------------------------------------------------------------
@@ -239,7 +334,9 @@ def test_an_openai_default_model_reaching_run_classify_comes_back_as_an_error_ou
     monkeypatch.setenv('EVALUATORQ_FAST_MODEL', 'openai/gpt-5-mini')
     outcome = _classify(_raw(), model='typesafe/jev-latest')
     assert outcome.error_kind is not None
-    assert 'EVALUATORQ_CLASSIFIER_MODEL' in (outcome.error_message or '')
+    # The classify-only default was swapped for the fast role, so the fast role variable is the one to set.
+    assert 'EVALUATORQ_FAST_MODEL' in (outcome.error_message or '')
+    assert 'EVALUATORQ_CLASSIFIER_MODEL' not in (outcome.error_message or '')
 
 
 # ---------------------------------------------------------------------------
@@ -399,28 +496,6 @@ def test_an_attacker_that_keeps_refusing_ends_with_adversarial_content_filter() 
 # ---------------------------------------------------------------------------
 
 
-class OpenAIShapedFake:
-    """Fails the test if anything reaches an OpenAI-shaped endpoint."""
-
-    base_url = 'https://api.openai.com/v1'
-    max_retries = 0
-
-    def __init__(self) -> None:
-        self.requests: list[str] = []
-        self.chat = MagicMock()
-        self.responses = MagicMock()
-        for surface in (self.chat.completions.create, self.chat.completions.parse, self.responses.create):
-            surface.side_effect = self._reject
-        self.post = AsyncMock(side_effect=self._reject)
-
-    async def _reject(self, *args: object, **kwargs: object) -> None:
-        self.requests.append('openai-shaped request')
-        raise AssertionError('a request reached an OpenAI-shaped client')
-
-    def with_options(self, **kwargs: object) -> OpenAIShapedFake:
-        return self
-
-
 def _system_text(request: dict[str, Any]) -> str:
     system = request.get('system')
     if isinstance(system, str):
@@ -437,12 +512,15 @@ def _verdict_reply(request: dict[str, Any]) -> str:
     return json.dumps({name: filler.get(spec.get('type'), None) for name, spec in properties.items()})
 
 
+_CAPABILITY_FIELDS = {'is_multi_agent', 'knowledge_retrieval', 'memory_read', 'memory_write'}
+
+
 class RolePlayMessages(ScriptedMessages):
     """Answers as the attacker, the evaluator and the target, from one Anthropic fake."""
 
     def __init__(self) -> None:
         super().__init__([])
-        self.by_role: dict[str, int] = {'target': 0, 'evaluator': 0, 'attacker': 0}
+        self.by_role: dict[str, int] = {'target': 0, 'evaluator': 0, 'capabilities': 0}
 
     async def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
@@ -450,8 +528,9 @@ class RolePlayMessages(ScriptedMessages):
         if 'security evaluator' in system:
             self.by_role['evaluator'] += 1
             return text(_verdict_reply(kwargs))
-        if 'output_config' in kwargs:
-            self.by_role['attacker'] += 1
+        schema = kwargs.get('output_config', {}).get('format', {}).get('schema', {})
+        if set(schema.get('properties', {})) == _CAPABILITY_FIELDS:
+            self.by_role['capabilities'] += 1
             return text(_verdict_reply(kwargs))
         if 'helpful assistant' in system:
             self.by_role['target'] += 1
@@ -471,12 +550,11 @@ def test_red_team_runs_end_to_end_on_an_anthropic_client(monkeypatch: pytest.Mon
     monkeypatch.delenv('ORQ_API_KEY', raising=False)
     # A key in the environment would let any code path that ignores the injected client build an OpenAI client.
     monkeypatch.setenv('OPENAI_API_KEY', 'sk-not-used')
-    openai_shaped = OpenAIShapedFake()
     built: list[object] = []
 
-    def build_openai(*args: object, **kwargs: object) -> OpenAIShapedFake:
+    def build_openai(*args: object, **kwargs: object) -> NoReturn:
         built.append(kwargs)
-        return openai_shaped
+        raise AssertionError('the code under test built an OpenAI client')
 
     monkeypatch.setattr(openai, 'AsyncOpenAI', build_openai)
 
@@ -505,4 +583,4 @@ def test_red_team_runs_end_to_end_on_an_anthropic_client(monkeypatch: pytest.Mon
     assert report.results[0].vulnerable is False
     assert all(count >= 1 for count in messages.by_role.values()), messages.by_role
     assert built == []
-    assert openai_shaped.requests == []
+    assert {call['model'] for call in messages.calls} == {'claude-sonnet-5-5'}

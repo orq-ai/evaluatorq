@@ -59,7 +59,7 @@ from evaluatorq.common.llm_client import is_anthropic_client
 from evaluatorq.common.llm_errors import STATUS_ERRORS, status_code
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
-from evaluatorq.common.retry import with_retry, without_client_retries
+from evaluatorq.common.retry import MAX_RETRY_ATTEMPTS, with_retry, without_client_retries
 from evaluatorq.common.tracing import with_llm_span
 from evaluatorq.contracts import (
     _RESERVED_COMPLETION_KEYS,
@@ -465,6 +465,7 @@ async def _generate_structured_via_responses(
     reasoning_effort: str | None = None,
     timeout_s: float = _STRUCTURED_TIMEOUT_S,
     extra_body: dict[str, Any] | None = None,
+    max_attempts: int = MAX_RETRY_ATTEMPTS,
 ) -> StructuredResult[T]:
     """Structured output through the Responses API; ``parsed is None`` means "use the chat legs".
 
@@ -500,6 +501,7 @@ async def _generate_structured_via_responses(
                     extra_body=extra_body,
                     extra_kwargs=extra_kwargs,
                 ),
+                max_attempts=max_attempts,
                 label=label,
             )
         except STATUS_ERRORS as e:
@@ -568,6 +570,7 @@ class _ChatLadderCall:
     timeout_s: float = _STRUCTURED_TIMEOUT_S
     extra_body: dict[str, Any] | None = None
     extra_kwargs: dict[str, Any] | None = None
+    max_attempts: int = MAX_RETRY_ATTEMPTS
 
     def executor_kwargs(self, **rung: Any) -> dict[str, Any]:
         """The shared executor arguments, with a rung's own fields layered on."""
@@ -649,6 +652,7 @@ async def _parse_rung(
     try:
         response, raw_usage = await with_retry(
             lambda: execute_chat_parse(**call.executor_kwargs(**rung)),
+            max_attempts=call.max_attempts,
             label=retry_label,
         )
     except STATUS_ERRORS as e:
@@ -712,6 +716,7 @@ async def _leg_json_schema(call: _ChatLadderCall, *, response_format: type[T]) -
     try:
         response, raw_usage = await with_retry(
             lambda: execute_chat_completion(**call.executor_kwargs(response_format=schema_format)),
+            max_attempts=call.max_attempts,
             label=f'{label} (json_schema fallback)',
         )
     except STATUS_ERRORS as e:
@@ -798,6 +803,7 @@ async def _leg_json_object(call: _ChatLadderCall, *, response_format: type[T]) -
     """Rung 4: bare ``json_object``, the last rung. A provider that rejects even this raises."""
     response, raw_usage = await with_retry(
         lambda: execute_chat_completion(**call.executor_kwargs(response_format={'type': 'json_object'})),
+        max_attempts=call.max_attempts,
         label=f'{call.label} (json_object fallback)',
     )
     return _content_result(
@@ -852,6 +858,7 @@ async def generate_structured(
     timeout_s: float | Unset = UNSET,
     extra_body: dict[str, Any] | Unset | None = UNSET,
     config: LLMCallConfig | None = None,
+    max_attempts: int = MAX_RETRY_ATTEMPTS,
 ) -> StructuredResult[T]:
     """Generate structured output, degrading through the rungs in the module docstring.
 
@@ -873,6 +880,9 @@ async def generate_structured(
     attempt can issue a second request if the model rejects ``reasoning_effort``,
     and ``api='responses'`` adds a fifth rung. Worst case is on the order of
     *rungs x 5 x 2* requests — bound a whole call with an outer timeout.
+
+    ``max_attempts`` is the `with_retry` budget of each rung. Leave it at the default unless the caller already
+    owns retry (a caller that wraps this call in its own `with_retry` passes ``1`` so the two layers do not multiply).
 
     ``extra_kwargs`` is merged into every rung's params last, so a caller's
     provider options win. Structural fields (``_STRUCTURAL_KEYS[api]``) raise
@@ -932,6 +942,7 @@ async def generate_structured(
                 reasoning_effort=reasoning_effort,
                 timeout_s=timeout_s,
                 extra_body=extra_body,
+                max_attempts=max_attempts,
             )
             usages.append(via_responses.usage)
             if via_responses.parsed is not None:
@@ -959,6 +970,7 @@ async def generate_structured(
                 timeout_s=timeout_s,
                 extra_body=extra_body,
                 extra_kwargs=extra_kwargs,
+                max_attempts=max_attempts,
             )
             last_raw = ''
             for leg in (_leg_strict_parse, _leg_json_schema, _leg_forced_tool, _leg_json_object):

@@ -135,6 +135,18 @@ def response_format_to_output_format(response_format: Any) -> dict[str, Any] | N
     return {'type': 'json_schema', 'schema': adapt_schema(schema)}
 
 
+def _role_variables_for(model: str) -> str:
+    """The role variable(s) that currently resolve to ``model``; every role variable when none does (the model was set per call)."""
+    from evaluatorq.common.model_roles import ROLE_ENV, ROLES, role_model
+
+    names = [ROLE_ENV[role] for role in ROLES if role_model(role) == model] or list(ROLE_ENV.values())
+    return (
+        f'the {names[0]} role variable'
+        if len(names) == 1
+        else 'the ' + ', '.join(names[:-1]) + f' or {names[-1]} role variables'
+    )
+
+
 def normalize_model(model: str) -> str:
     """Return the bare Claude model id, stripping an ``anthropic/`` prefix.
 
@@ -145,9 +157,8 @@ def normalize_model(model: str) -> str:
     if '/' in model and not model.startswith('arn:'):
         raise ValueError(
             f'An Anthropic client needs a Claude model id, got {model!r}. '
-            'Set the model explicitly, for example through the EVALUATORQ_FAST_MODEL, EVALUATORQ_SMART_MODEL, '
-            'EVALUATORQ_CLASSIFIER_MODEL or EVALUATORQ_EMBEDDING_MODEL role variables, to a name such as '
-            '"claude-sonnet-5-5" or "anthropic/claude-sonnet-5-5".'
+            f'Set the model explicitly, for example through {_role_variables_for(model)}, '
+            'to a name such as "claude-sonnet-5-5" or "anthropic/claude-sonnet-5-5".'
         )
     return model
 

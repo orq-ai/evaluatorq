@@ -116,7 +116,7 @@ async def test_llm_jury_threads_extra_body_to_the_request() -> None:
         criteria='Is it correct?',
         judges=['gpt-5-mini'],
         extra_body={'my_key': 'abc'},
-        client=_RecordingClient(sink),
+        client=cast('Any', _RecordingClient(sink)),
     )
     await evaluator['scorer']({'data': DataPoint(inputs={'question': 'q'}), 'output': 'an answer'})
 
@@ -128,7 +128,7 @@ async def test_llm_jury_threads_extra_body_to_the_request() -> None:
 async def test_llm_jury_without_extra_body_sends_no_extra_body_key() -> None:
     sink: list[dict[str, Any]] = []
     evaluator = llm_jury(
-        name='correctness', criteria='Is it correct?', judges=['gpt-5-mini'], client=_RecordingClient(sink)
+        name='correctness', criteria='Is it correct?', judges=['gpt-5-mini'], client=cast('Any', _RecordingClient(sink))
     )
     await evaluator['scorer']({'data': DataPoint(inputs={'question': 'q'}), 'output': 'an answer'})
 
@@ -144,7 +144,7 @@ async def test_llm_jury_pairwise_threads_extra_body_to_the_request() -> None:
         criteria='Which is better?',
         swap=False,
         extra_body={'my_key': 'abc'},
-        client=_RecordingClient(sink),
+        client=cast('Any', _RecordingClient(sink)),
     )
     await comparator.compare(question='q', response_a='answer A', response_b='answer B')
 

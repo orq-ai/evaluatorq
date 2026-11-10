@@ -38,6 +38,9 @@ from evaluatorq.jury_presets import get_preset
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
+if typing.TYPE_CHECKING:
+    from evaluatorq.common.llm_client import LLMClient
+
 DEFAULT_JUDGE_MODEL = DEFAULT_SMART_MODEL
 """Built-in judge model. At runtime a call naming neither ``model=`` nor ``judges=`` uses ``role_model('smart')``, which flags, env and settings can change."""
 
@@ -925,7 +928,7 @@ def llm_jury(
     extra_kwargs: dict[str, Any] | None = None,
     extra_body: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
-    client: Any = None,
+    client: LLMClient | None = None,
 ) -> Evaluator:
     """Build a jury (or single-judge) LLM evaluator for ``evaluators=[...]``.
 
@@ -1357,7 +1360,7 @@ class PairwiseComparator:
         structured_output: bool,
         extra_kwargs: dict[str, Any] | None,
         extra_body: dict[str, Any] | None,
-        client: Any,
+        client: LLMClient | None,
         reasoning_effort: str | None = None,
         state_fields: list[str] | None = None,
         classify_seated: bool | None = None,
@@ -1511,7 +1514,7 @@ def llm_jury_pairwise(
     extra_kwargs: dict[str, Any] | None = None,
     extra_body: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
-    client: Any = None,
+    client: LLMClient | None = None,
     state_fields: list[str] | None = None,
 ) -> PairwiseComparator:
     """Build a pairwise (A-vs-B) LLM jury that reuses the shared panel machinery.

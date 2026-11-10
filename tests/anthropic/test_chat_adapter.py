@@ -265,10 +265,19 @@ def test_model_prefix_accepted(given, sent):
     assert request['model'] == sent
 
 
-@pytest.mark.parametrize('model', ['openai/gpt-6-luna', 'openai/gpt-6-sol', 'orq/foo'])
-def test_other_provider_prefix_raises(model):
-    with pytest.raises(ValueError, match='EVALUATORQ_FAST_MODEL'):
+@pytest.mark.parametrize(
+    ('model', 'named', 'not_named'),
+    [
+        ('openai/gpt-6-luna', 'EVALUATORQ_FAST_MODEL', 'EVALUATORQ_SMART_MODEL'),
+        ('openai/gpt-6-sol', 'EVALUATORQ_SMART_MODEL', 'EVALUATORQ_FAST_MODEL'),
+        ('orq/foo', 'EVALUATORQ_FAST_MODEL', None),
+    ],
+)
+def test_other_provider_prefix_raises_naming_the_role_variable_that_resolves_to_it(model, named, not_named):
+    with pytest.raises(ValueError, match=named) as caught:
         call(model=model)
+    if not_named is not None:
+        assert not_named not in str(caught.value)
 
 
 def test_sampling_and_max_tokens_defaults():

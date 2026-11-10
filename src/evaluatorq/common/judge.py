@@ -781,7 +781,9 @@ async def _classify_structured(
         max_tokens=cfg.max_tokens,
         label=f'classify-fallback[{model}]',
         timeout_s=cfg.timeout_ms / 1000.0,
-        temperature=None,
+        # The caller (`with_retry` around `run_classify`) owns retry; a second layer here would multiply.
+        max_attempts=1,
+        **cfg.set_values('temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort'),
     )
     if result.parsed is None:
         return None, result.usage, result.raw
@@ -795,6 +797,13 @@ async def _classify_structured(
         else:
             answers[key] = ClassifyAnswer(type='score', score=float(value))
     return ClassifyResponse(answers=answers, model=model), result.usage, result.raw
+
+
+def _classify_failure_usage(exc: BaseException, usage: TokenUsage | None) -> TokenUsage | None:
+    """Spend billed before ``exc``: what the structured fallback attached to it, else what the call already returned."""
+    from evaluatorq.common.structured_output import usage_from_exception
+
+    return usage_from_exception(exc) or usage
 
 
 async def run_classify(
@@ -812,11 +821,15 @@ async def run_classify(
     The caller owns retry policy. This helper owns the classify span, timeout, wire
     response validation, and mapping provider failures into ``ClassifyOutcome``.
     """
-    warn_unread_config_fields(cfg, frozenset({'timeout_ms', 'retry_count'}), caller='run_classify')
     client = without_client_retries(client)
     raw_payload = ''
     usage: TokenUsage | None = None
     on_router = client_routes_through_orq(client)
+    # The router leg sends only the questions; the structured fallback also forwards the sampling fields.
+    read = frozenset({'timeout_ms', 'retry_count'})
+    if not on_router:
+        read |= {'temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort'}
+    warn_unread_config_fields(cfg, read, caller='run_classify')
     if not on_router and is_known_classify_model(model):
         model = classify_fallback_model(model, on_router=False)
     try:
@@ -865,6 +878,7 @@ async def run_classify(
             error_kind=JudgeError.TIMEOUT,
             error_message=f'timed out after {cfg.timeout_ms}ms',
             error_exc=exc,
+            token_usage=_classify_failure_usage(exc, usage),
         )
     except ValidationError as exc:
         logger.error('Judge [{}] classify reply did not validate: {}', model, exc)
@@ -877,10 +891,17 @@ async def run_classify(
     except CONNECTION_ERRORS + STATUS_ERRORS as exc:
         kind = _classify(exc)
         logger.error('Judge [{}] classify API error ({}): {}', model, kind.value, exc)
-        return ClassifyOutcome(error_kind=kind, error_message=str(exc), error_exc=exc)
+        return ClassifyOutcome(
+            error_kind=kind, error_message=str(exc), error_exc=exc, token_usage=_classify_failure_usage(exc, usage)
+        )
     except Exception as exc:
         logger.exception('Judge [{}] classify call failed (unknown): {}', model, exc)
-        return ClassifyOutcome(error_kind=JudgeError.UNKNOWN, error_message=str(exc), error_exc=exc)
+        return ClassifyOutcome(
+            error_kind=JudgeError.UNKNOWN,
+            error_message=str(exc),
+            error_exc=exc,
+            token_usage=_classify_failure_usage(exc, usage),
+        )
 
 
 async def _classify_judge(
