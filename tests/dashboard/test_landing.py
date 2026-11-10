@@ -535,6 +535,18 @@ class TestLandingScreen:
         assert 'API key' in r.text
         assert '<a class="nav-item active" href="/settings"' in r.text
 
+    def test_settings_shows_the_anthropic_key_row_unset_by_default(self, client: TestClient) -> None:
+        r = client.get('/settings')
+        assert 'Anthropic API key' in r.text
+        assert 'not set' in r.text
+
+    def test_settings_never_prints_a_set_anthropic_key(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-secret-value-1234')
+        r = client.get('/settings')
+        assert 'Anthropic API key' in r.text
+        assert 'sk-ant-secret-value-1234' not in r.text
+        assert 'secret-value' not in r.text
+
     def test_mask_key_shows_only_suffix(self) -> None:
         from evaluatorq.common.env_config import mask_secret as _mask_key
 

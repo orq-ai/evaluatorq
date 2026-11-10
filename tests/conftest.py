@@ -11,6 +11,7 @@ import pytest
 
 from evaluatorq.common.judge import reset_responses_rejectors
 from evaluatorq.common.llm_call import reset_reasoning_rejectors
+from evaluatorq.common.llm_client import LLM_CREDENTIAL_KEYS
 from evaluatorq.common.model_catalogue import clear_model_overrides, reset_catalogue_cache
 from evaluatorq.common.model_roles import ROLE_ENV, set_cli_models
 # CrewAI starts import-time Scarf tracking unless telemetry is disabled.
@@ -72,7 +73,7 @@ def _hide_ambient_credentials(request, monkeypatch):
     if request.node.get_closest_marker("integration"):
         yield
         return
-    for var in ("ORQ_API_KEY", "OPENAI_API_KEY"):
+    for var in LLM_CREDENTIAL_KEYS:
         monkeypatch.delenv(var, raising=False)
     yield
 

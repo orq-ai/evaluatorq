@@ -20,10 +20,16 @@ from loguru import logger
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.env_config import env_raw
-from evaluatorq.common.llm_client import as_llm_client, resolve_results_base_url
+from evaluatorq.common.llm_client import (
+    as_llm_client,
+    configured_llm_provider,
+    require_models_served_by_provider,
+    resolve_results_base_url,
+)
 from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import validate_reasoning_effort
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
@@ -776,18 +782,18 @@ def _validate_credentials_and_deps(
     # Also check per-role clients: if either role has a pre-configured client,
     # we don't need global credentials.
     has_role_client = config.attacker.client is not None or config.evaluator.client is not None
-    if (
-        llm_client is None
-        and not has_role_client
-        and not env_raw('OPENAI_API_KEY')
-        and not env_raw('ORQ_API_KEY')
-        and not env_raw('ANTHROPIC_API_KEY')
-    ):
-        raise CredentialError(
-            'Missing LLM credentials for attack/evaluation models. '
-            'Set OPENAI_API_KEY for direct OpenAI access, ORQ_API_KEY to use the ORQ router, '
-            'or ANTHROPIC_API_KEY to use Claude directly.'
-        )
+    if llm_client is None and not has_role_client:
+        if configured_llm_provider() is None:
+            raise CredentialError(
+                'Missing LLM credentials for attack/evaluation models. '
+                'Set OPENAI_API_KEY for direct OpenAI access, ORQ_API_KEY to use the ORQ router, '
+                'or ANTHROPIC_API_KEY to use Claude directly.'
+            )
+        require_models_served_by_provider({
+            'EVALUATORQ_SMART_MODEL (attacker)': config.attacker.model,
+            **{f'EVALUATORQ_SMART_MODEL (judge {i})': judge for i, judge in enumerate(config.evaluator.judges, 1)},
+            'EVALUATORQ_CLASSIFIER_MODEL': role_model('classifier', task='redteam.refusal_judge'),
+        })
 
     # Fail fast: static/hybrid runs that pull static datapoints from HuggingFace
     # need huggingface-hub. Check now rather than deep in the static leg — in
@@ -1179,10 +1185,10 @@ async def _generate_recommendations(
             recorded = True
     except (TypeError, AttributeError, ImportError, NameError, KeyError):
         raise
-    except Exception:
+    except Exception as exc:
         logger.warning('Failed to generate focus area recommendations', exc_info=True)
         report.pipeline_warnings.append(
-            'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
+            f'Failed to generate focus area recommendations ({exc}). Check LLM credentials and model configuration.'
         )
     return _PostProcessingOutcome(recorded=recorded, usage=usage)
 
@@ -1224,10 +1230,10 @@ async def _generate_executive_summary_section(
             recorded = True
     except (TypeError, AttributeError, ImportError, NameError, KeyError):
         raise
-    except Exception:
+    except Exception as exc:
         logger.warning('Failed to generate executive summary', exc_info=True)
         report.pipeline_warnings.append(
-            'Failed to generate executive summary. Check LLM credentials and model configuration.'
+            f'Failed to generate executive summary ({exc}). Check LLM credentials and model configuration.'
         )
     return _PostProcessingOutcome(recorded=recorded, usage=usage)
 

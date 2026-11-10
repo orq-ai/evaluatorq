@@ -49,11 +49,7 @@ def create_async_llm_client(
     ``without_client_retries`` (``evaluatorq.common.retry``) enforces that at
     retry-owning boundaries by cloning injected clients with ``max_retries=0``.
     """
-    from evaluatorq.common.llm_client import (
-        MissingExtraError,
-        MissingLLMCredentialsError,
-        resolve_llm_client,
-    )
+    from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
 
     config_client = role_config.client if role_config is not None else None
     try:
@@ -63,8 +59,6 @@ def create_async_llm_client(
             honor_openai_base_url=True,
             max_retries=max_retries,
         ).client
-    except MissingExtraError as exc:
-        raise BackendError(str(exc)) from exc
     except ImportError as exc:
         msg = (
             'openai package is required for LLM-based attack generation. '

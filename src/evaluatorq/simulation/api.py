@@ -367,7 +367,7 @@ async def simulate(
         generation_client: Optional pre-built ``AsyncOpenAI`` (or Anthropic SDK client) used for datapoint
             generation (first-message). When omitted, generation falls back to
             the same env-based provider resolution as
-            `generate_and_simulate` (``ORQ_API_KEY`` → ``OPENAI_API_KEY`` → ``ANTHROPIC_API_KEY``).
+            `generate_and_simulate`; see `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence.
         dataset_id: When set, fetch simulation datapoints from the named Orq
             dataset instead of taking them inline. Mutually exclusive with
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
@@ -764,9 +764,8 @@ async def generate_and_simulate(
     ``<key>``), for agents with a memory store attached. When omitted, a fresh
     per-target id is minted so memory-backed agents still work out of the box.
     Persona/scenario/first-message generation resolves its provider via
-    the shared factory: an injected ``generation_client`` → ``llm_config.client``
-    → ``ORQ_API_KEY`` (Orq router) → ``OPENAI_API_KEY`` (with optional
-    ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint) → ``ANTHROPIC_API_KEY``. No API key is
+    the shared factory: an injected ``generation_client``, then ``llm_config.client``, then the environment
+    (see `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence). No API key is
     needed when a client is injected.
     ``llm_config`` drives persona/scenario/first-message generation, the
     user-simulator, and the judge — the model name and anything beyond it
@@ -1252,9 +1251,8 @@ async def generate(
     judge remain stochastic at simulate time, so scores still vary run to run.
 
     Provider resolution matches `generate_and_simulate`: an injected
-    ``generation_client`` → ``llm_config.client`` → ``ORQ_API_KEY`` (Orq router)
-    → ``OPENAI_API_KEY`` (with optional ``OPENAI_BASE_URL`` for an
-    OpenAI-compatible endpoint) → ``ANTHROPIC_API_KEY``.
+    ``generation_client``, then ``llm_config.client``, then the environment (see
+    `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence).
     ``llm_config`` drives persona/scenario/first-message generation — the model
     name, temperature, reasoning effort and timeouts on those calls; see
     `simulate` for the full semantics.
@@ -1346,8 +1344,8 @@ async def generate_personas(
     The intermediate tier between fully-auto generation
     (`generate_and_simulate`) and hand-built ``Persona`` objects: you name
     each archetype, the LLM fills every trait. Provider resolves via the shared
-    factory: an injected ``generation_client`` → ``llm_config.client`` →
-    ``ORQ_API_KEY`` → ``OPENAI_API_KEY`` → ``ANTHROPIC_API_KEY``.
+    factory: an injected ``generation_client``, then ``llm_config.client``, then the
+    environment (see `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence).
 
     ``generation_instructions`` is an optional free-text steer applied to every
     persona on top of its seed (e.g. ``"all replying in German"``).

@@ -56,6 +56,11 @@ from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
+from evaluatorq.common.llm_client import (
+    ModelClientMismatchError,
+    configured_llm_provider,
+    require_models_served_by_provider,
+)
 from evaluatorq.common.llm_limit import DEFAULT_LLM_PARALLELISM, check_llm_parallelism_option, llm_concurrency_limit
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
@@ -200,7 +205,7 @@ def _resolve_target(
         return VercelAISdkTarget(vercel_url)
 
     # openai_model
-    if not env_raw('OPENAI_API_KEY') and not env_raw('ORQ_API_KEY') and not env_raw('ANTHROPIC_API_KEY'):
+    if configured_llm_provider() is None:
         raise typer.BadParameter(
             '--openai-model requires OPENAI_API_KEY (or ORQ_API_KEY for the AI Router, or ANTHROPIC_API_KEY for Claude) '
             'to be set in the environment.'
@@ -329,15 +334,22 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
     return list(evaluators)
 
 
+_OPENAI_MODEL_HELP = (
+    f'Model name for the target. {MODEL_OPTION_NOTE} ORQ_BASE_URL overrides the Orq host. '
+    "Namespace the model for the provider (e.g. 'openai/gpt-5.6-luna' for the Orq router, "
+    "'gpt-5.6-luna' for OpenAI, 'claude-sonnet-5-5' for Anthropic)."
+)
+
+_PROVIDER_LABELS: dict[str | None, str] = {
+    'orq': 'Orq router',
+    'openai': 'OpenAI-compatible',
+    'anthropic': 'Anthropic',
+}
+
+
 def _provider_label() -> str:
     """The provider branch the environment resolves to for generation LLM calls."""
-    if env_raw('ORQ_API_KEY'):
-        return 'Orq router'
-    if env_raw('OPENAI_API_KEY'):
-        return 'OpenAI-compatible'
-    if env_raw('ANTHROPIC_API_KEY'):
-        return 'Anthropic'
-    return 'unresolved provider'
+    return _PROVIDER_LABELS.get(configured_llm_provider(), 'unresolved provider')
 
 
 def _sim_llm_config(sim_model: str | None) -> LLMCallConfig:
@@ -348,6 +360,14 @@ def _sim_llm_config(sim_model: str | None) -> LLMCallConfig:
 def _generation_model(sim_model: str | None) -> str:
     """The model for generation, recommendations and summaries: the flag, else the fast role."""
     return sim_model or role_model('fast', task='sim.generator')
+
+
+def _require_models_served(models: dict[str, str]) -> None:
+    """Exit with one clear error before any work when Anthropic was chosen and a model is not a Claude id."""
+    try:
+        require_models_served_by_provider(models)
+    except ModelClientMismatchError as exc:
+        _handle_cli_error(exc)
 
 
 def _echo_using(model: str) -> None:
@@ -739,6 +759,10 @@ def _setup_run_output(*, verbose: int, quiet: bool, yes: bool, executive_summary
             verbose=verbose,
         )
     _configure_logging(verbose, console=log_console)
+    _require_models_served({
+        'the simulation model (EVALUATORQ_FAST_MODEL or --sim-model)': sim_model,
+        'EVALUATORQ_SMART_MODEL (judge)': role_model('smart', task='sim.judge'),
+    })
     _echo_using(sim_model)
     return hooks
 
@@ -893,14 +917,7 @@ def simulate(
         str | None,
         typer.Option(
             '--openai-model',
-            help=(
-                'OpenAI-compatible model name. Provider is resolved from env: '
-                'ORQ_API_KEY routes via the Orq AI Router (ORQ_BASE_URL overrides '
-                'the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for '
-                'vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both '
-                'keys are set; namespace the model accordingly '
-                "(e.g. 'openai/gpt-5.6-luna' for the Orq router, 'gpt-5.6-luna' for OpenAI)."
-            ),
+            help=_OPENAI_MODEL_HELP,
         ),
     ] = None,
     results_path: Annotated[
@@ -1039,9 +1056,7 @@ def simulate(
 
     - --target TARGET    agent:<key> (default for bare key) or deployment:<key>.
     - --vercel-url URL   Vercel AI SDK HTTP endpoint.
-    - --openai-model M   OpenAI-compatible model. Provider from env:
-      ORQ_API_KEY for the Orq AI Router, else OPENAI_API_KEY
-      (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local). ORQ wins if both set.
+    - --openai-model M   Model on the provider the environment selects; the option's own help names the precedence.
 
     Note: --target agent:<key> invokes a hosted Orq agent through the Responses
     router. --target deployment:<key> uses the deployment callback path.
@@ -1139,14 +1154,7 @@ def run(
         str | None,
         typer.Option(
             '--openai-model',
-            help=(
-                'OpenAI-compatible model name. Provider is resolved from env: '
-                'ORQ_API_KEY routes via the Orq AI Router (ORQ_BASE_URL overrides '
-                'the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for '
-                'vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both '
-                'keys are set; namespace the model accordingly '
-                "(e.g. 'openai/gpt-5.6-luna' for the Orq router, 'gpt-5.6-luna' for OpenAI)."
-            ),
+            help=_OPENAI_MODEL_HELP,
         ),
     ] = None,
     results_path: Annotated[
@@ -1339,9 +1347,7 @@ def run(
 
     - --target TARGET    agent:<key> (default for bare key) or deployment:<key>.
     - --vercel-url URL   Vercel AI SDK HTTP endpoint.
-    - --openai-model M   OpenAI-compatible model. Provider from env:
-      ORQ_API_KEY for the Orq AI Router, else OPENAI_API_KEY
-      (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local). ORQ wins if both set.
+    - --openai-model M   Model on the provider the environment selects; the option's own help names the precedence.
 
     If --target is an agent target, --agent-description may be omitted and is
     fetched from Orq agent context. Other targets require --agent-description.
@@ -1556,6 +1562,9 @@ def generate(
         log_console = Console(stderr=True)
         hooks = RichHooks(console=log_console, verbose=verbose)
     _configure_logging(verbose, console=log_console)
+    _require_models_served({
+        'the generation model (EVALUATORQ_FAST_MODEL or --sim-model)': _generation_model(sim_model)
+    })
     if not quiet:
         # Plan box (beats 1+2: input + what will happen). Subsumes the plain
         # "Using: <provider>" line — provider·model is a row here.

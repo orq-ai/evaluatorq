@@ -220,14 +220,9 @@ class BaseAgent(UsageTracking, ABC):
 
         Delegates to `evaluatorq.openresponses.client.build_simulation_client`.
 
-        Resolution order:
-        1. ``self.config.client`` — injected client, used as-is (not owned).
-        2. ``ORQ_API_KEY`` env var — routes through
-           ``ORQ_BASE_URL/v3/router`` (default: ``https://my.orq.ai/v3/router``).
-        3. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
-           traffic goes to OpenAI directly, not to the Orq router.
-        4. ``ANTHROPIC_API_KEY`` env var — an Anthropic client behind the
-           OpenAI-shaped adapter.
+        An injected ``self.config.client`` is used as-is (not owned); otherwise the
+        client comes from the environment. See
+        `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence.
 
         Retry owner: ``with_retry`` in ``_call_chat_completions`` / ``_call_responses``,
         bounded at ``config.retry_count + 1`` attempts. The SDK budget is disarmed
