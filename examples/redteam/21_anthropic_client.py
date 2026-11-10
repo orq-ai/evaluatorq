@@ -7,8 +7,9 @@ client plays three parts:
     - the attacker model
     - the evaluator model
 
-The default models are OpenAI ids, which an Anthropic client refuses, so every
-model role is set to a Claude id first.
+The default role models are not Claude ids (OpenAI ids, and an Orq-only
+classifier), which an Anthropic client refuses, so every model role is set to a
+Claude id first.
 
 Prerequisites:
     - pip install 'evaluatorq[anthropic,redteam]'

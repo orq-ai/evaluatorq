@@ -132,11 +132,11 @@ llm_config = LLMConfig(
 )
 ```
 
-evaluatorq sends the request to the beta Messages endpoint with the header `server-side-fallback-2026-07-01`. Fallbacks exist on the Claude API and on Google Cloud when Anthropic manages the deployment. Bedrock and a Vertex client you provision yourself reject them, and the adapter raises a `ValueError` before sending when the client is a Bedrock or Vertex one. Haiku 5.5 has no fallback model, so do not set `fallbacks` on a role that runs it.
+evaluatorq sends the request to the beta Messages endpoint with the header `server-side-fallback-2026-07-01`. Fallbacks exist on the Claude API and on Google Cloud when Anthropic manages the deployment. Bedrock and a Vertex client you provision yourself reject them, and the adapter raises a `ValueError` before sending when the client is a Bedrock or Vertex one. That includes every `AsyncAnthropicVertex` client, so use `AsyncAnthropic` to reach the Claude API when you want fallbacks. Haiku 5.5 has no fallback model, so do not set `fallbacks` on a role that runs it.
 
 ## Classify without the Orq router
 
-Classify questions normally go to the Orq router's `/decisions` endpoint. An Anthropic client does not route through Orq, so the same questions are answered by one structured judgement per question on the fast role, and a classify-only model such as `typesafe/jev-latest` is replaced by the fast role model with one warning per process.
+Classify questions normally go to the Orq router's `/decisions` endpoint. An Anthropic client does not route through Orq, so each question is answered by one structured judgement on the model you set for the classifier role. A classify-only model such as `typesafe/jev-latest` cannot run there, so it is replaced by the fast role model, with one warning per process.
 
 ## Insights needs an embedding client
 
@@ -166,7 +166,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Without `embedding_client`, the embedding step calls `embeddings.create` on the Anthropic client and fails with the `NotImplementedError` from the table above. Reading the traces still needs `ORQ_API_KEY`.
+Without `embedding_client`, the embedding step calls `embeddings.create` on the Anthropic client, which raises the `NotImplementedError` from the table above. Insights reports it as an `EmbeddingError` carrying that message, and the run ends with `status='error'`. Reading the traces still needs `ORQ_API_KEY`.
 
 ## Prompt caching, cost and retries
 
