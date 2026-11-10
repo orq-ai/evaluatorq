@@ -642,14 +642,14 @@ def ensure_target_can_backtrack(target: AgentTarget) -> None:
     if history_mode is ConversationHistoryMode.TARGET:
         raise RedTeamError(
             'Backtracking requires caller-owned history, but this target keeps the conversation '
-            'history itself, so a refused turn cannot be erased. Set max_backtracks to 0 for this target.'
+            'history itself, so a turn cannot be erased. Set max_backtracks to 0 for this target.'
         )
 
 
 def erasure_allowance(max_backtracks: int, turn: int, max_turns: int) -> int:
     """How many erasures an attack may have used by the end of ``turn`` (zero-based).
 
-    The budget is released in equal steps across the turns, and unused erasures carry
+    The budget is released in proportion to the turns used, rounded up, and unused erasures carry
     over, so an attack cannot spend its whole budget on the first message.
     """
     return min(max_backtracks, -(-max_backtracks * (turn + 1) // max_turns))
@@ -1411,10 +1411,10 @@ class MultiTurnOrchestrator:
         if not erase:
             return _BacktrackDecision(decision_usage=decision_usage, decision_failed=erase is None)
         backtracked_turns.append(Turn(attacker=attacker, target=response))
-        sanitized_refusal = f'<target_response>\n{xml_escape(response.text)}\n</target_response>'
+        sanitized_reply = f'<target_response>\n{xml_escape(response.text)}\n</target_response>'
         adversarial_messages.extend([
             {'role': 'assistant', 'content': attack_prompt},
-            {'role': 'user', 'content': ADVERSARIAL_BACKTRACK_PROMPT.replace('{response}', sanitized_refusal)},
+            {'role': 'user', 'content': ADVERSARIAL_BACKTRACK_PROMPT.replace('{response}', sanitized_reply)},
         ])
         set_span_attrs(
             turn_span,

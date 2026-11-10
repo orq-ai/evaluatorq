@@ -1675,7 +1675,7 @@ class ExecutionDetails(BaseModel):
     )
     backtrack_decision_failures: int = Field(
         default=0,
-        # Reports saved by v1.84.0 to v1.85.x use the old name.
+        # Reports saved before the RES-697 rename use the old name.
         validation_alias=AliasChoices('backtrack_decision_failures', 'refusal_judge_failures'),
         description='Turns where the attacker model gave no usable keep-or-erase answer; they were kept',
     )

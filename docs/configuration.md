@@ -78,7 +78,7 @@ A **task** is one named use of a role. A task override pins that single use to a
 
 | Task | Role | What it covers |
 |---|---|---|
-| `redteam.attacker` | `smart` | Attack generation, including the adaptive orchestrator. |
+| `redteam.attacker` | `smart` | Attack generation, including the adaptive orchestrator and the backtracking keep-or-erase decision. |
 | `redteam.evaluator` | `smart` | Red-team and OWASP evaluators. |
 | `sim.user` | `fast` | The simulated user. |
 | `sim.judge` | `smart` | The simulation judge. |

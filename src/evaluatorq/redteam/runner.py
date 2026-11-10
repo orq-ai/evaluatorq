@@ -241,7 +241,7 @@ def _restore_replayed_backtracks(llm_config: LLMConfig | None, replay: RedTeamRe
 
 
 def _backtracking_warnings(results: list[RedTeamResult], *, max_backtracks: int) -> list[str]:
-    """Report a backtracking setting that applied to nothing, or a judge that could not do its job."""
+    """Report a backtracking setting that applied to nothing, or turns where the keep-or-erase decision failed."""
     if max_backtracks == 0:
         return []
     dynamic = [r for r in results if r.attack.source in (AttackSource.TEMPLATE_DYNAMIC, AttackSource.GENERATED_DYNAMIC)]
