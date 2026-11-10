@@ -1413,11 +1413,13 @@ def _llm_sdk_error_references(source: str) -> list[tuple[int, str]]:
     ``from openai import _exceptions as errors`` then ``errors.APIError`` are both reported.
     """
     tree = ast.parse(source)
-    # Local name -> the SDK module it is bound to, as of the node being visited. Module-level
-    # bindings are followed in source order, so a later non-SDK import or assignment of the same
-    # name drops the alias; a function-local shadow is not tracked.
+    # Local name -> the SDK module it is bound to, as of the node being visited. Bindings are
+    # followed in source order, so a later non-SDK import or assignment of the same name drops
+    # the alias. A function, lambda or class body gets a copy of the enclosing map, so a binding
+    # inside it does not leak out to the enclosing scope.
     aliases = {'openai': 'openai', 'anthropic': 'anthropic'}
     found: list[tuple[int, str]] = []
+    scopes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 
     def bind(name: str, module: str | None) -> None:
         if module is None:
@@ -1425,7 +1427,30 @@ def _llm_sdk_error_references(source: str) -> list[tuple[int, str]]:
         else:
             aliases[name] = module
 
+    def unbind_target(target: ast.AST) -> None:
+        for sub in ast.walk(target):
+            if isinstance(sub, ast.Name):
+                bind(sub.id, None)
+
     def visit(node: ast.AST) -> None:
+        nonlocal aliases
+        if isinstance(node, scopes):
+            if not isinstance(node, ast.Lambda):
+                # The def or class name is bound in the enclosing scope.
+                bind(node.name, None)
+            outer = aliases
+            aliases = dict(outer)
+            if not isinstance(node, ast.ClassDef):
+                # Parameters shadow any enclosing alias of the same name.
+                for arg in ast.walk(node.args):
+                    if isinstance(arg, ast.arg):
+                        bind(arg.arg, None)
+            try:
+                for child in ast.iter_child_nodes(node):
+                    visit(child)
+            finally:
+                aliases = outer
+            return
         if isinstance(node, ast.Import):
             for a in node.names:
                 if a.asname:
@@ -1450,11 +1475,15 @@ def _llm_sdk_error_references(source: str) -> list[tuple[int, str]]:
                     found.append((node.lineno, node.attr))
         for child in ast.iter_child_nodes(node):
             visit(child)
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    bind(target.id, None)
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                unbind_target(target)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr, ast.For, ast.AsyncFor)):
+            unbind_target(node.target)
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            unbind_target(node.optional_vars)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bind(node.name, None)
 
     for stmt in tree.body:
         visit(stmt)
@@ -1536,3 +1565,39 @@ def test_llm_sdk_error_detector_forgets_rebound_aliases() -> None:
         'c = other.APIError\n'
     )
     assert _llm_sdk_error_references(source) == [(2, 'APIError')]
+
+
+def test_llm_sdk_error_detector_keeps_nested_scopes_local() -> None:
+    source = (
+        'import openai as sdk\n'
+        'def f():\n'
+        '    sdk = object()\n'
+        '    return sdk.APIError\n'
+        'def g(sdk):\n'
+        '    return sdk.APIError\n'
+        'class C:\n'
+        '    import json as sdk\n'
+        'h = lambda sdk: sdk.APIError\n'
+        'a = sdk.APIError\n'
+        'def k():\n'
+        '    import anthropic as inner\n'
+        '    return inner.APIError\n'
+        'b = inner.APIError\n'
+    )
+    assert _llm_sdk_error_references(source) == [(10, 'APIError'), (13, 'APIError')]
+
+
+def test_llm_sdk_error_detector_forgets_every_binding_form() -> None:
+    source = (
+        'import openai as a, openai as b, openai as c, openai as d, openai as e, openai as f\n'
+        'a, (x, b) = 1, (2, 3)\n'
+        'for c in []: pass\n'
+        'with open("p") as d: pass\n'
+        'try:\n'
+        '    pass\n'
+        'except Exception as e:\n'
+        '    pass\n'
+        '(f := 1)\n'
+        'refs = [a.APIError, b.APIError, c.APIError, d.APIError, e.APIError, f.APIError]\n'
+    )
+    assert _llm_sdk_error_references(source) == []
