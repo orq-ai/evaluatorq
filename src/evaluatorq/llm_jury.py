@@ -23,7 +23,7 @@ from evaluatorq.common.jury import (
     run_jury,
     validate_aggregator,
 )
-from evaluatorq.common.llm_client import client_routes_through_orq, resolve_llm_client
+from evaluatorq.common.llm_client import as_llm_client, client_routes_through_orq, resolve_llm_client
 from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.output_adapters import (
@@ -1198,7 +1198,7 @@ def llm_jury(
     # client= is used as-is; otherwise we resolve once on first use. A
     # single-element list, not a plain local: the scorer is a module-level
     # function bound by partial and so cannot rebind this frame's names.
-    client_state = [client]
+    client_state = [as_llm_client(client)]
     verdict_model = _build_verdict_model(
         verdict_kind=verdict_kind,
         labels=label_names,
@@ -1380,7 +1380,7 @@ class PairwiseComparator:
         self._extra_kwargs = extra_kwargs
         self._extra_body = extra_body
         self._reasoning_effort = reasoning_effort
-        self._client = client
+        self._client = as_llm_client(client)
         # `classify_seated=None` means the comparator was constructed by hand.
         direct_construction = classify_seated is None
         self._verdict_model = _build_verdict_model(

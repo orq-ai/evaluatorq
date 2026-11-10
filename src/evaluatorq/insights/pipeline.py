@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from orq_ai_sdk import Orq
 
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.insights.models import DimensionName, InsightsPopulation
 
 
@@ -466,7 +467,7 @@ async def insights(  # noqa: C901
     _source_name: str | None = None,
     _orq_scope: Mapping[str, str | None] | None = None,
     _on_saved: Callable[[Path], None] | None = None,
-    llm_client: AsyncOpenAI | None = None,
+    llm_client: LLMClient | None = None,
     embedding_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
 ) -> InsightsRun:

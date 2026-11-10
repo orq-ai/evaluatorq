@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, cast
 from loguru import logger
 
 from evaluatorq.common.judge import ClassifyQuestion, run_judge
-from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.llm_client import as_llm_client, resolve_llm_client
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.signals.config import SignalsConfig, ToolRole
 from evaluatorq.signals.walk import calls, walk
@@ -15,8 +15,7 @@ from evaluatorq.signals.walk import calls, walk
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from openai import AsyncOpenAI
-
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.formats.atif import AtifTrajectory
 
 _ROLE_CRITERIA: dict[str, str | None] = {
@@ -32,7 +31,7 @@ async def classify_tool_roles(
     trajectories: Iterable[AtifTrajectory],
     config: SignalsConfig | None = None,
     *,
-    client: AsyncOpenAI | None = None,
+    client: LLMClient | None = None,
 ) -> SignalsConfig:
     """Classify unknown tool names with Jev and return a config with merged roles.
 
@@ -41,6 +40,7 @@ async def classify_tool_roles(
     are recorded as ``'other'`` and logged. The resolved client is closed when this
     function creates it; an injected client remains caller-owned.
     """
+    client = as_llm_client(client)
     resolved_config = config or SignalsConfig()
     names: list[str] = []
     seen: set[str] = set()

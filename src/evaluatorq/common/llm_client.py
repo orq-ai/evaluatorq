@@ -20,12 +20,15 @@ likely to be present intentionally.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast, overload
 
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 
 if TYPE_CHECKING:
+    from anthropic import AsyncAnthropic, AsyncAnthropicBedrock, AsyncAnthropicVertex
     from openai import AsyncOpenAI
+
+    LLMClient = AsyncOpenAI | AsyncAnthropic | AsyncAnthropicBedrock | AsyncAnthropicVertex
 
 ORQ_DEFAULT_HOST = DEFAULT_ORQ_BASE_URL
 ORQ_ROUTER_SUFFIX = '/v3/router'
@@ -70,6 +73,29 @@ def is_anthropic_client(obj: object) -> bool:
     return getattr(obj, 'evaluatorq_provider', None) == 'anthropic'
 
 
+@overload
+def as_llm_client(client: None) -> None: ...
+
+
+@overload
+def as_llm_client(client: Any) -> AsyncOpenAI: ...
+
+
+def as_llm_client(client: Any) -> AsyncOpenAI | None:
+    """Return ``client`` ready for evaluatorq: a raw Anthropic SDK client is wrapped, anything else passes through.
+
+    Every public entry point that accepts an injected client calls this, so the adapter is built in one place. ``None``, an OpenAI client and an already wrapped adapter come back unchanged. A raw ``AsyncAnthropic``, ``AsyncAnthropicBedrock`` or ``AsyncAnthropicVertex`` is recognised by its module name and its ``messages`` attribute, so nothing here imports ``anthropic``; the adapter module is imported only when a raw client is seen.
+    """
+    if client is None or is_anthropic_client(client):
+        return client
+    if not type(client).__module__.startswith('anthropic') or not hasattr(client, 'messages'):
+        return client
+    from evaluatorq.anthropic.client import wrap_anthropic_client
+
+    # The adapter is duck-typed as an `AsyncOpenAI` everywhere downstream.
+    return cast('AsyncOpenAI', wrap_anthropic_client(client))
+
+
 def client_routes_through_orq(client: AsyncOpenAI | None) -> bool:
     """True when ``client``'s ``base_url`` points at the Orq router.
 
@@ -107,7 +133,7 @@ def resolve_results_base_url(
 
 
 def resolve_llm_client(
-    config_client: AsyncOpenAI | None = None,
+    config_client: LLMClient | None = None,
     *,
     extra_api_key: str | None = None,
     orq_host: str | None = None,
@@ -149,6 +175,7 @@ def resolve_llm_client(
             (and, unless ``require_orq``, no ``OPENAI_API_KEY`` either).
     """
     if config_client is not None:
+        config_client = as_llm_client(config_client)
         return ResolvedClient(
             client=config_client,
             owned=False,
@@ -202,6 +229,7 @@ __all__ = [
     'ORQ_ROUTER_SUFFIX',
     'MissingLLMCredentialsError',
     'ResolvedClient',
+    'as_llm_client',
     'client_routes_through_orq',
     'resolve_llm_client',
     'resolve_results_base_url',

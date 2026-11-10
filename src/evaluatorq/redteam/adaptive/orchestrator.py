@@ -28,7 +28,7 @@ from evaluatorq.common.content_filter import (
     is_content_filter_error,
     regenerate_on_content_filter,
 )
-from evaluatorq.common.judge import ClassifyQuestion, run_judge
+from evaluatorq.common.judge import ClassifyQuestion, classify_fallback_model, run_judge
 from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
@@ -684,16 +684,7 @@ async def refusal_judge_model(client: AsyncOpenAI) -> tuple[str, bool]:
     on_router = client_routes_through_orq(client)
     if on_router and await supports_classify(model, client):
         return model, True
-    fallback = role_model('fast')
-    if model not in _refusal_fallback_warned:
-        _refusal_fallback_warned.add(model)
-        reason = (
-            'the catalogue lists no classify endpoint for it' if on_router else 'the client is not on the Orq router'
-        )
-        logger.warning(
-            f'Refusal judge: {model} needs the classify endpoint, but {reason}; judging refusals with {fallback} instead'
-        )
-    return fallback, False
+    return classify_fallback_model(model, on_router=on_router, warned=_refusal_fallback_warned), False
 
 
 class MultiTurnOrchestrator:

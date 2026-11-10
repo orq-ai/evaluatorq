@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from loguru import logger
 
 from evaluatorq.common.judge import ClassifyQuestion, run_judge
-from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.llm_client import as_llm_client, resolve_llm_client
 from evaluatorq.common.redact import normalize_placeholders, scrub_known_secrets
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.signals.config import SignalsConfig
@@ -29,6 +29,7 @@ from evaluatorq.signals.walk import CallRecord, SignalContext, call_tool_schemas
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.formats.atif import AtifTrajectory
 
 Door = Literal['benign', 'two_way', 'one_way', 'unknown']
@@ -155,7 +156,7 @@ async def classify_tool_doors(
     trajectory: AtifTrajectory,
     config: SignalsConfig | None = None,
     *,
-    client: AsyncOpenAI | None = None,
+    client: LLMClient | None = None,
 ) -> dict[str, SignalResult]:
     """Classify a run's tool calls as benign, two-way or one-way doors with Jev, and count them.
 
@@ -188,7 +189,7 @@ async def classify_tool_doors(
 
     verdicts: dict[int, tuple[str, Door]] = {}
     if records:
-        verdicts = await _classify_calls(trajectory, records, resolved_config, client)
+        verdicts = await _classify_calls(trajectory, records, resolved_config, as_llm_client(client))
 
     out: dict[str, SignalResult] = {}
     for name, door in zip(DOOR_SIGNAL_NAMES, _COUNTED, strict=True):

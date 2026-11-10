@@ -20,7 +20,7 @@ from loguru import logger
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.env_config import env_raw
-from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.llm_client import as_llm_client, resolve_results_base_url
 from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import validate_reasoning_effort
@@ -117,6 +117,7 @@ from evaluatorq.tracing import tracing_session
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.types import DataPointResult
 
@@ -1326,7 +1327,7 @@ async def red_team(
     max_dynamic_datapoints: int | None = None,
     max_static_datapoints: int | None = None,
     cleanup_memory: bool = True,
-    llm_client: AsyncOpenAI | None = None,
+    llm_client: LLMClient | None = None,
     name: str | None = None,
     description: str | None = None,
     dataset: Path | str | None = None,
@@ -1414,7 +1415,7 @@ async def red_team(
         max_dynamic_datapoints: Cap dynamic (generated) datapoints (None = no cap).
         max_static_datapoints: Cap static (dataset) datapoints (None = no cap).
         cleanup_memory: Whether to clean up memory entities after dynamic runs.
-        llm_client: Pre-configured AsyncOpenAI client for attack/strategy generation.
+        llm_client: Pre-configured AsyncOpenAI client for attack/strategy generation. An Anthropic SDK client (``AsyncAnthropic``, ``AsyncAnthropicBedrock`` or ``AsyncAnthropicVertex``) is also accepted; see the Anthropic page.
         name: Optional experiment name for the run. Used as the evaluatorq experiment
             name and for the auto-saved run filename. Defaults to ``'red-team'``.
         description: Optional description for the report.
@@ -1578,6 +1579,7 @@ async def red_team(
         trace_datapoints if trace_datapoints is not None else replay.datapoints if replay is not None else None,
     )
     llm_config = _restore_replayed_backtracks(llm_config, replay)
+    llm_client = as_llm_client(llm_client)
 
     # Build or merge config -------------------------------------------------
     # When ``llm_config`` is provided it is the source of truth for models and

@@ -218,6 +218,14 @@ class LLMCallConfig(BaseModel):
         'the two cannot multiply.',
     )
 
+    @field_validator('client', mode='before')
+    @classmethod
+    def _wrap_anthropic_client(cls, value: Any) -> Any:
+        """Wrap a raw Anthropic SDK client in the adapter; any other client is kept as passed."""
+        from evaluatorq.common.llm_client import as_llm_client
+
+        return as_llm_client(value)
+
     def set_values(self, *names: str) -> dict[str, Any]:
         """The named fields the caller explicitly set, as a kwargs dict.
 
