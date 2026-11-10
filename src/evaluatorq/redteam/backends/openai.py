@@ -156,23 +156,17 @@ class OpenAIModelTarget(AgentTarget):
             if caching_applies(self.client, self.model)
             else raw_messages,
         )
-        # Tag the target invocation so its Orq trace is attributable to the run:
-        # the pipeline surface + run id via the standard `metadata` property (sent
-        # on every endpoint — this is the direct-OpenAI backend, and its traces
-        # still reach Orq via OTel), and the run thread via the `thread` extra_body
-        # field, which IS router-only and so stays guarded.
+        # The run thread is router-only; `apply_pipeline_metadata` owns the metadata rule.
         create_kwargs: dict[str, Any] = {
             'model': self.model,
             'messages': completion_messages,
+            # gpt-5.x and the reasoning models reject `max_tokens` on Chat Completions,
+            # and `max_completion_tokens` is accepted by every current model.
+            'max_completion_tokens': self.max_tokens,
         }
         if self.reasoning_effort:
-            # A reasoning model rejects `max_tokens` outright, so the two cannot ride
-            # together: asking for an effort has to switch the budget field with it.
             create_kwargs['reasoning_effort'] = self.reasoning_effort
-            create_kwargs['max_completion_tokens'] = self.max_tokens
-        else:
-            create_kwargs['max_tokens'] = self.max_tokens
-        apply_pipeline_metadata(create_kwargs)
+        apply_pipeline_metadata(create_kwargs, client=self.client, api='chat')
         if routes_through_orq:
             thread = thread_body_param()
             if thread:

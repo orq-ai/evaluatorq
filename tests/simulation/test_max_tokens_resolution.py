@@ -106,7 +106,7 @@ async def test_chat_truncation_message_names_config_knob_when_pinned(_fake_chat:
     assert CONFIG_ADVICE in message
     assert 'EVALUATORQ_LLM_MAX_TOKENS' not in message
     assert 'max_tokens=256' in message
-    assert _fake_chat['max_tokens'] == 256
+    assert _fake_chat['max_completion_tokens'] == 256
 
 
 @pytest.mark.asyncio
@@ -120,7 +120,7 @@ async def test_chat_truncation_message_names_env_var_when_nothing_set(_fake_chat
     message = str(excinfo.value)
     assert ENV_ADVICE in message
     assert f'max_tokens={DEFAULT_TARGET_MAX_TOKENS}' in message
-    assert _fake_chat['max_tokens'] == DEFAULT_TARGET_MAX_TOKENS
+    assert _fake_chat['max_completion_tokens'] == DEFAULT_TARGET_MAX_TOKENS
 
 
 @pytest.mark.asyncio
@@ -139,7 +139,7 @@ async def test_chat_truncation_message_names_the_call_argument(_fake_chat: dict[
     assert CALL_ADVICE in message
     assert 'EVALUATORQ_LLM_MAX_TOKENS' not in message
     assert 'max_tokens=64' in message
-    assert _fake_chat['max_tokens'] == 64
+    assert _fake_chat['max_completion_tokens'] == 64
 
 
 @pytest.mark.asyncio

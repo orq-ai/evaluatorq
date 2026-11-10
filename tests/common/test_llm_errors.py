@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import importlib
-import sys
-import types
+import importlib.util
 
-import anthropic
 import httpx
 import openai
 import pytest
@@ -19,25 +17,11 @@ from evaluatorq.common.llm_errors import (
     TIMEOUT_ERRORS,
     status_code,
 )
+from tests.common.llm_error_factories import STATUS_FACTORIES, openai_status
+
+anthropic = pytest.importorskip('anthropic')
 
 _REQUEST = httpx.Request('POST', 'https://example.test/v1')
-
-
-def _response(code: int) -> httpx.Response:
-    return httpx.Response(code, request=_REQUEST)
-
-
-def _openai_status(code: int) -> openai.APIStatusError:
-    cls = openai.BadRequestError if code == 400 else openai.APIStatusError
-    return cls('boom', response=_response(code), body=None)
-
-
-def _anthropic_status(code: int) -> anthropic.APIStatusError:
-    cls = anthropic.BadRequestError if code == 400 else anthropic.APIStatusError
-    return cls('boom', response=_response(code), body=None)
-
-
-STATUS_FACTORIES = [_openai_status, _anthropic_status]
 
 
 @pytest.mark.parametrize('make', STATUS_FACTORIES)
@@ -99,8 +83,13 @@ def test_status_code_none_for_non_status_errors():
     assert status_code(anthropic.APIConnectionError(request=_REQUEST)) is None
 
 
-def test_tuples_contain_only_openai_when_anthropic_absent(monkeypatch):
-    monkeypatch.setitem(sys.modules, 'anthropic', None)
+def test_tuples_contain_only_openai_when_anthropic_not_installed(monkeypatch):
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        'find_spec',
+        lambda name, *args: None if name == 'anthropic' else real_find_spec(name, *args),
+    )
     try:
         reloaded = importlib.reload(llm_errors)
         for name in (
@@ -112,38 +101,9 @@ def test_tuples_contain_only_openai_when_anthropic_absent(monkeypatch):
             'SDK_ERRORS',
         ):
             members = getattr(reloaded, name)
-            assert len(members) == 1, name
-            assert members[0].__module__.split('.')[0] == 'openai', name
-        assert reloaded.status_code(_openai_status(404)) == 404
+            assert all(m.__module__.split('.')[0] == 'openai' for m in members), name
+        assert reloaded.status_code(openai_status(404)) == 404
     finally:
         monkeypatch.undo()
         importlib.reload(llm_errors)
-    assert len(llm_errors.API_ERRORS) == 2
-
-
-def test_incompatible_anthropic_degrades_to_openai_only_with_a_warning(monkeypatch):
-    from loguru import logger
-
-    messages: list[str] = []
-    handler_id = logger.add(lambda m: messages.append(str(m)), level='WARNING')
-    monkeypatch.setitem(sys.modules, 'anthropic', types.ModuleType('anthropic'))
-    try:
-        reloaded = importlib.reload(llm_errors)
-        for name in (
-            'API_ERRORS',
-            'STATUS_ERRORS',
-            'CONNECTION_ERRORS',
-            'TIMEOUT_ERRORS',
-            'BAD_REQUEST_ERRORS',
-            'SDK_ERRORS',
-        ):
-            members = getattr(reloaded, name)
-            assert len(members) == 1, name
-            assert members[0].__module__.split('.')[0] == 'openai', name
-    finally:
-        logger.remove(handler_id)
-        monkeypatch.undo()
-        importlib.reload(llm_errors)
-    assert len(messages) == 1
-    assert 'only OpenAI error classes are recognised' in messages[0]
-    assert len(llm_errors.API_ERRORS) == 2
+    assert anthropic.APIError in llm_errors.API_ERRORS

@@ -1391,61 +1391,21 @@ LLM_SDK_ERROR_NAMES = frozenset({
 })
 
 
-_LLM_SDK_MODULES = frozenset({'openai', 'anthropic', 'openai._exceptions', 'anthropic._exceptions'})
-
-
-def _llm_sdk_error_references(source: str) -> list[tuple[int, str]]:
-    """Return ``(line, name)`` for each SDK exception class named from ``openai`` or ``anthropic``."""
-    found: list[tuple[int, str]] = []
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.ImportFrom) and node.module in _LLM_SDK_MODULES:
-            found.extend((node.lineno, a.name) for a in node.names if a.name in LLM_SDK_ERROR_NAMES)
-        elif isinstance(node, ast.Attribute) and node.attr in LLM_SDK_ERROR_NAMES:
-            base = node.value
-            if isinstance(base, ast.Attribute) and base.attr == '_exceptions':
-                base = base.value
-            if isinstance(base, ast.Name) and base.id in {'openai', 'anthropic'}:
-                found.append((node.lineno, node.attr))
-    return found
-
-
-def test_llm_sdk_errors_are_caught_through_llm_errors() -> None:
-    """Only ``common/llm_errors.py`` may name an ``openai`` or ``anthropic`` exception class.
+def test_llm_sdk_error_classes_are_banned_outside_llm_errors() -> None:
+    """Ruff TID251 must keep banning each SDK exception class, so errors are caught through ``common.llm_errors``.
 
     An ``except openai.APIStatusError`` lets an Anthropic client's errors slip past it, and the reverse.
     """
-    allowed = SRC / 'common' / 'llm_errors.py'
-    offenders = [
-        f'{path.relative_to(SRC)}:{line} ({name})'
-        for path in sorted(SRC.rglob('*.py'))
-        if path != allowed
-        for line, name in _llm_sdk_error_references(path.read_text(encoding='utf-8'))
-    ]
-    assert not offenders, (
-        'These modules name an LLM SDK exception class directly; use evaluatorq.common.llm_errors '
-        f'(STATUS_ERRORS, CONNECTION_ERRORS, BAD_REQUEST_ERRORS, status_code) instead: {offenders}'
-    )
-
-
-def test_llm_sdk_error_detector_flags_both_sdks_and_private_modules() -> None:
-    source = (
-        'import anthropic\n'
-        'import openai\n'
-        'from anthropic import RateLimitError\n'
-        'from openai._exceptions import APIStatusError\n'
-        'from anthropic._exceptions import APIError\n'
-        'try:\n'
-        '    pass\n'
-        'except anthropic.APIStatusError:\n'
-        '    pass\n'
-        'except openai._exceptions.BadRequestError:\n'
-        '    pass\n'
-        'x = openai.AsyncOpenAI\n'
-    )
-    assert _llm_sdk_error_references(source) == [
-        (3, 'RateLimitError'),
-        (4, 'APIStatusError'),
-        (5, 'APIError'),
-        (8, 'APIStatusError'),
-        (10, 'BadRequestError'),
-    ]
+    toml = pytest.importorskip('tomli' if sys.version_info < (3, 11) else 'tomllib')
+    config = toml.loads((REPO_ROOT / 'pyproject.toml').read_text(encoding='utf-8'))
+    ruff = config['tool']['ruff']['lint']
+    banned = ruff['flake8-tidy-imports']['banned-api']
+    expected = {
+        f'{module}.{name}'
+        for module in ('openai', 'anthropic', 'openai._exceptions', 'anthropic._exceptions')
+        for name in LLM_SDK_ERROR_NAMES | {'APIResponseValidationError'}
+        if not (name == 'OpenAIError' and module.startswith('anthropic'))
+        if not (name == 'AnthropicError' and module.startswith('openai'))
+    }
+    assert not expected - set(banned), f'pyproject.toml banned-api lost: {sorted(expected - set(banned))}'
+    assert 'TID251' in ruff['per-file-ignores']['src/evaluatorq/common/llm_errors.py']

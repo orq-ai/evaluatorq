@@ -1643,7 +1643,7 @@ async def test_embeddings_use_embedding_client_and_chat_calls_use_llm_client(
 
 
 @pytest.mark.asyncio
-async def test_insights_forwards_embedding_client_and_never_closes_it(
+async def test_insights_passes_both_clients_to_the_dimension_build_and_closes_neither(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     seen: dict[str, object] = {}

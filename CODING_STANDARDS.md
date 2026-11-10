@@ -54,6 +54,7 @@ Rules under **Hard rules** are violations when broken. Rules under **Judgement c
 
 ## Judgement calls
 
+- **A new judge degraded-state signal goes end to end.** Add it beside `repetitions_failed`: an aggregate field on `JuryVote` and a matching `judge.*` stamp on the `orq.judge` span, in the same change.
 - **Shared behaviour lives in `common/`.** Behaviour used by two or more surfaces belongs in `common/`; surface modules keep their own vocabulary and delegate the shared work. Extend an existing helper before adding a sibling, because every module there exists to end a drift between two copies.
 - **Preserve the data model.** A vulnerability is the atomic red-team concept and framework categories are derived mappings. Shared contracts belong in `contracts.py`, and surface-specific contracts in their own packages.
 - **No speculative abstraction.** Add a seam, parameter, or hook when a second caller needs it, not before.

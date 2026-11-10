@@ -180,7 +180,7 @@ async def _build_dimension(  # noqa: C901
 ) -> DimensionResult:
     """Run one dimension's embed → cluster → describe → merge → reduce pipeline.
 
-    Embeddings go through `embedding_client` when given, else through `client`.
+    Embeddings use `embedding_client` when given, otherwise `client`.
     """
     import numpy as np
 
@@ -473,8 +473,7 @@ async def insights(  # noqa: C901
 ) -> InsightsRun:
     """Run trace Insights and persist the partial or complete result with a manifest.
 
-    `embedding_client` serves only the embedding calls, for providers whose chat
-    client has no embeddings API. When `None`, embeddings use the chat client.
+    Sends only the embedding requests to `embedding_client` instead of `llm_client`.
     Like `llm_client`, an injected `embedding_client` is never closed here.
 
     `coding_analysis` retains the legacy full coding bundle. `coding_labels`
