@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
@@ -13,10 +14,17 @@ FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 _PLATFORMS_WITHOUT_FALLBACKS = ('Bedrock', 'Vertex')
 
 
+@dataclass
+class _RefusalLog:
+    """Whether the refusal warning was logged. One instance is shared by every clone `with_options` makes."""
+
+    logged: bool = False
+
+
 class _ChatCompletions:
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, refusal_log: _RefusalLog) -> None:
         self._client = client
-        self._refusal_logged = False
+        self._refusal_log = refusal_log
 
     async def _send(self, params: dict[str, Any]) -> Any:
         """Send one request and return the raw Anthropic message."""
@@ -31,8 +39,8 @@ class _ChatCompletions:
             message = await self._client.beta.messages.create(**request, betas=[FALLBACK_BETA])
         else:
             message = await self._client.messages.create(**request)
-        if message.stop_reason == 'refusal' and not self._refusal_logged:
-            self._refusal_logged = True
+        if message.stop_reason == 'refusal' and not self._refusal_log.logged:
+            self._refusal_log.logged = True
             logger.warning(
                 'The Anthropic model refused a request (stop_reason "refusal"). '
                 'Server-side fallbacks can retry it on another model: pass extra_kwargs={"fallbacks": "default"} '
@@ -53,8 +61,8 @@ class _ChatCompletions:
 
 
 class _Chat:
-    def __init__(self, client: Any) -> None:
-        self.completions = _ChatCompletions(client)
+    def __init__(self, client: Any, refusal_log: _RefusalLog) -> None:
+        self.completions = _ChatCompletions(client, refusal_log)
 
 
 class _Embeddings:
@@ -75,13 +83,14 @@ class AnthropicLLMClient:
     evaluatorq_provider = 'anthropic'
     api_key = None
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, *, _refusal_log: _RefusalLog | None = None) -> None:
         if not hasattr(getattr(client, 'messages', None), 'create'):
             raise TypeError(
                 f'AnthropicLLMClient needs an Anthropic SDK client with messages.create, got {type(client).__name__}.'
             )
         self._client = client
-        self.chat = _Chat(client)
+        self._refusal_log = _refusal_log if _refusal_log is not None else _RefusalLog()
+        self.chat = _Chat(client, self._refusal_log)
         self.embeddings = _Embeddings()
 
     @property
@@ -94,7 +103,7 @@ class AnthropicLLMClient:
 
     def with_options(self, **kwargs: Any) -> AnthropicLLMClient:
         """Wrap ``client.with_options(**kwargs)``; the wrapped client is never mutated."""
-        return AnthropicLLMClient(self._client.with_options(**kwargs))
+        return AnthropicLLMClient(self._client.with_options(**kwargs), _refusal_log=self._refusal_log)
 
     async def close(self) -> None:
         closer = getattr(self._client, 'close', None)

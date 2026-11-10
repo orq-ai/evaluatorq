@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -14,7 +15,11 @@ from openai.types.chat import ParsedChatCompletion
 from pydantic import BaseModel, Field, ValidationError
 
 from evaluatorq.anthropic import AnthropicLLMClient
+from anthropic.types.beta import BetaMessage
+from openai.types.chat import ChatCompletion
+
 from evaluatorq.anthropic.convert import adapt_schema
+from evaluatorq.common.retry import without_client_retries
 from evaluatorq.common.structured_output import StructuredGenerationError, generate_structured
 
 from .test_chat_adapter import make_message
@@ -37,6 +42,11 @@ class QueueMessages:
         return self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
 
 
+def as_beta(message: Any) -> BetaMessage:
+    """Return the ``anthropic.types.beta.BetaMessage`` twin of a plain ``Message``, as the beta endpoint returns it."""
+    return BetaMessage.model_validate(message.model_dump())
+
+
 class FakeClient:
     base_url = 'https://api.anthropic.com'
     max_retries = 2
@@ -44,7 +54,7 @@ class FakeClient:
     def __init__(self, replies: list[Any] | None = None, beta_replies: list[Any] | None = None) -> None:
         self.messages = QueueMessages(replies or [make_message()])
         self.beta = MagicMock()
-        self.beta.messages = QueueMessages(beta_replies or [make_message()])
+        self.beta.messages = QueueMessages([as_beta(reply) for reply in beta_replies or [make_message()]])
 
     def with_options(self, **kwargs: Any) -> FakeClient:
         return self
@@ -88,8 +98,10 @@ def test_parse_with_a_pydantic_class_sends_the_strict_schema_and_validates() -> 
 
 def test_parse_with_a_json_schema_dict_leaves_parsed_empty() -> None:
     schema = {'type': 'object', 'properties': {'a': {'type': 'string', 'maxLength': 3}}, 'required': ['a']}
+    original = copy.deepcopy(schema)
     fake = FakeClient([text('{"a": "x"}')])
     result = parse(fake, response_format={'type': 'json_schema', 'json_schema': {'name': 'n', 'schema': schema}})
+    assert schema == original
     assert result.choices[0].message.parsed is None
     assert result.choices[0].message.content == '{"a": "x"}'
     sent_schema = fake.messages.calls[0]['output_config']['format']['schema']
@@ -147,9 +159,16 @@ def test_json_schema_on_create_maps_like_parse() -> None:
         )
     )
     schema = fake.messages.calls[0]['output_config']['format']['schema']
-    assert schema['additionalProperties'] is False
-    assert 'maximum' not in json.dumps(schema)
-    assert '$defs' not in schema or isinstance(schema['$defs'], dict)
+    assert schema == {
+        'title': 'Answer',
+        'type': 'object',
+        'properties': {
+            'value': {'title': 'Value', 'type': 'string'},
+            'score': {'title': 'Score', 'type': 'integer'},
+        },
+        'required': ['value', 'score'],
+        'additionalProperties': False,
+    }
 
 
 def test_adapt_schema_keeps_properties_named_like_keywords_and_walks_defs() -> None:
@@ -177,6 +196,28 @@ async def _ladder(client: Any) -> Any:
         max_tokens=64,
         label='ladder',
     )
+
+
+def test_adapt_schema_walks_prefix_items_additional_properties_and_not() -> None:
+    schema = {
+        'type': 'array',
+        'prefixItems': [{'type': 'string', 'maxLength': 5}, {'type': 'integer', 'minimum': 0}],
+        'items': False,
+        'additionalProperties': {'type': 'object', 'properties': {'n': {'type': 'number', 'maximum': 9}}},
+        'not': {'type': 'string', 'minLength': 1},
+    }
+    out = adapt_schema(schema)
+    assert out == {
+        'type': 'array',
+        'prefixItems': [{'type': 'string'}, {'type': 'integer'}],
+        'items': False,
+        'additionalProperties': {
+            'type': 'object',
+            'properties': {'n': {'type': 'number'}},
+            'additionalProperties': False,
+        },
+        'not': {'type': 'string'},
+    }
 
 
 def test_ladder_skips_the_forced_tool_rung_for_the_adapter() -> None:
@@ -239,6 +280,22 @@ def _capture() -> tuple[list[str], int]:
     return seen, logger.add(lambda m: seen.append(str(m)), level='WARNING')
 
 
+def test_refusal_warning_is_logged_once_across_with_options_clones() -> None:
+    seen, handler = _capture()
+    try:
+        # Typed Any: the wrapper stands in for AsyncOpenAI, which the judge and structured-output callers pass in.
+        wrapper: Any = AnthropicLLMClient(FakeClient([text('No.', stop_reason='refusal')]))
+        for clone in (without_client_retries(wrapper), without_client_retries(wrapper)):
+            assert clone is not wrapper
+            asyncio.run(
+                clone.chat.completions.create(model='claude-sonnet-5-5', messages=[{'role': 'user', 'content': 'x'}])
+            )
+    finally:
+        logger.remove(handler)
+    refusals = [line for line in seen if 'refused' in line]
+    assert len(refusals) == 1
+
+
 def test_refusal_warning_is_logged_once_per_adapter_instance() -> None:
     seen, handler = _capture()
     try:
@@ -274,6 +331,7 @@ def test_no_refusal_warning_for_a_normal_reply() -> None:
 
 def test_fallbacks_route_to_the_beta_call_through_extra_body() -> None:
     fake = FakeClient()
+    assert isinstance(fake.beta.messages.replies[0], BetaMessage)
     client = AnthropicLLMClient(fake)
     completion = asyncio.run(
         client.chat.completions.create(
@@ -288,7 +346,11 @@ def test_fallbacks_route_to_the_beta_call_through_extra_body() -> None:
     assert sent['betas'] == ['server-side-fallback-2026-07-01']
     assert sent['extra_body'] == {'keep': 1, 'fallbacks': 'default'}
     assert 'fallbacks' not in sent
+    assert isinstance(completion, ChatCompletion)
+    assert completion.model == 'anthropic/claude-sonnet-5-5'
+    assert completion.choices[0].finish_reason == 'stop'
     assert completion.choices[0].message.content == 'hello'
+    assert completion.usage is not None and completion.usage.total_tokens == 14
 
 
 def test_fallbacks_work_for_parse_too() -> None:

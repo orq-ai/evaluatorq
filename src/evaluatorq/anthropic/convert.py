@@ -90,7 +90,7 @@ _UNSUPPORTED_SCHEMA_KEYWORDS = frozenset({
 def adapt_schema(schema: Any) -> Any:
     """Copy a JSON schema, dropping the keywords Anthropic structured outputs reject and closing every object.
 
-    Only schema positions are walked (``properties`` values, ``items``, ``anyOf``/``allOf``/``oneOf`` members, ``$defs``), so a property that happens to be named ``minimum`` survives. Objects without ``additionalProperties`` get ``False``, which Anthropic requires.
+    Only schema positions are walked (``properties`` values, ``items``, ``prefixItems``, schema-valued ``additionalProperties``, ``not``, ``anyOf``/``allOf``/``oneOf`` members, ``$defs``), so a property that happens to be named ``minimum`` survives. Objects without ``additionalProperties`` get ``False``, which Anthropic requires.
     """
     if not isinstance(schema, dict):
         return schema
@@ -102,9 +102,9 @@ def adapt_schema(schema: Any) -> Any:
             continue
         if key in ('properties', '$defs', 'definitions') and isinstance(value, dict):
             out[key] = {name: adapt_schema(sub) for name, sub in value.items()}
-        elif key in ('anyOf', 'allOf', 'oneOf') and isinstance(value, list):
+        elif key in ('anyOf', 'allOf', 'oneOf', 'prefixItems') and isinstance(value, list):
             out[key] = [adapt_schema(sub) for sub in value]
-        elif key == 'items':
+        elif key in ('items', 'additionalProperties', 'not'):
             out[key] = adapt_schema(value)
         else:
             out[key] = value
