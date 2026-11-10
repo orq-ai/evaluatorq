@@ -402,11 +402,16 @@ def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
     payload = outcome.payload
     if payload is None:
         return Prediction(error='judge returned no payload', token_usage=outcome.token_usage)
-    if payload.abstain or payload.value is None:
+    # Only an explicit abstain is a clean abstention. A bare value=None with
+    # abstain=False is a non-usable verdict, so it falls through to a non-decisive,
+    # non-abstained Prediction that _compute_judge_vote counts as a failed
+    # repetition, the same reading the redteam bridges use.
+    if payload.abstain:
         return Prediction(
             abstained=True,
             explanation=payload.explanation,
             token_usage=outcome.token_usage,
+            verdict_coerced=outcome.verdict_coerced,
         )
     return Prediction(
         value=payload.value,

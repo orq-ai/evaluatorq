@@ -159,7 +159,7 @@ class ToolChainingPlanner:
             response_format=_DecompositionSchema,
             extra_body=cfg.retry_extra_body(self._client),
         )
-        apply_pipeline_metadata(call_params)
+        apply_pipeline_metadata(call_params, client=self._client, api='chat')
         response = await asyncio.wait_for(
             self._client.chat.completions.parse(**call_params),
             timeout=cfg.attacker.timeout_ms / 1000.0,

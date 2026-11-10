@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from loguru import logger
 from pydantic import BaseModel
 
+from evaluatorq.common.judge import JudgeOutcome, judge_error_payload
 from evaluatorq.common.tracing import (
     current_otel_context,
     set_span_attrs,
@@ -37,6 +38,89 @@ VerdictValue = bool | float | str
 TieBreak = Callable[[list[VerdictValue]], VerdictValue | None]
 
 _UNSWAP = {'A': 'B', 'B': 'A'}
+
+
+NO_VERDICT_REASON_LIMIT = 200
+
+
+NO_VERDICT_CODE = 'no_verdict'
+
+
+def _cap_reason(reason: str) -> str:
+    """Strip a reason and cut it to `NO_VERDICT_REASON_LIMIT` characters, ending in an ellipsis."""
+    reason = reason.strip()
+    if len(reason) > NO_VERDICT_REASON_LIMIT:
+        reason = reason[: NO_VERDICT_REASON_LIMIT - 1].rstrip() + '…'
+    return reason
+
+
+def no_verdict_message(reason: str) -> str:
+    """The error for a judge that returned value=None without abstaining.
+
+    The reason is capped: the full explanation stays on the repetition on a panel, and in
+    the result's own explanation with one judge. This copy reaches saved results, so it
+    only needs to identify the cause.
+    """
+    reason = _cap_reason(reason)
+    return f'judge returned no verdict: {reason}' if reason else 'judge returned no verdict'
+
+
+def no_verdict_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any]:
+    """The evaluation error for a bare non-verdict, for a single-judge result's raw_output.
+
+    `judge_error_payload` reads `outcome.error_kind`, which a bare non-verdict leaves
+    unset, so the type and code are fixed here: they are what the error rollup groups by.
+    """
+    explanation = outcome.payload.explanation if outcome.payload is not None else ''
+    return {
+        **judge_error_payload(outcome, evaluator_id),
+        'message': no_verdict_message(explanation or ''),
+        'error_type': NO_VERDICT_CODE,
+        'code': NO_VERDICT_CODE,
+    }
+
+
+NON_BINARY_VERDICT_CODE = 'non_binary_verdict'
+
+
+def non_binary_verdict_message(value: VerdictValue | None) -> str:
+    """The error for a judge that returned a number or string where a pass/fail verdict is needed.
+
+    The value's repr is capped like a no-verdict reason: it reaches saved results, so it
+    only needs to identify the cause.
+    """
+    return f'judge returned a non-pass/fail verdict: {_cap_reason(repr(value))}'
+
+
+def non_binary_verdict_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any]:
+    """The evaluation error for a non-bool verdict on a pass/fail path, for a single-judge raw_output.
+
+    Mirrors `no_verdict_error_payload`: the type and code are fixed here because
+    `outcome.error_kind` is unset for a judge that answered.
+    """
+    value = outcome.payload.value if outcome.payload is not None else None
+    return {
+        **judge_error_payload(outcome, evaluator_id),
+        'message': non_binary_verdict_message(value),
+        'error_type': NON_BINARY_VERDICT_CODE,
+        'code': NON_BINARY_VERDICT_CODE,
+    }
+
+
+def single_verdict_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any] | None:
+    """The evaluation error for a single judge that answered without a pass/fail verdict, else None.
+
+    A bare non-verdict is a dead judge, as the adaptive single-judge path records it; a number
+    or string is not a pass/fail verdict either. A clean abstention is neither.
+    """
+    if outcome.payload is None:
+        return None
+    value = outcome.payload.value
+    if value is None:
+        return None if outcome.payload.abstain else no_verdict_error_payload(outcome, evaluator_id)
+    if not isinstance(value, bool):
+        return non_binary_verdict_error_payload(outcome, evaluator_id)
+    return None
 
 
 def _unswap(value: VerdictValue | None) -> VerdictValue | None:
@@ -82,6 +166,10 @@ class Prediction(BaseModel):
     raw_output: dict[str, Any] | None = None
     error: str | None = None
     abstained: bool = False
+    # True when the judge sent a self-contradictory abstain=True *with* a value, which
+    # common/judge.py coerced to an abstention. Carried so the artifact can tell a coerced
+    # verdict from a clean one.
+    verdict_coerced: bool = False
 
     @property
     def decisive(self) -> bool:
@@ -420,6 +508,7 @@ def _record_judge_span(span: Span | None, vote: JuryVote, *, latency_ms: float, 
             # Provider errors are unbounded; cap like every other text attribute.
             'judge.error': None if vote.error is None else truncate_for_span(vote.error),
             'judge.repetitions_failed': vote.repetitions_failed,
+            'judge.repetitions_coerced': vote.repetitions_coerced,
         },
     )
     if not vote.success:
@@ -449,6 +538,7 @@ async def _compute_judge_vote(
             value=p.value if p.decisive else None,
             explanation=p.explanation or None,
             raw_output=p.raw_output,
+            verdict_coerced=p.verdict_coerced,
         )
         for p in predictions
     ]
@@ -461,6 +551,9 @@ async def _compute_judge_vote(
     # already means "error is None and not abstained and value is not None", so a tie or a genuine
     # clean abstention is never counted. Shared jury layer, so it tightens redteam/simulation too.
     failed_count = sum(1 for p in predictions if not p.decisive and (not p.abstained or p.error is not None))
+    # Surfaced on the vote and the judge span so a reader can tell coerced verdicts from
+    # clean abstentions without re-reading the per-pass flags.
+    coerced_count = sum(1 for p in predictions if p.verdict_coerced)
 
     if failed_count > 0 and failed_count < len(predictions):
         logger.warning('judge {} had {}/{} repetitions fail', model, failed_count, len(predictions))
@@ -477,10 +570,14 @@ async def _compute_judge_vote(
                     explanation=explanation,
                     repetitions=repetitions_raw,
                     repetitions_failed=failed_count,
+                    repetitions_coerced=coerced_count,
                 ),
                 usages,
             )
-        error = next((p.error for p in predictions if p.error), 'no successful prediction')
+        error = next((p.error for p in predictions if p.error), None)
+        if error is None:
+            # Every pass was a bare value=None. The judge's own reason is the only cause there is.
+            error = no_verdict_message(next((p.explanation for p in predictions if p.explanation), ''))
         return (
             JuryVote(
                 model=model,
@@ -489,6 +586,7 @@ async def _compute_judge_vote(
                 error=error,
                 repetitions=repetitions_raw,
                 repetitions_failed=failed_count,
+                repetitions_coerced=coerced_count,
             ),
             usages,
         )
@@ -511,6 +609,7 @@ async def _compute_judge_vote(
                 explanation='Judge repetitions tied without a decisive tie-break.',
                 repetitions=repetitions_raw,
                 repetitions_failed=failed_count,
+                repetitions_coerced=coerced_count,
             ),
             usages,
         )
@@ -526,6 +625,7 @@ async def _compute_judge_vote(
             explanation=representative,
             repetitions=repetitions_raw,
             repetitions_failed=failed_count,
+            repetitions_coerced=coerced_count,
         ),
         usages,
     )

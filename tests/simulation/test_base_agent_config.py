@@ -96,7 +96,7 @@ class TestChatCompletionsConfigPropagation:
         await agent._call_llm(_messages())
 
         kwargs = client.chat.completions.create.await_args.kwargs
-        assert kwargs["max_tokens"] == 20_000
+        assert kwargs["max_completion_tokens"] == 20_000
 
     @pytest.mark.asyncio
     async def test_config_reasoning_effort_reaches_call_params(self):

@@ -368,12 +368,13 @@ Span attributes on `orq.judge`:
 | `judge.latency_ms` | Wall-clock time for this judge's repetitions |
 | `judge.error` | Error string when the judge failed (truncated per `EVALUATORQ_SPAN_MAX_TEXT_CHARS`) |
 | `judge.repetitions_failed` | Count of repetitions that failed to produce a usable verdict (an error, or a non-decisive non-abstained pass; a clean abstention is not counted), out of the configured repetition count |
+| `judge.repetitions_coerced` | Count of repetitions whose verdict was coerced to an abstention (the judge sent `abstain=true` with a value), out of the configured repetition count |
 
 No token usage or cost here: those are recorded once, on the `chat` spans underneath, and rolled up by the consumer. Stamping them on every ancestor as well made the same tokens appear three times in one trace.
 
 `judge.label_swapped` is only ever set (`True`/`False`) in comparative mode — in plain `run_jury()` deliberations it is absent, since each judge votes once.
 
-One judge attribute lives a level *down*, on the `chat` / `responses` span that made the call rather than on `orq.judge`: `judge.verdict_coerced`. It is set to `abstain_with_value` when the model returned `abstain=true` together with a non-null `value` — a self-contradictory verdict, kept as an abstention with the value dropped. It is absent on a well-formed verdict, so counting it per judge model in the trace store answers "can this model follow the verdict schema". Nothing aggregates it today — it does not reach `JuryVote`, the run manifest or any report, so a coerced verdict is indistinguishable from a clean abstention once it leaves the judge call. Query the spans, not the run artifact.
+One judge attribute also lives a level *down*, on the `chat` / `responses` span that made the call: `judge.verdict_coerced`. It is set to `abstain_with_value` when the model returned `abstain=true` together with a non-null `value` — a self-contradictory verdict, kept as an abstention with the value dropped. It is absent on a well-formed verdict, so counting it per judge model in the trace store answers "can this model follow the verdict schema". The count per judge is `judge.repetitions_coerced` on `orq.judge` and `JuryVote.repetitions_coerced` in the result, and each `JuryRepetition` carries `verdict_coerced`. No report renders them yet, so query the spans or read the result's `jury` output.
 
 Span attributes on `orq.jury`:
 
@@ -422,10 +423,11 @@ Every LLM invocation issued during a `red_team()` or simulation run (`simulate()
 
 | Surface | Key | Where |
 |---|---|---|
-| Request `metadata` on every LLM invocation | `evaluatorq_run_id` | red-team + simulation runs, including inherited nested work |
+| Request `metadata` on every Orq-routed LLM invocation | `evaluatorq_run_id` | red-team + simulation runs, including inherited nested work |
+| Attributes on every LLM span | `orq.evaluatorq_run_id`, `orq.evaluatorq_pipeline` | every LLM span in a bound run, on any endpoint, Orq-routed or not |
 | Root span attribute | `orq.evaluatorq_run_id` | `Evaluatorq - Red Teaming` root span; `Evaluatorq - Agent Simulation` / `orq.simulation.generate` root spans |
 
-A companion key rides the same rail: `evaluatorq_pipeline`, whose value is `"red_teaming"` or `"agent_simulation"`. It identifies which surface issued the call and is sent as request metadata alongside `evaluatorq_run_id` — filter on it to separate red-team traffic from simulation traffic regardless of run. Both `evaluatorq_run_id` and `evaluatorq_pipeline` are native request `metadata` fields on Chat Completions and Responses calls. They are sent to direct OpenAI-compatible endpoints as well as through the Orq router.
+A companion key rides the same rail: `evaluatorq_pipeline`, whose value is `"red_teaming"` or `"agent_simulation"`. It identifies which surface issued the call and is sent as request metadata alongside `evaluatorq_run_id` — filter on it to separate red-team traffic from simulation traffic regardless of run. Both `evaluatorq_run_id` and `evaluatorq_pipeline` are native request `metadata` fields on Chat Completions and Responses calls. Chat Completions calls send them only when the client routes through the Orq router, or when you pass `store=True` yourself: OpenAI's own Chat Completions API rejects `metadata` while `store` is off, so a direct-OpenAI Chat Completions call omits them. Responses calls send them unless you pass `store=False`, because that API defaults `store` to on. Evaluatorq never turns `store` on for you. Independently of the request metadata, every LLM span carries the same two values as `orq.evaluatorq_run_id` and `orq.evaluatorq_pipeline` attributes, so a run stays attributable on any endpoint. Span attributes reach a backend only when tracing is enabled and exported, that is when `ORQ_API_KEY` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
 ### How it reaches every call
 

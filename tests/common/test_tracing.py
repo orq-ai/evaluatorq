@@ -854,6 +854,38 @@ async def test_openresponses_llm_span_emits_neutral_and_legacy_purpose() -> None
         provider.shutdown()
 
 
+@pytest.mark.asyncio
+async def test_llm_span_carries_bound_run_attribution() -> None:
+    """Every LLM span carries the run id and pipeline label; caller attributes win."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
+    from evaluatorq.common.tracing import with_llm_span
+
+    exporter = _Exporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer('test')
+    try:
+        with patch('evaluatorq.common.tracing.get_tracer', return_value=tracer):
+            with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('run-xyz'):
+                async with with_llm_span(model='openai/gpt-4o'):
+                    pass
+                async with with_llm_span(model='openai/gpt-4o', attributes={'orq.evaluatorq_run_id': 'caller'}):
+                    pass
+            async with with_llm_span(model='openai/gpt-4o'):
+                pass
+        spans = exporter.spans
+        first, second, unbound = (_attrs(s) for s in spans)
+        assert first['orq.evaluatorq_run_id'] == 'run-xyz'
+        assert first['orq.evaluatorq_pipeline'] == 'red_teaming'
+        assert second['orq.evaluatorq_run_id'] == 'caller'
+        assert 'orq.evaluatorq_run_id' not in unbound
+    finally:
+        provider.shutdown()
+
+
 @pytest.mark.parametrize('bad', [-1, float('nan'), float('-inf'), float('inf')])
 def test_record_llm_response_survives_unusable_token_counts(bad: float) -> None:
     """Tracing must never raise on a hostile usage payload.

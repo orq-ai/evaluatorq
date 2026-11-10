@@ -423,7 +423,7 @@ class BaseAgent(UsageTracking, ABC):
                         span=span,
                         timeout_s=timeout_s,
                         temperature=temp,
-                        max_tokens=max_tok,
+                        max_completion_tokens=max_tok,
                         tools=tools,
                         extra_body=self.config.extra_body or None,
                         extra_kwargs=reasoning_kwargs,

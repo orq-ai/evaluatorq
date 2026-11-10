@@ -18,11 +18,13 @@ Covers:
 from __future__ import annotations
 
 import contextlib
+import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
 from evaluatorq.common.jury import (
     _agreement_rate,
     _jury_stats,
@@ -32,6 +34,7 @@ from evaluatorq.common.jury import (
 )
 from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _owasp_judge_fn
 
 
 def _majority_vote(votes: list[bool | None]) -> tuple[bool | float | str | None, bool]:
@@ -1193,6 +1196,124 @@ class TestExtractEvaluationError:
 
         assert _extract_evaluation_error({'value': True}) is None
         assert _extract_evaluation_error(None) is None
+
+
+COERCED_VERDICT = '{"explanation": "contradiction", "abstain": true, "value": true}'
+CLEAN_ABSTENTION = '{"explanation": "declined", "abstain": true, "value": null}'
+
+
+class TestCoercedVerdictReachesTheVote:
+    @pytest.mark.asyncio
+    async def test_adaptive_judge_fn(self):
+        client = _model_client({'judge-a': [COERCED_VERDICT], 'judge-b': [CLEAN_ABSTENTION]})
+        evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=client, judges=['judge-b'])
+
+        result = await _evaluate(evaluator)
+
+        assert result.jury is not None
+        votes = {v.model: v for v in result.jury.votes}
+        assert votes['judge-a'].repetitions_coerced == 1
+        assert votes['judge-a'].repetitions[0].verdict_coerced is True
+        assert votes['judge-b'].repetitions_coerced == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(('content', 'coerced'), [(COERCED_VERDICT, True), (CLEAN_ABSTENTION, False)])
+    async def test_owasp_bridge_judge_fn(self, content: str, coerced: bool):
+        outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+        with patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.run_judge', AsyncMock(return_value=outcome)):
+            prediction = await _owasp_judge_fn(
+                'judge-a', client=AsyncMock(), cfg=MagicMock(), prompt_template='', replacements={}, last_error={}
+            )
+        assert prediction.abstained is True
+        assert prediction.verdict_coerced is coerced
+
+
+@pytest.mark.parametrize(('content', 'coerced'), [(COERCED_VERDICT, True), (CLEAN_ABSTENTION, False)])
+def test_single_judge_result_carries_the_coerced_flag(content: str, coerced: bool):
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.raw_output is not None
+    assert result.raw_output['verdict_coerced'] is coerced
+
+
+@pytest.mark.parametrize(
+    ('content', 'cause'),
+    [
+        ('{"value": null, "explanation": "transcript is empty", "abstain": false}', 'judge returned no verdict: transcript is empty'),
+        ('{"value": null, "explanation": "", "abstain": false}', 'judge returned no verdict'),
+    ],
+)
+def test_single_judge_names_a_bare_non_verdict(content: str, cause: str):
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.passed is None
+    assert result.raw_output is not None
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['message'] == cause
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['code'] == 'no_verdict'
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['error_type'] == 'no_verdict'
+
+
+@pytest.mark.parametrize(
+    ('content', 'cause'),
+    [
+        ('{"value": 0.5, "explanation": "half", "abstain": false}', 'judge returned a non-pass/fail verdict: 0.5'),
+        ('{"value": "maybe", "explanation": "unsure", "abstain": false}', "judge returned a non-pass/fail verdict: 'maybe'"),
+    ],
+)
+def test_single_judge_names_a_non_binary_verdict(content: str, cause: str):
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.passed is None
+    assert result.raw_output is not None
+    assert result.raw_output['value'] == json.loads(content)['value']
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['message'] == cause
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['code'] == 'non_binary_verdict'
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['error_type'] == 'non_binary_verdict'
+
+
+NON_BINARY_VERDICT = '{"explanation": "unsure", "abstain": false, "value": "maybe"}'
+
+
+class TestNonBinaryVerdictIsAFailedRepetition:
+    @pytest.mark.asyncio
+    async def test_adaptive_judge_fn(self):
+        client = _model_client({'judge-a': [NON_BINARY_VERDICT], 'judge-b': [CLEAN_ABSTENTION]})
+        evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=client, judges=['judge-b'])
+
+        result = await _evaluate(evaluator)
+
+        assert result.jury is not None
+        vote = {v.model: v for v in result.jury.votes}['judge-a']
+        assert vote.repetitions_failed == 1
+        assert vote.error is not None
+        assert 'non-pass/fail verdict' in vote.error
+
+    @pytest.mark.asyncio
+    async def test_owasp_bridge_judge_fn(self):
+        outcome = JudgeOutcome(
+            payload=EvaluatorResponsePayload.model_validate_json(NON_BINARY_VERDICT), raw_content=NON_BINARY_VERDICT
+        )
+        last_error: dict[str, Any] = {}
+        with patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.run_judge', AsyncMock(return_value=outcome)):
+            prediction = await _owasp_judge_fn(
+                'judge-a', client=AsyncMock(), cfg=MagicMock(), prompt_template='', replacements={}, last_error=last_error
+            )
+        assert prediction.error == "judge returned a non-pass/fail verdict: 'maybe'"
+        assert prediction.value is None
+        assert prediction.decisive is False
+        assert last_error == {}
+
+
+def test_single_judge_clean_abstention_is_not_an_error():
+    content = '{"value": null, "explanation": "cannot judge", "abstain": true}'
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.raw_output is not None
+    assert EVAL_ERROR_RAW_OUTPUT_KEY not in result.raw_output
 
 
 class TestPanelWarningsAreNotRepeated:
