@@ -86,10 +86,13 @@ Explicit `start` and `end` bounds need timezone offsets, and `start` cannot be l
 
 ### Embed with a separate client
 
-Pass `embedding_client` when the client you give `llm_client` has no embeddings API, as with several non-OpenAI providers. It must be an `AsyncOpenAI` client that serves `embeddings.create`, and it handles only the embedding calls; every chat and structured call keeps using `llm_client`. Without it, embeddings use the same client as everything else. evaluatorq never closes an `embedding_client` you pass, and cached vectors are keyed by that client's `base_url`, so switching endpoints never reuses vectors from another one. If the embedding client cannot serve the `embedding_model` you name, the dimension stages fail and the run ends with `status="error"`.
+Pass `embedding_client` to send only the embedding requests to a different `AsyncOpenAI` client, for example OpenAI directly while everything else goes through Orq. Summaries, the classifier and cluster merging still need `llm_client` to be routed through Orq today, because the classifier calls Orq's Decisions endpoint; `embedding_client` changes only where the vectors come from. Without it, embeddings use `llm_client`. evaluatorq never closes an `embedding_client` you pass, and cached vectors are keyed by that client's `base_url`, so switching endpoints never reuses vectors from another one.
+
+`embedding_model` must be in the embedding endpoint's own id format. The default comes from the `embedding` model role and is an Orq-style id such as `openai/text-embedding-3-small`, which does not resolve on api.openai.com. If the embedding client cannot serve the model you name, the dimension stages fail and the run ends with `status="error"`.
 
 ```python
 import asyncio
+import os
 
 from openai import AsyncOpenAI
 
@@ -97,15 +100,17 @@ from evaluatorq.insights import InsightsPopulation, insights
 
 
 async def main() -> None:
-    # chat_client talks to a provider with no embeddings API; OpenAI serves the vectors.
-    chat_client = AsyncOpenAI(base_url="https://llm.example.com/v1", api_key="...")
-    embedding_client = AsyncOpenAI()  # reads OPENAI_API_KEY
+    # Summaries, the classifier and merging go through the Orq router.
+    orq_client = AsyncOpenAI(
+        base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai')}/v3/router",
+        api_key=os.environ["ORQ_API_KEY"],
+    )
+    # Embeddings go to OpenAI directly (reads OPENAI_API_KEY), so the model id is bare.
+    openai_client = AsyncOpenAI()
     run = await insights(
         population=InsightsPopulation(window_days=7, limit=200),
-        llm_client=chat_client,
-        embedding_client=embedding_client,
-        summary_model="openai/gpt-6-sol",
-        classifier_model="typesafe/jev-latest",
+        llm_client=orq_client,
+        embedding_client=openai_client,
         embedding_model="text-embedding-3-small",
     )
     print(run.status)
