@@ -422,10 +422,11 @@ Every LLM invocation issued during a `red_team()` or simulation run (`simulate()
 
 | Surface | Key | Where |
 |---|---|---|
-| Request `metadata` on every LLM invocation | `evaluatorq_run_id` | red-team + simulation runs, including inherited nested work |
+| Request `metadata` on every Orq-routed LLM invocation | `evaluatorq_run_id` | red-team + simulation runs, including inherited nested work |
+| Attributes on every LLM span | `orq.evaluatorq_run_id`, `orq.evaluatorq_pipeline` | every LLM span in a bound run, on any endpoint, Orq-routed or not |
 | Root span attribute | `orq.evaluatorq_run_id` | `Evaluatorq - Red Teaming` root span; `Evaluatorq - Agent Simulation` / `orq.simulation.generate` root spans |
 
-A companion key rides the same rail: `evaluatorq_pipeline`, whose value is `"red_teaming"` or `"agent_simulation"`. It identifies which surface issued the call and is sent as request metadata alongside `evaluatorq_run_id` — filter on it to separate red-team traffic from simulation traffic regardless of run. Both `evaluatorq_run_id` and `evaluatorq_pipeline` are native request `metadata` fields on Chat Completions and Responses calls. They are sent to direct OpenAI-compatible endpoints as well as through the Orq router.
+A companion key rides the same rail: `evaluatorq_pipeline`, whose value is `"red_teaming"` or `"agent_simulation"`. It identifies which surface issued the call and is sent as request metadata alongside `evaluatorq_run_id` — filter on it to separate red-team traffic from simulation traffic regardless of run. Both `evaluatorq_run_id` and `evaluatorq_pipeline` are native request `metadata` fields on Chat Completions and Responses calls. Chat Completions calls send them only when the client routes through the Orq router, or when you pass `store=True` yourself: OpenAI's own Chat Completions API rejects `metadata` while `store` is off, so a direct-OpenAI Chat Completions call omits them. Responses calls send them unless you pass `store=False`, because that API defaults `store` to on. Evaluatorq never turns `store` on for you. Independently of the request metadata, every LLM span carries the same two values as `orq.evaluatorq_run_id` and `orq.evaluatorq_pipeline` attributes, so a run stays attributable on any endpoint. Span attributes reach a backend only when tracing is enabled and exported, that is when `ORQ_API_KEY` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
 ### How it reaches every call
 

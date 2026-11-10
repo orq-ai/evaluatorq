@@ -92,6 +92,10 @@ All notable changes to `evaluatorq` are documented here.
 - **Added: a pairwise compare page at `/compare/pairwise`.** Pick a second pairwise run from the report header to see both verdicts, judge agreement, and every matched comparison with changed winners tagged, paired by question text.
 ### Notable defaults
 
+- **Run metadata is no longer sent to direct OpenAI Chat Completions, and Responses calls keep it unless `store` is off.** Direct OpenAI Chat Completions rejects `metadata` unless `store` is on, so a `red_team()` run against OpenAI failed on its first call. Chat Completions calls off-Orq now omit `evaluatorq_run_id` and `evaluatorq_pipeline` unless you pass `store=True`, and evaluatorq never turns `store` on for you. Orq-routed calls are unchanged. When tracing is exported, every LLM span carries `orq.evaluatorq_run_id` and `orq.evaluatorq_pipeline`. (RES-1873)
+
+- **The OpenAI target and simulation agents send `max_completion_tokens` on Chat Completions.** gpt-5.x rejects `max_tokens`, so these models now work without setting `reasoning_effort`. (RES-1873)
+
 - **The results upload timeout is 120 s, up from 30 s.** It is fixed: a longer wait than the proxy in front of the upload endpoint allows would fail anyway. (BACK-2363)
 
 - **Job and evaluator traces capture their input/output payloads by default.** Jobs use `gen_ai.input/output`; evaluators use `orq.evaluation.input/output`, including simulation criterion details. `EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false` suppresses these payloads. Python scorers without an explicit `evaluator_type` now render as `python_eval` evaluator spans. Failed scorers retain their input and report an error; result scoring is unchanged.

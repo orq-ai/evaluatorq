@@ -18,11 +18,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from openai import BadRequestError
 
 from evaluatorq.common.cli_oauth import DECISIONS_PATH
+from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.model_input import classifier_question_wire_payloads
@@ -167,22 +168,30 @@ def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -
     _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
 
 
-def apply_pipeline_metadata(params: dict[str, Any]) -> None:
-    """Tag the invocation with the active run surface + run id via ``metadata``.
+def apply_pipeline_metadata(
+    params: dict[str, Any],
+    *,
+    client: Any,
+    api: Literal['chat', 'responses'],
+) -> None:
+    """Tag the request with the active run surface and run id via ``metadata``.
 
     Mutates ``params`` in place; no-op when no run is bound. Caller-supplied
-    metadata (via ``extra_kwargs``) wins on key conflict. Public: direct
-    ``create()`` sites that build their own kwargs dict (structured output,
-    first-message generation) call this instead of routing through
-    `execute_chat_completion`.
-
-    Sent regardless of endpoint. ``metadata`` is a first-class field on OpenAI's
-    own Chat Completions / Responses APIs, so it is safe off-Orq — unlike the
-    router-only ``thread`` body param, which callers still gate on
-    ``client_routes_through_orq``. Only set when non-empty: an explicit
-    ``metadata=None`` would serialize as ``"metadata": null`` rather than being
-    stripped from the body.
+    metadata wins on key conflict. Added only when ``client`` routes through the Orq
+    router or ``store`` is on, read from ``params['store']``, then
+    ``params['extra_body']['store']``, then the API default (off for Chat Completions,
+    on for Responses). Chat Completions defaults to ``store=false`` and rejects
+    ``metadata`` then with a 400. ``store`` is never set for the caller, because that
+    would keep attacker and target conversations at the provider.
     """
+    if not client_routes_through_orq(client):
+        if 'store' in params:
+            store = params['store']
+        else:
+            body = params.get('extra_body') or {}
+            store = body.get('store', api == 'responses')
+        if not store:
+            return
     md = pipeline_metadata()
     if md:
         params['metadata'] = {**md, **(params.get('metadata') or {})}
@@ -252,7 +261,7 @@ async def execute_chat_completion(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    apply_pipeline_metadata(params)
+    apply_pipeline_metadata(params, client=client, api='chat')
 
     record_llm_input(span, messages)
 
@@ -334,7 +343,7 @@ async def execute_chat_parse(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    apply_pipeline_metadata(params)
+    apply_pipeline_metadata(params, client=client, api='chat')
 
     record_llm_input(span, messages)
 
@@ -471,7 +480,7 @@ async def execute_response(
     )
 
     strip_known_rejected_responses_reasoning(model, params)
-    apply_pipeline_metadata(params)
+    apply_pipeline_metadata(params, client=client, api='responses')
 
     if record_input:
         record_llm_input(span, messages)
