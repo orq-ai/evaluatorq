@@ -14,15 +14,16 @@ correctness = llm_jury(
 
 ## The presets
 
-Costs are USD per 1,000 pointwise items at 1,500 input and 1,500 output tokens, uncached, one call per judge per item. The token counts are a flat assumption, the same for every seat whatever its reasoning effort. Every figure is recomputed from the committed model garden snapshot in the test suite, so the table below cannot drift away from what the code seats.
+Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, uncached, one call per judge per item. The token counts are a flat 3:1 assumption, the same for every seat whatever its reasoning effort, and the same ratio the seats are ranked on. Every figure is recomputed from the live model catalog's rates by a weekly check, so a repricing shows up as a failing run rather than a quietly wrong table.
 
 | Preset | Judges | Aggregation | $ / 1k | Reserve |
 | --- | --- | --- | --- | --- |
-| **Balanced Trio** (default) | `deepseek/deepseek-v4-pro`<br>`openai/gpt-6-luna`<br>`google/gemini-3.6-flash` | majority | 16.36 | `deepseek/deepseek-flash` |
-| **Strong Jury** | `anthropic/claude-opus-5-5`<br>`openai/gpt-5.6-sol`<br>`google/gemini-3.6-flash` | majority | 85.50 | `deepseek/deepseek-v4-pro` |
-| **Open-Weight / Portable** | `deepseek/deepseek-v4-pro`<br>`wafer/Kimi-K3`<br>`zai/glm-5.2` | majority | 37.66 | `minimax/MiniMax-M2.7` |
-| **EU Region** | `aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0`<br>`google/eu.gemini-3.5-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 27.75 | `google/eu.claude-sonnet-5` |
-| **Single-Provider Trio** | `openai/gpt-5.6-sol`<br>`openai/gpt-5.6-terra`<br>`openai/gpt-6-luna` | majority | 57.90 | `openai/gpt-5.4-nano` |
+| **Balanced Trio** (default) | `deepseek/deepseek-v4-pro`<br>`openai/gpt-6-luna`<br>`google/gemini-3.6-flash` | majority | 7.49 | `deepseek/deepseek-flash` |
+| **Strong Jury** | `anthropic/claude-opus-5-5`<br>`openai/gpt-5.6-sol`<br>`google/gemini-3.6-flash` | majority | 38.00 | `deepseek/deepseek-v4-pro` |
+| **Cheap Aggregate** | `zai/glm-5.3-flash`<br>`google-ai/gemini-3.8-flash`<br>`anthropic/claude-haiku-5-5` | majority | 3.64 | `openai/gpt-6-luna` |
+| **Open-Weight / Portable** | `deepseek/deepseek-v4-pro`<br>`baseten/kimi-k3`<br>`zai/glm-5.2` | majority | 17.39 | `greenpt/qwen3.6-35b-a3b` |
+| **EU Region** | `aws/eu.anthropic.claude-haiku-5-5`<br>`google/eu.gemini-3.7-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 4.64 | `google/eu.claude-sonnet-5` |
+| **Single-Provider Trio** | `openai/gpt-6.1-sol`<br>`openai/gpt-6.1-terra`<br>`openai/gpt-6-luna` | majority | 12.40 | `openai/gpt-6-sol` |
 
 Balanced Trio and Single-Provider Trio use GPT-6 Luna at its `medium` default. On the same Artificial Analysis Intelligence Index v4.3.2, [GPT-6 Luna (Medium)](https://artificialanalysis.ai/models/gpt-6-luna-medium) scores 29.93 against [GPT-5.6 Luna (Medium)](https://artificialanalysis.ai/models/gpt-5-6-luna-medium)'s 25.04, while Orq's captured rates fall from $0.20/$1.20 to $0.10/$0.50 per million input/output tokens. Do not compare these scores with the older index values still present on some catalogue cards. The EU preset keeps its EU-hosted GPT-5.6 Luna seat; the US-hosted successor is not a residency-compatible replacement.
 
@@ -30,13 +31,15 @@ Balanced Trio and Single-Provider Trio use GPT-6 Luna at its `medium` default. O
 
 **Balanced Trio** is the default and the right answer for most subjective evaluation. Three lineages means three different ways of being wrong, which is the whole reason to run a panel instead of one judge three times.
 
-**Strong Jury** costs more than five times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
+**Strong Jury** costs about five times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
 
-**Open-Weight / Portable** buys independence from any closed frontier vendor, and a migration path if you later want to serve the judges yourself. It is not the cheap option: it costs twice the default trio, because the open-weight cards that would make it cheaper are dominated by models already seated elsewhere.
+**Cheap Aggregate** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort. The `zai/glm-5.3-flash` seat is costed on its catalog card rate ($0.075/$0.25 per million); usage on the judge endpoint has been billed at twice that, which would put the panel at $3.88 rather than $3.64.
 
-**EU Region** seats every judge on an EU endpoint. It is not Balanced Trio relocated: the DeepSeek seat has no EU endpoint newer than v3.1, so the panel is Anthropic, Google and OpenAI, which is what the EU catalog can field at the current generation.
+**Open-Weight / Portable** buys independence from any closed frontier vendor, and a migration path if you later want to serve the judges yourself. It is not the cheap option: it costs more than twice the default trio, because the open-weight cards that would make it cheaper are dominated by models already seated elsewhere.
 
-**Single-Provider Trio** exists for workspaces locked to one provider contract. It is the honest version of that constraint rather than a recommendation: three OpenAI tiers correlate, and an OpenAI-generated output faces a self-preference risk the panel cannot vote away.
+**EU Region** seats every judge on an EU endpoint, and is the second-cheapest panel after Cheap Aggregate. It is not Balanced Trio relocated: the DeepSeek seat has no EU endpoint newer than v3.1, so the panel is Anthropic, Google and OpenAI, which is what the EU catalog can field at the current generation.
+
+**Single-Provider Trio** exists for workspaces locked to one provider contract. It seats the three tiers of the newest OpenAI generation, with GPT-6 Luna standing in because no GPT-6.1 Luna is listed. It is the honest version of that constraint rather than a recommendation: three OpenAI tiers correlate, and an OpenAI-generated output faces a self-preference risk the panel cannot vote away.
 
 ## What a preset fills in
 
@@ -53,7 +56,7 @@ Presets are pointwise panels, one call per judge per item, so `assignment="cycli
 
 ## What a preset does not carry
 
-A preset sends no reasoning effort, so each seat runs at its provider's default. `JuryPreset.seated_efforts()` reports it, with `None` for a model whose catalog entry has no effort setting:
+A preset sends no reasoning effort, so each seat runs at its provider's default. `JuryPreset.seated_efforts()` reads it from the live catalog (it needs `ORQ_API_KEY`), with `None` for a model whose catalog entry has no effort setting. Inside async code, `await load_garden()` from `evaluatorq.common.model_frontier` and pass the result as `garden=` instead:
 
 ```python
 from evaluatorq import get_preset
@@ -62,25 +65,43 @@ get_preset("Strong Jury").seated_efforts()
 # {'anthropic/claude-opus-5-5': 'medium', 'openai/gpt-5.6-sol': 'medium', 'google/gemini-3.6-flash': 'medium'}
 ```
 
-Open-Weight / Portable uses `wafer/Kimi-K3` at Wafer's default effort, `none`, instead of `baseten/kimi-k3` at `max`. Wafer bills $3.00 input and $15.00 output per million tokens, matching Baseten's $3.00/$15.00 rates. This is an accepted host-and-effort trade, not a claim that non-reasoning and maximum-reasoning benchmark scores are equal. Both hosts passed a two-answer factual-judging smoke check; that check does not establish equal accuracy on your dataset.
+Two seats run at a default effort that has no benchmark behind it, and are held on a written review rather than ranked: `deepseek/deepseek-v4-pro` runs at `high` while Artificial Analysis measures it only at `max` and `none`, and `openai/gpt-6.1-terra` has no score on the index version the rest of the catalog uses. `REVIEWED_UNBENCHMARKED_SEATS` in `evaluatorq.jury_presets` records each hold with the card fingerprint that expires it.
 
 `llm_jury()` takes one `reasoning_effort` for the whole panel, so passing one overrides every seat's default. Per-judge call settings are a schema change and a separate ticket.
 
 Two more limits worth knowing before you quote a number:
 
 - Agreement between these panels and human raters is inherited from the literature, not measured on orq data. There is no human-agreement baseline behind any of these presets.
-- The 1,500 output tokens are an assumption, not a measurement. A judge that reasons less than that on your items costs less than the table, and one that reasons more costs more.
+- The 500 output tokens are an assumption, not a measurement, and a floor rather than a typical figure: a judge that reasons without being asked writes more than that and costs more than the table.
 
 ## How a preset stays current
 
-Seats are chosen in this package. Compare Artificial Analysis intelligence at the model's default reasoning effort against its price within each lineage, because the default is the effort a preset call runs at. Explicitly reviewed host-and-effort trades can retain a seat without a benchmark at its new default; the Wafer Kimi seat is such a trade, not a measured dominance claim. Lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
+Seats are chosen in this package. `evaluatorq.common.model_frontier` reads the live `/v2/models` catalog, where every autorouter-eligible card carries Artificial Analysis intelligence scores per reasoning effort beside its rates, and ranks each model at its default effort on a 3:1 blended price. Compare seats within each lineage, because lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
 
-`common/data/jury_judge_rates.json` records what each seated judge bills, the default reasoning effort it runs at, and when both were captured. Every published figure is recomputed from those rates on every test run, so a repricing fails CI instead of quietly making the docs wrong. An opt-in integration test (`ORQ_API_KEY` plus `RUN_PRICING_DRIFT=1`) compares the table against the live catalog, which is how a repricing or a changed default gets noticed in the first place.
+Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog and opens an issue when one fails. Each failure names the seat and the register to update:
 
-Waiting for a test run to notice a repricing means waiting for someone to push. `scripts/refresh_jury_judge_rates.py` re-reads each seat's rates and default reasoning effort from the live catalog and rewrites the table, and a monthly workflow runs it and opens a pull request when anything moved. A repricing, a changed default and a seat missing from the catalog are each printed as a decision for a human, and the script refuses to report a whole table of retirements when what actually failed was the key.
+- a seat the catalog no longer serves, or that can no longer be ranked at its default effort
+- a repricing that moves a published figure in the table above
+- a newer model in a seated lineage that nobody has reviewed (`REVIEWED_SUCCESSORS`)
+- a same-lineage model that beats a seat on both intelligence and price
+- a seat older than 180 days whose lineage has stopped shipping (`AGED_SEATS`)
+
+Read the catalog with a workspace-scoped key. A project-scoped key lists only what that project has enabled, so the checks would run on a truncated catalog; the suite fails on purpose when it sees one. Routes the router serves but the catalog omits are recorded in `UNLISTED_ROUTES`, each with its source and date.
 
 A preset that is not in `PRESETS` still owes you a reason. `DROPPED_PRESETS` records one that shipped and was then retired, `WITHHELD_PRESETS` one that is derived and costed but not seated because a seat cannot do the job yet, and asking for either by name raises an error carrying that reason rather than a bare "unknown preset".
 
-Cheap Aggregate is the entry in `WITHHELD_PRESETS`. It is a five-judge volume panel, but `minimax/MiniMax-M2.7` answers a `json_schema` response format with prose, and the fallback that would resend the schema as instructions only fires when a provider rejects the request outright, not when a 200 comes back the wrong shape. Four voting seats is an even panel, which is the one shape the validator exists to reject, and it slips through only because the validator counts declared seats rather than voting ones. Seating the named reserve does not rescue it either: `zai/glm-5.2` costs $8.70 per 1k for that seat alone, which defeats a budget panel. It ships when the judge path falls back on an unparseable 200 as well as on a rejected request.
-
 Value Trio is the one entry in `DROPPED_PRESETS`. It was a budget panel whose measured cost ran far above its published figure, because two of its judges wrote long prose verdicts. Asking for it by name raises an error carrying that reason rather than a bare "unknown preset".
+
+## Router pools
+
+`evaluatorq.router_pools` derives candidate pools for the autorouter from the same live garden. A router calls one model per request rather than every member, so a pool is chosen for value under a constraint rather than for independent errors: each pool is three models on the Pareto frontier of what the constraint allows, with adjacent price tiers at least 2.75x apart. Membership is derived on first use, never committed.
+
+```python
+from evaluatorq.router_pools import get_pools, get_underivable_pools
+
+pools = get_pools()  # reads /v2/models; needs ORQ_API_KEY
+pools["EU Region Only"].models
+get_underivable_pools()  # constraint name -> why no pool could be seated today
+```
+
+A pool publishes a cost range rather than a figure, at the same 1,500 input and 500 output tokens: what a request costs depends on the routing policy that picks within the pool. `DROPPED_POOLS` records the shapes that were retired and why, and `REVIEWED_UNDERIVABLE_POOLS` the ones the current catalog cannot seat.
