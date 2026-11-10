@@ -22,7 +22,7 @@ from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
 
-from .test_chat_adapter import FakeAnthropic, make_message
+from .test_chat_adapter import FakeAnthropic, call as chat_call, make_message
 from .test_structured_output import FakeClient
 
 
@@ -251,6 +251,15 @@ def test_max_tokens_is_incomplete():
     assert response.incomplete_details is not None
     assert response.incomplete_details.reason == 'max_output_tokens'
     assert responses_stop_reason(response) == 'length'
+
+
+def test_pause_turn_is_completed_like_the_chat_face():
+    response, _ = respond(make_message(stop_reason='pause_turn'))
+    assert response.status == 'completed'
+    assert response.incomplete_details is None
+    assert response.output_text == 'hello'
+    chat, _ = chat_call(make_message(stop_reason='pause_turn'))
+    assert chat.choices[0].finish_reason == 'stop'
 
 
 def test_refusal_is_a_refusal_part():

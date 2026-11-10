@@ -263,15 +263,16 @@ def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[st
             raise ValueError(f'The Anthropic adapter cannot convert a message with role {role!r}.')
     flush_results()
     out = merge_same_role(out)
+    return build_system(system_blocks), out
 
-    system: str | list[dict[str, Any]] | None
+
+def build_system(system_blocks: list[dict[str, Any]]) -> str | list[dict[str, Any]] | None:
+    """Build Anthropic ``system``: ``None`` when empty, the block list when any block has ``cache_control``, else one ``\\n\\n``-joined string."""
     if not system_blocks:
-        system = None
-    elif any('cache_control' in block for block in system_blocks):
-        system = system_blocks
-    else:
-        system = '\n\n'.join(block['text'] for block in system_blocks)
-    return system, out
+        return None
+    if any('cache_control' in block for block in system_blocks):
+        return system_blocks
+    return '\n\n'.join(block['text'] for block in system_blocks)
 
 
 def convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -301,6 +302,17 @@ def convert_tool_choice(tool_choice: Any) -> dict[str, str] | None:
         f'The Anthropic adapter cannot send tool_choice={tool_choice!r}: a forced or named tool choice returns '
         'HTTP 400 on current Claude models. Use "auto" and name the tool in the prompt instead.'
     )
+
+
+def apply_tools(request: dict[str, Any], tools: list[dict[str, Any]] | None, tool_choice: Any) -> None:
+    """Set ``tools`` and ``tool_choice`` on an Anthropic request from Chat-shaped ``tools``; refuse a forced choice even without tools."""
+    if tools:
+        request['tools'] = convert_tools(tools)
+        choice = convert_tool_choice(tool_choice)
+        if choice is not None:
+            request['tool_choice'] = choice
+    elif tool_choice not in (None, 'auto', 'none'):
+        convert_tool_choice(tool_choice)
 
 
 def build_output_config(output_format: dict[str, Any] | None, effort: str | None) -> dict[str, Any]:
@@ -343,13 +355,7 @@ def build_messages_request(params: dict[str, Any]) -> dict[str, Any]:
     }
     if system is not None:
         request['system'] = system
-    if params.get('tools'):
-        request['tools'] = convert_tools(params['tools'])
-        choice = convert_tool_choice(params.get('tool_choice'))
-        if choice is not None:
-            request['tool_choice'] = choice
-    elif params.get('tool_choice') not in (None, 'auto', 'none'):
-        convert_tool_choice(params['tool_choice'])
+    apply_tools(request, params.get('tools'), params.get('tool_choice'))
     apply_shared_params(
         request,
         params,

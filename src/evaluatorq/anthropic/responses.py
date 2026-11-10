@@ -29,10 +29,10 @@ from evaluatorq.anthropic.convert import (
     REFUSAL_FALLBACK_TEXT,
     adapt_schema,
     apply_shared_params,
+    apply_tools,
     build_output_config,
+    build_system,
     content_blocks,
-    convert_tool_choice,
-    convert_tools,
     decode_arguments,
     merge_same_role,
     normalize_model,
@@ -120,14 +120,7 @@ def convert_input(
             continue
         else:
             raise ValueError(f'The Anthropic adapter cannot convert a Responses input item of type {kind!r}.')
-    system: str | list[dict[str, Any]] | None
-    if not system_blocks:
-        system = None
-    elif any('cache_control' in block for block in system_blocks):
-        system = system_blocks
-    else:
-        system = '\n\n'.join(block['text'] for block in system_blocks)
-    return system, merge_same_role(out)
+    return build_system(system_blocks), merge_same_role(out)
 
 
 def _chat_shaped_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -194,13 +187,8 @@ def build_responses_request(params: dict[str, Any], *, text_format: Any = None) 
     }
     if system is not None:
         request['system'] = system
-    if params.get('tools'):
-        request['tools'] = convert_tools(_chat_shaped_tools(params['tools']))
-        choice = convert_tool_choice(params.get('tool_choice'))
-        if choice is not None:
-            request['tool_choice'] = choice
-    elif params.get('tool_choice') not in (None, 'auto', 'none'):
-        convert_tool_choice(params['tool_choice'])
+    tools = params.get('tools')
+    apply_tools(request, _chat_shaped_tools(tools) if tools else None, params.get('tool_choice'))
     text = params.get('text')
     if text_format is not None:
         text = {**(text or {}), 'format': type_to_text_format_param(text_format)}
