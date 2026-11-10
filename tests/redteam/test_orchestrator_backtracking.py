@@ -218,6 +218,18 @@ class TestSeveralErasures:
         assert [t.target.text for t in result.backtracked_turns] == ['no 1', 'no 3']
         assert [t.target.text for t in result.turns] == ['a2', 'a4']
 
+    @pytest.mark.asyncio
+    async def test_each_decision_sees_the_remaining_budget_and_the_whole_conversation(self) -> None:
+        orchestrator, llm = _orchestrator(['q1', ERASE, 'q2', 'q3', KEEP], max_backtracks=2)
+
+        await _run(orchestrator, _Target(['no', 'a2', 'a3']), max_turns=2)
+
+        calls = llm.chat.completions.create.call_args_list
+        first, second = (str(calls[i].kwargs['messages'][-1]['content']) for i in (1, 4))
+        assert '<erasures_left>2</erasures_left>' in first
+        assert '<erasures_left>1</erasures_left>' in second
+        assert 'q2' in second and 'a2' in second and 'system:' in second
+
 
 class TestBudgetAndScope:
     @pytest.mark.asyncio
@@ -596,6 +608,8 @@ class TestRunLevelWarnings:
 
         assert len(warnings) == 1
         assert '3 turn' in warnings[0]
+        assert 'attacker model' in warnings[0]
+        assert 'refusal_judge' not in warnings[0]
 
     @pytest.mark.parametrize(
         'results',
@@ -672,3 +686,11 @@ def test_reports_saved_under_the_old_field_name_keep_their_failure_count() -> No
 
     assert ExecutionDetails.model_validate({'refusal_judge_failures': 2}).backtrack_decision_failures == 2
     assert JobOutputPayload.model_validate({'refusal_judge_failures': 2}).backtrack_decision_failures == 2
+
+
+def test_the_removed_refusal_judge_task_is_rejected_as_an_override() -> None:
+    from evaluatorq.common.model_roles import TASKS, parse_overrides
+
+    assert 'redteam.refusal_judge' not in TASKS
+    with pytest.raises(ValueError):
+        parse_overrides(['redteam.refusal_judge=some/model'])
