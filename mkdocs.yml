@@ -141,6 +141,7 @@ plugins:
           - structured-results.md: Multi-dimensional evaluator scores with EvaluationResultCell.
           - framework-integrations.md: Evaluate LangChain and LangGraph agents.
           - guides/targets.md: The system under test — built-in target kinds and how to write your own AgentTarget.
+          - anthropic.md: Run red teaming, simulation and Insights on an Anthropic, Bedrock or Vertex client, with Claude model ids per role and server-side fallbacks.
           - coding-agent-targets.md: Run Claude Code, Codex CLI or OpenCode as the system under test, directly or through orq launch.
           - dashboard.md: Browse red team and simulation reports in a local web dashboard.
           - trace-finder.md: Find semantic matches in recent Orq traces with a classify model.
@@ -286,6 +287,7 @@ nav:
       - Structured Results: structured-results.md
       - Framework Integrations: framework-integrations.md
       - Targets: guides/targets.md
+      - Anthropic Clients: anthropic.md
       - Coding Agents: coding-agent-targets.md
       - Dashboard: dashboard.md
       - Trace Finder: trace-finder.md
