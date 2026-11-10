@@ -76,8 +76,9 @@ def test_truncates_sample_validation_errors_after_twenty(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     ('category', 'expected'),
     [
-        ('sensitive_information_disclosure', "'sensitive_information_disclosure' is not a category"),
+        ('sensitive_information_disclosure', "'sensitive_information_disclosure' is not in the default category set"),
         ('LLM03', "Use 'ASI04'."),
+        ('owasp-llm03', "Use 'ASI04'."),
     ],
 )
 def test_rejects_category_a_run_would_not_request(tmp_path: Path, category: str, expected: str) -> None:

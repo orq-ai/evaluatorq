@@ -899,12 +899,13 @@ def _collect_sample_errors(samples: Any) -> list[str]:
                 errors.append(f'  {row}.{loc}: {err["msg"]}')
             continue
         category = parsed.input.category
-        if normalize_category(category.upper()) not in requested:
-            vuln = resolve_category_safe(category)
+        code = normalize_category(category.upper())
+        if code not in requested:
+            vuln = resolve_category_safe(code)
             hint = f" Use '{get_primary_category(vuln)}'." if vuln is not None else ''
             errors.append(
-                f'  {row}.input.category: {category!r} is not a category '
-                f'a red team run requests, so this row would not run.{hint}'
+                f'  {row}.input.category: {category!r} is not in the default category set, '
+                f'so a run without a category filter skips this row.{hint}'
             )
     return errors
 
@@ -921,7 +922,7 @@ def validate_dataset(
     """Validate the shape of a red team dataset.
 
     Checks that every sample has the required fields, that messages
-    are well-formed, and that every row's category is one a run requests.
+    are well-formed, and that every row's category is in the default set a run requests.
     Does NOT enforce enum membership for open-set fields like
     attack_technique or delivery_method.
     """

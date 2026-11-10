@@ -176,7 +176,7 @@ On the CLI the same run is `eq redteam run --target agent:my-agent --mode static
 
 ## Rows a run would not request
 
-A run replays a row only when its `category`, upper-cased and with any `OWASP-` prefix removed, is one of the 18 codes above (`OWASP-LLM07` and `llm07` both run). `validate-dataset` rejects any other value and names the row, so a row that would never run fails the check instead of shrinking the run. Two mistakes end up here.
+A run with no category filter replays a row only when its `category`, upper-cased and with any `OWASP-` prefix removed, is one of the 18 codes above (`OWASP-LLM07` and `llm07` both run). `validate-dataset` rejects any other value and names the row, so a row that a default run would skip fails the check instead of shrinking the run. Two mistakes end up here.
 
 A misspelled `vulnerability` is rejected on its own field, with the valid values listed:
 
@@ -242,11 +242,11 @@ Validating local file: llm03.json
 Found 1 samples.
 
 FAIL: 1 validation error(s):
-  sample[0] (id='llm03-001').input.category: 'LLM03' is not a category a red team run requests, so this row would not run. Use 'ASI04'.
+  sample[0] (id='llm03-001').input.category: 'LLM03' is not in the default category set, so a run without a category filter skips this row. Use 'ASI04'.
 exit code 1
 ```
 
-The check uses the 18 codes a run requests by default. A run that passes `categories=[...]` replays only the rows in that list, so after such a run compare the ids in `report.results` against the ids in your file; a count alone is ambiguous, because `--max-static-datapoints` and `--delivery-method` also reduce it.
+The check uses the 18 codes a run requests by default. A run that passes `categories=[...]` replays only the rows in that list, which can include a code outside the 18 such as `LLM03`, so after such a run compare the ids in `report.results` against the ids in your file; a count alone is ambiguous, because `--max-static-datapoints` and `--delivery-method` also reduce it.
 
 That last filter is its own trap. `--delivery-method` matches `delivery_method` **exactly**, with no case or punctuation folding, and the field defaults to an empty string, so a `--delivery-method crescendo` run against a dataset that omits the field selects nothing at all.
 

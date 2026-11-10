@@ -134,6 +134,27 @@ class TestLoadFromFileError:
             evaluatorq_bridge._load_from_file(wrong)
         assert isinstance(ei.value.__cause__, ValidationError)
 
+    def test_unknown_vulnerability_raises_dataset_error(self, tmp_path):
+        from evaluatorq.redteam.exceptions import DatasetError
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+        row = {
+            'input': {
+                'id': 'typo-001',
+                'vulnerability': 'goal_hijack',
+                'severity': 'low',
+                'vulnerability_domain': 'agent',
+                'turn_type': 'single',
+                'source': 'test',
+            },
+            'messages': [{'role': 'user', 'content': 'x'}],
+        }
+        path = tmp_path / 'dataset.json'
+        path.write_text(json.dumps({'samples': [row]}))
+
+        with pytest.raises(DatasetError, match="Unknown vulnerability 'goal_hijack'"):
+            evaluatorq_bridge._load_from_file(path)
+
 
 class TestMultiAgentGate:
     """ASI07/08 are skipped for single-agent targets and kept for multi-agent ones (gripe #5)."""
