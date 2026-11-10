@@ -397,6 +397,11 @@ def normalize_category(category: str) -> str:
     return category.removeprefix('OWASP-')
 
 
+def category_key(category: str) -> str:
+    """Return the form of a category code that run filters compare: upper case, no 'OWASP-' prefix."""
+    return normalize_category(category.upper())
+
+
 def infer_framework(category: str) -> str:
     """Infer OWASP framework from category code.
 
@@ -500,8 +505,8 @@ class RedTeamInput(BaseModel):
             try:
                 vuln_enum = Vulnerability(data['vulnerability'])
             except ValueError:
-                valid = ', '.join(v.value for v in Vulnerability)
-                msg = f'Unknown vulnerability {data["vulnerability"]!r}. Valid vulnerabilities: {valid}'
+                valid = sorted(v.value for v in Vulnerability)
+                msg = f'Unknown vulnerability {data["vulnerability"]!r}. Valid vulnerabilities: {valid}.'
                 raise ValueError(msg) from None
             if not has_cat:
                 data['category'] = get_primary_category(vuln_enum)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 import pytest
 from loguru import logger
@@ -41,6 +42,14 @@ class TestEvaluatorCoverage:
         assert missing == [], f'vulnerabilities with no evaluator: {missing}'
 
 
+def _category(dp: Any) -> str:
+    return dp.inputs.get('category', '')
+
+
+def _id(dp: Any) -> str | None:
+    return dp.inputs.get('id')
+
+
 class TestZeroCategoryWarning:
     """A requested category with zero datapoints warns instead of silently vanishing (gripe #3)."""
 
@@ -51,7 +60,7 @@ class TestZeroCategoryWarning:
         dps = [DataPoint(inputs={'category': 'ASI01'})]
         messages, stop = _capture_logs('WARNING')
         try:
-            kept = _filter_by_categories(dps, ['ASI01', 'ASI03'], category_of=lambda dp: dp.inputs.get('category', ''))
+            kept = _filter_by_categories(dps, ['ASI01', 'ASI03'], category_of=_category, id_of=_id)
         finally:
             stop()
 
@@ -67,11 +76,47 @@ class TestZeroCategoryWarning:
         dps = [DataPoint(inputs={'category': 'ASI01'}), DataPoint(inputs={'category': 'OWASP-ASI02'})]
         messages, stop = _capture_logs('WARNING')
         try:
-            kept = _filter_by_categories(dps, ['ASI01', 'ASI02'], category_of=lambda dp: dp.inputs.get('category', ''))
+            kept = _filter_by_categories(dps, ['ASI01', 'ASI02'], category_of=_category, id_of=_id)
         finally:
             stop()
 
         assert len(kept) == 2
+        assert messages == []
+
+    @pytest.mark.parametrize('category', ['ASI1', 'LLM03'])
+    def test_warns_with_ids_for_unrequestable_category(self, category: str):
+        from evaluatorq import DataPoint
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _filter_by_categories
+
+        dps = [
+            DataPoint(inputs={'id': 'ok', 'category': 'ASI01'}),
+            DataPoint(inputs={'id': 'r1', 'category': category}),
+            DataPoint(inputs={'id': 'r2', 'category': category}),
+        ]
+        messages, stop = _capture_logs('WARNING')
+        try:
+            kept = _filter_by_categories(dps, ['ASI01', 'ASI04'], category_of=_category, id_of=_id)
+        finally:
+            stop()
+
+        assert len(kept) == 1
+        assert (
+            f'Skipped 2 static datapoint(s) with category {category!r}, which is not a requested '
+            'category code (ids: r1, r2).'
+        ) in '\n'.join(messages)
+
+    def test_no_skip_warning_for_unrequested_valid_category(self):
+        from evaluatorq import DataPoint
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _filter_by_categories
+
+        dps = [DataPoint(inputs={'id': 'a', 'category': 'ASI01'}), DataPoint(inputs={'id': 'b', 'category': 'LLM03'})]
+        messages, stop = _capture_logs('WARNING')
+        try:
+            kept = _filter_by_categories(dps, ['ASI01'], category_of=_category, id_of=_id)
+        finally:
+            stop()
+
+        assert len(kept) == 1
         assert messages == []
 
 

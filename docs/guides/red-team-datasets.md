@@ -114,7 +114,7 @@ Five fields are required. One of `category` or `vulnerability` is also required;
 | `framework` | no | `OWASP-LLM`, `OWASP-ASI`, `OWASP-AGENTIC` (default), `CONTENT`, `LIABILITY`, `FAIRNESS`, `GDPR`, `AI-ACT` | Nothing: a value outside the list fails validation, and a valid one is discarded and re-inferred from `category` |
 | `additional_metadata` | no | any object | Carried through to the report untouched |
 
-**`category` is the field that acts.** It selects the judge and it is what the run's filter matches; everything else on the row is a label. `vulnerability` is a convenience: supply it alone and it resolves into `category` (`system_prompt_leakage` yields `LLM07`), supply `category` alone and the report derives the vulnerability back from it, and supply both and neither is touched. Write `category` directly — it is the spelling with the fewest ways to go wrong.
+**`category` is the field that acts.** It selects the judge and it is what the run's filter matches; everything else on the row is a label. `vulnerability` is a convenience: supply it alone and it resolves into `category` (`system_prompt_leakage` yields `LLM07`), supply `category` alone and the report derives the vulnerability back from it, and supply both and both are kept as written. An unknown `vulnerability` fails validation even next to a valid `category`, and when the two disagree the judge follows `category`. Write `category` directly, since it is the spelling with the fewest ways to go wrong.
 
 The 18 codes a run requests, and the vulnerability each resolves to. This is the set `category` must come from; [Vulnerabilities and frameworks](vulnerabilities-and-frameworks.md) explains what each one means and lists the wider set of codes you can *filter* by.
 
@@ -207,11 +207,12 @@ Validating local file: typo.json
 Found 1 samples.
 
 FAIL: 1 validation error(s):
-  sample[0] (id='typo-001').input: Value error, Unknown vulnerability 'sensitive_information_disclosure'. Valid vulnerabilities: goal_hijacking, tool_misuse, identity_privilege_abuse, supply_chain, code_execution, memory_poisoning, inter_agent_comms, cascading_failures, trust_exploitation, rogue_agents, excessive_agency, prompt_injection, sensitive_info_disclosure, data_poisoning, improper_output, system_prompt_leakage, vector_embedding_weakness, misinformation
+  sample[0] (id='typo-001').input: Value error, Unknown vulnerability 'sensitive_information_disclosure'.
+Valid vulnerabilities: ['cascading_failures', 'code_execution', 'data_poisoning', 'excessive_agency', 'goal_hijacking', 'identity_privilege_abuse', 'improper_output', 'inter_agent_comms', 'memory_poisoning', 'misinformation', 'prompt_injection', 'rogue_agents', 'sensitive_info_disclosure', 'supply_chain', 'system_prompt_leakage', 'tool_misuse', 'trust_exploitation', 'vector_embedding_weakness'].
 exit code 1
 ```
 
-The real value is `sensitive_info_disclosure`. Loading the file for a run raises the same error, so the row cannot be dropped quietly there either.
+The real value is `sensitive_info_disclosure`. Loading the file for a run raises the same error, so the run stops before any attack instead of dropping the row.
 
 A correct OWASP-LLM code can miss too. `LLM03` resolves to the `supply_chain` vulnerability, but a run requests that vulnerability under its primary code `ASI04`, so validation rejects the row and suggests the code to use:
 
@@ -245,6 +246,8 @@ FAIL: 1 validation error(s):
   sample[0] (id='llm03-001').input.category: 'LLM03' is not in the default category set, so a run without a category filter skips this row. Use 'ASI04'.
 exit code 1
 ```
+
+A run that skips a row for its `category` logs a warning naming the row ids, for example `Skipped 1 static datapoint(s) with category 'ASI1', which is not a requested category code (ids: typo-002).` It does so when the code is a typo or, like `LLM03`, stands for a vulnerability the run requests under another code; a row left out because you filtered to other categories is not reported.
 
 The check uses the 18 codes a run requests by default. A run that passes `categories=[...]` replays only the rows in that list, which can include a code outside the 18 such as `LLM03`, so after such a run compare the ids in `report.results` against the ids in your file; a count alone is ambiguous, because `--max-static-datapoints` and `--delivery-method` also reduce it.
 

@@ -836,10 +836,10 @@ def _import_hf_download() -> Any:
     return hf_hub_download
 
 
-def _download_and_read_hf_dataset(hf_hub_download: Any, repo: str, filename: str) -> Any:
+def _download_and_read_hf_dataset(hf_hub_download: Any, repo: str, filename: str, revision: str | None = None) -> Any:
     typer.echo(f'Downloading from HuggingFace: {repo}/{filename}')
     try:
-        local_path = hf_hub_download(repo_id=repo, filename=filename, repo_type='dataset')
+        local_path = hf_hub_download(repo_id=repo, filename=filename, repo_type='dataset', revision=revision)
     except Exception as e:
         typer.echo(
             f'Failed to download dataset from HuggingFace ({repo}/{filename}): {e}. '
@@ -862,12 +862,13 @@ def _load_raw_dataset(dataset: str | None) -> Any:
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import (
         DEFAULT_HF_FILENAME,
         DEFAULT_HF_REPO,
+        DEFAULT_HF_REVISION,
         _parse_hf_source,
     )
 
     if dataset is None:
         hf_hub_download = _import_hf_download()
-        return _download_and_read_hf_dataset(hf_hub_download, DEFAULT_HF_REPO, DEFAULT_HF_FILENAME)
+        return _download_and_read_hf_dataset(hf_hub_download, DEFAULT_HF_REPO, DEFAULT_HF_FILENAME, DEFAULT_HF_REVISION)
     if dataset.startswith('hf:'):
         hf_hub_download = _import_hf_download()
         repo, filename = _parse_hf_source(dataset.removeprefix('hf:'))
@@ -878,15 +879,18 @@ def _load_raw_dataset(dataset: str | None) -> Any:
         return json.load(f)
 
 
-def _collect_sample_errors(samples: Any) -> list[str]:
+def _collect_sample_errors(samples: Any) -> tuple[list[str], str]:
+    """Return the per-row errors and, when a vulnerability was unknown, the valid list to print once."""
     from pydantic import ValidationError as _ValidationError
 
     from evaluatorq.redteam.adaptive.strategy_registry import list_available_categories
-    from evaluatorq.redteam.contracts import RedTeamSample, normalize_category
+    from evaluatorq.redteam.contracts import RedTeamSample, category_key
     from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe
 
+    valid_list_marker = ' Valid vulnerabilities: '
     requested = set(list_available_categories())
     errors: list[str] = []
+    valid_vulnerabilities = ''
     for i, sample in enumerate(samples):
         meta = sample.get('input') if isinstance(sample, dict) else None
         sample_id = meta.get('id') if isinstance(meta, dict) else None
@@ -896,18 +900,20 @@ def _collect_sample_errors(samples: Any) -> list[str]:
         except _ValidationError as e:
             for err in e.errors():
                 loc = ' -> '.join(str(loc_part) for loc_part in err['loc'])
-                errors.append(f'  {row}.{loc}: {err["msg"]}')
+                msg, _, valid = err['msg'].partition(valid_list_marker)
+                valid_vulnerabilities = valid_vulnerabilities or valid
+                errors.append(f'  {row}.{loc}: {msg}')
             continue
         category = parsed.input.category
-        code = normalize_category(category.upper())
-        if code not in requested:
-            vuln = resolve_category_safe(code)
+        if category_key(category) not in requested:
+            raw_vuln = parsed.input.vulnerability
+            vuln = Vulnerability(raw_vuln) if raw_vuln else resolve_category_safe(category_key(category))
             hint = f" Use '{get_primary_category(vuln)}'." if vuln is not None else ''
             errors.append(
                 f'  {row}.input.category: {category!r} is not in the default category set, '
                 f'so a run without a category filter skips this row.{hint}'
             )
-    return errors
+    return errors, valid_vulnerabilities
 
 
 @app.command()
@@ -921,10 +927,10 @@ def validate_dataset(
 ) -> None:
     """Validate the shape of a red team dataset.
 
-    Checks that every sample has the required fields, that messages
-    are well-formed, and that every row's category is in the default set a run requests.
-    Does NOT enforce enum membership for open-set fields like
-    attack_technique or delivery_method.
+    Checks that every sample has the required fields, that messages are
+    well-formed, that every vulnerability is known, and that every row's
+    category is in the default set a run requests. Does NOT enforce enum
+    membership for open-set fields like attack_technique or delivery_method.
     """
     raw = _load_raw_dataset(dataset)
 
@@ -936,7 +942,7 @@ def validate_dataset(
     samples = raw['samples']
     typer.echo(f'Found {len(samples)} samples.')
 
-    errors = _collect_sample_errors(samples)
+    errors, valid_vulnerabilities = _collect_sample_errors(samples)
 
     if errors:
         typer.echo(f'\nFAIL: {len(errors)} validation error(s):', err=True)
@@ -944,6 +950,8 @@ def validate_dataset(
             typer.echo(line, err=True)
         if len(errors) > 20:
             typer.echo(f'  ... and {len(errors) - 20} more', err=True)
+        if valid_vulnerabilities:
+            typer.echo(f'Valid vulnerabilities: {valid_vulnerabilities}', err=True)
         raise typer.Exit(code=1)
 
     typer.echo(f'OK: All {len(samples)} samples are valid.')
