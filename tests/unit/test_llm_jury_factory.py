@@ -289,3 +289,63 @@ async def test_client_resolved_lazily_not_at_factory_time():
             dp = DataPoint(inputs={"q": "?"}, expected_output="x")
             await ev["scorer"]({"data": dp, "output": "x"})
         rc.assert_called_once()  # first scorer call: resolved once
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_judge_warns_and_votes_once():
+    with patch.object(llm_jury_mod.logger, "warning") as warn:
+        ev = llm_jury(
+            name="x", criteria="c", judges=["m1", "m1", "m2"],
+            labels=["yes", "no"], passing_labels=["yes"], client=MagicMock(),
+        )
+    warned = [call.args[0] for call in warn.call_args_list]
+    assert any("['m1']" in w and "more than once" in w for w in warned)
+
+    voters: list[str] = []
+
+    async def fake_run_judge(**kwargs):
+        voters.append(kwargs["model"])
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value="yes", explanation="x"),
+            token_usage=None, raw_content="{}",
+        )
+
+    with patch.object(llm_jury_mod, "run_judge", side_effect=fake_run_judge):
+        dp = DataPoint(inputs={"q": "?"}, expected_output="x")
+        await ev["scorer"]({"data": dp, "output": "x"})
+
+    assert sorted(voters) == ["m1", "m2"], "a repeated judge must cast one vote, not two"
+
+
+@pytest.mark.parametrize(("judges", "warns"), [(["m1", "m2"], True), (["m1", "m2", "m3"], False)])
+def test_llm_jury_warns_on_an_even_panel(judges, warns):
+    with patch.object(llm_jury_mod.logger, "warning") as warn:
+        llm_jury(name="x", criteria="c", judges=judges, client=MagicMock())
+    warned = [call.args[0] for call in warn.call_args_list]
+    assert any("even number of judges" in w for w in warned) is warns
+
+
+def test_llm_jury_pairwise_warns_on_an_even_panel():
+    with patch.object(llm_jury_mod.logger, "warning") as warn:
+        llm_jury_mod.llm_jury_pairwise(criteria="c", judges=["m1", "m2"], client=MagicMock())
+    warned = [call.args[0] for call in warn.call_args_list]
+    assert any("even number of judges (2)" in w for w in warned)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "warns"),
+    [
+        ({"verdict_kind": "numeric", "aggregator": "median"}, False),
+        ({"verdict_kind": "numeric"}, False),
+        ({"tie_break": lambda values: values[0]}, False),
+        ({"aggregator": "majority"}, True),
+        ({}, True),
+    ],
+)
+def test_even_panel_advice_only_where_a_split_costs_the_verdict(kwargs, warns):
+    # A numeric reduction always returns a value and a caller's tie_break settles a
+    # split, so neither can lose the verdict to an even panel.
+    with patch.object(llm_jury_mod.logger, "warning") as warn:
+        llm_jury(name="x", criteria="c", judges=["m1", "m2"], client=MagicMock(), **kwargs)
+    warned = [call.args[0] for call in warn.call_args_list]
+    assert any("even number of judges" in w for w in warned) is warns

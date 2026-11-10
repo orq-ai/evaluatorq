@@ -67,7 +67,7 @@ A **model role** names a kind of work, and each role has one configured model. e
 |---|---|---|
 | `fast` | `openai/gpt-6-luna` | The simulated user, simulation generators (persona, scenario, first message, datapoints, from-traces), the simulation recommendations pass and executive summary, and the trace-finder query compiler. |
 | `smart` | `openai/gpt-6-sol` | Red-team attack generation (attacker, objective and attack generators, the adaptive orchestrator, capability and blackbox classifiers) and the red-team executive summary, every judge and evaluator (red-team and OWASP evaluators, the simulation judge, the default `llm_jury()` panel), apply-recommendations, and Insights summaries. |
-| `classifier` | `typesafe/jev-latest` | Ask AI and trace-finder classification, Insights labels, and signal tool-role classification. |
+| `classifier` | `typesafe/jev-latest` | Ask AI and trace-finder classification, Insights labels, signal tool-role classification, and the red-team refusal check for backtracking. |
 | `embedding` | `openai/text-embedding-3-small` | Insights embeddings. |
 
 The smart default is a larger model than the fast one, so red-team, simulation-judge and apply runs cost more than they did before roles existed. To keep the old model everywhere, set both `EVALUATORQ_FAST_MODEL` and `EVALUATORQ_SMART_MODEL` to `openai/gpt-5.6-luna`.
@@ -80,6 +80,7 @@ A **task** is one named use of a role. A task override pins that single use to a
 |---|---|---|
 | `redteam.attacker` | `smart` | Attack generation, including the adaptive orchestrator. |
 | `redteam.evaluator` | `smart` | Red-team and OWASP evaluators. |
+| `redteam.refusal_judge` | `classifier` | The refusal check that decides whether backtracking erases a turn. It falls back to the `fast` role only when it names a classify-only model, such as the default jev, with no reachable classify endpoint: off the Orq router or when the catalogue lists none. A chat model pinned to this task runs as pinned, with no fallback. |
 | `sim.user` | `fast` | The simulated user. |
 | `sim.judge` | `smart` | The simulation judge. |
 | `sim.generator` | `fast` | Persona, scenario, first-message and datapoint generation, simulation recommendations and executive summary. |
@@ -174,9 +175,9 @@ See [Models](#models) for what each role runs and the order they are resolved in
 
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
-| `EVALUATORQ_FAST_MODEL` | No | `openai/gpt-6-luna` | Model for the `fast` role: the simulated user, simulation generators, and the trace-finder compiler. |
+| `EVALUATORQ_FAST_MODEL` | No | `openai/gpt-6-luna` | Model for the `fast` role: the simulated user, simulation generators, the trace-finder compiler, and the refusal check for backtracking when the client does not route through the Orq router. |
 | `EVALUATORQ_SMART_MODEL` | No | `openai/gpt-6-sol` | Model for the `smart` role: red-team attacks, every judge and evaluator, apply-recommendations, and Insights summaries. Set it to `openai/gpt-5.6-luna` to restore the previous default. |
-| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Model for the `classifier` role: Ask AI and trace-finder classification, Insights labels, and signal tool-role classification. See [Trace finder](trace-finder.md) and [Signals](signals.md). |
+| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Model for the `classifier` role: Ask AI and trace-finder classification, Insights labels, signal tool-role classification, and the red-team refusal check for backtracking. See [Trace finder](trace-finder.md) and [Signals](signals.md). |
 | `EVALUATORQ_EMBEDDING_MODEL` | No | `openai/text-embedding-3-small` | Model for the `embedding` role: Insights embeddings. |
 | `EVALUATORQ_COMPILER_MODEL` | No | unset | **Deprecated.** Pins the `finder.compiler` task. Logs one warning per process. Use `--model-override finder.compiler=MODEL`, `model_overrides` in the settings file, or `EVALUATORQ_FAST_MODEL`. |
 | `EVALUATORQ_APPLY_MODEL` | No | unset | **Deprecated.** Pins the `apply` task. Logs one warning per process. Use `--model-override apply=MODEL`, `model_overrides` in the settings file, or `EVALUATORQ_SMART_MODEL`. |
