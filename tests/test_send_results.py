@@ -9,7 +9,7 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from evaluatorq.send_results import SendResultsError, send_results_to_orq
+from evaluatorq.send_results import RESULTS_RECEIVE_PATH, OrqResponse, SendResultsError, send_results_to_orq
 from evaluatorq.types import (
     DataPoint,
     DataPointResult,
@@ -346,7 +346,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             return httpx.Response(
                 401,
                 request=request,
@@ -374,7 +374,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             raise httpx.RequestError("connection failed", request=request)
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -398,7 +398,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             return httpx.Response(503, request=request, json={"error": "service unavailable"})
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -429,7 +429,7 @@ class TestSendResultsUploadFailures:
 
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
             captured["json"] = kwargs["json"]
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             return httpx.Response(
                 200,
                 request=request,
@@ -544,7 +544,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             raise httpx.RequestError("connection failed", request=request)
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -598,7 +598,7 @@ class TestSendResultsBaseUrl:
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
             base_url="https://my.staging.orq.ai",
         )
-        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
     @pytest.mark.asyncio
     async def test_base_url_trailing_slash_normalized(
@@ -619,7 +619,7 @@ class TestSendResultsBaseUrl:
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
             base_url="https://my.staging.orq.ai/",
         )
-        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_env_when_base_url_not_supplied(
@@ -640,7 +640,7 @@ class TestSendResultsBaseUrl:
             start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
         )
-        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
 
 class TestUploadDiagnostics:
@@ -649,7 +649,7 @@ class TestUploadDiagnostics:
     @staticmethod
     def _fake_post(rows_created: int, url: str | None = "https://my.orq.ai/e/abc"):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             body = {
                 "sheet_id": "s1",
                 "manifest_id": "m1",
@@ -895,3 +895,50 @@ class TestSendResultsTimeoutAndRetry:
         with pytest.raises(SendResultsError, match="timed out"):
             await self._upload(build_results, raise_on_error=True)
         assert len(seen) == 1
+
+
+class TestSendResultsExperimentsApiResponse:
+    @pytest.mark.asyncio
+    async def test_parses_the_experiments_api_response(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        """Body as answered by optimization-api on 2026-10-30 for a local upload: the
+        field names are the ones the spreadsheets-api route used, so OrqResponse
+        validates it unchanged."""
+        experiments_api_body = {
+            "sheet_id": "01KN274AXD09TPG3S5G24RQX26",
+            "manifest_id": "01M66QQ3W19DXFFEYJGKHZ21CE",
+            "experiment_name": "llm-eval-with-results",
+            "rows_created": 3,
+            "workspace_key": "orquesta-local",
+            "experiment_url": (
+                "http://localhost:4200/orquesta-local/experiments/01KN274AXD09TPG3S5G24RQX26"
+                "?runId=01M66QQ3W19DXFFEYJGKHZ21CE"
+            ),
+        }
+        captured: dict[str, Any] = {}
+
+        async def fake_post(self: httpx.AsyncClient, url: str, *args: Any, **kwargs: Any) -> httpx.Response:
+            captured["url"] = url
+            return httpx.Response(200, request=httpx.Request("POST", url), json=experiments_api_body)
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+        result = await send_results_to_orq(
+            api_key="key",
+            evaluation_name="llm-eval-with-results",
+            evaluation_description=None,
+            dataset_id=None,
+            results=build_results(0.5),
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            base_url="http://localhost:4200",
+        )
+
+        assert captured["url"] == "http://localhost:4200/v3/experiments/evaluations/receive"
+        assert result == OrqResponse.model_validate(experiments_api_body)
+        assert result is not None
+        assert result.experiment_url is not None
+        assert result.experiment_url.endswith(f"/experiments/{result.sheet_id}?runId={result.manifest_id}")

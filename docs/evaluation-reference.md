@@ -190,8 +190,8 @@ The response source is chosen by the `data` argument to `evaluatorq()`:
 
 Both IDs are read off the Orq UI:
 
-- **`experiment_id`** — the ID in the experiment URL, `/experiments/<experiment_id>`. The REST API calls experiments "spreadsheets", so the same ID appears in `/v2/spreadsheets/<id>` routes.
-- **`run_id`** — optional. Every execution of an experiment creates a new run (a "manifest" in the API). Open a run from the experiment's run history to read its ID from the URL. Omit it to replay the latest run.
+- **`experiment_id`** — the ID in the experiment URL, `/experiments/<experiment_id>`. The same ID appears in the `/v3/experiments/<id>` API routes.
+- **`run_id`** — optional. Every execution of an experiment creates a new run. Open a run from the experiment's run history to read its ID from the URL, or list them with `GET /v3/experiments/<id>/runs`. Omit it to replay the latest run.
 
 ### Example
 
