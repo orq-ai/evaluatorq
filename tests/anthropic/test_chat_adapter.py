@@ -124,9 +124,47 @@ def test_assistant_tool_calls_and_merged_tool_results():
         'content': [
             {'type': 'tool_result', 'tool_use_id': 't1', 'content': 'one'},
             {'type': 'tool_result', 'tool_use_id': 't2', 'content': 'two'},
+            {'type': 'text', 'text': 'thanks'},
         ],
     }
-    assert len(sent['messages']) == 4
+    assert len(sent['messages']) == 3
+
+
+def test_consecutive_user_messages_merge_into_one_turn():
+    _, sent = call(messages=[{'role': 'user', 'content': 'a'}, {'role': 'user', 'content': 'b'}])
+    assert sent['messages'] == [
+        {'role': 'user', 'content': [{'type': 'text', 'text': 'a'}, {'type': 'text', 'text': 'b'}]}
+    ]
+
+
+def test_consecutive_assistant_messages_merge_into_one_turn():
+    _, sent = call(
+        messages=[
+            {'role': 'user', 'content': 'go'},
+            {'role': 'assistant', 'content': 'one'},
+            {'role': 'assistant', 'content': 'two'},
+        ]
+    )
+    assert [m['role'] for m in sent['messages']] == ['user', 'assistant']
+    assert sent['messages'][1]['content'] == [{'type': 'text', 'text': 'one'}, {'type': 'text', 'text': 'two'}]
+
+
+def test_empty_message_list_raises_before_the_api_call():
+    with pytest.raises(ValueError, match='no user or assistant content'):
+        call(messages=[{'role': 'system', 'content': 'rules'}])
+
+
+def test_empty_content_message_is_dropped_with_a_debug_log():
+    from loguru import logger
+
+    seen: list[str] = []
+    handler = logger.add(lambda m: seen.append(str(m)), level='DEBUG')
+    try:
+        _, sent = call(messages=[{'role': 'user', 'content': 'hi'}, {'role': 'assistant', 'content': ''}])
+    finally:
+        logger.remove(handler)
+    assert [m['role'] for m in sent['messages']] == ['user']
+    assert any('empty content' in line for line in seen)
 
 
 def test_image_part_raises_naming_the_type():
@@ -210,14 +248,24 @@ def test_usage_mapping_and_extract():
 
 @pytest.mark.parametrize(
     ('given', 'sent'),
-    [('claude-sonnet-5-5', 'claude-sonnet-5-5'), ('anthropic/claude-sonnet-5-5', 'claude-sonnet-5-5')],
+    [
+        ('claude-sonnet-5-5', 'claude-sonnet-5-5'),
+        ('anthropic/claude-sonnet-5-5', 'claude-sonnet-5-5'),
+        ('anthropic/claude-opus-5-5', 'claude-opus-5-5'),
+        (
+            'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5-5-v1:0',
+            'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5-5-v1:0',
+        ),
+        ('us.anthropic.claude-opus-5-5-v1:0', 'us.anthropic.claude-opus-5-5-v1:0'),
+        ('claude-opus-5-5@20260101', 'claude-opus-5-5@20260101'),
+    ],
 )
 def test_model_prefix_accepted(given, sent):
     _, request = call(model=given)
     assert request['model'] == sent
 
 
-@pytest.mark.parametrize('model', ['openai/gpt-6-luna', 'orq/foo'])
+@pytest.mark.parametrize('model', ['openai/gpt-6-luna', 'openai/gpt-6-sol', 'orq/foo'])
 def test_other_provider_prefix_raises(model):
     with pytest.raises(ValueError, match='EVALUATORQ_FAST_MODEL'):
         call(model=model)
@@ -238,6 +286,25 @@ def test_sampling_and_max_tokens_defaults():
 def test_reasoning_effort_becomes_output_config():
     _, sent = call(reasoning_effort='high')
     assert sent['output_config'] == {'effort': 'high'}
+
+
+@pytest.mark.parametrize(
+    ('given', 'sent'),
+    [('minimal', 'low'), ('low', 'low'), ('medium', 'medium'), ('high', 'high'), ('xhigh', 'max'), ('max', 'max')],
+)
+def test_reasoning_effort_mapping(given, sent):
+    _, request = call(reasoning_effort=given)
+    assert request['output_config'] == {'effort': sent}
+
+
+def test_reasoning_effort_none_is_omitted():
+    _, request = call(reasoning_effort='none')
+    assert 'output_config' not in request
+
+
+def test_unknown_reasoning_effort_raises_naming_allowed_values():
+    with pytest.raises(ValueError, match='xhigh'):
+        call(reasoning_effort='extreme')
 
 
 def test_metadata_dropped_headers_and_timeout_pass_through():

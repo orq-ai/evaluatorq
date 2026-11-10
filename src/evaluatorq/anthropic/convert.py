@@ -9,6 +9,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from loguru import logger
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionMessage, ChatCompletionMessageFunctionToolCall
 from openai.types.chat.chat_completion import Choice
@@ -34,6 +35,17 @@ _FINISH_REASONS: dict[str, str] = {
     'tool_use': 'tool_calls',
     'refusal': 'content_filter',
 }
+
+_EFFORT_LEVELS: dict[str, str | None] = {
+    'none': None,
+    'minimal': 'low',
+    'low': 'low',
+    'medium': 'medium',
+    'high': 'high',
+    'xhigh': 'max',
+    'max': 'max',
+}
+"""OpenAI ``reasoning_effort`` to Anthropic ``output_config.effort``, which allows ``low|medium|high|max``; ``None`` omits it."""
 
 _SUPPORTED_KEYS = frozenset({
     'model',
@@ -115,6 +127,17 @@ def _decode_arguments(call: dict[str, Any]) -> dict[str, Any]:
     return decoded
 
 
+def _merge_same_role(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Join adjacent turns of the same role into one, keeping block order (tool results come first in a user turn)."""
+    merged: list[dict[str, Any]] = []
+    for turn in turns:
+        if merged and merged[-1]['role'] == turn['role']:
+            merged[-1] = {'role': turn['role'], 'content': [*merged[-1]['content'], *turn['content']]}
+        else:
+            merged.append(turn)
+    return merged
+
+
 def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
     """Split OpenAI messages into Anthropic ``(system, messages)``.
 
@@ -145,6 +168,8 @@ def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[st
             blocks = _content_blocks(message.get('content'), role='user')
             if blocks:
                 out.append({'role': 'user', 'content': blocks})
+            else:
+                logger.debug('Dropping a user message with empty content before sending it to Anthropic.')
         elif role == 'assistant':
             blocks = _content_blocks(message.get('content'), role='assistant')
             for call in message.get('tool_calls') or []:
@@ -156,9 +181,12 @@ def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[st
                 })
             if blocks:
                 out.append({'role': 'assistant', 'content': blocks})
+            else:
+                logger.debug('Dropping an assistant message with empty content before sending it to Anthropic.')
         else:
             raise ValueError(f'The Anthropic adapter cannot convert a message with role {role!r}.')
     flush_results()
+    out = _merge_same_role(out)
 
     system: str | list[dict[str, Any]] | None
     if not system_blocks:
@@ -211,6 +239,10 @@ def build_messages_request(params: dict[str, Any]) -> dict[str, Any]:
         raise TypeError(f'The Anthropic adapter does not support chat.completions.create parameters: {unknown}')
 
     system, messages = convert_messages(params['messages'])
+    if not messages:
+        raise ValueError(
+            'The Anthropic adapter has no user or assistant content to send: every message was empty or a system message.'
+        )
     max_tokens = params.get('max_completion_tokens')
     if max_tokens is None:
         max_tokens = params.get('max_tokens')
@@ -232,8 +264,12 @@ def build_messages_request(params: dict[str, Any]) -> dict[str, Any]:
         if params.get(key) is not None:
             request[key] = params[key]
     effort = params.get('reasoning_effort')
-    if effort is not None and effort != 'none':
-        request['output_config'] = {'effort': 'low' if effort == 'minimal' else effort}
+    if effort is not None:
+        if effort not in _EFFORT_LEVELS:
+            raise ValueError(f'reasoning_effort={effort!r} is not supported; use one of {sorted(_EFFORT_LEVELS)}.')
+        mapped = _EFFORT_LEVELS[effort]
+        if mapped is not None:
+            request['output_config'] = {'effort': mapped}
     if params.get('extra_headers'):
         request['extra_headers'] = params['extra_headers']
     extra_body = {k: v for k, v in (params.get('extra_body') or {}).items() if k not in ORQ_ONLY_EXTRA_BODY_KEYS}
