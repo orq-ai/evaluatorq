@@ -138,8 +138,7 @@ class TestDerivedPools:
         """The RES-1285 clean configuration, and the only size trivially safe
         under positional banding: one model per band, nothing unreachable."""
         for pool in pools.values():
-            if not pool.measured:
-                assert len(pool.models) == 3, pool.name
+            assert len(pool.models) == 3, pool.name
 
     def test_no_member_dominates_another(self, pools, garden):
         for pool in pools.values():
@@ -398,6 +397,19 @@ class TestValidators:
             RouterPool(**self._pool(reserve_models=()))
 
 
+# Lineages that publish downloadable weights, which is what the Open-Weight /
+# Portable jury constraint asks for. `minimax` was missing while the jury held
+# `MiniMax-M2.7` as its reserve; M2.7 publishes 228B safetensors and is served by
+# three hosts other than MiniMax, so it is portable in the sense the constraint
+# means (the licence is MiniMax's own, a redistribution question, not a
+# self-hosting one).
+_OPEN_WEIGHT_FAMILIES = {'zhipu', 'moonshot', 'deepseek', 'alibaba', 'meta', 'minimax'}
+
+
+def _is_open_weight(model) -> bool:
+    return rp._family(model) in _OPEN_WEIGHT_FAMILIES or 'gpt-oss' in model.router_id
+
+
 @pytest.mark.integration
 @pytest.mark.allow_network
 class TestConstraintsHoldAcrossPresetKinds:
@@ -416,7 +428,7 @@ class TestConstraintsHoldAcrossPresetKinds:
         closed = [
             router_id
             for router_id in (*jury.judges, *jury.reserve_judges)
-            if (model := garden.get(router_id)) and not rp._is_open_weight(model)
+            if (model := garden.get(router_id)) and not _is_open_weight(model)
         ]
 
         assert not closed, (
@@ -440,3 +452,15 @@ class TestConstraintsHoldAcrossPresetKinds:
             f'A data-residency preset that seats a model outside the region is the one '
             f'failure it cannot recover from.'
         )
+
+
+@pytest.mark.asyncio
+async def test_async_getters_derive_from_the_awaited_garden(monkeypatch):
+    garden = _synthetic_garden()
+
+    async def live(client=None):
+        return garden
+
+    monkeypatch.setattr(rp, 'load_garden', live)
+    assert set(await rp.get_pools_async()) == set(rp.build_pools(garden)[0])
+    assert await rp.get_underivable_pools_async() == rp.build_pools(garden)[1]

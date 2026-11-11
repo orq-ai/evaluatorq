@@ -25,7 +25,7 @@ classifiers and evaluator groups all pick models out of the same garden.
 Nothing here is committed: the garden is derived from the live `/v2/models`
 cards on every process (`load_garden`), read through `common.model_catalogue`
 so the pricing table and the garden can never describe different catalogues.
-The registers below (UNLISTED_ROUTES, AA_FILLS, SUPERSEDED, UNROUTABLE,
+The registers below (MANUAL_MODEL_CARDS, AA_FILLS, SUPERSEDED, UNROUTABLE,
 NEVER_SEAT) are reviewed judgements about that live data, each with its source.
 """
 
@@ -60,6 +60,9 @@ if TYPE_CHECKING:
 
 class ScoredModel(BaseModel):
     """A garden model with the two axes seating decisions are made on."""
+
+    # A misspelled field in a hand-written MANUAL_MODEL_CARDS entry must fail, not fall back to a default.
+    model_config = {'extra': 'forbid'}
 
     router_id: str
     intelligence_index: float = Field(
@@ -121,16 +124,6 @@ class ScoredModel(BaseModel):
         if self.default_effort is None:
             return True
         return self.default_effort not in self.effort_indices and self.headline_effort != self.default_effort
-
-    @property
-    def comparable(self) -> bool:
-        """Whether the card has a position on the price axis: free cards are never ranked."""
-        return not self.free
-
-    @property
-    def ranked_index(self) -> float:
-        """Alias of `default_index`, kept for the sort keys and margins that read it."""
-        return self.default_index
 
     @property
     def pareto_score(self) -> float | None:
@@ -317,7 +310,7 @@ def derived_successor(router_id: str, garden: Mapping[str, ScoredModel]) -> str 
     for other, candidate in garden.items():
         theirs = _lineage(other)
         same_lineage = theirs is not None and theirs[0] == mine[0] and theirs[2] == mine[2]
-        if same_lineage and theirs[1] > mine[1] and candidate.comparable and seatable(candidate):
+        if same_lineage and theirs[1] > mine[1] and not candidate.free and seatable(candidate):
             newer.append((theirs[1], other))
     return min(newer, key=lambda pair: (tuple(-v for v in pair[0]), pair[1]))[1] if newer else None
 
@@ -499,7 +492,10 @@ def load_garden_sync() -> dict[str, ScoredModel]:
 def _created_ms(created: object) -> int | None:
     """A catalogue `created` stamp as epoch milliseconds; ISO strings, seconds and milliseconds all occur."""
     if isinstance(created, str):
-        return int(datetime.fromisoformat(created.replace('Z', '+00:00')).timestamp() * 1000)
+        try:
+            return int(datetime.fromisoformat(created.replace('Z', '+00:00')).timestamp() * 1000)
+        except ValueError:
+            return None
     if isinstance(created, (int, float)) and not isinstance(created, bool):
         return int(created if created > 1e11 else created * 1000)
     return None
@@ -543,11 +539,13 @@ async def public_listings(*, timeout_s: float = 60.0) -> dict[str, int | None]:
 # three families, so no reserve (derivation in the 2-pager).
 MAX_BLEND = 2.0
 
-# Routes the router serves but the project-scoped `/v2/models` listing omits,
-# so they have no card to read. Each value carries its own source and date;
-# the live catalogue leads, so an entry is used only while the router id is
-# absent from the live garden. Never add a value that has no source.
-UNLISTED_ROUTES: dict[str, dict[str, Any]] = {
+# Hand-written cards for models the router can call but `/v2/models` does not
+# list (for this key), so there is no live card to read their price or score
+# from. Each value carries its own source and date. The live catalogue wins:
+# an entry is used only while the router id is absent from the live garden, so
+# once a card appears the entry is dead and should be deleted. Never add a
+# value that has no source.
+MANUAL_MODEL_CARDS: dict[str, dict[str, Any]] = {
     'anthropic/claude-haiku-5-5': {
         # Callable 2026-10-26 (chat completion 200); `aws/eu.anthropic.claude-haiku-5-5`
         # is the listed EU sibling and its card carries the same ladder.
@@ -632,11 +630,11 @@ def with_aa_fills(garden: dict[str, ScoredModel]) -> dict[str, ScoredModel]:
     return {**garden, **filled}
 
 
-def with_unlisted_routes(garden: dict[str, ScoredModel]) -> dict[str, ScoredModel]:
-    """The garden plus every UNLISTED_ROUTES entry the garden does not already carry."""
+def with_manual_cards(garden: dict[str, ScoredModel]) -> dict[str, ScoredModel]:
+    """The garden plus every hand-written MANUAL_MODEL_CARDS entry the live garden has no card for."""
     extra = {
         router_id: ScoredModel(router_id=router_id, provider=router_id.split('/')[0], **fields)
-        for router_id, fields in UNLISTED_ROUTES.items()
+        for router_id, fields in MANUAL_MODEL_CARDS.items()
         if router_id not in garden
     }
     return {**garden, **extra}
@@ -661,14 +659,19 @@ def rank_cheapest_top(
     eligible = {
         router_id: m
         for router_id, m in garden.items()
-        if m.comparable and seatable(m) and m.enabled is not False and m.region != 'europe' and m.price < max_blend
+        if not m.free and seatable(m) and m.enabled is not False and m.region != 'europe' and m.price < max_blend
     }
     best: dict[str, ScoredModel] = {}
     for model in sorted(eligible.values(), key=lambda m: (-(m.default_index or 0), m.price, m.router_id)):
         if derived_successor(model.router_id, eligible):
             continue
-        best.setdefault(family_of(model.router_id), model)
-    return sorted(best.values(), key=lambda m: (-m.ranked_index, m.price, m.router_id))
+        try:
+            family = family_of(model.router_id)
+        except ValueError:
+            logger.warning('{}: unknown lineage, left out of the cheap ranking', model.router_id)
+            continue
+        best.setdefault(family, model)
+    return sorted(best.values(), key=lambda m: (-m.default_index, m.price, m.router_id))
 
 
 def unseatable_reason(model: ScoredModel) -> str | None:
@@ -701,58 +704,9 @@ def pareto_frontier(models: list[ScoredModel]) -> list[ScoredModel]:
     garden, which is why a preset containing one is dead weight. Free cards
     have no position on the price axis and are left out.
     """
-    comparable = [m for m in models if m.comparable]
+    comparable = [m for m in models if not m.free]
     frontier = [m for m in comparable if not any(other.dominates(m) for other in comparable)]
-    return sorted(frontier, key=lambda m: -m.ranked_index)
-
-
-def dominated_by(model: ScoredModel, models: list[ScoredModel]) -> list[ScoredModel]:
-    """Everything in the garden that beats this model outright."""
-    return sorted(
-        (m for m in models if m.dominates(model)),
-        key=lambda m: -m.ranked_index,
-    )
-
-
-def upgrade_verdict(incumbent: ScoredModel, successor: ScoredModel) -> tuple[str, str]:
-    """Whether a successor should take a seat, and why, in one computed answer.
-
-    Deliberately three-valued. 'seat' and 'reject' are arithmetic. 'trade' is
-    the honest middle: the successor is better on one axis and worse on the
-    other, which no index can settle, so it goes back to a human with the
-    numbers attached rather than being auto-applied or silently dropped.
-    Both indices are read at each card's catalogue default effort.
-    """
-    if (reason := unseatable_reason(successor)) is not None:
-        return 'trade', f'{successor.router_id} cannot hold a seat: {reason}. This goes to a human.'
-    if not region_compatible(successor, incumbent):
-        return 'trade', (
-            f'{successor.router_id} ({successor.region}) would move {incumbent.router_id} '
-            f'({incumbent.region}) to another region. This goes to a human.'
-        )
-    # A dead incumbent is replaced by any seatable successor; dominance is moot.
-    if (reason := unseatable_reason(incumbent)) is not None:
-        return 'seat', f'{incumbent.router_id} cannot hold a seat ({reason}); {successor.router_id} can.'
-    if successor.dominates(incumbent):
-        return 'seat', (
-            f'{successor.router_id} dominates {incumbent.router_id}: '
-            f'index {successor.default_index} at {successor.default_effort} vs '
-            f'{incumbent.default_index} at {incumbent.default_effort}, '
-            f'price {successor.price} vs {incumbent.price}.'
-        )
-    if incumbent.dominates(successor):
-        return 'reject', (
-            f'{incumbent.router_id} still dominates {successor.router_id}: '
-            f'index {incumbent.default_index} at {incumbent.default_effort} vs '
-            f'{successor.default_index} at {successor.default_effort}, '
-            f'price {incumbent.price} vs {successor.price}.'
-        )
-    return 'trade', (
-        f'{successor.router_id} trades against {incumbent.router_id}: '
-        f'index {successor.default_index} vs {incumbent.default_index}, '
-        f'price {successor.price} vs {incumbent.price}. '
-        'Neither dominates, so seating it is a stated preference, not an upgrade.'
-    )
+    return sorted(frontier, key=lambda m: -m.default_index)
 
 
 def region_compatible(candidate: ScoredModel, incumbent: ScoredModel) -> bool:
@@ -794,7 +748,6 @@ def in_family_upgrades(
     models: list[ScoredModel],
     family_of: Callable[[str], str],
     identity_of: Callable[[str], str] | None = None,
-    min_index_gain: float = MIN_INDEX_GAIN,
 ) -> list[ScoredModel]:
     """Same-lineage models that beat this seat on both axes without moving region.
 
@@ -825,13 +778,13 @@ def in_family_upgrades(
             continue
         if not m.dominates(incumbent):
             continue
-        m_index, incumbent_index = m.ranked_index, incumbent.ranked_index
+        m_index, incumbent_index = m.default_index, incumbent.default_index
         # Same weights served by another host is pure price arbitrage: there is
         # no quality question to answer, so no index margin is required.
         same_model = identity_of is not None and identity_of(m.router_id) == identity_of(incumbent.router_id)
-        if same_model or m_index - incumbent_index >= min_index_gain:
+        if same_model or m_index - incumbent_index >= MIN_INDEX_GAIN:
             better.append(m)
-    return sorted(better, key=lambda m: -m.ranked_index)
+    return sorted(better, key=lambda m: -m.default_index)
 
 
 # The tier rule was authored at 3.0, which was a judgement about how far apart
@@ -848,7 +801,6 @@ MIN_TIER_RATIO = 2.75
 def derive_trio(
     frontier: list[ScoredModel],
     identity_of: Callable[[str], str],
-    min_tier_ratio: float = MIN_TIER_RATIO,
 ) -> tuple[list[ScoredModel], bool]:
     """Pick a router pool from a constrained frontier, by the RES-1285 criteria.
 
@@ -860,7 +812,7 @@ def derive_trio(
        used and no dead weight. Three is also the only size trivially safe
        under positional banding: one model per band, so both routing profiles
        select the same model per band and no seat is unreachable.
-    3. Adjacent price tiers at least `min_tier_ratio` apart, or the cost
+    3. Adjacent price tiers at least `MIN_TIER_RATIO` apart, or the cost
        profile has nothing to win by routing down; the measured six-model pool
        failed partly because its tiers collapsed into each other.
     4. Maximise the weakest seat's intelligence subject to the above,
@@ -878,7 +830,7 @@ def derive_trio(
     from itertools import combinations
 
     def distinct_trios():
-        by_price = sorted((m for m in frontier if m.comparable), key=lambda m: -m.price)
+        by_price = sorted((m for m in frontier if not m.free), key=lambda m: -m.price)
         for trio in combinations(by_price, 3):
             if len({identity_of(m.router_id) for m in trio}) == 3:
                 yield trio
@@ -886,7 +838,7 @@ def derive_trio(
     best = None
     for trio in distinct_trios():
         prices = [m.price for m in trio]
-        if prices[0] / prices[1] < min_tier_ratio or prices[1] / prices[2] < min_tier_ratio:
+        if prices[0] / prices[1] < MIN_TIER_RATIO or prices[1] / prices[2] < MIN_TIER_RATIO:
             continue
         rank = (min(m.default_index for m in trio), sum(m.default_index for m in trio))
         if best is None or rank > best[0]:

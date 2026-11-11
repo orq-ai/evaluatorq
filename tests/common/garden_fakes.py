@@ -81,7 +81,7 @@ def synthetic_garden() -> dict[str, ScoredModel]:
 
 
 def seated_garden() -> dict[str, ScoredModel]:
-    """Every listed router ID a shipped preset seats, at its real rates; unlisted seats come from UNLISTED_ROUTES."""
+    """Every listed router ID a shipped preset seats, at its real rates; seats with no live card come from MANUAL_MODEL_CARDS."""
     return {router_id: scored(router_id, 40.0) for router_id in PRICES}
 
 

@@ -46,6 +46,7 @@ from evaluatorq.common.model_frontier import (
     ScoredModel,
     derive_trio,
     derived_successor,
+    load_garden,
     load_garden_sync,
     pareto_frontier,
     seatable,
@@ -98,10 +99,6 @@ class RouterPool(BaseModel):
         'took the widest spread available instead. A relaxed pool routes for less '
         'saving than an open one, and the flag is how a caller can say so.',
     )
-    measured: bool = Field(
-        default=False,
-        description='True only for the RES-1285 benchmarked trio, whose membership is a measurement, not a derivation.',
-    )
 
     @model_validator(mode='after')
     def _pool_is_well_formed(self) -> RouterPool:
@@ -117,29 +114,11 @@ class RouterPool(BaseModel):
         return self
 
 
-def _load_scored() -> dict[str, ScoredModel]:
-    return load_garden_sync()
-
-
 def _family(model: ScoredModel) -> str | None:
     try:
         return judge_family(model.router_id)
     except ValueError:
         return None
-
-
-# Lineages that publish downloadable weights, which is what the Open-Weight /
-# Portable constraint actually asks for. `minimax` was missing while the jury of
-# the same name held `MiniMax-M2.7` as its reserve, so the preset's own reserve
-# would have broken the preset's own pitch. M2.7 publishes 228B safetensors and
-# is served by three hosts other than MiniMax, so it is portable in the sense
-# the constraint means; the licence is MiniMax's own rather than MIT or Apache,
-# which is a redistribution question and not a self-hosting one.
-_OPEN_WEIGHT_FAMILIES = {'zhipu', 'moonshot', 'deepseek', 'alibaba', 'meta', 'minimax'}
-
-
-def _is_open_weight(model: ScoredModel) -> bool:
-    return _family(model) in _OPEN_WEIGHT_FAMILIES or 'gpt-oss' in model.router_id
 
 
 class _PoolSpec(BaseModel):
@@ -304,7 +283,6 @@ def _build_pool(
     frontier: list[ScoredModel],
     *,
     relaxed: bool,
-    measured: bool = False,
     reserve_gap_reason: str = '',
 ) -> RouterPool:
     members = sorted(members, key=lambda m: -m.price)
@@ -314,10 +292,10 @@ def _build_pool(
         for m in frontier
         if m.router_id not in {s.router_id for s in members} and model_identity(m.router_id) not in seated_identities
     ]
-    reserves = (max(remaining, key=lambda m: m.ranked_index).router_id,) if remaining else ()
+    reserves = (max(remaining, key=lambda m: m.default_index).router_id,) if remaining else ()
     costs = [request_cost_per_1k(m) for m in members]
     prices = [m.price for m in members]
-    indices = [m.ranked_index for m in members]
+    indices = [m.default_index for m in members]
     return RouterPool(
         name=spec_name,
         models=tuple(m.router_id for m in members),
@@ -332,7 +310,6 @@ def _build_pool(
         cost_per_1k_range=(round(min(costs), 2), round(max(costs), 2)),
         tier_ratios=tuple(round(prices[i] / prices[i + 1], 1) for i in range(len(prices) - 1)),
         relaxed_tier_rule=relaxed,
-        measured=measured,
     )
 
 
@@ -355,7 +332,7 @@ def build_pools(scored: dict[str, ScoredModel] | None = None) -> tuple[dict[str,
     into the register instead of raising, so one thin constraint never takes
     the other pools down with it.
     """
-    scored = scored if scored is not None else _load_scored()
+    scored = scored if scored is not None else load_garden_sync()
     # enabled is False only when the catalog says the workspace switched the
     # model off: listed and scored, but not servable, so not seatable. None
     # (a card without the field) passes.
@@ -411,6 +388,20 @@ def get_pools() -> dict[str, RouterPool]:
 def get_underivable_pools() -> dict[str, str]:
     """Specs the live garden could not seat, mapped to the reason. Empty on a healthy garden."""
     return dict(_live_pools()[1])
+
+
+async def get_pools_async() -> dict[str, RouterPool]:
+    """`get_pools` for async callers: fetches the live garden without blocking the event loop.
+
+    The garden is cached per process and credential, so only the first call
+    fetches; the pools themselves are derived locally on every call.
+    """
+    return build_pools(await load_garden())[0]
+
+
+async def get_underivable_pools_async() -> dict[str, str]:
+    """`get_underivable_pools` for async callers; see `get_pools_async`."""
+    return build_pools(await load_garden())[1]
 
 
 def all_pool_model_ids() -> set[str]:

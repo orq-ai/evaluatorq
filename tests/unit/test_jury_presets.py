@@ -26,7 +26,7 @@ from evaluatorq.jury_presets import (
     judge_rates,
     model_identity,
 )
-from evaluatorq.common.model_frontier import with_unlisted_routes
+from evaluatorq.common.model_frontier import with_manual_cards
 from tests.common.garden_fakes import seated_garden
 
 
@@ -135,7 +135,7 @@ class TestPublishedCost:
     @pytest.mark.parametrize('router_id', sorted(all_router_ids()))
     def test_every_preset_router_id_is_priced(self, router_id, garden):
         """A preset must never ship a judge that silently costs zero."""
-        model = with_unlisted_routes(garden).get(router_id)
+        model = with_manual_cards(garden).get(router_id)
 
         assert model is not None
         assert model.input_price > 0
@@ -153,7 +153,7 @@ class TestPublishedCost:
         preset = PRESETS['Balanced Trio']
         missing = {k: v for k, v in garden.items() if k != preset.judges[0]}
 
-        with pytest.raises(KeyError, match='no live card prices'):
+        with pytest.raises(KeyError, match='no live card for'):
             preset.cost_per_1k(missing)
 
     def test_the_estimate_is_three_input_tokens_to_one_output(self):
@@ -459,3 +459,29 @@ class TestDocsTable:
         )
 
         assert aggregation == applied
+
+
+class TestAsyncAndMissingSeats:
+    @pytest.fixture
+    def preset(self):
+        return jury_presets.BALANCED_TRIO
+
+    @pytest.mark.asyncio
+    async def test_async_methods_match_the_sync_ones_on_the_same_garden(self, preset):
+        garden = seated_garden()
+        assert await preset.cost_per_1k_async(garden) == preset.cost_per_1k(garden)
+        assert await preset.seated_efforts_async(garden) == preset.seated_efforts(garden)
+
+    @pytest.mark.asyncio
+    async def test_async_methods_await_the_live_garden(self, preset, monkeypatch):
+        async def live(client=None):
+            return seated_garden()
+
+        monkeypatch.setattr(jury_presets, 'load_garden', live)
+        assert await preset.cost_per_1k_async() == preset.cost_per_1k(seated_garden())
+
+    def test_a_seat_with_no_card_raises_in_both_methods(self, preset):
+        with pytest.raises(KeyError):
+            preset.seated_efforts({})
+        with pytest.raises(KeyError):
+            preset.cost_per_1k({})

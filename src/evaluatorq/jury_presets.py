@@ -10,7 +10,7 @@ which reads `/v2/models`), and the live drift suite recomputes every published
 figure against it, so a repricing or a changed default shows up as a failing
 check rather than in a refreshed file's diff. The freshness registers at the
 bottom of this file are the written record that suite reads: every newer
-model and aged seat is seated or argued for in words.
+model and stale seat is seated or argued for in words.
 
 Seats are chosen here. Compare intelligence at the catalogue default reasoning
 effort against price within each lineage. A card with no score at its default
@@ -55,7 +55,7 @@ from pydantic import BaseModel, Field, model_validator
 from evaluatorq.common.jury import AggregatorName, provider_family
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.common.model_catalogue import ModelCatalogueError
-from evaluatorq.common.model_frontier import ScoredModel, load_garden_sync, with_unlisted_routes
+from evaluatorq.common.model_frontier import ScoredModel, load_garden, load_garden_sync, with_manual_cards
 
 # Re-exported: model_identity moved to common.model_frontier so the frontier's
 # lineage parsing can share it without importing this module.
@@ -66,8 +66,13 @@ if TYPE_CHECKING:
 
 
 def _reachable(garden: Mapping[str, ScoredModel] | None) -> dict[str, ScoredModel]:
-    """The garden a seat is priced and ranked in: live unless passed, plus the reviewed unlisted routes."""
-    return with_unlisted_routes(dict(garden) if garden is not None else load_garden_sync())
+    """The garden a seat is priced and ranked in: live unless passed, plus the hand-written MANUAL_MODEL_CARDS."""
+    return with_manual_cards(dict(garden) if garden is not None else load_garden_sync())
+
+
+async def _reachable_async(garden: Mapping[str, ScoredModel] | None) -> dict[str, ScoredModel]:
+    """`_reachable` for async callers: the live garden is awaited, not fetched with a blocking call."""
+    return with_manual_cards(dict(garden) if garden is not None else await load_garden())
 
 
 class JudgeRates(BaseModel):
@@ -166,20 +171,33 @@ class JuryPreset(BaseModel):
 
         A preset sends no effort, so each seat runs at the provider default,
         which is also the rung it is ranked at. None means the card exposes no
-        effort parameter, or no card is reachable. Reads the live garden unless
-        one is passed; async callers `await load_garden()` and pass it.
+        effort parameter. Reads the live garden unless one is passed; async
+        callers use `seated_efforts_async`.
 
         `llm_jury` takes one `reasoning_effort` for the whole panel, so passing
         one overrides every seat's default; per-judge call settings are a schema
         change and its own ticket (RES-1347).
 
         Raises:
+            KeyError: A seat has no card in the garden and no MANUAL_MODEL_CARDS entry.
             MissingLLMCredentialsError: No garden was passed and no Orq key is set.
             ModelCatalogueError: No garden was passed and the live fetch failed.
             RuntimeError: No garden was passed and an event loop is running.
         """
-        reachable = _reachable(garden)
-        return {judge: (m.default_effort if (m := reachable.get(judge)) else None) for judge in self.judges}
+        return self._efforts(_reachable(garden))
+
+    async def seated_efforts_async(self, garden: Mapping[str, ScoredModel] | None = None) -> dict[str, str | None]:
+        """`seated_efforts` for async callers: awaits the live garden instead of blocking on it."""
+        return self._efforts(await _reachable_async(garden))
+
+    def _seat(self, judge: str, reachable: Mapping[str, ScoredModel]) -> ScoredModel:
+        model = reachable.get(judge)
+        if model is None:
+            raise KeyError(f'{self.name}: no live card for {judge!r}; reseat it or add a MANUAL_MODEL_CARDS entry')
+        return model
+
+    def _efforts(self, reachable: Mapping[str, ScoredModel]) -> dict[str, str | None]:
+        return {judge: self._seat(judge, reachable).default_effort for judge in self.judges}
 
     def duplicated_lineages(self) -> dict[str, tuple[str, ...]]:
         """Lineages seated more than once, whose errors correlate.
@@ -200,20 +218,25 @@ class JuryPreset(BaseModel):
         `estimated_cost_per_1k` is the figure the docs publish; this is where it
         has to come from. The live drift suite asserts the two agree, so a
         repricing fails that suite rather than quietly making a published table
-        wrong. Reads the live garden unless one is passed.
+        wrong. Reads the live garden unless one is passed; async callers use
+        `cost_per_1k_async`.
 
         Raises:
-            KeyError: A seat has no card in the garden and no reviewed unlisted route.
+            KeyError: A seat has no card in the garden and no MANUAL_MODEL_CARDS entry.
             MissingLLMCredentialsError: No garden was passed and no Orq key is set.
             ModelCatalogueError: No garden was passed and the live fetch failed.
             RuntimeError: No garden was passed and an event loop is running.
         """
-        reachable = _reachable(garden)
+        return self._cost(_reachable(garden))
+
+    async def cost_per_1k_async(self, garden: Mapping[str, ScoredModel] | None = None) -> float:
+        """`cost_per_1k` for async callers: awaits the live garden instead of blocking on it."""
+        return self._cost(await _reachable_async(garden))
+
+    def _cost(self, reachable: Mapping[str, ScoredModel]) -> float:
         total = Decimal(0)
         for judge in self.judges:
-            model = reachable.get(judge)
-            if model is None:
-                raise KeyError(f'{self.name}: no live card prices {judge!r}; reseat it or add an UNLISTED_ROUTES entry')
+            model = self._seat(judge, reachable)
             total += Decimal(str(model.input_price)) * Decimal(ESTIMATED_PROMPT_TOKENS)
             total += Decimal(str(model.output_price)) * Decimal(ESTIMATED_COMPLETION_TOKENS)
         # Decimal, and one rounding at the end. A figure that lands exactly on a
@@ -275,7 +298,7 @@ CHEAP_AGGREGATE = JuryPreset(
     name='Cheap Aggregate',
     # Derived, not hand-picked: the best default-effort index of each model
     # family whose 3:1 blend is under MAX_BLEND, from the live catalogue plus
-    # the reviewed UNLISTED_ROUTES and AA_FILLS registers, minus anything
+    # the reviewed MANUAL_MODEL_CARDS and AA_FILLS registers, minus anything
     # superseded by a newer version of itself (model_frontier.rank_cheapest_top).
     # test_cheap_aggregate_matches_the_live_derivation fails with a readable
     # diff when the live ranking moves; a change here is a deliberate edit.
@@ -396,7 +419,9 @@ WITHHELD_PRESETS: dict[str, str] = {}
 # this has watched two or three rounds of its own band ship without moving.
 MAX_SEAT_AGE_DAYS = 180
 
-# Seats knowingly held past MAX_SEAT_AGE_DAYS, keyed by model identity.
+# Waivers for seats that are older than MAX_SEAT_AGE_DAYS but kept on purpose,
+# keyed by model identity, each with the written reason. Without a waiver the
+# weekly drift check fails on a seat that old.
 #
 # The other registers all answer "something newer exists, why not it?".  This
 # one answers the question nothing else asks: a lineage can simply stop
@@ -405,21 +430,16 @@ MAX_SEAT_AGE_DAYS = 180
 #
 # Age here is time since first listing in the garden, taken across every host
 # of the same weights, so a second host relisting a model does not reset it.
-AGED_SEATS: dict[str, str] = {
+STALE_SEAT_WAIVERS: dict[str, str] = {
     'claude-haiku-4-5-20251001': (
         'Listed 2025-10, held only by the derived Anthropic Only pool, and only '
         'on a project-scoped key: anthropic/claude-haiku-5-5 is in the public '
         "catalogue but not in this project's /v2/models, and the pool "
         'derivation reads /v2/models alone, so it still reaches for 4.5. '
         'Retire this entry once the drift suite runs on a workspace key; '
-        'test_aged_seat_entries_are_dropped_once_the_seat_is_young_again says when.'
+        'test_stale_seat_waivers_are_dropped_once_the_seat_is_young_again says when.'
     ),
 }
-
-
-# Seats that SUPERSEDED would refuse, held on a written reason. Keyed by router
-# ID; test_every_judge_and_reserve_is_seatable honours exactly these.
-HELD_SUPERSEDED: dict[str, str] = {}
 
 # Successors already looked at and deliberately not seated. A model reaching the
 # garden is not a reason to put it in front of customers, but it is a reason to

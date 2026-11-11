@@ -25,7 +25,7 @@ import pytest
 
 from evaluatorq.common.model_catalogue import model_cards
 from evaluatorq.common.model_frontier import (
-    UNLISTED_ROUTES,
+    MANUAL_MODEL_CARDS,
     ScoredModel,
     catalog_scope,
     headline_contradicts_its_own_rung,
@@ -35,11 +35,10 @@ from evaluatorq.common.model_frontier import (
     rank_cheapest_top,
     unseatable_reason,
     with_aa_fills,
-    with_unlisted_routes,
+    with_manual_cards,
 )
 from evaluatorq.jury_presets import (
-    AGED_SEATS,
-    HELD_SUPERSEDED,
+    STALE_SEAT_WAIVERS,
     MAX_SEAT_AGE_DAYS,
     PRESETS,
     REVIEWED_SUCCESSORS,
@@ -82,8 +81,8 @@ def test_the_garden_is_read_with_a_workspace_scoped_key():
 @pytest.mark.parametrize('router_id', sorted(all_router_ids()))
 def test_every_shipped_judge_is_still_served(listed, router_id):
     """A retired judge is dead weight the user picks without being able to see."""
-    # UNLISTED_ROUTES are callable but absent from the listing.
-    assert router_id in listed or router_id in UNLISTED_ROUTES, (
+    # MANUAL_MODEL_CARDS are callable but absent from the listing.
+    assert router_id in listed or router_id in MANUAL_MODEL_CARDS, (
         f'{router_id} is named by a preset but no longer served by the garden. '
         'Promote a reserve rather than deleting the seat.'
     )
@@ -104,12 +103,6 @@ def test_published_cost_matches_the_live_card_rates(garden, preset):
     )
 
 
-# moonshotai/kimi-k2.6 was recorded here until the live pull of 2026-10-26, whose card
-# agrees with itself (headline 27.0 at `reasoning`, rung 27.0).
-CONTRADICTED_CARDS: dict[str, str] = {}
-"""Headline-ranked cards whose own ladder contradicts that headline, keyed by router ID."""
-
-
 def _contradicted(garden: dict[str, ScoredModel]) -> dict[str, str]:
     return {
         router_id: f'headline {model.intelligence_index} against rungs {model.effort_indices}'
@@ -119,12 +112,11 @@ def _contradicted(garden: dict[str, ScoredModel]) -> dict[str, str]:
 
 
 def _assert_no_card_scores_its_own_rung_twice(garden: dict[str, ScoredModel]) -> None:
-    contradicted = {k: v for k, v in _contradicted(garden).items() if k not in CONTRADICTED_CARDS}
+    contradicted = _contradicted(garden)
 
     assert not contradicted, (
         f'these cards disagree with themselves about one rung: {contradicted}. '
-        f'Record the card in CONTRADICTED_CARDS. Nothing may be seated on a number '
-        f'the card contradicts.'
+        f'Nothing may be seated on a number the card contradicts.'
     )
 
 
@@ -132,24 +124,6 @@ def _assert_no_card_scores_its_own_rung_twice(garden: dict[str, ScoredModel]) ->
 def test_no_card_scores_its_own_rung_twice(garden):
     """A card ranked on its headline must not publish a different score for the headline's rung."""
     _assert_no_card_scores_its_own_rung_twice(garden)
-
-
-@live
-def test_a_contradicted_card_holds_no_seat():
-    """The register records a bad card; it does not license seating one."""
-    seats = {j for preset in PRESETS.values() for j in (*preset.judges, *preset.reserve_judges)}
-    seats |= {m for pool in get_pools().values() for m in (*pool.models, *pool.reserve_models)}
-    seated = sorted(seats & set(CONTRADICTED_CARDS))
-
-    assert not seated, f'{seated} are seated on a card that contradicts itself. Reseat.'
-
-
-@live
-def test_contradicted_entries_are_dropped_once_the_card_agrees_with_itself(garden):
-    """An entry whose card no longer contradicts itself is stale."""
-    resolved = sorted(set(CONTRADICTED_CARDS) & set(garden) - set(_contradicted(garden)))
-
-    assert not resolved, f'{resolved} now agree with themselves. Drop the entries.'
 
 
 class TestContradictionFires:
@@ -188,16 +162,14 @@ def _assert_every_judge_and_reserve_is_seatable(garden: dict[str, ScoredModel]) 
     refused = {}
     for preset in PRESETS.values():
         for router_id in (*preset.judges, *preset.reserve_judges):
-            # An unlisted route is validated from its UNLISTED_ROUTES fields, never skipped.
-            model = garden.get(router_id) or with_unlisted_routes({}).get(router_id)
+            # A model without a live card is validated from its MANUAL_MODEL_CARDS fields, never skipped.
+            model = garden.get(router_id) or with_manual_cards({}).get(router_id)
             if model is None:
                 # Collected, not asserted: one missing card must not hide every other refusal.
                 refused[f'{preset.name}: {router_id}'] = 'unknown route: no card in the garden'
                 continue
             model = with_aa_fills({router_id: model})[router_id]
             reason = unseatable_reason(model)
-            if reason and router_id in HELD_SUPERSEDED and reason.startswith('superseded'):
-                continue
             if reason:
                 refused[f'{preset.name}: {router_id}'] = reason
 
@@ -380,9 +352,9 @@ class TestFrontier:
         global frontier check would push all three seats onto whichever vendor
         is cheapest, recreating the correlated errors the panel exists to cancel.
         """
-        # Unlisted seats (reviewed routes with no card) are incumbents too, or a
+        # Seats with only a hand-written card are incumbents too, or a
         # same-family model could dominate one without this check noticing.
-        reachable = with_aa_fills(with_unlisted_routes(garden))
+        reachable = with_aa_fills(with_manual_cards(garden))
         models = list(reachable.values())
 
         stale = {}
@@ -403,7 +375,7 @@ class TestFrontier:
 
     def test_exemptions_are_dropped_once_they_stop_applying(self, garden):
         """An exemption whose upgrade has gone away is stale reasoning."""
-        reachable = with_aa_fills(with_unlisted_routes(garden))
+        reachable = with_aa_fills(with_manual_cards(garden))
         models = list(reachable.values())
 
         pointless = [
@@ -418,7 +390,7 @@ class TestFrontier:
 
     def test_every_seat_is_scored(self, garden):
         """An unscored seat is one the upgrade check silently skips."""
-        unscored = all_router_ids() - set(garden) - set(UNLISTED_ROUTES)
+        unscored = all_router_ids() - set(garden) - set(MANUAL_MODEL_CARDS)
         assert not unscored, (
             f'{unscored} carry no autorouter intelligence/price pair, so no upgrade check runs against them.'
         )
@@ -458,18 +430,18 @@ def test_no_seat_ages_out_unargued(listed):
         if first is None:
             continue
         days = (now - first).days
-        if days > MAX_SEAT_AGE_DAYS and model_identity(router_id) not in AGED_SEATS:
+        if days > MAX_SEAT_AGE_DAYS and model_identity(router_id) not in STALE_SEAT_WAIVERS:
             aged[router_id] = f'{days}d, held by {", ".join(held)}'
 
     assert not aged, (
         f'these seats were listed more than {MAX_SEAT_AGE_DAYS} days ago and no '
         f'successor has been flagged, so nothing else will ever ask about them: '
-        f'{aged}. Reseat, or record the reason in AGED_SEATS.'
+        f'{aged}. Reseat, or record the reason in STALE_SEAT_WAIVERS.'
     )
 
 
 @live
-def test_aged_seat_entries_are_dropped_once_the_seat_is_young_again(listed):
+def test_stale_seat_waivers_are_dropped_once_the_seat_is_young_again(listed):
     """A vendor shipping again should retire the excuse, not leave it standing."""
     earliest = _first_listed(listed)
     now = datetime.now(UTC)
@@ -477,7 +449,7 @@ def test_aged_seat_entries_are_dropped_once_the_seat_is_young_again(listed):
 
     pointless = sorted(
         identity
-        for identity in AGED_SEATS
+        for identity in STALE_SEAT_WAIVERS
         if identity not in seated or (identity in earliest and (now - earliest[identity]).days <= MAX_SEAT_AGE_DAYS)
     )
 
@@ -493,7 +465,7 @@ def test_cheap_aggregate_matches_the_live_derivation(garden):
     Fails with both lists when the ranking moves, so a reseat is a deliberate,
     reviewed edit to the preset and never a silent drift.
     """
-    ranked = rank_cheapest_top(with_aa_fills(with_unlisted_routes(garden)), judge_family)
+    ranked = rank_cheapest_top(with_aa_fills(with_manual_cards(garden)), judge_family)
     derived = [m.router_id for m in ranked]
     preset = PRESETS['Cheap Aggregate']
 

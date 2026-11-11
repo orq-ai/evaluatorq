@@ -20,13 +20,12 @@ from evaluatorq.common.model_frontier import (
     MIN_SEAT_INDEX,
     NEVER_SEAT,
     SUPERSEDED,
-    UNLISTED_ROUTES,
+    MANUAL_MODEL_CARDS,
     UNROUTABLE,
     ScoredModel,
     catalog_scope,
     derive_trio,
     derived_successor,
-    dominated_by,
     garden_from_cards,
     in_family_upgrades,
     load_garden,
@@ -36,9 +35,8 @@ from evaluatorq.common.model_frontier import (
     scored_model_from_card,
     seatable,
     unseatable_reason,
-    upgrade_verdict,
     with_aa_fills,
-    with_unlisted_routes,
+    with_manual_cards,
 )
 
 
@@ -86,16 +84,6 @@ class TestDominanceAndFrontier:
         only = scored('x/only', 10.0, 1.0)
 
         assert pareto_frontier([only]) == [only]
-
-    def test_dominated_by_names_every_winner_strongest_first(self):
-        loser = scored('x/loser', 30.0, 2.0)
-        strong = scored('x/strong', 50.0, 1.0)
-        mid = scored('x/mid', 40.0, 2.0)
-        unrelated = scored('x/pricier', 60.0, 5.0)
-
-        winners = dominated_by(loser, [strong, mid, unrelated, loser])
-
-        assert [m.router_id for m in winners] == ['x/strong', 'x/mid']
 
 
 class TestDefaultEffortRanking:
@@ -228,44 +216,6 @@ class TestSelfContradictingCards:
 
         assert seatable(m)
 
-    def test_upgrade_verdict_sends_a_contradicted_successor_to_a_human(self):
-        incumbent = scored('x/old', 40.0, 2.0)
-        successor = scored('x/new', 44.2, 1.0, effort_indices={'none': 34.6})
-
-        verdict, reason = upgrade_verdict(incumbent, successor)
-
-        assert verdict == 'trade'
-        assert 'cannot hold a seat' in reason
-
-    def test_upgrade_verdict_never_seats_a_comparable_but_unseatable_successor(self):
-        """Both axes defined is not enough: a never-seat family is still refused."""
-        incumbent = scored('x/old', 40.0, 2.0)
-        successor = scored(f'x/{next(iter(NEVER_SEAT))}-new', 60.0, 1.0)
-
-        verdict, reason = upgrade_verdict(incumbent, successor)
-
-        assert verdict == 'trade'
-        assert 'never seated' in reason
-
-    def test_upgrade_verdict_never_moves_a_seat_to_another_region(self):
-        """Even a dead incumbent is not replaced by an EU-pinned successor: the swap would pin the panel."""
-        for incumbent in (scored('x/old', 40.0, 2.0), scored('x/old', 40.0, 2.0, enabled=False)):
-            successor = scored('x/eu.new', 60.0, 1.0, region='europe')
-
-            verdict, reason = upgrade_verdict(incumbent, successor)
-
-            assert verdict == 'trade'
-            assert 'another region' in reason
-
-    def test_upgrade_verdict_replaces_a_dead_incumbent(self):
-        """A disabled incumbent is replaced even by a successor that does not dominate it."""
-        incumbent = scored('x/old', 50.0, 1.0, enabled=False)
-        successor = scored('x/new', 45.0, 2.0)
-
-        verdict, reason = upgrade_verdict(incumbent, successor)
-
-        assert verdict == 'seat'
-        assert 'disabled' in reason
 
     def test_in_family_upgrades_never_promotes_a_contradicted_card(self):
         incumbent = scored('openai/gpt-5.4-mini', 29.8, 1.0)
@@ -367,17 +317,17 @@ def test_default_ceiling_is_the_published_max_blend():
     assert [m.router_id for m in rank_cheapest_top(garden, lambda rid: rid.split('/')[0])] == ['a/in']
 
 
-class TestUnlistedRoutes:
+class TestManualModelCards:
     def test_every_entry_is_comparable(self):
-        for router_id, model in with_unlisted_routes({}).items():
-            assert model.router_id in UNLISTED_ROUTES
-            assert model.comparable, router_id
+        for router_id, model in with_manual_cards({}).items():
+            assert model.router_id in MANUAL_MODEL_CARDS
+            assert not model.free, router_id
 
     def test_the_live_catalogue_leads_when_it_lists_the_route(self):
-        router_id = next(iter(UNLISTED_ROUTES))
+        router_id = next(iter(MANUAL_MODEL_CARDS))
         live = scored(router_id, 99.0, 0.5)
 
-        assert with_unlisted_routes({router_id: live})[router_id] is live
+        assert with_manual_cards({router_id: live})[router_id] is live
 
 
 def test_scored_model_from_card_reads_rates_per_million_and_the_default_effort():
@@ -696,3 +646,37 @@ class TestMalformedScores:
         garden = model_frontier.garden_from_cards([card_, card('q', 'other')])
         assert set(garden) == {'p/m', 'q/other'}
         assert garden['p/m'].effort_indices == {'high': 40.0}
+
+
+class TestSmallRobustness:
+    def test_a_misspelled_manual_card_field_is_refused(self):
+        with pytest.raises(ValueError, match='defualt_effort'):
+            ScoredModel.model_validate(
+                {'router_id': 'x/y', 'intelligence_index': 1.0, 'input_price': 1.0, 'output_price': 1.0, 'defualt_effort': 'low'}
+            )
+
+    @pytest.mark.parametrize(
+        ('stamp', 'expected'),
+        [
+            ('2026-01-01T00:00:00Z', 1767225600000),
+            (1767225600, 1767225600000),
+            (1767225600000, 1767225600000),
+            ('not a date', None),
+            (True, None),
+            (None, None),
+        ],
+    )
+    def test_created_stamps_read_as_milliseconds_or_none(self, stamp, expected):
+        assert model_frontier._created_ms(stamp) == expected
+
+    def test_a_cheap_model_of_unknown_lineage_is_left_out_not_fatal(self):
+        def family_of(router_id: str) -> str:
+            if router_id.startswith('mystery'):
+                raise ValueError('unknown lineage')
+            return router_id.split('/')[0]
+
+        garden = {
+            'mystery/m-1': scored('mystery/m-1', 50, 0.5),
+            'a/ok-1': scored('a/ok-1', 40, 0.5),
+        }
+        assert [m.router_id for m in rank_cheapest_top(garden, family_of, 1.0)] == ['a/ok-1']
