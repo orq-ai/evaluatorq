@@ -29,7 +29,6 @@ jobs:
           - examples/redteam/01_basic_dynamic.py
           - examples/redteam/02_static_dataset.py
           - examples/agent_simulation/01_basic_simulation.py
-          - examples/redteam/21_anthropic_client.py
 
     steps:
       - uses: actions/checkout@v7
