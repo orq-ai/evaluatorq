@@ -23,17 +23,8 @@ Candidates additionally pass `common.model_frontier.seatable`: an index floor th
 removes the noise tier, and the NEVER_SEAT families the platform will not
 recommend at any score (gpt-oss, on the PR #330 review verdict).
 
-Not every named shape ships: `DROPPED_POOLS` records each retirement reason so
-the ticket's list is answered name by name:
-
-- `Measured Default`, the exact trio RES-1285 benchmarked (99.2% retention at
-  17.1% savings over 524 reference-graded prompts; the run lives with that
-  ticket). It seated an EU-pinned endpoint and a
-  NEVER_SEAT model, and a measured configuration cannot be edited without
-  invalidating the measurement, so it retired whole.
-- `Open-Weight / Portable` and `Value Stack`, whose constraints collapse onto
-  Balanced Pareto Trio's frontier once membership is derived; the same three
-  models under two names is padding.
+Not every named shape ships: `DROPPED_POOLS` records each retirement reason, keyed
+by pool name, so the ticket's list is answered name by name.
 
 On cost: a pool has a range, not a figure. What a request actually costs
 depends on the routing policy that picks within the pool, and routing policy
@@ -48,6 +39,7 @@ from __future__ import annotations
 from collections.abc import Callable  # noqa: TC003 — pydantic resolves `_PoolSpec.predicate` at runtime
 from functools import lru_cache
 
+from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 
 from evaluatorq.common.model_frontier import (
@@ -102,7 +94,7 @@ class RouterPool(BaseModel):
     )
     relaxed_tier_rule: bool = Field(
         default=False,
-        description='True when no trio under this constraint reaches 3x tiers and the pool '
+        description='True when no trio under this constraint reaches 2.75x tiers and the pool '
         'took the widest spread available instead. A relaxed pool routes for less '
         'saving than an open one, and the flag is how a caller can say so.',
     )
@@ -387,19 +379,19 @@ def build_pools(scored: dict[str, ScoredModel] | None = None) -> tuple[dict[str,
             members, relaxed = derive_trio(frontier, model_identity)
         except ValueError as error:
             underivable[spec.name] = f'{spec.constraint}: {error}'
+            logger.warning('router pool {!r} is not derivable from this garden: {}', spec.name, error)
             continue
-        try:
-            pools[spec.name] = _build_pool(
-                spec.name,
-                spec.constraint,
-                spec.use_when,
-                members,
-                frontier,
-                relaxed=relaxed,
-                reserve_gap_reason=_no_reserve_reason(spec.constraint),
-            )
-        except ValueError as error:
-            underivable[spec.name] = f'{spec.constraint}: {error}'
+        # Not caught: derive_trio is the one call that signals "no trio" by
+        # design, so a malformed pool here is a bug and must raise.
+        pools[spec.name] = _build_pool(
+            spec.name,
+            spec.constraint,
+            spec.use_when,
+            members,
+            frontier,
+            relaxed=relaxed,
+            reserve_gap_reason=_no_reserve_reason(spec.constraint),
+        )
     return pools, underivable
 
 
@@ -409,13 +401,16 @@ def _live_pools() -> tuple[dict[str, RouterPool], dict[str, str]]:
 
 
 def get_pools() -> dict[str, RouterPool]:
-    """Every pool derived from the live garden, built on first call and cached for the process."""
-    return _live_pools()[0]
+    """Every pool derived from the live garden, built on first call and cached for the process.
+
+    Returns a copy of the register, so adding or removing a pool cannot change what the next caller sees.
+    """
+    return dict(_live_pools()[0])
 
 
 def get_underivable_pools() -> dict[str, str]:
     """Specs the live garden could not seat, mapped to the reason. Empty on a healthy garden."""
-    return _live_pools()[1]
+    return dict(_live_pools()[1])
 
 
 def all_pool_model_ids() -> set[str]:

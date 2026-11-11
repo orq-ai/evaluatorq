@@ -9,7 +9,8 @@ from typing import Any, cast
 
 import pytest
 
-from evaluatorq import llm_jury
+from evaluatorq import jury_presets, llm_jury
+from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.llm_jury import _apply_preset
 from evaluatorq.jury_presets import (
     DROPPED_PRESETS,
@@ -197,6 +198,15 @@ class TestDeprecatedRates:
     def test_judge_rates_is_none_without_a_card(self, garden):
         with pytest.deprecated_call():
             assert judge_rates('openai/not-a-model', garden) is None
+
+    @pytest.mark.parametrize('error', [RuntimeError('loop running'), MissingLLMCredentialsError('no key')])
+    def test_judge_rates_is_none_when_no_live_catalogue_can_be_read(self, monkeypatch, error):
+        def unreadable():
+            raise error
+
+        monkeypatch.setattr(jury_presets, 'load_garden_sync', unreadable)
+        with pytest.deprecated_call():
+            assert judge_rates('openai/gpt-6-sol') is None
 
     def test_captured_at_is_an_iso_date(self):
         with pytest.deprecated_call():

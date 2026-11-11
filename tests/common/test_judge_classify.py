@@ -153,14 +153,16 @@ async def test_noul_above_threshold_is_a_true_verdict():
 
 @pytest.mark.asyncio
 async def test_run_classify_answers_multiple_questions_in_one_request() -> None:
-    client = _client({
-        'answers': {
-            'tone': {'type': 'choice', 'choice': 'neutral'},
-            'risk': {'type': 'noul', 'noul': 0.2},
-        },
-        'usage': _usage(),
-        'model': 'jev-latest',
-    })
+    client = _client(
+        {
+            'answers': {
+                'tone': {'type': 'choice', 'choice': 'neutral'},
+                'risk': {'type': 'noul', 'noul': 0.2},
+            },
+            'usage': _usage(),
+            'model': 'jev-latest',
+        }
+    )
     request = ClassifyRequest(
         state={'reply': 'hello'},
         questions={
@@ -219,17 +221,17 @@ async def test_run_classify_disables_an_injected_clients_sdk_retries() -> None:
 
 @pytest.mark.asyncio
 async def test_run_classify_preserves_partial_answers_and_usage() -> None:
-    client = _client({
-        'answers': {'tone': {'type': 'choice', 'choice': 'neutral'}},
-        'usage': _usage(),
-        'model': 'jev-latest',
-    })
+    client = _client(
+        {
+            'answers': {'tone': {'type': 'choice', 'choice': 'neutral'}},
+            'usage': _usage(),
+            'model': 'jev-latest',
+        }
+    )
     request = ClassifyRequest(
         state='reply',
         questions={
-            'tone': ClassifyQuestion(
-                kind='choice', instructions='Classify it.', criteria={'neutral': 'plain'}, state='x'
-            ),
+            'tone': ClassifyQuestion(kind='choice', instructions='Classify it.', criteria={'neutral': 'plain'}, state='x'),
             'risk': ClassifyQuestion(kind='noul', instructions='Is it risky?', state='x'),
         },
     )
@@ -888,9 +890,7 @@ async def test_run_classify_judges_abstains_on_a_refused_question_and_keeps_the_
 async def test_run_classify_judges_empty_questions_returns_immediately() -> None:
     client = _client()
 
-    outcomes = await run_classify_judges(
-        client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state='x', questions={}
-    )
+    outcomes = await run_classify_judges(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state='x', questions={})
 
     assert outcomes == {}
     client.post.assert_not_called()
@@ -958,11 +958,13 @@ async def test_run_classify_judges_maps_an_api_error_to_every_question_key() -> 
 
 @pytest.mark.asyncio
 async def test_run_classify_judges_keeps_partial_reply_and_returns_missing_key_error() -> None:
-    client = _client({
-        'answers': {'tone': {'type': 'noul', 'noul': 0.9}},
-        'usage': _usage(),
-        'model': 'jev-latest',
-    })
+    client = _client(
+        {
+            'answers': {'tone': {'type': 'noul', 'noul': 0.9}},
+            'usage': _usage(),
+            'model': 'jev-latest',
+        }
+    )
     questions = {
         'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
         'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
@@ -980,7 +982,6 @@ async def test_run_classify_judges_keeps_partial_reply_and_returns_missing_key_e
     assert missing.token_usage.input_tokens == 120
     assert missing.raw_content is not None
     assert 'tone' in missing.raw_content
-
 
 # ---------------------------------------------------------------------------
 # Capability is additive: the caller's question picks the endpoint (#245)

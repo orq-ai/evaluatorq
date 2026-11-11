@@ -214,9 +214,8 @@ SUPERSEDED: dict[str, str] = {
         'cheap-tier successor, but the old model is not a seat either.'
     ),
     'zai/glm-5.2': (
-        'superseded by zai/glm-5.3-flash (41.8 at max, $0.10 blended on the card, '
-        '$0.20 at actual Zai billing); live catalogue 2026-10-26. Held on Open-Weight / '
-        'Portable only (HELD_SUPERSEDED in evaluatorq.jury_presets).'
+        'superseded by zai/glm-5.3-flash (41.8 at max, $0.119 blended on the card, '
+        '$0.2375 at actual Zai billing); live catalogue 2026-10-26.'
     ),
     'alibaba/qwen3.5-35b-a3b': (
         'superseded by qwen3.6-35b-a3b (greenpt/qwen3.6-35b-a3b rest, scaleway/qwen3.6-35b-a3b '
@@ -353,6 +352,13 @@ def _effort_ladder(v2: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {effort: entry for effort, entry in ladder.items() if isinstance(entry, Mapping)}
 
 
+def _score(value: object) -> float | None:
+    """A benchmark index as a float, or None unless it is a finite real number (not a bool)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
 def _scored_effort(v2: Mapping[str, Any]) -> str | None:
     """The effort the card's headline index was measured at, via its benchmark slug."""
     slug, index = v2.get('aa_slug'), v2.get('intelligence_index')
@@ -364,6 +370,27 @@ def _scored_effort(v2: Mapping[str, Any]) -> str | None:
         ),
         None,
     )
+
+
+def _rung_indices(card: Mapping[str, object], v2: Mapping[str, Any]) -> dict[str, float]:
+    """Each rung's index, dropping (with a warning) any that is present but not a finite number."""
+    indices: dict[str, float] = {}
+    for effort, entry in _effort_ladder(v2).items():
+        raw = entry.get('intelligence_index')
+        if raw is None:
+            continue
+        score = _score(raw)
+        if score is None:
+            logger.warning(
+                '{}/{}: ignoring effort rung {!r} with a non-numeric index {!r}',
+                card.get('provider'),
+                card.get('model_id'),
+                effort,
+                raw,
+            )
+            continue
+        indices[effort] = score
+    return indices
 
 
 def _catalogue_effort(card: dict[str, object]) -> tuple[bool, str | None]:
@@ -389,24 +416,21 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
     v2 = (autorouter.get('v2') if isinstance(autorouter, dict) else None) or {}
     index = v2.get('intelligence_index') if isinstance(v2, dict) else None
     input_cost, output_cost = _usd_price(card, 'input'), _usd_price(card, 'output')
-    if not isinstance(index, (int, float)) or isinstance(index, bool) or input_cost is None or output_cost is None:
+    headline = _score(index)
+    if headline is None or input_cost is None or output_cost is None:
         return None
     effort_parameter, default_effort = _catalogue_effort(card)
     region = metadata.get('region')
     enabled = card.get('enabled')
     return ScoredModel(
         router_id=f'{card["provider"]}/{card["model_id"]}',
-        intelligence_index=float(index),
+        intelligence_index=headline,
         input_price=round(input_cost * 1000, 6),
         output_price=round(output_cost * 1000, 6),
         region=region if isinstance(region, str) else None,
         provider=str(card.get('provider')),
         headline_effort=_scored_effort(v2),
-        effort_indices={
-            e: entry['intelligence_index']
-            for e, entry in _effort_ladder(v2).items()
-            if entry.get('intelligence_index') is not None
-        },
+        effort_indices=_rung_indices(card, v2),
         effort_parameter=effort_parameter,
         default_effort=default_effort,
         enabled=enabled if isinstance(enabled, bool) else None,
@@ -627,20 +651,21 @@ def rank_cheapest_top(
 
     Eligible: comparable (not free), seatable (not
     NEVER_SEAT, UNROUTABLE, SUPERSEDED or under the floor), enabled, not
-    EU-pinned, without a newer version of itself in the garden
-    (`derived_successor`), and a 3:1 blend strictly under `max_blend`. Prices are the garden's own, so pass
+    EU-pinned, without a newer eligible version of itself
+    (`derived_successor` over the eligible set, so a successor that is itself EU-pinned or over the ceiling retires nothing), and a 3:1 blend strictly under `max_blend`. Prices are the garden's own, so pass
     the live garden. One model per family (`family_of`), the highest default
     index in it; ties break to the lower price, then router_id. Seats are the
     first n entries and the reserve is the next, which is by construction a
     different family from every seat.
     """
+    eligible = {
+        router_id: m
+        for router_id, m in garden.items()
+        if m.comparable and seatable(m) and m.enabled is not False and m.region != 'europe' and m.price < max_blend
+    }
     best: dict[str, ScoredModel] = {}
-    for model in sorted(garden.values(), key=lambda m: (-(m.default_index or 0), m.price, m.router_id)):
-        if not (model.comparable and seatable(model) and model.enabled is not False):
-            continue
-        if model.region == 'europe' or model.price >= max_blend:
-            continue
-        if derived_successor(model.router_id, garden):
+    for model in sorted(eligible.values(), key=lambda m: (-(m.default_index or 0), m.price, m.router_id)):
+        if derived_successor(model.router_id, eligible):
             continue
         best.setdefault(family_of(model.router_id), model)
     return sorted(best.values(), key=lambda m: (-m.ranked_index, m.price, m.router_id))

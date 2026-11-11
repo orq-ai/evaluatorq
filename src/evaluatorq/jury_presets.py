@@ -49,9 +49,12 @@ from decimal import ROUND_HALF_UP, Decimal
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 
 from evaluatorq.common.jury import AggregatorName, provider_family
+from evaluatorq.common.llm_client import MissingLLMCredentialsError
+from evaluatorq.common.model_catalogue import ModelCatalogueError
 from evaluatorq.common.model_frontier import ScoredModel, load_garden_sync, with_unlisted_routes
 
 # Re-exported: model_identity moved to common.model_frontier so the frontier's
@@ -82,13 +85,22 @@ def judge_rates(router_id: str, garden: Mapping[str, ScoredModel] | None = None)
 
     Rates used to come from a committed monthly snapshot; they are now read from
     `/v2/models`. Use `load_garden()` and read the `ScoredModel` instead.
+
+    Without ``garden`` it reads the live catalogue through the ambient key. Where
+    that is impossible (no key, a failed fetch, or a running event loop) it logs
+    a warning and returns None, as the shim did when it had no rates for a judge.
+    Pass ``garden=`` from async code.
     """
     warnings.warn(
         'judge_rates() is deprecated; rates are live now. Read the ScoredModel from common.model_frontier.load_garden().',
         DeprecationWarning,
         stacklevel=2,
     )
-    model = _reachable(garden).get(router_id)
+    try:
+        model = _reachable(garden).get(router_id)
+    except (MissingLLMCredentialsError, ModelCatalogueError, RuntimeError) as exc:
+        logger.warning('judge_rates({!r}) could not read the live catalogue: {}', router_id, exc)
+        return None
     if model is None:
         return None
     return JudgeRates(
@@ -160,6 +172,11 @@ class JuryPreset(BaseModel):
         `llm_jury` takes one `reasoning_effort` for the whole panel, so passing
         one overrides every seat's default; per-judge call settings are a schema
         change and its own ticket (RES-1347).
+
+        Raises:
+            MissingLLMCredentialsError: No garden was passed and no Orq key is set.
+            ModelCatalogueError: No garden was passed and the live fetch failed.
+            RuntimeError: No garden was passed and an event loop is running.
         """
         reachable = _reachable(garden)
         return {judge: (m.default_effort if (m := reachable.get(judge)) else None) for judge in self.judges}
@@ -187,6 +204,9 @@ class JuryPreset(BaseModel):
 
         Raises:
             KeyError: A seat has no card in the garden and no reviewed unlisted route.
+            MissingLLMCredentialsError: No garden was passed and no Orq key is set.
+            ModelCatalogueError: No garden was passed and the live fetch failed.
+            RuntimeError: No garden was passed and an event loop is running.
         """
         reachable = _reachable(garden)
         total = Decimal(0)
@@ -397,8 +417,6 @@ AGED_SEATS: dict[str, str] = {
 }
 
 
-# Explicitly reviewed holds, not measured-quality recommendations. The default
-# and measured-rung fingerprint expire the decision when the card changes.
 # Seats that SUPERSEDED would refuse, held on a written reason. Keyed by router
 # ID; test_every_judge_and_reserve_is_seatable honours exactly these.
 HELD_SUPERSEDED: dict[str, str] = {}
@@ -435,7 +453,7 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
         'alibaba/qwen3.8-flash is europe-pinned and unscored in the live catalogue (2026-10-26), so it has no index to rank on and no non-EU route.'
     ),
     'qwen-3.8-27b': (
-        "cerebras/qwen-3.8-27b scores 33.7 live but at $0.99/$1.49 per 1k; a reserve held for price, not strength, so it stays out. Revisit if Portable's reserve is ever chosen by pareto rather than by cost."
+        "cerebras/qwen-3.8-27b scores 33.7 live but at $0.99/$1.49 per 1M; a reserve held for price, not strength, so it stays out. Revisit if Portable's reserve is ever chosen by pareto rather than by cost."
     ),
     'qwen3.8-flash-next': (
         'tensorix/qwen/qwen3.8-flash-next is europe-pinned and unscored in the live catalogue (2026-10-26).'
@@ -484,11 +502,11 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'gemini-nano-banana-2.1': _NOT_A_JUDGE,
     'gemma-4-12b': 'munito EU host only, public AA index 9.4, under the 15.0 floor. 2026-11-10.',
     'qwen3.8-max-0902': "Public AA index 45.4 at $1.65/$4.95 per 1M, europe/us/apac. Alibaba holds only Portable's cost-chosen reserve ($0.30/$1.80), so a stronger, pricier Qwen is not a reserve upgrade; it would be a fourth-family judge, which no panel has a seat for. 2026-11-10.",
-    'glm-5.3-fast': "Public AA index 44.8 at $2.10/$6.60 per 1M against Portable's glm-5.2 at $1.40/$4.40: stronger, pricier, and already the subject of the glm-5.2 HELD_SUPERSEDED decision. 2026-11-10.",
+    'glm-5.3-fast': 'Public AA index 44.8 at $2.10/$6.60 per 1M against the seated glm-5.3-flash at $0.075/$0.25 per 1M on the card: stronger, far pricier. 2026-11-10.',
     'glm-5.3-flashx': 'Same 41.8 public index as the seated glm-5.3-flash at $0.37/$1.25 against $0.075/$0.25: same score, five times the price. 2026-11-10.',
-    'deepseek-v4.1-flash-fast': 'Baseten fast variant at $0.60/$2.40 per 1M, public AA index 39.5; twice deepseek-v4.1-flash and four times the deepseek-flash reserve ($0.14/$0.28). 2026-11-10.',
+    'deepseek-v4.1-flash-fast': 'Baseten fast variant at $0.60/$2.40 per 1M, public AA index 39.5; twice deepseek-v4.1-flash and six times the deepseek-flash reserve ($0.14/$0.28) at a 3:1 blend. 2026-11-10.',
     'kimi-k3-fast': 'The same K3 weights on Fireworks at $4.50/$22.50 per 1M against Baseten $3/$15: same score, pricier. 2026-11-10.',
-    'gemini-4-argon': "Public AA index 52.6 at $2/$10 per 1M, against Strong Jury's gemini-3.6-flash at $1.50/$7.50. No card in the project-scoped /v2/models, so no default-effort rung to rank on (2026-11-10). The strongest unreviewed candidate in the catalogue: rank it for Strong Jury once the drift suite has a workspace key.",
+    'gemini-4-argon': "Public AA index 52.6 at $2/$10 per 1M, against Strong Jury's gemini-3.8-flash at a $1.50 3:1 blend. No card in the project-scoped /v2/models, so no default-effort rung to rank on (2026-11-10). The strongest unreviewed candidate in the catalogue: rank it for Strong Jury once the drift suite has a workspace key.",
 }
 
 

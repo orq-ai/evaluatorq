@@ -41,19 +41,11 @@ def _payload(span: ReadableSpan, key: str) -> Any:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ('output', 'captured'),
-    [
-        ('hello', {'value': 'hello'}),
-        ('', {'value': ''}),
-        (False, {'value': False}),
-        (0, {'value': 0}),
-        (None, {'value': None}),
-        ({}, {'value': {}}),
-        ([], {'value': []}),
-        ({'nested': [False, 0, '']}, {'nested': [False, 0, '']}),
-    ],
-)
+@pytest.mark.parametrize(('output', 'captured'), [
+    ('hello', {'value': 'hello'}), ('', {'value': ''}), (False, {'value': False}),
+    (0, {'value': 0}), (None, {'value': None}), ({}, {'value': {}}), ([], {'value': []}),
+    ({'nested': [False, 0, '']}, {'nested': [False, 0, '']}),
+])
 async def test_job_records_datapoint_and_falsy_output(spans: InMemorySpanExporter, output: Any, captured: Any) -> None:
     data = DataPoint(inputs={'question': 'hello'}, expected_output='reference')
 
@@ -131,10 +123,7 @@ async def test_custom_evaluator_records_input_and_classifies_result(spans: InMem
     assert result.error is None
     assert _payload(span, 'orq.evaluation.input') == {'data': data.model_dump(), 'output': 'actual', 'row': 2}
     assert _payload(span, 'orq.evaluation.output') == {
-        'passed': False,
-        'value': False,
-        'type': 'python_eval',
-        'reason': 'The answer differs',
+        'passed': False, 'value': False, 'type': 'python_eval', 'reason': 'The answer differs',
     }
     assert (span.attributes or {})['orq.span_type'] == 'span.evaluator'
 
@@ -148,35 +137,16 @@ async def test_simulation_evaluator_keeps_structured_criteria(spans: InMemorySpa
 
     data = DataPoint(inputs={'persona': 'synthetic customer'})
     simulation = SimulationResult(
-        messages=[],
-        terminated_by=TerminatedBy.judge,
-        reason='Finished',
-        goal_achieved=True,
-        goal_completion_score=1.0,
-        rules_broken=[],
-        turn_count=1,
-        token_usage=TokenUsage(),
-        turn_metrics=[],
-        criteria_verified=True,
-        criteria_results={'greeted': True},
-        metadata={
-            'criteria_meta': [
-                {
-                    'id': 'greeting',
-                    'description': 'greeted',
-                    'type': 'must_happen',
-                    'passed': True,
-                    'audited': True,
-                    'evidence': 'Hello',
-                }
-            ]
-        },
+        messages=[], terminated_by=TerminatedBy.judge, reason='Finished', goal_achieved=True,
+        goal_completion_score=1.0, rules_broken=[], turn_count=1, token_usage=TokenUsage(),
+        turn_metrics=[], criteria_verified=True, criteria_results={'greeted': True},
+        metadata={'criteria_meta': [{
+            'id': 'greeting', 'description': 'greeted', 'type': 'must_happen',
+            'passed': True, 'audited': True, 'evidence': 'Hello',
+        }]},
     )
     evaluator = _adapt_simulation_scorer('criteria_met', get_evaluator('criteria_met'), {id(data): simulation})
-    response = {
-        'object': 'response',
-        'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'Hello'}]}],
-    }
+    response = {'object': 'response', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'Hello'}]}]}
 
     result = await process_evaluator(evaluator, data, response)
 
@@ -192,9 +162,7 @@ async def test_simulation_evaluator_keeps_structured_criteria(spans: InMemorySpa
 
 
 @pytest.mark.asyncio
-async def test_capture_gate_suppresses_job_and_evaluator_payloads(
-    spans: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_capture_gate_suppresses_job_and_evaluator_payloads(spans: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('EVALUATORQ_CAPTURE_MESSAGE_CONTENT', 'false')
 
     async def job(_data: DataPoint, _row: int) -> dict[str, Any]:
@@ -203,9 +171,7 @@ async def test_capture_gate_suppresses_job_and_evaluator_payloads(
     async def scorer(_params: ScorerParameter) -> EvaluationResult:
         return EvaluationResult(value=1, explanation='private reason', raw_output={'secret': 'details'})
 
-    result = await process_job(
-        job, DataPoint(inputs={'secret': 'request'}), row_index=0, evaluators=[{'name': 'private', 'scorer': scorer}]
-    )
+    result = await process_job(job, DataPoint(inputs={'secret': 'request'}), row_index=0, evaluators=[{'name': 'private', 'scorer': scorer}])
 
     assert result.error is None
     assert result.evaluator_scores is not None
@@ -233,9 +199,7 @@ async def test_scorer_failure_retains_input(spans: InMemorySpanExporter) -> None
 
 
 @pytest.mark.asyncio
-async def test_text_truncation_preserves_json_structure(
-    spans: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_text_truncation_preserves_json_structure(spans: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('EVALUATORQ_SPAN_MAX_TEXT_CHARS', '24')
     _default_span_max_text_chars.cache_clear()
 
@@ -287,9 +251,7 @@ async def test_nonfinite_payload_is_skipped_without_failing_job(spans: InMemoryS
 @pytest.mark.asyncio
 @pytest.mark.parametrize('bad_detail', ['nan', 'inf', 'negative-inf', 'circular'])
 async def test_invalid_optional_diagnostics_preserve_verdict(
-    spans: InMemorySpanExporter,
-    caplog: pytest.LogCaptureFixture,
-    bad_detail: str,
+    spans: InMemorySpanExporter, caplog: pytest.LogCaptureFixture, bad_detail: str,
 ) -> None:
     diagnostics: dict[str, Any] = {}
     if bad_detail == 'circular':
@@ -306,10 +268,7 @@ async def test_invalid_optional_diagnostics_preserve_verdict(
     assert result.error is None
     assert result.score.value == 0.75
     assert _payload(span, 'orq.evaluation.output') == {
-        'passed': True,
-        'value': 0.75,
-        'type': 'python_eval',
-        'reason': 'valid verdict',
+        'passed': True, 'value': 0.75, 'type': 'python_eval', 'reason': 'valid verdict',
     }
     assert 'raw_output' in caplog.text
     assert 'optional' in caplog.text

@@ -226,7 +226,6 @@ def test_record_token_usage_falls_back_to_usage_calls_when_unset() -> None:
     set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     assert set_attrs['gen_ai.usage.calls'] == 3
 
-
 # ---------------------------------------------------------------------------
 # record_llm_response — superset: chat-completions shape
 # ---------------------------------------------------------------------------

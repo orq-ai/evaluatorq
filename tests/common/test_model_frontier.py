@@ -639,3 +639,60 @@ class TestLiveGarden:
         assert [c['model_id'] for c in first] == ['one']
         assert info is not None
         assert len(calls) == 1
+
+
+class TestRankCheapestTopSuccessors:
+    """A newer version retires an older one only when the newer one could itself be seated."""
+
+    @staticmethod
+    def rank(garden: dict[str, ScoredModel], max_blend: float = 1.0) -> list[str]:
+        return [m.router_id for m in rank_cheapest_top(garden, lambda rid: rid.split('/')[0], max_blend)]
+
+    def test_an_eu_pinned_successor_retires_nothing(self):
+        garden = {
+            'a/foo-1': scored('a/foo-1', 50, 0.5),
+            'a/foo-2': scored('a/foo-2', 60, 0.5, region='europe'),
+        }
+        assert self.rank(garden) == ['a/foo-1']
+
+    def test_a_successor_over_the_ceiling_retires_nothing(self):
+        garden = {
+            'a/foo-1': scored('a/foo-1', 50, 0.5),
+            'a/foo-2': scored('a/foo-2', 60, 5.0),
+        }
+        assert self.rank(garden) == ['a/foo-1']
+
+    def test_an_eligible_successor_still_retires_the_older_version(self):
+        garden = {
+            'a/foo-1': scored('a/foo-1', 50, 0.5),
+            'a/foo-2': scored('a/foo-2', 60, 0.5),
+        }
+        assert self.rank(garden) == ['a/foo-2']
+
+
+class TestMalformedScores:
+    """External card data never takes the whole garden down, and never reads as a score by accident."""
+
+    @staticmethod
+    def card_with(headline: object, rungs: dict[str, Any] | None = None) -> dict[str, object]:
+        v2: dict[str, Any] = {'intelligence_index': headline}
+        if rungs is not None:
+            v2['reasoning_efforts'] = rungs
+        return {
+            'provider': 'p',
+            'model_id': 'm',
+            'input_cost': 0.001,
+            'output_cost': 0.004,
+            'metadata': {'autorouter': {'v2': v2}},
+        }
+
+    @pytest.mark.parametrize('headline', [float('nan'), float('inf'), True, 'n/a'])
+    def test_a_non_finite_or_non_numeric_headline_is_unscored(self, headline):
+        assert model_frontier.scored_model_from_card(self.card_with(headline)) is None
+
+    @pytest.mark.parametrize('rung', ['n/a', True, float('nan')])
+    def test_a_bad_rung_is_dropped_and_the_card_survives(self, rung):
+        card_ = self.card_with(30, {'low': {'intelligence_index': rung}, 'high': {'intelligence_index': 40}})
+        garden = model_frontier.garden_from_cards([card_, card('q', 'other')])
+        assert set(garden) == {'p/m', 'q/other'}
+        assert garden['p/m'].effort_indices == {'high': 40.0}

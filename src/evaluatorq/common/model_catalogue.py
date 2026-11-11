@@ -536,9 +536,12 @@ async def model_cards(client: AsyncOpenAI | None = None) -> tuple[dict[str, obje
     """
     host, _api_key, oauth_fetch, cache_key = _catalogue_source(client)
     if callable(oauth_fetch):
-        payload = await _fetch_catalogue_payload(host=host, api_key=None, oauth_fetch=oauth_fetch)
-        if not isinstance(payload, list):
-            raise ModelCatalogueError('Orq returned an unreadable model catalogue.')
+        try:
+            payload = await _fetch_catalogue_payload(host=host, api_key=None, oauth_fetch=oauth_fetch)
+        except (httpx.HTTPError, ValueError, RuntimeError) as exc:
+            raise ModelCatalogueError(f'Orq model catalogue fetch failed: {exc}') from exc
+        if not isinstance(payload, list) or not payload:
+            raise ModelCatalogueError('Orq returned an unreadable or empty model catalogue.')
         return _cards(payload)
     cached = _raw_catalogues.get(cache_key)
     if cached is not None and cache_key not in _failed_catalogues:

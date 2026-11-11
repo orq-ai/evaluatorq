@@ -61,10 +61,7 @@ async def test_target_timeout_at_or_above_helper_timeout_warns(caplog: pytest.Lo
     handler_id = logger.add(caplog.handler, level='WARNING', format='{message}')
     try:
         await call_target_with_retry(
-            _Slow(_Fatal('boom')),
-            [Message(role='user', content='x')],
-            target_agent_timeout_ms=240_000,
-            max_target_retries=0,
+            _Slow(_Fatal('boom')), [Message(role='user', content='x')], target_agent_timeout_ms=240_000, max_target_retries=0
         )
     finally:
         logger.remove(handler_id)

@@ -32,9 +32,7 @@ def _catalogue(monkeypatch: pytest.MonkeyPatch):
 
 
 def _usage(**kw: object) -> Usage:
-    return Usage(
-        input_tokens=1000, output_tokens=500, total_tokens=1500, calls=1, priced_calls=0, **typing.cast(typing.Any, kw)
-    )
+    return Usage(input_tokens=1000, output_tokens=500, total_tokens=1500, calls=1, priced_calls=0, **typing.cast(typing.Any, kw))
 
 
 @pytest.mark.asyncio
@@ -108,22 +106,24 @@ def _bare(prices: dict[str, ModelInfo]) -> dict[str, ModelInfo]:
 def test_a_host_pinned_id_prices_at_its_own_host():
     """Hosts republish each other's models and do not always agree on price."""
 
-    prices = pricing._parse_catalogue([
-        {
-            'model_id': 'deepseek-v4-pro',
-            'provider': 'deepseek',
-            'model_developer': 'deepseek',
-            'input_cost': 0.000435,
-            'output_cost': 0.00087,
-        },
-        {
-            'model_id': 'deepseek-v4-pro',
-            'provider': 'tensorix',
-            'model_developer': 'deepseek',
-            'input_cost': 0.00175,
-            'output_cost': 0.0035,
-        },
-    ])
+    prices = pricing._parse_catalogue(
+        [
+            {
+                'model_id': 'deepseek-v4-pro',
+                'provider': 'deepseek',
+                'model_developer': 'deepseek',
+                'input_cost': 0.000435,
+                'output_cost': 0.00087,
+            },
+            {
+                'model_id': 'deepseek-v4-pro',
+                'provider': 'tensorix',
+                'model_developer': 'deepseek',
+                'input_cost': 0.00175,
+                'output_cost': 0.0035,
+            },
+        ]
+    )
 
     assert prices['deepseek/deepseek-v4-pro'].input_cost_per_1k == 0.000435
     assert prices['tensorix/deepseek-v4-pro'].input_cost_per_1k == 0.00175
@@ -133,21 +133,25 @@ def test_a_host_pinned_id_prices_at_its_own_host():
 
 def test_parse_catalogue_skips_malformed_entries():
 
-    prices = pricing._parse_catalogue([
-        {'model_id': 'a', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2},
-        {'model_id': 'c', 'input_cost': 0.1, 'output_cost': 0.2},
-        {'input_cost': 0.1, 'output_cost': 0.2},
-        'nonsense',
-    ])
+    prices = pricing._parse_catalogue(
+        [
+            {'model_id': 'a', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2},
+            {'model_id': 'c', 'input_cost': 0.1, 'output_cost': 0.2},
+            {'input_cost': 0.1, 'output_cost': 0.2},
+            'nonsense',
+        ]
+    )
     assert _bare(prices) == {'a': ModelInfo(0.1, 0.2, 'openai', supports_responses=False)}
 
 
 def test_parse_catalogue_prefers_the_developers_own_provider():
 
-    prices = pricing._parse_catalogue([
-        {'model_id': 'm', 'provider': 'azure', 'model_developer': 'openai', 'input_cost': 1.0, 'output_cost': 2.0},
-        {'model_id': 'm', 'provider': 'openai', 'model_developer': 'openai', 'input_cost': 1.0, 'output_cost': 2.0},
-    ])
+    prices = pricing._parse_catalogue(
+        [
+            {'model_id': 'm', 'provider': 'azure', 'model_developer': 'openai', 'input_cost': 1.0, 'output_cost': 2.0},
+            {'model_id': 'm', 'provider': 'openai', 'model_developer': 'openai', 'input_cost': 1.0, 'output_cost': 2.0},
+        ]
+    )
     assert prices['m'].provider == 'openai'
 
 
@@ -182,9 +186,9 @@ def test_parse_catalogue_reads_reasoning_effort_options():
 
 def test_parse_catalogue_reasoning_efforts_is_none_without_the_parameter():
 
-    prices = pricing._parse_catalogue([
-        {'model_id': 'plain', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}
-    ])
+    prices = pricing._parse_catalogue(
+        [{'model_id': 'plain', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]
+    )
     assert prices['plain'].reasoning_efforts is None
     assert prices['plain'].default_reasoning_effort is None
 
@@ -239,69 +243,72 @@ async def test_validate_reasoning_effort_passes_when_the_catalogue_cannot_say():
 
 def test_parse_catalogue_rejects_non_list_payload():
 
-    assert (
-        pricing._parse_catalogue({
-            'data': [{'model_id': 'a', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]
-        })
-        == {}
-    )
+    assert pricing._parse_catalogue({'data': [{'model_id': 'a', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]}) == {}
 
 
 def test_parse_catalogue_lists_bool_cost_unpriced():
     # bool is an int subclass: input_cost=True must not price at $1.00/1k.
 
-    prices = pricing._parse_catalogue([{'model_id': 'a', 'provider': 'openai', 'input_cost': True, 'output_cost': 0.2}])
+    prices = pricing._parse_catalogue(
+        [{'model_id': 'a', 'provider': 'openai', 'input_cost': True, 'output_cost': 0.2}]
+    )
     assert prices['a'].input_cost_per_1k is None
     assert prices['a'].output_cost_per_1k is None
 
 
 def test_parse_catalogue_lists_negative_cost_unpriced():
 
-    prices = pricing._parse_catalogue([{'model_id': 'a', 'provider': 'openai', 'input_cost': -0.1, 'output_cost': 0.2}])
+    prices = pricing._parse_catalogue(
+        [{'model_id': 'a', 'provider': 'openai', 'input_cost': -0.1, 'output_cost': 0.2}]
+    )
     assert prices['a'].input_cost_per_1k is None
 
 
 def test_parse_catalogue_lists_non_usd_currency_unpriced_but_prices_empty_and_usd():
 
-    prices = pricing._parse_catalogue([
-        {
-            'model_id': 'eur-model',
-            'provider': 'openai',
-            'input_cost': 0.1,
-            'output_cost': 0.2,
-            'input_currency': 'eur',
-        },
-        {
-            'model_id': 'empty-currency',
-            'provider': 'openai',
-            'input_cost': 0.1,
-            'output_cost': 0.2,
-            'input_currency': '',
-        },
-        {
-            'model_id': 'usd-model',
-            'provider': 'openai',
-            'input_cost': 0.1,
-            'output_cost': 0.2,
-            'input_currency': 'usd',
-            'output_currency': 'usd',
-        },
-    ])
+    prices = pricing._parse_catalogue(
+        [
+            {
+                'model_id': 'eur-model',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'input_currency': 'eur',
+            },
+            {
+                'model_id': 'empty-currency',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'input_currency': '',
+            },
+            {
+                'model_id': 'usd-model',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'input_currency': 'usd',
+                'output_currency': 'usd',
+            },
+        ]
+    )
     assert {k for k, v in _bare(prices).items() if v.input_cost_per_1k is not None} == {'empty-currency', 'usd-model'}
     assert prices['eur-model'].input_cost_per_1k is None
 
 
 def test_parse_catalogue_reads_supports_responses_from_metadata():
 
-    prices = pricing._parse_catalogue([
-        {
-            'model_id': 'a',
-            'provider': 'openai',
-            'input_cost': 0.1,
-            'output_cost': 0.2,
-            'metadata': {'supports_responses_api': True},
-        }
-    ])
+    prices = pricing._parse_catalogue(
+        [
+            {
+                'model_id': 'a',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'metadata': {'supports_responses_api': True},
+            }
+        ]
+    )
     assert prices['a'].supports_responses is True
 
 
@@ -746,9 +753,7 @@ async def test_catalogue_is_cached_per_credential_on_one_host(monkeypatch: pytes
         'AsyncClient',
         _FakeAsyncClient(
             calls,
-            lambda: _FakeResponse(
-                200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]
-            ),
+            lambda: _FakeResponse(200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]),
         ),
     )
 
@@ -812,6 +817,7 @@ async def test_env_key_used_when_no_client_given(monkeypatch: pytest.MonkeyPatch
     fake_client = _FakeAsyncClient(calls, _respond, headers)
     monkeypatch.setattr(httpx, 'AsyncClient', fake_client)
 
+
     await pricing._load_catalogue()
 
     assert calls == ['https://prod.example/v2/models']
@@ -826,29 +832,31 @@ def test_parse_catalogue_survives_a_non_mapping_metadata():
     payload happened to carry a non-empty one.
     """
 
-    prices = pricing._parse_catalogue([
-        {
-            'model_id': 'listy',
-            'provider': 'openai',
-            'input_cost': 0.1,
-            'output_cost': 0.2,
-            'metadata': [{'supports_responses_api': True}],
-        },
-        {
-            'model_id': 'stringy',
-            'provider': 'openai',
-            'input_cost': 0.1,
-            'output_cost': 0.2,
-            'metadata': 'supports_responses_api',
-        },
-        {
-            'model_id': 'good',
-            'provider': 'openai',
-            'input_cost': 0.1,
-            'output_cost': 0.2,
-            'metadata': {'supports_responses_api': True},
-        },
-    ])
+    prices = pricing._parse_catalogue(
+        [
+            {
+                'model_id': 'listy',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'metadata': [{'supports_responses_api': True}],
+            },
+            {
+                'model_id': 'stringy',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'metadata': 'supports_responses_api',
+            },
+            {
+                'model_id': 'good',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'metadata': {'supports_responses_api': True},
+            },
+        ]
+    )
     assert set(_bare(prices)) == {'listy', 'stringy', 'good'}
     assert prices['listy'].supports_responses is False
     assert prices['stringy'].supports_responses is False
@@ -906,14 +914,8 @@ def _router_catalogue(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.parametrize(
     ('served_model', 'reason'),
     [
-        (
-            'anthropic/claude-unlisted',
-            'was served by anthropic/claude-unlisted, which the Orq catalogue does not price',
-        ),
-        (
-            'orq/autorouter-openai-cost',
-            'answered under router id orq/autorouter-openai-cost, not the model that served it',
-        ),
+        ('anthropic/claude-unlisted', 'was served by anthropic/claude-unlisted, which the Orq catalogue does not price'),
+        ('orq/autorouter-openai-cost', 'answered under router id orq/autorouter-openai-cost, not the model that served it'),
         (
             'orq/autorouter-anthropic-balanced',
             'answered under router id orq/autorouter-anthropic-balanced, not the model that served it',
@@ -1034,9 +1036,9 @@ def test_parse_catalogue_reads_supports_classify():
 
 def test_parse_catalogue_leaves_supports_classify_false_without_the_flag():
 
-    prices = pricing._parse_catalogue([
-        {'model_id': 'plain', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}
-    ])
+    prices = pricing._parse_catalogue(
+        [{'model_id': 'plain', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]
+    )
     assert prices['plain'].supports_classify is False
 
 
@@ -1046,6 +1048,7 @@ def test_parse_catalogue_does_not_treat_non_boolean_classify_metadata_as_support
     metadata = entry['metadata']
     assert isinstance(metadata, dict)
     metadata['supports_classify'] = flag
+
 
     prices = pricing._parse_catalogue([entry])
 
@@ -1125,9 +1128,7 @@ async def test_supports_classify_false_for_an_unknown_model():
 @pytest.mark.asyncio
 async def test_unpriced_model_is_listed_but_its_call_stays_unpriced(monkeypatch: pytest.MonkeyPatch):
     """A model the workspace offers without a price still appears in the settings picker."""
-    entries = [
-        {'model_id': 'free-chat', 'provider': 'acme', 'model_type': 'chat', 'input_cost': None, 'output_cost': None}
-    ]
+    entries = [{'model_id': 'free-chat', 'provider': 'acme', 'model_type': 'chat', 'input_cost': None, 'output_cost': None}]
 
     catalogue = pricing._parse_catalogue(entries)
 
@@ -1145,7 +1146,9 @@ async def test_unpriced_model_is_listed_but_its_call_stays_unpriced(monkeypatch:
 @pytest.mark.parametrize('cost', [float('nan'), float('inf'), 10**1000])
 def test_parse_catalogue_lists_non_finite_cost_unpriced(cost: float):
 
-    prices = pricing._parse_catalogue([{'model_id': 'a', 'provider': 'openai', 'input_cost': cost, 'output_cost': 0.2}])
+    prices = pricing._parse_catalogue(
+        [{'model_id': 'a', 'provider': 'openai', 'input_cost': cost, 'output_cost': 0.2}]
+    )
     assert prices['a'].input_cost_per_1k is None
 
 
@@ -1157,13 +1160,7 @@ def test_model_info_with_one_rate_is_unpriced():
 @pytest.mark.asyncio
 async def test_models_by_provider_embedding_kind_lists_only_embedding_models(monkeypatch: pytest.MonkeyPatch):
     entries = [
-        {
-            'model_id': 'text-embedding-4',
-            'provider': 'openai',
-            'model_type': 'embedding',
-            'input_cost': 1,
-            'output_cost': 0,
-        },
+        {'model_id': 'text-embedding-4', 'provider': 'openai', 'model_type': 'embedding', 'input_cost': 1, 'output_cost': 0},
         {'model_id': 'embed-v4', 'provider': 'cohere', 'model_type': 'embedding', 'input_cost': 1, 'output_cost': 0},
         {'model_id': 'gpt-5.6-luna', 'provider': 'openai', 'model_type': 'chat', 'input_cost': 1, 'output_cost': 1},
     ]

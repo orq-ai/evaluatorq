@@ -278,12 +278,7 @@ async def test_initialization_parses_headers_with_equals_and_skips_empty_or_malf
 @pytest.mark.parametrize(
     ('endpoint', 'base_url', 'expected_source', 'expected_traces_endpoint'),
     [
-        (
-            'https://collector.example',
-            'https://ignored.example',
-            'OTEL_EXPORTER_OTLP_ENDPOINT',
-            'https://collector.example/v1/traces',
-        ),
+        ('https://collector.example', 'https://ignored.example', 'OTEL_EXPORTER_OTLP_ENDPOINT', 'https://collector.example/v1/traces'),
         (None, 'https://collector.example', 'ORQ_BASE_URL', 'https://collector.example/v2/otel/v1/traces'),
         (None, None, 'default (ORQ_API_KEY)', 'https://my.orq.ai/v2/otel/v1/traces'),
     ],
@@ -476,7 +471,9 @@ async def test_flush_tracing_bounds_a_hanging_force_flush(monkeypatch: pytest.Mo
 
     await tracing_setup.flush_tracing()
 
-    warning.assert_called_once_with('OTEL span flush timed out after {}ms; some spans may not have been exported.', 10)
+    warning.assert_called_once_with(
+        'OTEL span flush timed out after {}ms; some spans may not have been exported.', 10
+    )
 
 
 @pytest.mark.asyncio

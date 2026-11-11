@@ -14,7 +14,7 @@ correctness = llm_jury(
 
 ## The presets
 
-Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, uncached, one call per judge per item. The token counts are a flat 3:1 assumption, the same for every seat whatever its reasoning effort, and the same ratio the seats are ranked on. Every figure is recomputed from the live model catalog's rates by a weekly check, so a repricing shows up as a failing run rather than a quietly wrong table.
+Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, uncached, one call per judge per item. The token counts are a flat 3:1 assumption, the same for every seat whatever its reasoning effort, and the same ratio the seats are ranked on. Every figure is recomputed by a weekly check from the live model catalog's rates (seats priced from `UNLISTED_ROUTES` use that register's dated rates), so a repricing shows up as a failing run rather than a quietly wrong table.
 
 | Preset | Judges | Aggregation | $ / 1k | Reserve |
 | --- | --- | --- | --- | --- |
@@ -78,9 +78,9 @@ Two more limits worth knowing before you quote a number:
 
 Seats are chosen in this package. `evaluatorq.common.model_frontier` reads the live `/v2/models` catalog, where every autorouter-eligible card carries Artificial Analysis intelligence scores per reasoning effort beside its rates, and ranks each model at its default effort on a 3:1 blended price. Compare seats within each lineage, because lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
 
-Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog; a failure leaves that run red in Actions. Each failure names the seat and the register to update:
+Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh; the exceptions are the seats the catalog does not list, which are priced from the dated `UNLISTED_ROUTES` register. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog; a failure leaves that run red in Actions. Each failure names the seat and the register to update:
 
-- a seat the catalog no longer serves, or that can no longer be ranked at its default effort
+- a seat the catalog no longer serves
 - a repricing that moves a published figure in the table above
 - a newer model in a seated lineage that nobody has reviewed (`REVIEWED_SUCCESSORS`)
 - a same-lineage model that beats a seat on both intelligence and price

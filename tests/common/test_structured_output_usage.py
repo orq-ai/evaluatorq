@@ -193,9 +193,7 @@ async def test_usage_covers_the_rungs_burned_when_nothing_validates() -> None:
 async def test_responses_leg_reports_its_own_usage() -> None:
     """The Responses leg's usage comes back on the success path."""
     client = MagicMock()
-    client.responses.create = AsyncMock(
-        return_value=_responses_response('{"value": "ok"}', input_tokens=11, output_tokens=7)
-    )
+    client.responses.create = AsyncMock(return_value=_responses_response('{"value": "ok"}', input_tokens=11, output_tokens=7))
 
     result = await _generate(client, api='responses')
 

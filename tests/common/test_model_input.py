@@ -107,7 +107,6 @@ def test_question_wire_payloads_count_exact_fields_and_are_idempotent() -> None:
     assert classifier_question_wire_payloads(expected) == expected
     assert serialized_question_chars(questions) == serialized_chars(expected)
 
-
 def test_jev_state_keeps_user_edges_and_does_not_mutate_source() -> None:
     source = [{'role': 'user', 'content': 'x' * 3_000}]
 
@@ -119,10 +118,7 @@ def test_jev_state_keeps_user_edges_and_does_not_mutate_source() -> None:
 
 def test_jev_tool_call_pairs_every_matching_result_and_retains_status() -> None:
     source = [
-        {
-            'role': 'assistant',
-            'tool_calls': [{'id': 'call-1', 'function': {'name': 'shell.exec', 'arguments': 'x' * 300}}],
-        },
+        {'role': 'assistant', 'tool_calls': [{'id': 'call-1', 'function': {'name': 'shell.exec', 'arguments': 'x' * 300}}]},
         {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'b' * 300, 'status': 'failed', 'exit_code': 7},
         {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'second result', 'status': 'completed'},
         {'role': 'tool', 'content': 'orphan'},
@@ -183,6 +179,7 @@ def test_jev_reused_tool_call_id_uses_latest_assistant_group() -> None:
     assert [result['text'] for result in calls[1]['results']] == ['latest result']
 
 
+
 def test_jev_model_gate_and_question_capacity_validation() -> None:
     assert is_jev_model('typesafe/jev-latest')
     assert not is_jev_model('openai/gpt-6-luna')
@@ -203,7 +200,9 @@ def test_jev_global_cap_keeps_complete_head_and_tail_messages() -> None:
 
 def test_long_question_reserves_state_capacity() -> None:
     state = {
-        'messages': [{'index': index, 'role': 'user', 'type': 'message', 'text': 'x' * 1_000} for index in range(200)]
+        'messages': [
+            {'index': index, 'role': 'user', 'type': 'message', 'text': 'x' * 1_000} for index in range(200)
+        ]
     }
 
     bounded = fit_jev_state(state, [{'instructions': 'q' * 100_000}])
@@ -324,7 +323,6 @@ def test_jev_removes_harness_reminders_and_typed_reasoning_but_keeps_business_js
     assert 'help' in rendered
     assert 'harness reminder omitted' in rendered
 
-
 def test_structured_text_data_and_url_fields_are_not_mislabeled_as_media() -> None:
     content = {'text': 'label', 'data': {'records': [{'id': 7}]}, 'url': '/records/7'}
 
@@ -350,14 +348,13 @@ def test_literal_omission_marker_does_not_inflate_jev_excerpt_count() -> None:
     assert text.startswith(literal)
 
 
+
 def test_jev_inline_base64_media_reports_decoded_size_without_copying_payload() -> None:
     import base64
 
     payload = b'\x89PNG' + b'x' * 130_000
     encoded = base64.b64encode(payload).decode('ascii')
-    source = [
-        {'role': 'user', 'content': [{'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{encoded}'}}]}
-    ]
+    source = [{'role': 'user', 'content': [{'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{encoded}'}}]}]
 
     state = jev_state(source, global_char_cap=500_000)
 
@@ -390,6 +387,7 @@ def test_jev_message_and_tool_results_preserve_multimodal_order() -> None:
     assert call['results'][0]['text'] == expected
 
 
+
 def test_question_limited_jev_state_preserves_and_counts_top_level_metadata() -> None:
     state = {
         'trace_status': 'completed',
@@ -408,6 +406,7 @@ def test_question_limited_jev_state_preserves_and_counts_top_level_metadata() ->
     assert len(bounded['messages']) < len(state['messages'])
 
 
+
 def test_question_fit_keeps_the_full_state_ceiling_and_respects_question_limits() -> None:
     source = [{'role': 'user', 'content': f'event-{index}-' + 'x' * 2_000} for index in range(50)]
     state = jev_state(source, global_char_cap=500_000)
@@ -422,16 +421,11 @@ def test_question_fit_keeps_the_full_state_ceiling_and_respects_question_limits(
     assert serialized_chars(bounded) <= JEV_STATE_CHARS - question_chars
     assert serialized_chars(bounded) + longest_question <= JEV_STATE_QUESTION_CHARS
     assert serialized_chars(bounded) + question_chars <= JEV_STATE_ALL_QUESTIONS_CHARS
-
-
 def test_jev_role_excerpt_accumulates_global_and_role_omissions() -> None:
     original = 'x' * 600_000
     state = fit_jev_state(jev_state([{'role': 'user', 'content': original}], global_char_cap=500_000), [])
 
-    assert (
-        state['messages'][0]['text']
-        == f'{original[:1000]}[... {len(original) - 2_000} chars left out ...]{original[-1000:]}'
-    )
+    assert state['messages'][0]['text'] == f'{original[:1000]}[... {len(original) - 2_000} chars left out ...]{original[-1000:]}'
 
 
 _OPTION_SOURCE = [
@@ -543,11 +537,7 @@ def test_jev_state_never_reads_reasoning_even_when_the_source_carries_it() -> No
 
 def test_jev_coverage_follows_the_include_flags_and_the_trim_limits() -> None:
     off = JevOptions(
-        coverage=True,
-        include_user=False,
-        include_tool_results=False,
-        user=EdgeLimit(10, 5),
-        assistant=EdgeLimit(90, 30),
+        coverage=True, include_user=False, include_tool_results=False, user=EdgeLimit(10, 5), assistant=EdgeLimit(90, 30)
     )
 
     context = jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=off)['context']
@@ -582,13 +572,9 @@ def test_jev_coverage_counts_inside_the_state_cap() -> None:
 def test_located_gaps_use_source_neighbours_including_grouped_results() -> None:
     messages = [
         {'role': 'system', 'content': 'excluded beginning'},
-        {
-            'role': 'assistant',
-            'content': '',
-            'tool_calls': [
-                {'id': 'call', 'function': {'name': 'shell', 'arguments': ''}},
-            ],
-        },
+        {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'call', 'function': {'name': 'shell', 'arguments': ''}},
+        ]},
         {'role': 'system', 'content': 'excluded before result'},
         {'role': 'tool', 'tool_call_id': 'call', 'content': 'done'},
         {'role': 'system', 'content': 'excluded after result'},
@@ -596,16 +582,12 @@ def test_located_gaps_use_source_neighbours_including_grouped_results() -> None:
         {'role': 'system', 'content': 'excluded end'},
     ]
     state = jev_state(
-        messages,
-        global_char_cap=10_000,
+        messages, global_char_cap=10_000,
         options=JevOptions(include_system=False, located_omission=True),
     )
     gaps = [entry for entry in state['messages'] if entry['type'] == 'omission']
     assert [(gap['after_index'], gap['before_index'], gap['messages_left_out']) for gap in gaps] == [
-        (None, 1, 1),
-        (1, 3, 1),
-        (3, 5, 1),
-        (5, None, 1),
+        (None, 1, 1), (1, 3, 1), (3, 5, 1), (5, None, 1),
     ]
     assert state_omitted_messages(state) == 4
     assert 'omission' not in state
@@ -616,14 +598,10 @@ def test_located_gaps_use_source_neighbours_including_grouped_results() -> None:
 @pytest.mark.parametrize('cap', [150, 300, 500, 1000])
 def test_located_caps_count_unique_source_indexes_and_marker_metadata(cap: int) -> None:
     messages = [
-        {
-            'role': 'assistant',
-            'content': 'call',
-            'tool_calls': [
-                {'id': 'a', 'function': {'name': 'shell', 'arguments': 'x' * 100}},
-                {'id': 'b', 'function': {'name': 'shell', 'arguments': 'y' * 100}},
-            ],
-        },
+        {'role': 'assistant', 'content': 'call', 'tool_calls': [
+            {'id': 'a', 'function': {'name': 'shell', 'arguments': 'x' * 100}},
+            {'id': 'b', 'function': {'name': 'shell', 'arguments': 'y' * 100}},
+        ]},
         {'role': 'tool', 'tool_call_id': 'a', 'content': 'a' * 100},
         {'role': 'tool', 'tool_call_id': 'b', 'content': 'b' * 100},
         *({'role': 'user', 'content': 'z' * 300} for _ in range(8)),
@@ -631,8 +609,7 @@ def test_located_caps_count_unique_source_indexes_and_marker_metadata(cap: int) 
     state = jev_state(messages, global_char_cap=10_000, options=JevOptions(state_chars=cap, located_omission=True))
     represented = {
         index
-        for entry in state['messages']
-        if entry['type'] != 'omission'
+        for entry in state['messages'] if entry['type'] != 'omission'
         for index in [entry['index'], *(result['index'] for result in entry.get('results', []))]
     }
     assert serialized_chars(state) <= cap
@@ -648,13 +625,9 @@ def test_located_caps_count_unique_source_indexes_and_marker_metadata(cap: int) 
 
 def test_jev_layout_options_preserve_type_and_status_without_empty_call_fields() -> None:
     messages = [
-        {
-            'role': 'assistant',
-            'content': '',
-            'tool_calls': [
-                {'id': 'a', 'function': {'name': 'shell', 'arguments': ''}},
-            ],
-        },
+        {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'a', 'function': {'name': 'shell', 'arguments': ''}},
+        ]},
         {'role': 'tool', 'tool_call_id': 'a', 'content': '', 'status': 'error', 'exit_code': 7},
     ]
     state = jev_state(messages, global_char_cap=10_000, options=JevOptions(field_order=True, drop_empty=True))
@@ -671,16 +644,10 @@ def test_jev_layout_options_preserve_type_and_status_without_empty_call_fields()
 
 
 def test_drop_empty_keeps_multi_call_indexes_and_null_identifiers() -> None:
-    messages = [
-        {
-            'role': 'assistant',
-            'content': '',
-            'tool_calls': [
-                {'id': None, 'function': {'name': None, 'arguments': ''}},
-                {'id': 'b', 'function': {'name': 'shell', 'arguments': ''}},
-            ],
-        }
-    ]
+    messages = [{'role': 'assistant', 'content': '', 'tool_calls': [
+        {'id': None, 'function': {'name': None, 'arguments': ''}},
+        {'id': 'b', 'function': {'name': 'shell', 'arguments': ''}},
+    ]}]
     state = jev_state(messages, global_char_cap=10_000, options=JevOptions(drop_empty=True))
     assert [entry['call_index'] for entry in state['messages']] == [0, 1]
     assert state['messages'][0]['id'] is None and state['messages'][0]['name'] is None
@@ -694,22 +661,18 @@ def test_located_coverage_metadata_fits_or_reports_an_impossible_cap() -> None:
     assert 'context' in state
     assert serialized_chars(state) <= 1_500
     with pytest.raises(ValueError, match='metadata'):
-        jev_state(
-            messages,
-            global_char_cap=10_000,
-            options=JevOptions(
-                coverage=True,
-                located_omission=True,
-                state_chars=50,
-            ),
-        )
+        jev_state(messages, global_char_cap=10_000, options=JevOptions(
+            coverage=True, located_omission=True, state_chars=50,
+        ))
 
 
 def test_located_marker_overhead_preserves_useful_messages_within_budget() -> None:
-    messages = [{'role': 'system' if index % 2 else 'user', 'content': f'visible turn {index}'} for index in range(161)]
+    messages = [
+        {'role': 'system' if index % 2 else 'user', 'content': f'visible turn {index}'}
+        for index in range(161)
+    ]
     state = jev_state(
-        messages,
-        global_char_cap=10_000,
+        messages, global_char_cap=10_000,
         options=JevOptions(include_system=False, coverage=True, located_omission=True, state_chars=5_000),
     )
     retained = [entry['index'] for entry in state['messages'] if entry['type'] != 'omission']
