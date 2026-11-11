@@ -4,7 +4,8 @@ name: Jury preset drift (weekly)
 # garden, so nothing in the repo goes stale on a timer. What can drift is the
 # choice: a seat retires, loses its score, gets a newer model in its lineage, or
 # stops being on the frontier. This suite catches that against the live garden.
-# Weekly and non-blocking, like examples-weekly.yml: it opens an issue instead.
+# Weekly and non-blocking, like examples-weekly.yml. A failure leaves the run red;
+# it opens no issue.
 #
 # Needs repo secret ORQ_WORKSPACE_API_KEY: a workspace-scoped orq key. A
 # project-scoped key sees a truncated garden, so the suite's scope check fails on
@@ -41,26 +42,3 @@ jobs:
           ORQ_API_KEY: ${{ secrets.ORQ_WORKSPACE_API_KEY || secrets.ORQ_API_KEY }}
         run: uv run pytest -m integration tests/integration/test_preset_freshness.py tests/unit/test_router_pools.py
 
-  report:
-    name: Report drift
-    needs: [preset-drift]
-    if: failure()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: read
-      issues: write
-
-    steps:
-      - name: Open an issue
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `Weekly jury preset drift check failed (${new Date().toISOString().slice(0, 10)})`,
-              body: `The live-garden preset checks failed. Each failure names the seat and what changed; review it against the registers in src/evaluatorq/jury_presets.py and docs/jury-presets.md ("How a preset stays current").\n\nWorkflow run: ${url}`,
-              labels: ['ci'],
-            })

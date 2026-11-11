@@ -78,7 +78,7 @@ Two more limits worth knowing before you quote a number:
 
 Seats are chosen in this package. `evaluatorq.common.model_frontier` reads the live `/v2/models` catalog, where every autorouter-eligible card carries Artificial Analysis intelligence scores per reasoning effort beside its rates, and ranks each model at its default effort on a 3:1 blended price. Compare seats within each lineage, because lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
 
-Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog and opens an issue when one fails. Each failure names the seat and the register to update:
+Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog; a failure leaves that run red in Actions. Each failure names the seat and the register to update:
 
 - a seat the catalog no longer serves, or that can no longer be ranked at its default effort
 - a repricing that moves a published figure in the table above
