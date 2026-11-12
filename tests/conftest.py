@@ -1,3 +1,4 @@
+import contextlib
 import hashlib
 import logging
 import os
@@ -27,6 +28,63 @@ def _is_loopback(address: object) -> bool:
         return False
     host = str(address[0])
     return host in {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
+
+
+@pytest.fixture(autouse=True)
+def _restore_environ():
+    """Undo every environment change a test makes, including ones code under test makes directly.
+
+    `eq dashboard` exports its roots for the reload worker and `.env` loading sets variables
+    without a monkeypatch, so without this a variable from one test reached whichever test the
+    worker ran next.
+    """
+    saved = dict(os.environ)
+    yield
+    for name in set(os.environ) - set(saved):
+        del os.environ[name]
+    for name, value in saved.items():
+        if os.environ.get(name) != value:
+            os.environ[name] = value
+
+
+@pytest.fixture(autouse=True)
+def _restore_logging_config(monkeypatch):
+    """Undo the logging setup a CLI test installs, so a later test's caplog sees its warnings.
+
+    The CLIs set the `evaluatorq` stdlib logger's level and handlers, replace the Loguru sinks
+    with one on the test's captured stderr, and the red-team progress display disables
+    `evaluatorq` in Loguru while it runs. Left in place, a `-q` CLI test silenced every WARNING
+    a later test asserted on.
+    """
+    from loguru import logger as loguru_logger
+
+    logging.getLogger("evaluatorq")  # the CLIs configure it; make sure it is in the snapshot even before first use
+    loggers = [logging.getLogger()] + [
+        item
+        for name, item in list(logging.Logger.manager.loggerDict.items())
+        if isinstance(item, logging.Logger) and (name == "evaluatorq" or name.startswith("evaluatorq."))
+    ]
+    saved = [(item, item.level, list(item.handlers), item.propagate, item.disabled) for item in loggers]
+    # Loguru cannot list its sinks, so record the ones added during the test and remove only those.
+    added: list[int] = []
+    real_add = loguru_logger.add
+
+    def recording_add(*args, **kwargs):
+        sink_id = real_add(*args, **kwargs)
+        added.append(sink_id)
+        return sink_id
+
+    monkeypatch.setattr(loguru_logger, "add", recording_add)
+    yield
+    for item, level, handlers, propagate, disabled in saved:
+        item.setLevel(level)
+        item.handlers[:] = handlers
+        item.propagate = propagate
+        item.disabled = disabled
+    for sink_id in added:
+        with contextlib.suppress(ValueError):  # the test, or a CLI's logger.remove(), already removed it
+            loguru_logger.remove(sink_id)
+    loguru_logger.enable("evaluatorq")
 
 
 @pytest.fixture(autouse=True)
