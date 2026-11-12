@@ -52,7 +52,22 @@ def dashboard_css_href() -> str:
 _SIDEBAR_TOGGLE_SCRIPT = (
     '<script>'
     "(function(){try{if(localStorage.getItem('eq-sidebar-collapsed')==='1')"
-    "document.documentElement.classList.add('sidebar-collapsed');}catch(e){}})();"
+    "document.documentElement.classList.add('sidebar-collapsed');"
+    "const w=localStorage.getItem('eq-sidebar-width');"
+    "if(w)document.documentElement.style.setProperty('--sidebar-w',w+'px');}catch(e){}})();"
+    # Sidebar resize: drag the right-edge handle, arrow keys step it, double-click resets.
+    'function eqSidebarWidth(w){w=Math.max(180,Math.min(400,Math.round(w)));'
+    "document.documentElement.style.setProperty('--sidebar-w',w+'px');"
+    "try{localStorage.setItem('eq-sidebar-width',String(w));}catch(e){}}"
+    'function eqSidebarDrag(e){if(e.button!==0)return;e.preventDefault();'
+    "const root=document.documentElement,x0=document.querySelector('.app-sidebar').getBoundingClientRect().left;"
+    "root.classList.add('sidebar-resizing');"
+    'function mv(ev){eqSidebarWidth(ev.clientX-x0);}'
+    "function up(){document.removeEventListener('pointermove',mv);document.removeEventListener('pointerup',up);"
+    "root.classList.remove('sidebar-resizing');}"
+    "document.addEventListener('pointermove',mv);document.addEventListener('pointerup',up);}"
+    "function eqSidebarKey(e){const d=e.key==='ArrowLeft'?-16:e.key==='ArrowRight'?16:0;if(!d)return;"
+    "e.preventDefault();eqSidebarWidth(document.querySelector('.app-sidebar').offsetWidth+d);}"
     'function eqToggleSidebar(){'
     "const c=document.documentElement.classList.toggle('sidebar-collapsed');"
     "try{localStorage.setItem('eq-sidebar-collapsed',c?'1':'0');}catch(e){}}"
@@ -218,6 +233,9 @@ def _sidebar_html(active_nav: str, *, compression_inspector_enabled: bool) -> st
         ' stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>'
         '<span>Collapse</span>'
         '<kbd class="sidebar-toggle-kbd">⌘ B</kbd></button>'
+        '<div class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"'
+        ' title="Drag to resize, double-click to reset" tabindex="0" onpointerdown="eqSidebarDrag(event)"'
+        ' onkeydown="eqSidebarKey(event)" ondblclick="eqSidebarWidth(232)"></div>'
         '</aside>'
     )
 
