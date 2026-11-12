@@ -258,3 +258,26 @@ def render_transcript_fragment(
     grid_html = f'<div class="sim-transcript-grid">{criteria_col}{error_html}{bubbles_html}</div>'
 
     return f'<div class="sim-transcript-detail">{summary_html}{grid_html}</div>'
+
+
+def first_divergence(entry_a: SimulationEntry, entry_b: SimulationEntry) -> int | None:
+    """Index of the first message that differs between the two transcripts
+    (role or text), the shorter length when one is a prefix of the other, or
+    ``None`` when they are identical."""
+    msgs_a, msgs_b = entry_a.transcript or [], entry_b.transcript or []
+    for i, (ma, mb) in enumerate(zip(msgs_a, msgs_b, strict=False)):
+        if ma.role != mb.role or coerce_content_text(ma.content) != coerce_content_text(mb.content):
+            return i
+    return None if len(msgs_a) == len(msgs_b) else min(len(msgs_a), len(msgs_b))
+
+
+def flipped_criteria(entry_a: SimulationEntry, entry_b: SimulationEntry) -> list[tuple[str, str, str]]:
+    """(description, state in A, state in B) for criteria whose verdict differs,
+    matched by description; a criterion only one run has counts as changed."""
+    states_a = {c.description: c.state for c in entry_a.criteria or []}
+    states_b = {c.description: c.state for c in entry_b.criteria or []}
+    return [
+        (desc, states_a.get(desc, 'absent'), states_b.get(desc, 'absent'))
+        for desc in dict.fromkeys([*states_a, *states_b])
+        if states_a.get(desc) != states_b.get(desc)
+    ]

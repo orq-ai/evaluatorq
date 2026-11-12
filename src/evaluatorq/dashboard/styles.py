@@ -3021,7 +3021,7 @@ _RT_REPORT_CSS = """
 # Side-by-side sim run comparison page. The hero reuses the shared .report-hero
 # classes; this block only carries compare-specific rules, on the editorial
 # theme tokens. Kept with the other dashboard CSS blocks rather than inlined
-# per-request in sim_compare.py.
+# per-request in the sim_compare package.
 _SIM_COMPARE_CSS = """
 /* Hero action row: trace-link button + the on-report compare control */
 .report-hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }

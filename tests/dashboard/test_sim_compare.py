@@ -113,13 +113,13 @@ def _rids(roots: list[Path]) -> tuple[str, str]:
 
 
 def _cmp(selections: dict[str, list[str]] | None = None):
-    from evaluatorq.dashboard.sim_compare import build_comparison
+    from evaluatorq.dashboard.sim_compare.model import build_comparison
 
     return build_comparison('ra', 'rb', _run_a(), _run_b(), selections or {})
 
 
 def test_aggregates_per_run():
-    from evaluatorq.dashboard.sim_compare import aggregates
+    from evaluatorq.dashboard.sim_compare.model import aggregates
 
     cmp = _cmp()
     a, b = aggregates(cmp.a), aggregates(cmp.b)
@@ -131,7 +131,7 @@ def test_aggregates_per_run():
 
 
 def test_pair_change_classifies_regressed_and_improved():
-    from evaluatorq.dashboard.sim_compare import pair_change
+    from evaluatorq.dashboard.sim_compare.model import pair_change
 
     cmp = _cmp()
     by_persona = {p.a.persona: pair_change(cmp.a, cmp.b, p) for p in cmp.matching.matched}
@@ -140,9 +140,9 @@ def test_pair_change_classifies_regressed_and_improved():
 
 
 def test_score_rows_keep_one_sided_scorer_as_none():
-    from evaluatorq.dashboard.sim_compare import ScoreRow, score_rows
+    from evaluatorq.dashboard.sim_compare.model import ScoreRow, score_rows
 
-    from evaluatorq.dashboard.sim_compare import build_comparison
+    from evaluatorq.dashboard.sim_compare.model import build_comparison
 
     run_a, run_b = _run_a(), _run_b()
     run_a.results[0].metadata['evaluator_scores'] = {'shared': 0.5, 'only_a': 1.0}
@@ -159,7 +159,7 @@ def test_score_rows_keep_one_sided_scorer_as_none():
 def test_filter_keeps_pair_when_either_side_matches():
     # goal_outcome=Achieved: A's alice and carol and B's bob and dave match. Both pairs survive
     # (alice, bob) plus both unmatched entries, and each side is described by its half of those rows.
-    from evaluatorq.dashboard.sim_compare import aggregates
+    from evaluatorq.dashboard.sim_compare.model import aggregates
 
     cmp = _cmp({'goal_outcome': ['Achieved']})
     assert {p.a.persona for p in cmp.matching.matched} == {'alice', 'bob'}
@@ -171,7 +171,7 @@ def test_filter_keeps_pair_when_either_side_matches():
 
 
 def test_pair_change_missed_to_error_is_error_not_regressed():
-    from evaluatorq.dashboard.sim_compare import build_comparison, pair_change
+    from evaluatorq.dashboard.sim_compare.model import build_comparison, pair_change
 
     run_a = _run('A', [_result('alice', 'billing', goal=False, score=0.1, turns=2)], {})
     run_b = _run('B', [_result('alice', 'billing', goal=False, score=0.0, turns=1, terminated='error')], {})
@@ -183,7 +183,7 @@ def test_pair_change_missed_to_error_is_error_not_regressed():
 
 
 def test_aggregates_count_errored_conversations_in_the_denominator():
-    from evaluatorq.dashboard.sim_compare import aggregates, build_comparison
+    from evaluatorq.dashboard.sim_compare.model import aggregates, build_comparison
     from evaluatorq.simulation.reports.sections import _build_summary_section
 
     run_a = _run(
@@ -204,7 +204,8 @@ def test_aggregates_count_errored_conversations_in_the_denominator():
 
 
 def test_scorer_with_every_result_dropped_renders_as_failed():
-    from evaluatorq.dashboard.sim_compare import _scores_panel, build_comparison, score_rows
+    from evaluatorq.dashboard.sim_compare.panels import _scores_panel
+    from evaluatorq.dashboard.sim_compare.model import build_comparison, score_rows
 
     run_a, run_b = _run_a(), _run_b()
     for r in run_a.results:
@@ -219,7 +220,8 @@ def test_scorer_with_every_result_dropped_renders_as_failed():
 
 
 def test_scores_panel_draws_tracks_only_within_unit_range():
-    from evaluatorq.dashboard.sim_compare import ScoreRow, _scores_panel
+    from evaluatorq.dashboard.sim_compare.model import ScoreRow
+    from evaluatorq.dashboard.sim_compare.panels import _scores_panel
 
     inside = _scores_panel([ScoreRow('ok', 0.2, 0.4)])
     assert 'cmp-track-fill' in inside and 'Mean per conversation, 0 to 1' in inside
@@ -241,7 +243,7 @@ def test_default_sort_puts_regressed_first(roots: list[Path]):
 
 
 def test_match_entries_counts_repeated_same_object_by_position() -> None:
-    from evaluatorq.dashboard.sim_compare import match_entries
+    from evaluatorq.dashboard.sim_compare.model import match_entries
     from evaluatorq.simulation.reports.sections import individual_entries
 
     entry = individual_entries(_run_a().results[:1])[0]
@@ -252,7 +254,7 @@ def test_match_entries_counts_repeated_same_object_by_position() -> None:
 
 
 def test_match_entries_pairs_and_flags_unmatched():
-    from evaluatorq.dashboard.sim_compare import match_entries
+    from evaluatorq.dashboard.sim_compare.model import match_entries
     from evaluatorq.simulation.reports.sections import individual_entries
 
     m = match_entries(individual_entries(_run_a().results), individual_entries(_run_b().results))
@@ -379,7 +381,8 @@ def test_compare_transcript_rejects_a_non_matched_pair(roots: list[Path]):
 def test_compare_transcript_route_scopes_session_slug_to_one_response(
     roots: list[Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from evaluatorq.dashboard import orq_scope, orq_workspace, sim_compare
+    from evaluatorq.dashboard import orq_scope, orq_workspace
+    from evaluatorq.dashboard.sim_compare import drawer
     from evaluatorq.dashboard.trace_links import thread_trace_url
 
     for name in ('ORQ_API_KEY', 'ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG'):
@@ -397,7 +400,7 @@ def test_compare_transcript_route_scopes_session_slug_to_one_response(
 
     monkeypatch.setattr(orq_scope, 'discover_orq_scope', discover)
     monkeypatch.setattr(
-        sim_compare, 'render_transcript_fragment', lambda entry, **_kw: thread_trace_url(str(entry.index)) or ''
+        drawer, 'render_transcript_fragment', lambda entry, **_kw: thread_trace_url(str(entry.index)) or ''
     )
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)
@@ -535,7 +538,7 @@ def test_compare_control_on_sim_report(roots: list[Path]):
 
 
 def test_outcome_filter_makes_goal_rate_not_comparable():
-    from evaluatorq.dashboard.sim_compare import _headlines, _tiles
+    from evaluatorq.dashboard.sim_compare.panels import _headlines, _tiles
 
     cmp = _cmp({'goal_outcome': ['Achieved']})
     assert cmp.outcome_filtered
@@ -548,7 +551,8 @@ def test_outcome_filter_makes_goal_rate_not_comparable():
 
 
 def test_biggest_score_move_skips_the_goal_scorer():
-    from evaluatorq.dashboard.sim_compare import ScoreRow, _headlines
+    from evaluatorq.dashboard.sim_compare.model import ScoreRow
+    from evaluatorq.dashboard.sim_compare.panels import _headlines
 
     cmp = _cmp()
     cmp.__dict__['scores'] = [
@@ -592,7 +596,7 @@ def test_headline_row_toggles_and_follows_the_table(roots: list[Path]):
 
 
 def test_single_termination_reason_hides_the_ended_bar():
-    from evaluatorq.dashboard.sim_compare import _outcomes_panel
+    from evaluatorq.dashboard.sim_compare.panels import _outcomes_panel
 
     assert 'How conversations ended' in _outcomes_panel(_cmp())
     assert 'How conversations ended' not in _outcomes_panel(_cmp({'persona': ['alice']}))
@@ -638,7 +642,7 @@ def test_copy_link_reports_failure_instead_of_claiming_success():
 
 
 def test_compare_params_split_filters_from_table_state_and_drop_unknown_keys():
-    from evaluatorq.dashboard.sim_compare import parse_compare_params
+    from evaluatorq.dashboard.sim_compare.state import parse_compare_params
 
     selections, state = parse_compare_params(
         [('a', 'x'), ('persona', 'alice'), ('persona', 'bob'), ('cmp_view', 'all'), ('bogus', '1')]
@@ -648,7 +652,7 @@ def test_compare_params_split_filters_from_table_state_and_drop_unknown_keys():
 
 
 def test_first_divergence_and_flipped_criteria():
-    from evaluatorq.dashboard.sim_compare import _flipped_criteria, first_divergence
+    from evaluatorq.common.reports.sim_detail import flipped_criteria, first_divergence
     from evaluatorq.dashboard.sim_views import _entries_from_run
 
     a = _entries_from_run(_run_a())[0]
@@ -664,8 +668,8 @@ def test_first_divergence_and_flipped_criteria():
 
         row = CriteriaRow(id='c0', description='asks for order id', type='must_happen', passed=True, safety=False)
     flipped = row.model_copy(update={'passed': not row.passed})
-    assert _flipped_criteria(a.model_copy(update={'criteria': [row]}), b.model_copy(update={'criteria': [row]})) == []
-    assert _flipped_criteria(a.model_copy(update={'criteria': [row]}), b.model_copy(update={'criteria': [flipped]})) == [
+    assert flipped_criteria(a.model_copy(update={'criteria': [row]}), b.model_copy(update={'criteria': [row]})) == []
+    assert flipped_criteria(a.model_copy(update={'criteria': [row]}), b.model_copy(update={'criteria': [flipped]})) == [
         (row.description, row.state, flipped.state)
     ]
 
