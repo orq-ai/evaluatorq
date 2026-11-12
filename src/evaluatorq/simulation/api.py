@@ -30,6 +30,7 @@ from evaluatorq.simulation._config import (
     DEFAULT_MAX_TOOL_RESULT_CHARS,
     DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     SimulationConfig,
+    require_sim_models_served,
     sim_llm_config,
     sim_role_config,
 )
@@ -619,6 +620,9 @@ async def _simulate_run(
     # GENERATE phase). Minted before the span opens so it can be stamped as a
     # span attribute rather than set after the fact.
     resolved_llm_config = sim_llm_config(llm_config)
+    require_sim_models_served(
+        resolved_llm_config, generation_client=generation_client, user_simulator=user_simulator, judge=judge
+    )
     run_id = uuid.uuid4().hex
 
     try:
@@ -1078,6 +1082,9 @@ async def _generate_and_simulate_run(
     # both stages are recorded. Minted before the span opens so it can be stamped
     # as a span attribute rather than set after the fact.
     resolved_llm_config = sim_llm_config(llm_config)
+    require_sim_models_served(
+        resolved_llm_config, generation_client=generation_client, user_simulator=user_simulator, judge=judge
+    )
     run_id = uuid.uuid4().hex
 
     try:
@@ -1265,6 +1272,7 @@ async def generate(
     await init_tracing_if_needed()
 
     resolved_llm_config = sim_llm_config(llm_config)
+    require_sim_models_served(resolved_llm_config, generation_client=generation_client, simulating=False)
     # Minted before the span opens so it can be stamped as a span attribute.
     run_id = uuid.uuid4().hex
 

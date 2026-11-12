@@ -68,3 +68,59 @@ async def test_tool_role_classification_checks_the_fast_model_the_classify_only_
 @pytest.mark.asyncio
 async def test_signal_classification_with_nothing_to_classify_needs_no_check() -> None:
     assert (await classify_tool_doors(traj([user(), agent()])))['one_way_call_count'].value == 0
+
+
+@pytest.mark.asyncio
+async def test_a_programmatic_simulation_stops_before_calling_the_target() -> None:
+    from evaluatorq.simulation import simulate
+    from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
+
+    calls: list[Any] = []
+
+    async def target(messages: Any) -> str:
+        calls.append(messages)
+        return 'ok'
+
+    with pytest.raises(ModelClientMismatchError, match=r'\(sim\.judge\)=openai/'):
+        await simulate(
+            target=target,
+            personas=[
+                Persona(
+                    name='Test User',
+                    patience=0.5,
+                    assertiveness=0.5,
+                    politeness=0.5,
+                    technical_level=0.5,
+                    communication_style=CommunicationStyle.casual,
+                    background='bg',
+                )
+            ],
+            scenarios=[Scenario(name='S', goal='fix my bug')],
+            upload_results=False,
+        )
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_programmatic_generation_checks_only_the_generation_model() -> None:
+    from evaluatorq.simulation import generate
+
+    with pytest.raises(ModelClientMismatchError, match=r'\(sim\.generator\)=openai/') as info:
+        await generate(agent_description='A support agent.')
+    assert 'EVALUATORQ_SMART_MODEL' not in str(info.value)
+
+
+def test_a_simulation_checks_only_the_roles_the_environment_serves() -> None:
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation._config import require_sim_models_served
+
+    injected = object()
+    with pytest.raises(ModelClientMismatchError) as info:
+        require_sim_models_served(None, generation_client=injected, user_simulator=injected, judge=None)
+    assert 'EVALUATORQ_SMART_MODEL' in str(info.value)
+    assert 'EVALUATORQ_FAST_MODEL' not in str(info.value)
+
+    require_sim_models_served(None, generation_client=injected, user_simulator=injected, judge=injected)
+    require_sim_models_served(LLMCallConfig(model='claude-sonnet-5-5'), generation_client=None)
+    client = AsyncOpenAI(api_key='sk-test', max_retries=0)
+    require_sim_models_served(LLMCallConfig(client=client), generation_client=None)

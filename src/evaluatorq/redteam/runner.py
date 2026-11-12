@@ -32,7 +32,6 @@ from evaluatorq.common.model_catalogue import validate_reasoning_effort
 from evaluatorq.common.model_roles import model_source
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
-from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.run_store_dir import get_store_dir
@@ -460,7 +459,7 @@ def _apply_coverage_policy(report: RedTeamReport, pipeline_config: LLMConfig | N
 
     total_attacks = summary.total_attacks
     if summary.no_verdict:
-        report.pipeline_warnings.append(
+        report.add_pipeline_warnings(
             f'NO VERDICT: 0/{total_attacks} attacks could be evaluated — the target was not tested. '
             'Check evaluator model configuration, credentials, and any gateway guardrails rejecting '
             'judge or target calls.'
@@ -468,7 +467,7 @@ def _apply_coverage_policy(report: RedTeamReport, pipeline_config: LLMConfig | N
         logger.error(f'No verdict: 0/{total_attacks} attacks could be evaluated — the target was not tested.')
     elif summary.coverage_below_minimum:
         floor = summary.min_evaluation_coverage
-        report.pipeline_warnings.append(
+        report.add_pipeline_warnings(
             f'Evaluation coverage below the configured minimum: '
             f'{summary.evaluated_attacks}/{total_attacks} attacks scored '
             f'({pct(summary.evaluation_coverage)} < {pct(floor)}). The rates below are '
@@ -1223,8 +1222,8 @@ async def _generate_recommendations(
         raise
     except Exception as exc:
         logger.warning('Failed to generate focus area recommendations', exc_info=True)
-        report.pipeline_warnings.append(
-            f'Failed to generate focus area recommendations ({scrub_known_secrets(str(exc))}). Check LLM credentials and model configuration.'
+        report.add_pipeline_warnings(
+            f'Failed to generate focus area recommendations ({exc}). Check LLM credentials and model configuration.'
         )
     return _PostProcessingOutcome(recorded=recorded, usage=usage)
 
@@ -1268,8 +1267,8 @@ async def _generate_executive_summary_section(
         raise
     except Exception as exc:
         logger.warning('Failed to generate executive summary', exc_info=True)
-        report.pipeline_warnings.append(
-            f'Failed to generate executive summary ({scrub_known_secrets(str(exc))}). Check LLM credentials and model configuration.'
+        report.add_pipeline_warnings(
+            f'Failed to generate executive summary ({exc}). Check LLM credentials and model configuration.'
         )
     return _PostProcessingOutcome(recorded=recorded, usage=usage)
 
@@ -1343,7 +1342,7 @@ def _persist_and_index_run(
         if auto_save_path is None:
             auto_save_path = run_path
         if run_path is None:
-            report.pipeline_warnings.append(
+            report.add_pipeline_warnings(
                 'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
             )
 
@@ -1785,9 +1784,7 @@ async def red_team(
 
             _fold_post_processing_usage(report=report, post_processing_usages=post_processing_usages)
 
-            report.pipeline_warnings.extend(
-                _backtracking_warnings(report.results, max_backtracks=config.max_backtracks)
-            )
+            report.add_pipeline_warnings(*_backtracking_warnings(report.results, max_backtracks=config.max_backtracks))
 
             persisted = _persist_and_index_run(
                 report=report,
@@ -3734,7 +3731,7 @@ async def _run_dynamic_or_hybrid(
         all_datapoints=all_datapoints,
     )
 
-    merged.pipeline_warnings.extend(_collect_filter_warnings(prepared_targets=prepared_targets))
+    merged.add_pipeline_warnings(*_collect_filter_warnings(prepared_targets=prepared_targets))
 
     _apply_coverage_policy(merged, pipeline_config)
 
@@ -3768,8 +3765,8 @@ async def _run_dynamic_or_hybrid(
     finally:
         _save_report(output_dir, '03_summary_report.json', merged)
 
-    merged.pipeline_warnings.extend(
-        await _cleanup_target_memory(
+    merged.add_pipeline_warnings(
+        *await _cleanup_target_memory(
             prepared_targets=prepared_targets,
             cleanup_memory=cleanup_memory,
             resolved_hooks=resolved_hooks,
@@ -3807,12 +3804,12 @@ def _finalize_merged_report(
         merged.summary.datapoint_breakdown = _datapoint_breakdown(all_datapoints)
 
     if len(all_datapoints) == 0:
-        merged.pipeline_warnings.append(
+        merged.add_pipeline_warnings(
             'Zero datapoints generated for requested vulnerabilities. '
             'Strategy generation may have failed — check logs for details.'
         )
     elif merged.summary.total_attacks == 0:
-        merged.pipeline_warnings.append(
+        merged.add_pipeline_warnings(
             'Zero attacks executed. The resistance rate of 100% does not reflect actual security posture — '
             'no attacks were run. Check strategy generation logs and LLM credentials.'
         )

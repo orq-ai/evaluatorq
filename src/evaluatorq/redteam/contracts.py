@@ -2176,8 +2176,12 @@ class RedTeamReport(BaseModel):
 
     @field_serializer('pipeline_warnings')
     def _scrub_pipeline_warnings_on_save(self, warnings: list[str]) -> list[str]:
-        """The run appends warnings after the report is built, past the validator, so scrub them again on the way out."""
+        """A caller can still append to the list directly, past the validator, so scrub again on the way out."""
         return [scrub_known_secrets(warning) for warning in warnings]
+
+    def add_pipeline_warnings(self, *warnings: str) -> None:
+        """Add warnings to the report, scrubbed, so every reader of the live list (renderers, dashboards) sees them safe."""
+        self.pipeline_warnings.extend(scrub_known_secrets(warning) for warning in warnings)
 
 
 # ---------------------------------------------------------------------------

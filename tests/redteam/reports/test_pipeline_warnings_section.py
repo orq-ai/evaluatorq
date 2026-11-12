@@ -63,7 +63,7 @@ def test_a_credential_in_a_warning_is_scrubbed_on_validation_and_on_save() -> No
     built = RedTeamReport.model_validate({**_report([]).model_dump(mode='json'), 'pipeline_warnings': [_LEAKY]})
     assert built.pipeline_warnings == [_LEAKY.replace('sk-proj-AbCdEf1234567890AbCdEf1234567890', '<API_KEY>')]
 
-    # The run appends warnings after the report is built, which skips the validator; the saved JSON is still clean.
+    # A direct append skips the validator; the saved JSON is still clean.
     appended = _report([])
     appended.pipeline_warnings.append(_LEAKY)
     saved = json.loads(appended.model_dump_json())
@@ -92,3 +92,13 @@ async def test_a_failed_executive_summary_records_a_scrubbed_warning(monkeypatch
     assert len(report.pipeline_warnings) == 1
     assert 'sk-proj-' not in report.pipeline_warnings[0]
     assert '<API_KEY>' in report.pipeline_warnings[0]
+
+
+def test_an_added_warning_is_scrubbed_in_the_live_report_every_renderer_reads() -> None:
+    report = _report([])
+    report.add_pipeline_warnings(_LEAKY, 'plain warning')
+    assert report.pipeline_warnings == [
+        _LEAKY.replace('sk-proj-AbCdEf1234567890AbCdEf1234567890', '<API_KEY>'),
+        'plain warning',
+    ]
+    assert 'sk-proj-' not in render_report_body(report)
