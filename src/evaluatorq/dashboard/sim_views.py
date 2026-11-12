@@ -219,7 +219,7 @@ def _sim_size_selector(
     """Rows-per-page selector over *sizes*. Changing size resets to page 1."""
     opts = ''.join(
         (
-            f'<button type="button" class="sim-size-btn" aria-current="true" aria-pressed="true">{n}</button>'
+            f'<button type="button" class="sim-size-btn" disabled aria-current="true" aria-pressed="true">{n}</button>'
             if n == size
             else f'<button type="button" class="sim-size-btn" {control(sort, direction, 1, n)}>{n}</button>'
         )

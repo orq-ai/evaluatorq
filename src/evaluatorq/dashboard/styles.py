@@ -3097,7 +3097,8 @@ _SIM_COMPARE_CSS = """
 .rk-head:has(.cmp-head-btn:focus-visible) { box-shadow: inset 0 0 0 2px var(--teal-600); }
 /* The action button stretches over the whole row; the scenario link sits above it. */
 .cmp-head-btn { border: 0; background: none; padding: 0; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-align: right; }
-.cmp-head-btn:focus-visible { outline: none; }
+.cmp-head-btn:focus-visible { outline: 2px solid var(--teal-600); outline-offset: 2px; }
+.rk-head:has(.cmp-head-btn:focus-visible) .cmp-head-btn:focus-visible { outline: none; }
 .cmp-head-btn::after { content: ''; position: absolute; inset: 0; }
 .cmp-head-scn { position: relative; z-index: 1; color: var(--text-link); text-decoration: underline; text-underline-offset: 2px; }
 .cmp-head-scn:hover { color: var(--text-link); }

@@ -73,7 +73,7 @@ def _resolve_stamped(rid: str, roots: list[Path] | None, surface: str) -> tuple[
         return 'missing', None, None
     try:
         return 'ok', adapter.load(path), stamp
-    except Exception:
+    except (ValueError, OSError):  # JSON decode and pydantic validation errors are ValueErrors
         logger.opt(exception=True).warning('compare: failed to load {} report {}', surface, rid)
         return 'error', None, None
 
