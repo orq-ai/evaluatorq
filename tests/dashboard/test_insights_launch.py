@@ -7,7 +7,6 @@ import html
 import json
 import os
 import re
-import stat
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -1400,9 +1399,12 @@ def test_finder_export_fifo_is_rejected_without_blocking(monkeypatch: pytest.Mon
         InsightsLaunchSpec(source='finder', finder_export='pipe.json')
 
 
+@pytest.mark.usefixtures('group_writable_umask')
 def test_finder_insights_launch_records_source_until_run_finishes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # Under umask 002, start_manifest creates insights-runs group-writable, as it does in production;
+    # the launch must repair that folder before it writes the lease there.
     import json
 
     import tempfile
@@ -1412,9 +1414,11 @@ def test_finder_insights_launch_records_source_until_run_finishes(
     monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_identity', lambda _pid: 'test:1')
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     export_dir = tmp_path / 'finder-exports'
-    export_dir.mkdir()
+    export_dir.mkdir(mode=0o700)
+    export_dir.chmod(0o700)
     export_path = export_dir / 'trace-finder-source.json'
     export_path.write_text(_run_export(['trace-1']).model_dump_json(), encoding='utf-8')
+    export_path.chmod(0o600)
     spec = InsightsLaunchSpec(source='finder', finder_export=export_path.name)
     with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
         spawn.return_value.pid = 43210
@@ -1422,9 +1426,9 @@ def test_finder_insights_launch_records_source_until_run_finishes(
 
     reference = finder_export_reference_path(tmp_path / 'insights-runs', run_id)
     assert json.loads(reference.read_text(encoding='utf-8')) == {'finder_export': str(export_path)}
-    if os.name != 'nt':
-        assert reference.stat().st_mode & 0o777 == 0o600
-        assert reference.parent.stat().st_mode & 0o777 == 0o700
+    assert reference.stat().st_mode & 0o777 == 0o600
+    assert reference.parent.stat().st_mode & 0o777 == 0o700
+    assert (tmp_path / 'insights-runs').stat().st_mode & 0o777 == 0o700
     assert read_private_finder_reference(reference) == {'finder_export': str(export_path)}
     assert len(list_manifests(tmp_path / 'insights-runs')) == 1
 
@@ -2597,13 +2601,3 @@ def test_chosen_models_reach_insights_and_blank_ones_keep_the_pipeline_default(
     assert 'classifier_model' not in seen
     assert 'compiler_model' not in seen
 
-
-@pytest.mark.usefixtures('group_writable_umask')
-def test_finder_lease_folder_is_created_under_a_group_writable_umask(tmp_path: Path) -> None:
-    runs_dir = tmp_path / 'insights-runs'
-    lease_dir = finder_export_reference_path(runs_dir, 'run-1').parent
-
-    ensure_private_finder_reference_dir(lease_dir)
-
-    assert stat.S_IMODE(runs_dir.stat().st_mode) == 0o700
-    assert stat.S_IMODE(lease_dir.stat().st_mode) == 0o700

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal, cast
 
+from loguru import logger
 from pydantic import BaseModel, Field, ValidationError
 
 from evaluatorq.common.private_files import ensure_private_directory, write_private_atomic
@@ -349,7 +350,8 @@ def _recent_upload_entry(runs_dir: Path, path: Path, kind: UploadKind) -> tuple[
             trace_count=metadata.trace_count,
             kind=kind,
         )
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError) as exc:
+        logger.warning('Leaving Insights upload {} out of recent trace files: {}', path.name, exc)
         return None
 
 
@@ -367,8 +369,19 @@ def _recent_finder_entry(finder_dir: Path, path: Path) -> tuple[float, RecentTra
             trace_count=_trace_count(contents, 'finder'),
             kind='finder',
         )
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError) as exc:
+        logger.warning('Leaving Finder export {} out of recent trace files: {}', path.name, exc)
         return None
+
+
+def _finder_dir_rejection(finder_dir: Path) -> str | None:
+    """Why no export in `finder_dir` can be listed, checked once so the reason is logged once."""
+    from evaluatorq.dashboard.insights_launch import finder_export_dir_problem
+
+    info = finder_dir.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        return 'is a symlink'
+    return finder_export_dir_problem(info) if os.name != 'nt' else None
 
 
 def recent_trace_files(runs_dir: Path, finder_dir: Path) -> list[RecentTraceFile]:
@@ -384,7 +397,10 @@ def recent_trace_files(runs_dir: Path, finder_dir: Path) -> list[RecentTraceFile
             entry = _recent_upload_entry(runs_dir, path, kind)
             if entry is not None:
                 entries.append(entry)
-    if finder_dir.exists() and not finder_dir.is_symlink():
+    finder_rejection = _finder_dir_rejection(finder_dir) if finder_dir.exists() or finder_dir.is_symlink() else None
+    if finder_rejection is not None:
+        logger.warning('Leaving every Finder export out of recent trace files: {} {}', finder_dir, finder_rejection)
+    elif finder_dir.exists():
         for path in finder_dir.glob('*.json'):
             entry = _recent_finder_entry(finder_dir, path)
             if entry is not None:
