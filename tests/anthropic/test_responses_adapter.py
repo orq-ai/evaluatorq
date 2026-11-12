@@ -452,3 +452,34 @@ def test_user_simulator_turn_on_the_adapter():
     assert sent['messages'][-1]['content'][0]['text'].startswith('Generate your first message')
     assert 'tools' not in sent
 
+
+
+def test_openai_sdk_objects_convert_like_the_dicts_they_dump_to() -> None:
+    """The OpenAI SDK accepts its own objects as messages and input items, such as a replayed completion or `response.output`."""
+    from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
+    from openai.types.chat.chat_completion_message_tool_call import Function
+    from openai.types.responses import ResponseFunctionToolCall
+
+    from evaluatorq.anthropic.convert import convert_messages
+    from evaluatorq.anthropic.responses import convert_input
+
+    call = ChatCompletionMessageToolCall(id='c1', type='function', function=Function(name='lookup', arguments='{"q": 1}'))
+    replayed = ChatCompletionMessage(role='assistant', content=None, tool_calls=[call])
+    tool_result = {'role': 'tool', 'tool_call_id': 'c1', 'content': 'found'}
+    user = {'role': 'user', 'content': 'look it up'}
+    assert convert_messages([user, replayed, tool_result]) == convert_messages(
+        [user, replayed.model_dump(exclude_none=True), tool_result]
+    )
+    _, messages = convert_messages([user, replayed, tool_result])
+    assert messages[1]['content'] == [{'type': 'tool_use', 'id': 'c1', 'name': 'lookup', 'input': {'q': 1}}]
+
+    item = ResponseFunctionToolCall(type='function_call', call_id='c1', name='lookup', arguments='{"q": 1}')
+    output = {'type': 'function_call_output', 'call_id': 'c1', 'output': 'found'}
+    assert convert_input([user, item, output], None) == convert_input([user, item.model_dump(exclude_none=True), output], None)
+
+
+def test_an_input_that_is_neither_a_dict_nor_an_sdk_object_is_refused() -> None:
+    from evaluatorq.anthropic.convert import convert_messages
+
+    with pytest.raises(TypeError, match='pass a dict or an OpenAI SDK object'):
+        convert_messages([('user', 'hi')])  # ty: ignore[invalid-argument-type]

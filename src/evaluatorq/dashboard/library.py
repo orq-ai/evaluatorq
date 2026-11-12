@@ -52,10 +52,14 @@ def read_json(path_str: str, mtime_ns: int) -> dict[str, object]:
     return json.loads(Path(path_str).read_text(encoding='utf-8'))
 
 
+def stamp(path: Path) -> tuple[str, int]:
+    """``(resolved path, mtime_ns)``: the key of every mtime-keyed cache here. A rewrite changes it."""
+    return str(path.resolve()), path.stat().st_mtime_ns
+
+
 def read_json_cached(path: Path) -> dict[str, object]:
     """Read + parse JSON at *path*, using the mtime-keyed LRU cache."""
-    mtime_ns = path.stat().st_mtime_ns
-    return read_json(str(path.resolve()), mtime_ns)
+    return read_json(*stamp(path))
 
 
 @functools.lru_cache(maxsize=32)
@@ -78,8 +82,12 @@ def _validate_model(
 
 def load_model_cached(path: Path, validator: Callable[[dict[str, object]], _Model]) -> _Model:
     """Return a cached, validated report model for *path* (see ``_validate_model``)."""
-    mtime_ns = path.stat().st_mtime_ns
-    return _validate_model(str(path.resolve()), mtime_ns, validator)
+    return load_model_at(stamp(path), validator)
+
+
+def load_model_at(file_stamp: tuple[str, int], validator: Callable[[dict[str, object]], _Model]) -> _Model:
+    """``load_model_cached`` for a stamp taken earlier, so a caller keyed on that stamp gets that version."""
+    return _validate_model(*file_stamp, validator)
 
 
 def sniff_kind(data: dict[str, object]) -> str | None:

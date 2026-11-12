@@ -8,6 +8,32 @@ import tempfile
 from pathlib import Path
 
 
+def _require_owned_directory(path: Path) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = path.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        raise OSError(f'Private file storage is a symlink, not a directory: {path}')
+    if not stat.S_ISDIR(info.st_mode):
+        raise OSError(f'Private file storage is not a directory: {path}')
+    if hasattr(os, 'getuid') and info.st_uid != os.getuid():
+        raise OSError(f'Private file storage is owned by uid {info.st_uid}, not this user (uid {os.getuid()}): {path}')
+
+
+def ensure_private_directory(path: Path) -> None:
+    """Create `path`, or take one this user already owns, and set it to mode 0o700.
+
+    The mode is set explicitly rather than left to `mkdir`, because the process umask
+    decides what `mkdir` grants: under umask 002 a new folder is group-writable, and the
+    readers that check storage privacy reject it. Raises `OSError` for a symlink, a
+    non-directory, or a directory owned by another user.
+    """
+    _require_owned_directory(path)
+    path.chmod(0o700)
+
+
 def write_private_atomic(path: Path, contents: str | bytes, *, private_directory: bool = True) -> None:
     """Replace a file atomically with mode 0o600, in an owned, non-symlink directory.
 
@@ -17,16 +43,10 @@ def write_private_atomic(path: Path, contents: str | bytes, *, private_directory
     Windows access control comes from the containing directory's inherited ACL;
     POSIX permission bits do not enforce access control there.
     """
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory_info = path.parent.lstat()
-    if (
-        path.parent.is_symlink()
-        or not stat.S_ISDIR(directory_info.st_mode)
-        or (hasattr(os, 'getuid') and directory_info.st_uid != os.getuid())
-    ):
-        raise OSError(f'Private file storage is not an owned directory: {path.parent}')
     if private_directory:
-        path.parent.chmod(0o700)
+        ensure_private_directory(path.parent)
+    else:
+        _require_owned_directory(path.parent)
     descriptor, temporary = tempfile.mkstemp(prefix=f'.{path.stem}.', suffix='.tmp', dir=path.parent)
     try:
         try:

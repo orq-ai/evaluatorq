@@ -620,8 +620,13 @@ async def _simulate_run(
     # GENERATE phase). Minted before the span opens so it can be stamped as a
     # span attribute rather than set after the fact.
     resolved_llm_config = sim_llm_config(llm_config)
+    # The generator writes first messages for persona x scenario runs, the summary and the recommendations.
     require_sim_models_served(
-        resolved_llm_config, generation_client=generation_client, user_simulator=user_simulator, judge=judge
+        resolved_llm_config,
+        generation_client=generation_client,
+        user_simulator=user_simulator,
+        judge=judge,
+        generating=datapoints is None or executive_summary or bool(recommendations),
     )
     run_id = uuid.uuid4().hex
 

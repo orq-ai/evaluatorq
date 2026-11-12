@@ -534,10 +534,12 @@ def test_an_unsupported_effort_400_passes_through_as_anthropic_bad_request_with_
     assert caught.value.body == {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': message}}
 
 
-def test_the_executor_drops_the_effort_and_retries_once_when_the_400_names_reasoning() -> None:
+def test_the_executor_drops_the_effort_and_retries_once_when_the_400_names_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from evaluatorq.common import llm_call
 
-    llm_call._REASONING_EFFORT_REJECTORS.clear()
+    monkeypatch.setattr(llm_call, '_REASONING_EFFORT_REJECTORS', set())
     fake = scripted([_bad_request('reasoning effort is not supported for this model'), text('ok')])
     client = as_llm_client(fake)
 
@@ -556,7 +558,6 @@ def test_the_executor_drops_the_effort_and_retries_once_when_the_400_names_reaso
     assert response.choices[0].message.content == 'ok'
     assert 'output_config' in fake.messages.calls[0]
     assert 'output_config' not in fake.messages.calls[1]
-    llm_call._REASONING_EFFORT_REJECTORS.clear()
 
 
 @asynccontextmanager

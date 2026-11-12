@@ -124,3 +124,41 @@ def test_a_simulation_checks_only_the_roles_the_environment_serves() -> None:
     require_sim_models_served(LLMCallConfig(model='claude-sonnet-5-5'), generation_client=None)
     client = AsyncOpenAI(api_key='sk-test', max_retries=0)
     require_sim_models_served(LLMCallConfig(client=client), generation_client=None)
+
+
+def test_a_simulation_without_generation_does_not_check_the_generator() -> None:
+    from evaluatorq.simulation._config import require_sim_models_served
+
+    agent = object()
+    require_sim_models_served(None, generation_client=None, user_simulator=agent, judge=agent, generating=False)
+    with pytest.raises(ModelClientMismatchError, match=r'\(sim\.generator\)'):
+        require_sim_models_served(None, generation_client=None, user_simulator=agent, judge=agent)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('kwargs', 'generating'),
+    [
+        ({'personas': [], 'scenarios': []}, True),
+        ({'datapoints': []}, True),
+        ({'datapoints': [], 'executive_summary': False, 'recommendations': False}, False),
+    ],
+)
+async def test_simulate_checks_the_generator_only_when_the_run_uses_it(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, Any], generating: bool
+) -> None:
+    from evaluatorq.simulation import api, simulate
+
+    seen: dict[str, Any] = {}
+
+    class _Stop(Exception):
+        pass
+
+    def capture(*_args: Any, **options: Any) -> None:
+        seen.update(options)
+        raise _Stop
+
+    monkeypatch.setattr(api, 'require_sim_models_served', capture)
+    with pytest.raises(_Stop):
+        await simulate(target=lambda messages: 'ok', upload_results=False, **kwargs)
+    assert seen['generating'] is generating

@@ -716,7 +716,8 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             files = await asyncio.to_thread(
                 recent_trace_files, runs_dir=get_insights_runs_dir(), finder_dir=get_finder_exports_dir()
             )
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            logger.warning('Could not list recent Insights trace files: {}', exc)
             return _html('<p class="insights-error" role="status">Recent trace files could not be loaded.</p>', 422)
         return _html(render_recent_files(files))
 

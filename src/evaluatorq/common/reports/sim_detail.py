@@ -207,6 +207,9 @@ def render_transcript_fragment(
     entry: SimulationEntry,
     persona_entity_id: str | None = None,
     scenario_entity_id: str | None = None,
+    *,
+    summary: bool = True,
+    mark_index: int | None = None,
 ) -> str:
     """Render the drill-down transcript fragment for a single sim result entry.
 
@@ -226,6 +229,9 @@ def render_transcript_fragment(
 
     Args:
         entry: A typed ``SimulationEntry`` from ``individual_entries``.
+        summary: Include the persona/scenario header. The run comparison names
+            the pair once above both columns and turns it off.
+        mark_index: Transcript position to flag as the first difference.
 
     Returns:
         An HTML fragment (no full-page shell).
@@ -233,7 +239,7 @@ def render_transcript_fragment(
     error = entry.error
 
     criteria_col = _render_criteria_column(entry)
-    summary_html = _render_conversation_summary(entry, persona_entity_id, scenario_entity_id)
+    summary_html = _render_conversation_summary(entry, persona_entity_id, scenario_entity_id) if summary else ''
 
     error_html = f'<div class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</div>' if error else ''
 
@@ -248,7 +254,7 @@ def render_transcript_fragment(
 
     bubbles_html = (
         f'<div class="sim-transcript-bubbles">'
-        f'{render_message_list(normalised_msgs, role_labels=_ROLE_LABELS, class_prefix="sim")}'
+        f'{render_message_list(normalised_msgs, role_labels=_ROLE_LABELS, class_prefix="sim", mark_index=mark_index)}'
         f'</div>'
     )
     # Criteria above the conversation: the outcome verdict frames the
@@ -256,3 +262,26 @@ def render_transcript_fragment(
     grid_html = f'<div class="sim-transcript-grid">{criteria_col}{error_html}{bubbles_html}</div>'
 
     return f'<div class="sim-transcript-detail">{summary_html}{grid_html}</div>'
+
+
+def first_divergence(entry_a: SimulationEntry, entry_b: SimulationEntry) -> int | None:
+    """Index of the first message that differs between the two transcripts
+    (role or text), the shorter length when one is a prefix of the other, or
+    ``None`` when they are identical."""
+    msgs_a, msgs_b = entry_a.transcript or [], entry_b.transcript or []
+    for i, (ma, mb) in enumerate(zip(msgs_a, msgs_b, strict=False)):
+        if ma.role != mb.role or coerce_content_text(ma.content) != coerce_content_text(mb.content):
+            return i
+    return None if len(msgs_a) == len(msgs_b) else min(len(msgs_a), len(msgs_b))
+
+
+def flipped_criteria(entry_a: SimulationEntry, entry_b: SimulationEntry) -> list[tuple[str, str, str]]:
+    """(description, state in A, state in B) for criteria whose verdict differs,
+    matched by description; a criterion only one run has counts as changed."""
+    states_a = {c.description: c.state for c in entry_a.criteria or []}
+    states_b = {c.description: c.state for c in entry_b.criteria or []}
+    return [
+        (desc, states_a.get(desc, 'absent'), states_b.get(desc, 'absent'))
+        for desc in dict.fromkeys([*states_a, *states_b])
+        if states_a.get(desc) != states_b.get(desc)
+    ]
