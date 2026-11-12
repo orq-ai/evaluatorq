@@ -302,6 +302,14 @@ def test_ty_is_the_only_locked_typechecker() -> None:
     assert not re.search(r'(?m)^name = "basedpyright"$', lockfile)
 
 
+def test_local_pytest_stays_serial() -> None:
+    """CI passes `-n auto` itself. Plain `uv run pytest` stays serial: PR #272 dropped xdist from
+    the default run because spawning workers cost more collection CPU and memory than local runs gained."""
+    addopts = _array(_table((REPO_ROOT / 'pyproject.toml').read_text(), 'tool.pytest.ini_options'), 'addopts')
+
+    assert not any(option == '-n' or option.startswith(('-n', '--numprocesses', '--dist')) for option in addopts), addopts
+
+
 def test_ty_migration_audit_matches_effective_offline_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
     def network_forbidden(url: str) -> str:
         raise AssertionError(f'offline audit attempted network access: {url}')
