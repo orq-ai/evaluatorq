@@ -43,6 +43,25 @@ if TYPE_CHECKING:
     from evaluatorq.contracts import Message
 
 
+@pytest.fixture(autouse=True)
+def _isolated_workspace_lookup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Give every test its own workspace-slug cache, so a slug cached by one test never leaks into another."""
+    from evaluatorq.dashboard import orq_workspace
+
+    monkeypatch.setattr(orq_workspace, '_cli_slug_cache', {})
+    monkeypatch.setattr(orq_workspace, '_pending', {})
+    monkeypatch.setattr(orq_workspace, '_CLI_CONFIG_DIR', tmp_path / 'orq-cli-home')
+    monkeypatch.setattr(orq_workspace, '_session_memo', None)
+
+
+def settle_workspace_lookup() -> None:
+    """Wait for every background workspace lookup to finish."""
+    from evaluatorq.dashboard import orq_workspace
+
+    for thread in list(orq_workspace._pending.values()):
+        thread.join(timeout=2)
+
+
 # ---------------------------------------------------------------------------
 # Result builder
 # ---------------------------------------------------------------------------
