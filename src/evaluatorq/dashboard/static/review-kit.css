@@ -19,7 +19,7 @@
 @media(max-width:850px){.rk-head{grid-template-columns:110px minmax(0,1fr);gap:8px 12px}.rk-head-go{grid-column:2;text-align:left}}
 
 /* filter bar and chips */
-.rk-fbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:34px;margin-bottom:12px}
+.rk-fbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:34px;margin-bottom:12px;font-size:13px}
 .rk-fbar-count{font-weight:500;margin-right:4px}
 .rk-fbar-count b{font-family:var(--font-mono,var(--mono));font-variant-numeric:tabular-nums}
 .rk-fbar-hint{color:var(--text-faint)}
