@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, Field, ValidationError
 
-from evaluatorq.common.private_files import write_private_atomic
+from evaluatorq.common.private_files import ensure_private_directory, write_private_atomic
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import Snapshot
 
@@ -65,7 +65,7 @@ def cleanup_expired_uploads(runs_dir: Path, *, now: float | None = None) -> int:
     directory = uploads_dir(runs_dir)
     if directory.is_symlink() or not directory.exists():
         return 0
-    _ensure_private_directory(directory)
+    ensure_private_directory(directory)
     cutoff = (time.time() if now is None else now) - UPLOAD_RETENTION_SECONDS
     removed = 0
     for path in directory.iterdir():
@@ -117,16 +117,6 @@ def limit_request_body(request: Request) -> None:
         return message
 
     request._receive = limited_receive  # noqa: SLF001 — install the bounded ASGI receive wrapper.
-
-
-def _ensure_private_directory(path: Path) -> None:
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = path.lstat()
-    if path.is_symlink() or not stat.S_ISDIR(info.st_mode):
-        raise OSError('Insights upload storage must be a real directory.')
-    if hasattr(os, 'getuid') and info.st_uid != os.getuid():
-        raise OSError('Insights upload storage has unexpected ownership.')
-    path.chmod(0o700)
 
 
 def upload_size_error(kind: UploadKind, size: int) -> str | None:
