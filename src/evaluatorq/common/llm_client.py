@@ -98,6 +98,23 @@ def resolve_results_base_url(
     return env_raw('ORQ_BASE_URL', default_orq_host).rstrip('/')
 
 
+def resolve_orq_credential(client: AsyncOpenAI | None = None) -> str | None:
+    """Resolve the API key to send to the Orq host chosen by `resolve_results_base_url`.
+
+    Returns ``client.api_key`` only when ``client`` routes through the Orq router,
+    because only then is that key an Orq key for that host. Any other client (a
+    direct OpenAI or Anthropic client) holds a provider key that must never be
+    sent to Orq, so its key is ignored and ``ORQ_API_KEY`` is used instead.
+    Returns ``None`` when neither is available, and the caller then makes no
+    authenticated Orq call.
+    """
+    if client is not None and client_routes_through_orq(client):
+        key = getattr(client, 'api_key', None)
+        if isinstance(key, str) and key:
+            return key
+    return env_raw('ORQ_API_KEY') or None
+
+
 def resolve_llm_client(
     config_client: AsyncOpenAI | None = None,
     *,
@@ -196,5 +213,6 @@ __all__ = [
     'ResolvedClient',
     'client_routes_through_orq',
     'resolve_llm_client',
+    'resolve_orq_credential',
     'resolve_results_base_url',
 ]
