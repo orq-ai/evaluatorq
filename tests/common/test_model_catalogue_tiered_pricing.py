@@ -297,3 +297,50 @@ async def test_price_usage_below_threshold_is_flat_for_uncached_calls():
     assert priced is not None
     assert priced.input_cost == pytest.approx(0.00125)
     assert priced.output_cost == pytest.approx(0.005)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_tiered_catalogue')
+async def test_price_usage_bills_audio_input_at_the_audio_rate():
+    usage = Usage(
+        input_tokens=1_000, output_tokens=0, total_tokens=1_000, audio_input_tokens=400, calls=1, priced_calls=0
+    )
+    priced = await catalogue.price_usage(usage, 'gemini-2.5-pro')
+    assert priced is not None
+    assert priced.input_cost == pytest.approx(0.6 * 0.00125 + 0.4 * 0.003)
+
+
+# --- CallCost ---------------------------------------------------------------------------------
+
+
+def test_cost_of_returns_a_named_pair_that_still_unpacks():
+    costs = cost_of(_info(), 1_000, 500)
+    assert costs is not None
+    assert isinstance(costs, catalogue.CallCost)
+    assert costs.input == pytest.approx(0.00125)
+    assert costs.output == pytest.approx(0.005)
+    input_cost, output_cost = costs
+    assert (input_cost, output_cost) == (costs.input, costs.output)
+
+
+# --- tier boundary ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('threshold', [128_000, 1_000_000])
+def test_above_rates_are_dropped_when_the_threshold_is_not_200k(threshold: int):
+    info = _parse({**GEMINI_METADATA, 'extended_context_threshold': threshold})
+    assert info.extended_context_threshold == threshold
+    assert info.above_threshold_input_cost_per_1k is None
+    assert info.above_threshold_output_cost_per_1k is None
+    assert info.above_threshold_cache_read_cost_per_1k is None
+    # Everything else on the card survives, and the call bills flat.
+    assert info.cache_write_cost_per_1k == pytest.approx(0.0045)
+    flat = cost_of(info, threshold + 1, 1_000)
+    assert flat is not None
+    assert flat.input == pytest.approx((threshold + 1) * 0.00125 / 1000)
+    assert flat.output == pytest.approx(0.01)
+
+
+def test_above_rates_are_dropped_when_there_is_no_threshold():
+    metadata = {k: v for k, v in GEMINI_METADATA.items() if k != 'extended_context_threshold'}
+    assert _parse(metadata).above_threshold_input_cost_per_1k is None
