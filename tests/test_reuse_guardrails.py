@@ -1409,3 +1409,19 @@ def test_llm_sdk_error_classes_are_banned_outside_llm_errors() -> None:
     allowed_but_banned = {f'{sdk}.{name}' for sdk in ('openai', 'anthropic') for name in LLM_SDK_ERROR_ALLOWLIST}
     assert not allowed_but_banned & set(banned), f'allowlisted yet banned: {sorted(allowed_but_banned & set(banned))}'
     assert 'TID251' in ruff['per-file-ignores']['src/evaluatorq/common/llm_errors.py']
+
+
+def test_report_warnings_are_added_through_the_scrubbing_method() -> None:
+    """A red-team warning can quote a provider exception, and renderers read the live list before any save.
+
+    So a warning is added with ``RedTeamReport.add_pipeline_warnings``, which scrubs it, and never appended to the
+    list directly; the method itself in ``redteam/contracts.py`` is the one place that touches the list.
+    """
+    offenders = [
+        f'{path.relative_to(SRC).as_posix()}:{lineno}'
+        for path in sorted(SRC.rglob('*.py'))
+        if path.relative_to(SRC).as_posix() != 'redteam/contracts.py'
+        for lineno, name in _calls(path.read_text(encoding='utf-8'))
+        if name.endswith(('pipeline_warnings.append', 'pipeline_warnings.extend'))
+    ]
+    assert not offenders, f'use add_pipeline_warnings: {offenders}'

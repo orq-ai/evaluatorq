@@ -1,8 +1,8 @@
 """Single source of truth for OpenAI-compatible LLM client resolution.
 
 Both the red-team pipeline (``redteam.backends.registry``) and the simulation
-stack (``openresponses.client``) resolve an ``AsyncOpenAI`` client from the same
-two env vars. Historically each had its own copy of the precedence logic, which
+stack (``openresponses.client``) resolve an LLM client from the same three env
+vars. Historically each had its own copy of the precedence logic, which
 drifted (different default host, different docstrings). This module owns the
 precedence decision once; the call sites are thin policy wrappers.
 
@@ -12,21 +12,28 @@ Precedence (highest first):
    AI Router at ``ORQ_BASE_URL/v3/router`` (default host ``https://my.orq.ai``).
 3. ``OPENAI_API_KEY`` — talks to OpenAI (or, when ``honor_openai_base_url`` is
    set, to ``OPENAI_BASE_URL`` for vLLM/OpenRouter/Azure-compatible endpoints).
+4. ``ANTHROPIC_API_KEY`` — an ``AsyncAnthropic`` wrapped by the
+   ``evaluatorq.anthropic`` adapter, talking to Anthropic directly (the SDK reads
+   ``ANTHROPIC_BASE_URL`` itself). Needs the ``evaluatorq[anthropic]`` extra.
 
-``ORQ_API_KEY`` wins when both are set: the Orq router is the default path, and
+``ORQ_API_KEY`` wins when several are set: the Orq router is the default path, and
 ``ORQ_API_KEY`` is also required for tracing/result-upload, so it is the key most
-likely to be present intentionally.
+likely to be present intentionally. ``OPENAI_API_KEY`` beats ``ANTHROPIC_API_KEY``
+so existing setups resolve as before; unset the other keys to use Claude directly.
 """
 
 from __future__ import annotations
 
 import contextlib
 import weakref
-from typing import TYPE_CHECKING, Any, NamedTuple, cast, overload
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast, overload
 
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from anthropic import AsyncAnthropic, AsyncAnthropicBedrock, AsyncAnthropicVertex
     from openai import AsyncOpenAI
 
@@ -38,6 +45,18 @@ else:
 
 ORQ_DEFAULT_HOST = DEFAULT_ORQ_BASE_URL
 ORQ_ROUTER_SUFFIX = '/v3/router'
+
+LLMProvider = Literal['orq', 'openai', 'anthropic']
+
+LLM_CREDENTIAL_PROVIDERS: Mapping[str, LLMProvider] = MappingProxyType({
+    'ORQ_API_KEY': 'orq',
+    'OPENAI_API_KEY': 'openai',
+    'ANTHROPIC_API_KEY': 'anthropic',
+})
+"""Each environment variable that can supply an LLM client and the provider it picks, in the order `resolve_llm_client` tries them."""
+
+LLM_CREDENTIAL_KEYS: tuple[str, ...] = tuple(LLM_CREDENTIAL_PROVIDERS)
+"""The environment variables that can supply an LLM client, in the order `resolve_llm_client` tries them."""
 
 
 def orq_base_url() -> str:
@@ -67,7 +86,7 @@ class ModelClientMismatchError(LLMConfigurationError):
 
 
 class MissingLLMCredentialsError(ValueError):
-    """No ``ORQ_API_KEY``/``OPENAI_API_KEY`` and no injected client.
+    """No usable LLM credentials: none of `LLM_CREDENTIAL_KEYS` is set and no client was injected, or the package that serves the one that is set is not installed.
 
     Subclasses ``ValueError`` so existing simulation call sites that document a
     ``ValueError`` contract keep working; the red-team wrapper re-raises it as a
@@ -195,6 +214,89 @@ def resolve_orq_credential(client: AsyncOpenAI | None = None) -> str | None:
     return env_raw('ORQ_API_KEY') or None
 
 
+def configured_llm_provider(*, extra_api_key: str | None = None, require_orq: bool = False) -> LLMProvider | None:
+    """The provider `resolve_llm_client` picks from the environment, or ``None`` when no key is set.
+
+    The one place the precedence lives: an explicit ``extra_api_key`` picks Orq, and otherwise the first key of `LLM_CREDENTIAL_PROVIDERS` that is set (``ORQ_API_KEY``, then ``OPENAI_API_KEY``, then ``ANTHROPIC_API_KEY``). With ``require_orq`` only the Orq key counts. An injected client is the caller's business and is not considered here.
+    """
+    if extra_api_key:
+        return 'orq'
+    for key, provider in LLM_CREDENTIAL_PROVIDERS.items():
+        if require_orq and provider != 'orq':
+            break
+        if env_raw(key):
+            return provider
+    return None
+
+
+def require_models_served_by_provider(models: Mapping[str, str]) -> None:
+    """Stop a run before any work when the environment picked Anthropic and a model it will use names another provider.
+
+    A leftover ``ANTHROPIC_API_KEY`` with no Orq or OpenAI key makes Anthropic the provider, while the built-in role defaults are ``openai/`` ids it refuses. Without this check the run starts and dies at the first call. Does nothing for any other provider.
+
+    The check is ``normalize_model``'s and no wider: it rejects a ``provider/`` prefix other than ``anthropic/``. A bare id such as ``gpt-6-sol`` passes and fails at the API instead, because Bedrock and Vertex ids do not follow one Claude naming pattern a positive rule could match.
+
+    Args:
+        models: Each model a command will use, keyed by where it is set (a role variable such as ``EVALUATORQ_SMART_MODEL`` or a flag), so the error can name what to change. The model rule itself stays in the adapter's ``normalize_model``.
+
+    Raises:
+        ModelClientMismatchError: Anthropic is the provider and at least one model is not served by it.
+    """
+    if configured_llm_provider() != 'anthropic':
+        return
+    from evaluatorq.anthropic.convert import normalize_model
+
+    rejected: list[str] = []
+    for source, model in models.items():
+        try:
+            normalize_model(model)
+        except ModelClientMismatchError:  # noqa: PERF203
+            rejected.append(f'{source}={model}')
+    if rejected:
+        raise ModelClientMismatchError(
+            'Anthropic was chosen because ANTHROPIC_API_KEY is the only LLM key set, but it cannot serve '
+            f'{", ".join(rejected)}. Set those to Claude model ids (for example claude-sonnet-5-5), '
+            'or set ORQ_API_KEY or OPENAI_API_KEY to use another provider.'
+        )
+
+
+def _resolve_anthropic_client(max_retries: int | None) -> ResolvedClient:
+    """Build the ``AsyncAnthropic`` behind the adapter for ``ANTHROPIC_API_KEY``.
+
+    The SDK's own retry layer is the single one, sized like the OpenAI branches but from Anthropic's default when ``max_retries`` is ``None``. The SDK reads ``ANTHROPIC_BASE_URL`` itself.
+    """
+    try:
+        from anthropic import DEFAULT_MAX_RETRIES, AsyncAnthropic
+
+        from evaluatorq.anthropic.client import wrap_anthropic_client
+    except ModuleNotFoundError as exc:
+        if exc.name != 'anthropic':
+            raise
+        raise MissingLLMCredentialsError(
+            'ANTHROPIC_API_KEY is the only LLM key set, but the anthropic package is not installed. '
+            'Install it with: uv add "evaluatorq[anthropic]" (or: python -m pip install "evaluatorq[anthropic]"), '
+            'or set ORQ_API_KEY or OPENAI_API_KEY.'
+        ) from exc
+    except ImportError as exc:
+        # Installed but unusable, typically older than the extra's floor: reinstalling the extra is the fix, and
+        # "not installed" would send the reader looking for a package that is there.
+        raise ImportError(
+            f'ANTHROPIC_API_KEY is the only LLM key set, but the installed anthropic package failed to import ({exc}). '
+            'Upgrade it with: uv add "evaluatorq[anthropic]" (or: python -m pip install -U "evaluatorq[anthropic]").'
+        ) from exc
+
+    retries = max_retries if max_retries is not None else DEFAULT_MAX_RETRIES
+    # The adapter is duck-typed as an `AsyncOpenAI` everywhere downstream.
+    return ResolvedClient(
+        client=cast(
+            'AsyncOpenAI',
+            wrap_anthropic_client(AsyncAnthropic(api_key=env_raw('ANTHROPIC_API_KEY'), max_retries=retries)),
+        ),
+        owned=True,
+        routes_through_orq=False,
+    )
+
+
 def resolve_llm_client(
     config_client: LLMClient | None = None,
     *,
@@ -205,7 +307,9 @@ def resolve_llm_client(
     require_orq: bool = False,
     max_retries: int | None = None,
 ) -> ResolvedClient:
-    """Resolve an ``AsyncOpenAI`` client from an injected client or env vars.
+    """Resolve an LLM client from an injected client or env vars.
+
+    The client is an ``AsyncOpenAI`` for the Orq and OpenAI keys, and an adapter-wrapped ``AsyncAnthropic`` for ``ANTHROPIC_API_KEY``.
 
     Args:
         config_client: Pre-built client to use as-is (returned not owned).
@@ -216,13 +320,13 @@ def resolve_llm_client(
         default_orq_host: Host used when ``ORQ_BASE_URL`` is unset.
         honor_openai_base_url: When True, the OpenAI branch respects
             ``OPENAI_BASE_URL``; when False it forces the OpenAI SDK default.
-        require_orq: When True, the ``OPENAI_API_KEY`` fallback is disabled — the
+        require_orq: When True, the ``OPENAI_API_KEY`` and ``ANTHROPIC_API_KEY`` fallbacks are disabled — the
             client must route through Orq (injected ``config_client``,
             ``extra_api_key``, or ``ORQ_API_KEY``). Used by ORQ-agent targets
             whose ``agent/<key>`` model id only resolves on the Orq router, so an
             ``OPENAI_API_KEY`` left in the env must never silently capture them.
         max_retries: Client-side retry budget (number of *retries*, not attempts)
-            for clients built here. The OpenAI SDK retries 408/409/429/5xx and
+            for clients built here. The OpenAI and Anthropic SDKs retry 408/409/429/5xx and
             connection errors with ``Retry-After`` support. A caller that passes
             an explicit ``max_retries`` makes this the single client-side retry
             layer and must not add its own wrapper on top; a caller that owns
@@ -235,7 +339,9 @@ def resolve_llm_client(
 
     Raises:
         MissingLLMCredentialsError: No injected client and no usable ORQ key
-            (and, unless ``require_orq``, no ``OPENAI_API_KEY`` either).
+            (and, unless ``require_orq``, no ``OPENAI_API_KEY`` or
+            ``ANTHROPIC_API_KEY`` either), or only ``ANTHROPIC_API_KEY`` is
+            set and the ``anthropic`` extra is not installed.
     """
     if config_client is not None:
         config_client = as_llm_client(config_client)
@@ -245,12 +351,17 @@ def resolve_llm_client(
             routes_through_orq=client_routes_through_orq(config_client),
         )
 
+    provider = configured_llm_provider(extra_api_key=extra_api_key, require_orq=require_orq)
+
+    if provider == 'anthropic':
+        return _resolve_anthropic_client(max_retries)
+
     from openai import DEFAULT_MAX_RETRIES, AsyncOpenAI
 
     retries = max_retries if max_retries is not None else DEFAULT_MAX_RETRIES
 
-    orq_api_key = extra_api_key or env_raw('ORQ_API_KEY')
-    if orq_api_key:
+    if provider == 'orq':
+        orq_api_key = extra_api_key or env_raw('ORQ_API_KEY')
         host = (orq_host or env_raw('ORQ_BASE_URL', default_orq_host)).rstrip('/')
         router_url = f'{host}{ORQ_ROUTER_SUFFIX}'
         return ResolvedClient(
@@ -259,16 +370,8 @@ def resolve_llm_client(
             routes_through_orq=True,
         )
 
-    if require_orq:
-        raise MissingLLMCredentialsError(
-            'ORQ routing is required for this target but no Orq credentials were '
-            'found. Set ORQ_API_KEY (optionally ORQ_BASE_URL), or pass a pre-built '
-            'Orq-routed client. The OPENAI_API_KEY fallback is disabled here: '
-            'ORQ agent targets must run on the Orq router.'
-        )
-
-    openai_api_key = env_raw('OPENAI_API_KEY')
-    if openai_api_key:
+    if provider == 'openai':
+        openai_api_key = env_raw('OPENAI_API_KEY')
         base_url = env_raw('OPENAI_BASE_URL') if honor_openai_base_url else None
         client = (
             AsyncOpenAI(api_key=openai_api_key, base_url=base_url, max_retries=retries)
@@ -281,22 +384,34 @@ def resolve_llm_client(
             routes_through_orq=client_routes_through_orq(client),
         )
 
+    if require_orq:
+        raise MissingLLMCredentialsError(
+            'ORQ routing is required for this target but no Orq credentials were '
+            'found. Set ORQ_API_KEY (optionally ORQ_BASE_URL), or pass a pre-built '
+            'Orq-routed client. The OPENAI_API_KEY and ANTHROPIC_API_KEY fallbacks are disabled here: '
+            'ORQ agent targets must run on the Orq router.'
+        )
+
     raise MissingLLMCredentialsError(
-        'Missing LLM credentials. Set either ORQ_API_KEY (optionally ORQ_BASE_URL) '
-        'or OPENAI_API_KEY (optionally OPENAI_BASE_URL), or pass a pre-built client.'
+        'Missing LLM credentials. Set ORQ_API_KEY (optionally ORQ_BASE_URL), '
+        'OPENAI_API_KEY (optionally OPENAI_BASE_URL) or ANTHROPIC_API_KEY, or pass a pre-built client.'
     )
 
 
 __all__ = [
+    'LLM_CREDENTIAL_KEYS',
     'ORQ_DEFAULT_HOST',
     'ORQ_ROUTER_SUFFIX',
     'LLMClient',
+    'LLMProvider',
     'MissingLLMCredentialsError',
     'ModelClientMismatchError',
     'ResolvedClient',
     'as_llm_client',
     'client_routes_through_orq',
+    'configured_llm_provider',
     'is_anthropic_client',
+    'require_models_served_by_provider',
     'resolve_llm_client',
     'resolve_orq_credential',
     'resolve_results_base_url',

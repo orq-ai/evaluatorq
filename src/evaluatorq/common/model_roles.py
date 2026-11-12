@@ -184,6 +184,28 @@ def role_source(role: Role, task: str | None = None) -> str:
     return _resolve(role, task)[1]
 
 
+def model_source(role: Role, task: str | None = None) -> tuple[str, str]:
+    """The model `role_model` resolves to and a label naming the setting that supplied it, for error messages.
+
+    Raises ``KeyError`` for a task not in `TASKS`, and ``ValueError`` for a task of another role.
+    """
+    model, source, task_level = _resolve(role, task)
+    if task is not None and task_level:
+        label = {
+            'flag': f'--model-override {task}',
+            'env': LEGACY_TASK_ENV.get(task, 'environment'),
+            'settings': f'the settings file override for {task}',
+        }[source]
+    else:
+        label = {
+            'flag': f'--{role}-model',
+            'env': ROLE_ENV[role],
+            'settings': f'the settings file {role}_model',
+            'default': f'{ROLE_ENV[role]} (unset, built-in default)',
+        }[source]
+    return model, label if task is None else f'{label} ({task})'
+
+
 def task_override(task: str) -> tuple[str, str] | None:
     """The model and a human label of the task-level source that pins *task*, or ``None``."""
     model, source, task_level = _resolve(TASKS[task], task)

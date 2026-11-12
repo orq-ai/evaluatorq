@@ -30,6 +30,7 @@ from evaluatorq.simulation._config import (
     DEFAULT_MAX_TOOL_RESULT_CHARS,
     DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     SimulationConfig,
+    require_sim_models_served,
     sim_llm_config,
     sim_role_config,
 )
@@ -367,7 +368,7 @@ async def simulate(
         generation_client: Optional pre-built ``AsyncOpenAI`` (or Anthropic SDK client) used for datapoint
             generation (first-message). When omitted, generation falls back to
             the same env-based provider resolution as
-            `generate_and_simulate` (``ORQ_API_KEY`` → ``OPENAI_API_KEY``).
+            `generate_and_simulate`; see `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence.
         dataset_id: When set, fetch simulation datapoints from the named Orq
             dataset instead of taking them inline. Mutually exclusive with
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
@@ -619,6 +620,9 @@ async def _simulate_run(
     # GENERATE phase). Minted before the span opens so it can be stamped as a
     # span attribute rather than set after the fact.
     resolved_llm_config = sim_llm_config(llm_config)
+    require_sim_models_served(
+        resolved_llm_config, generation_client=generation_client, user_simulator=user_simulator, judge=judge
+    )
     run_id = uuid.uuid4().hex
 
     try:
@@ -764,9 +768,8 @@ async def generate_and_simulate(
     ``<key>``), for agents with a memory store attached. When omitted, a fresh
     per-target id is minted so memory-backed agents still work out of the box.
     Persona/scenario/first-message generation resolves its provider via
-    the shared factory: an injected ``generation_client`` → ``llm_config.client``
-    → ``ORQ_API_KEY`` (Orq router) → ``OPENAI_API_KEY`` (with optional
-    ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint). No API key is
+    the shared factory: an injected ``generation_client``, then ``llm_config.client``, then the environment
+    (see `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence). No API key is
     needed when a client is injected.
     ``llm_config`` drives persona/scenario/first-message generation, the
     user-simulator, and the judge — the model name and anything beyond it
@@ -1079,6 +1082,9 @@ async def _generate_and_simulate_run(
     # both stages are recorded. Minted before the span opens so it can be stamped
     # as a span attribute rather than set after the fact.
     resolved_llm_config = sim_llm_config(llm_config)
+    require_sim_models_served(
+        resolved_llm_config, generation_client=generation_client, user_simulator=user_simulator, judge=judge
+    )
     run_id = uuid.uuid4().hex
 
     try:
@@ -1252,9 +1258,8 @@ async def generate(
     judge remain stochastic at simulate time, so scores still vary run to run.
 
     Provider resolution matches `generate_and_simulate`: an injected
-    ``generation_client`` → ``llm_config.client`` → ``ORQ_API_KEY`` (Orq router)
-    → ``OPENAI_API_KEY`` (with optional ``OPENAI_BASE_URL`` for an
-    OpenAI-compatible endpoint).
+    ``generation_client``, then ``llm_config.client``, then the environment (see
+    `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence).
     ``llm_config`` drives persona/scenario/first-message generation — the model
     name, temperature, reasoning effort and timeouts on those calls; see
     `simulate` for the full semantics.
@@ -1267,6 +1272,7 @@ async def generate(
     await init_tracing_if_needed()
 
     resolved_llm_config = sim_llm_config(llm_config)
+    require_sim_models_served(resolved_llm_config, generation_client=generation_client, simulating=False)
     # Minted before the span opens so it can be stamped as a span attribute.
     run_id = uuid.uuid4().hex
 
@@ -1346,8 +1352,8 @@ async def generate_personas(
     The intermediate tier between fully-auto generation
     (`generate_and_simulate`) and hand-built ``Persona`` objects: you name
     each archetype, the LLM fills every trait. Provider resolves via the shared
-    factory: an injected ``generation_client`` → ``llm_config.client`` →
-    ``ORQ_API_KEY`` → ``OPENAI_API_KEY``.
+    factory: an injected ``generation_client``, then ``llm_config.client``, then the
+    environment (see `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence).
 
     ``generation_instructions`` is an optional free-text steer applied to every
     persona on top of its seed (e.g. ``"all replying in German"``).

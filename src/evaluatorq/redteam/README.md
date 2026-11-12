@@ -125,12 +125,13 @@ See [Replay a previous run](../../../docs/guides/red-teaming.md#replay-a-previou
 
 ### LLM client configuration
 
-Red teaming needs an OpenAI-compatible LLM for attack generation and evaluation. `ORQ_*` variables take priority over `OPENAI_*`:
+Red teaming needs an LLM for attack generation and evaluation. `ORQ_*` variables take priority over `OPENAI_*`, which take priority over `ANTHROPIC_API_KEY`:
 
 | Priority | Variables | Description |
 |----------|-----------|-------------|
 | 1st | `ORQ_API_KEY` + `ORQ_BASE_URL` (optional) | ORQ router |
 | 2nd | `OPENAI_API_KEY` + `OPENAI_BASE_URL` (optional) | Direct OpenAI or any compatible endpoint |
+| 3rd | `ANTHROPIC_API_KEY` | Claude directly, with Claude model ids on every role; see [Configuration](../../../docs/configuration.md#go-anthropic-direct) |
 
 Or pass a custom client: `red_team(..., llm_client=AsyncOpenAI(api_key="sk-..."))`.
 
