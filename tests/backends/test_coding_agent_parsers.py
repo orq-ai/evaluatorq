@@ -127,12 +127,13 @@ def test_opencode_tool_turn() -> None:
     assert call.result == 'hello-fixture\n'
     assert call.status is FunctionCallStatus.completed
     assert turn.usage is not None
-    assert turn.usage.input_tokens == 58843 + 1054
+    # opencode reports `input` exclusive of cache reads; Usage folds them in so cached stays a subset.
+    assert turn.usage.input_tokens == 58843 + 1054 + 57856
     assert turn.usage.calls == 2
     assert turn.usage.output_tokens == 33 + 5
     assert turn.usage.cached_tokens == 57856
     assert turn.usage.reasoning_tokens == 19
-    assert turn.usage.total_tokens == turn.usage.input_tokens + turn.usage.output_tokens  # opencode's own total adds cache reads
+    assert turn.usage.total_tokens == turn.usage.input_tokens + turn.usage.output_tokens
     assert turn.cost_usd == 0
 
 

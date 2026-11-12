@@ -601,7 +601,7 @@ class Usage(BaseModel):
         default=0,
         ge=0,
         validation_alias=AliasChoices('input_tokens', 'prompt_tokens'),
-        description='Input/prompt tokens (includes cached_tokens)',
+        description='Input/prompt tokens (includes cached_tokens and cache_creation_tokens, for every provider shape)',
     )
     output_tokens: int = Field(
         default=0,
@@ -614,7 +614,7 @@ class Usage(BaseModel):
     cache_creation_tokens: int = Field(
         default=0,
         ge=0,
-        description='Cache-write input tokens (subset of input_tokens for OpenAI-shaped payloads; reported separately by Anthropic)',
+        description='Cache-write input tokens (subset of input_tokens; Usage.extract folds Anthropic-shaped payloads, which report them outside input_tokens, into input_tokens)',
     )
     cache_creation_1h_tokens: int = Field(
         default=0, ge=0, description='Cache-write tokens at the 1h TTL tier (subset of cache_creation_tokens)'
@@ -753,17 +753,22 @@ class Usage(BaseModel):
             return None
         inp = _usage_first_int(usage, ('input_tokens', 'prompt_tokens', 'promptTokens', 'prompt'))
         out = _usage_first_int(usage, ('output_tokens', 'completion_tokens', 'completionTokens', 'completion'))
-        # Provider total is trusted only when > 0; otherwise fall back to input+output.
         reported_total = _usage_first_int(usage, ('total_tokens', 'totalTokens', 'total'))
-        total = reported_total if reported_total > 0 else inp + out
         # Anthropic reports cache reads as a flat top-level `cache_read_input_tokens`
         # (anthropic.types.Usage), not nested in a details object like Orq/OpenAI.
         # Codex CLI is flat too (`cached_input_tokens`).
-        cached = _usage_detail_int(
+        cached_nested = _usage_detail_int(
             usage,
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
             ('cached_tokens', 'cache_read'),
-        ) or _usage_first_int(usage, ('cache_read_input_tokens', 'cached_input_tokens'))
+        )
+        # Flat Anthropic shape (anthropic.types.Usage, and OpenCode renamed to the same keys): the
+        # top-level `input_tokens` EXCLUDES these, unlike the nested shape where they are a subset.
+        # Provenance, not model name, decides: a count read from the flat keys is added to
+        # `input_tokens` below so the subset contract holds. A nested count wins, so a payload
+        # carrying both shapes is never counted twice.
+        cached_flat_exclusive = 0 if cached_nested else _usage_first_int(usage, ('cache_read_input_tokens',))
+        cached = cached_nested or cached_flat_exclusive or _usage_first_int(usage, ('cached_input_tokens',))
         # Anthropic prices a 1h cache write above a 5m one, so the tier split is
         # billing-relevant even though Orq folds both into the flat input_cost.
         # Orq nests the tiers under input_tokens_details; Anthropic puts them in a
@@ -782,15 +787,29 @@ class Usage(BaseModel):
         # Both Anthropic and Orq v3 do report a pre-summed total, so the tier sum is
         # only a last-resort fallback for a payload that carries the split alone —
         # without it those cache-write tokens would vanish from cache_creation_tokens.
-        cache_creation = (
-            _usage_detail_int(
-                usage,
-                ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
-                ('cache_creation_tokens', 'cache_creation_input_tokens'),
+        cache_creation_nested = _usage_detail_int(
+            usage,
+            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
+            ('cache_creation_tokens', 'cache_creation_input_tokens'),
+        )
+        # Flat Anthropic cache writes (top-level `cache_creation_input_tokens`, or only the
+        # top-level `cache_creation` tier object) are likewise exclusive of `input_tokens`.
+        cache_creation_flat_exclusive = 0
+        if not cache_creation_nested:
+            tiers = _usage_get(usage, 'cache_creation')
+            cache_creation_flat_exclusive = _usage_first_int(usage, ('cache_creation_input_tokens',)) or (
+                _usage_first_int(tiers, ('ephemeral_1h_input_tokens',))
+                + _usage_first_int(tiers, ('ephemeral_5m_input_tokens',))
             )
-            or _usage_first_int(usage, ('cache_creation_input_tokens', 'cache_write_input_tokens'))
+        cache_creation = (
+            cache_creation_nested
+            or cache_creation_flat_exclusive
+            or _usage_first_int(usage, ('cache_write_input_tokens',))
             or cache_creation_1h + cache_creation_5m
         )
+        inp += cached_flat_exclusive + cache_creation_flat_exclusive
+        # Provider total is trusted only when > 0; otherwise input + output with the adjusted input.
+        total = reported_total if reported_total > 0 else inp + out
         # Codex CLI reports reasoning flat as `reasoning_output_tokens`.
         reasoning = _usage_detail_int(
             usage,
