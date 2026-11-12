@@ -208,6 +208,7 @@ class LLMCallConfig(BaseModel):
         'is the only authority — an unsupported value comes back as a provider 400, which the '
         '`common.llm_call` executors turn into a drop-and-retry-once.',
     )
+    # Typed as AsyncOpenAI for the type checker and `Any` at runtime, because pydantic cannot validate the optional Anthropic SDK types. The validator below wraps a raw Anthropic client in the adapter, so it works in this field too.
     client: _Client = None
     retry_count: int = Field(
         default=1,
@@ -217,6 +218,14 @@ class LLMCallConfig(BaseModel):
         "owning caller disarms the client's own retry budget for the duration (see run_judge) so "
         'the two cannot multiply.',
     )
+
+    @field_validator('client', mode='before')
+    @classmethod
+    def _wrap_anthropic_client(cls, value: Any) -> Any:
+        """Wrap a raw Anthropic SDK client in the adapter; any other client is kept as passed."""
+        from evaluatorq.common.llm_client import as_llm_client
+
+        return as_llm_client(value)
 
     def set_values(self, *names: str) -> dict[str, Any]:
         """The named fields the caller explicitly set, as a kwargs dict.

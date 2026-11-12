@@ -528,6 +528,34 @@ async def test_non_classify_model_ignores_a_classify_question():
 
 
 @pytest.mark.asyncio
+async def test_a_dropped_classify_question_on_the_router_becomes_the_prompt():
+    """A router client with a model that does not serve classify must not send an empty user message."""
+    client = _client()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"value": true, "explanation": "ok"}'))],
+            usage={'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5},
+        )
+    )
+
+    await run_judge(
+        client=client,
+        model='gpt-5-mini',
+        cfg=LLMCallConfig(model='gpt-5-mini', api='chat_completions', retry_count=0),
+        prompt_template='',
+        replacements={},
+        classify=_noul_question(),
+    )
+
+    call = client.chat.completions.create.await_args
+    assert call is not None
+    sent = call.kwargs['messages']
+    user_text = ' '.join(str(m['content']) for m in sent if m['role'] == 'user')
+    assert user_text.strip(), 'the judge was sent an empty prompt'
+    assert 'Question:' in user_text
+
+
+@pytest.mark.asyncio
 async def test_a_rate_limited_attempt_is_retried():
     client = _client(_rate_limit(), _reply({'type': 'noul', 'noul': 0.8}))
 
@@ -926,10 +954,12 @@ async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question
     )
 
     assert len(calls) == 2
-    assert all('Judge the supplied state' in call['prompt_template'] for call in calls)
-    prompt_contexts = [json.loads(call['replacements']['classify_question']) for call in calls]
-    assert {context['instructions'] for context in prompt_contexts} == {'tone?', 'risk?'}
-    assert all(context['state'] == 'reply' for context in prompt_contexts)
+    # No prompt is sent: run_judge turns the classify question (with the state) into the prompt itself.
+    assert all(call['prompt_template'] == '' for call in calls)
+    assert {call['classify'].instructions for call in calls} == {'tone?', 'risk?'}
+    assert all(call['classify'].state == 'reply' for call in calls)
+    texts = [judge_mod._classify_question_prompt(call['classify']) for call in calls]
+    assert all('<state>"reply"</state>' in t for t in texts), 'the state is delimited as data'
     client.post.assert_not_called()
     assert outcomes['tone'].payload is not None
     assert outcomes['tone'].payload.value == 'answered-tone?'

@@ -56,6 +56,11 @@ from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
+from evaluatorq.common.llm_client import (
+    ModelClientMismatchError,
+    configured_llm_provider,
+    require_models_served_by_provider,
+)
 from evaluatorq.common.llm_limit import DEFAULT_LLM_PARALLELISM, check_llm_parallelism_option, llm_concurrency_limit
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
@@ -200,9 +205,10 @@ def _resolve_target(
         return VercelAISdkTarget(vercel_url)
 
     # openai_model
-    if not env_raw('OPENAI_API_KEY') and not env_raw('ORQ_API_KEY'):
+    if configured_llm_provider() is None:
         raise typer.BadParameter(
-            '--openai-model requires OPENAI_API_KEY (or ORQ_API_KEY for the AI Router) to be set in the environment.'
+            '--openai-model requires OPENAI_API_KEY (or ORQ_API_KEY for the AI Router, or ANTHROPIC_API_KEY for Claude) '
+            'to be set in the environment.'
         )
     from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
@@ -328,13 +334,22 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
     return list(evaluators)
 
 
+_OPENAI_MODEL_HELP = (
+    f'Model name for the target. {MODEL_OPTION_NOTE} ORQ_BASE_URL overrides the Orq host. '
+    "Namespace the model for the provider (e.g. 'openai/gpt-5.6-luna' for the Orq router, "
+    "'gpt-5.6-luna' for OpenAI, 'claude-sonnet-5-5' for Anthropic)."
+)
+
+_PROVIDER_LABELS: dict[str | None, str] = {
+    'orq': 'Orq router',
+    'openai': 'OpenAI-compatible',
+    'anthropic': 'Anthropic',
+}
+
+
 def _provider_label() -> str:
     """The provider branch the environment resolves to for generation LLM calls."""
-    if env_raw('ORQ_API_KEY'):
-        return 'Orq router'
-    if env_raw('OPENAI_API_KEY'):
-        return 'OpenAI-compatible'
-    return 'unresolved provider'
+    return _PROVIDER_LABELS.get(configured_llm_provider(), 'unresolved provider')
 
 
 def _sim_llm_config(sim_model: str | None) -> LLMCallConfig:
@@ -345,6 +360,14 @@ def _sim_llm_config(sim_model: str | None) -> LLMCallConfig:
 def _generation_model(sim_model: str | None) -> str:
     """The model for generation, recommendations and summaries: the flag, else the fast role."""
     return sim_model or role_model('fast', task='sim.generator')
+
+
+def _require_models_served(models: dict[str, str]) -> None:
+    """Exit with one clear error before any work when Anthropic was chosen and a model is not a Claude id."""
+    try:
+        require_models_served_by_provider(models)
+    except ModelClientMismatchError as exc:
+        _handle_cli_error(exc)
 
 
 def _echo_using(model: str) -> None:
@@ -678,12 +701,14 @@ def _forwarded_kwargs(cfg: BaseModel) -> dict[str, Any]:
     return {name: value for name, value in model_kwargs(cfg).items() if name not in _CLI_OWNED_FIELDS}
 
 
-def _sim_model(cfg: BaseModel) -> str:
-    """The model every simulation-side LLM call uses, for display."""
-    llm_config: LLMCallConfig | None = getattr(cfg, 'llm_config', None)
-    if llm_config is not None and 'model' in llm_config.model_fields_set:
-        return llm_config.model
-    return role_model('fast', task='sim.user')
+def _require_sim_models_served(cfg: SimulateCliConfig | GenerateAndSimulateCliConfig, openai_model: str | None) -> None:
+    """Check every model a simulation run will call, the ``--openai-model`` target included, before any work."""
+    from evaluatorq.simulation._config import sim_models
+
+    models = sim_models(cfg.llm_config)
+    if openai_model is not None:
+        models['--openai-model'] = openai_model
+    _require_models_served(models)
 
 
 @app.command()
@@ -712,8 +737,15 @@ def schema(
     echo_schema(SimulateCliConfig if command == 'simulate' else GenerateAndSimulateCliConfig, output=False)
 
 
-def _setup_run_output(*, verbose: int, quiet: bool, yes: bool, executive_summary: bool, sim_model: str) -> Any:
-    """Configure logging, build the run hooks (``None`` under ``--quiet``) and echo the simulation model.
+def _setup_run_output(
+    *,
+    verbose: int,
+    quiet: bool,
+    yes: bool,
+    cfg: SimulateCliConfig | GenerateAndSimulateCliConfig,
+    openai_model: str | None,
+) -> Any:
+    """Configure logging, build the run hooks (``None`` under ``--quiet``), check the models and echo the simulation model.
 
     Runs before the input-source validation so a validation error is rendered by the same console
     the run would have used.
@@ -732,11 +764,14 @@ def _setup_run_output(*, verbose: int, quiet: bool, yes: bool, executive_summary
         hooks = RichHooks(
             console=log_console,
             skip_confirm=should_skip_confirm(yes),
-            defer_summary=executive_summary,
+            defer_summary=cfg.executive_summary,
             verbose=verbose,
         )
     _configure_logging(verbose, console=log_console)
-    _echo_using(sim_model)
+    _require_sim_models_served(cfg, openai_model)
+    from evaluatorq.simulation._config import sim_role_config
+
+    _echo_using(sim_role_config(cfg.llm_config, 'sim.user').model)
     return hooks
 
 
@@ -890,14 +925,7 @@ def simulate(
         str | None,
         typer.Option(
             '--openai-model',
-            help=(
-                'OpenAI-compatible model name. Provider is resolved from env: '
-                'ORQ_API_KEY routes via the Orq AI Router (ORQ_BASE_URL overrides '
-                'the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for '
-                'vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both '
-                'keys are set; namespace the model accordingly '
-                "(e.g. 'openai/gpt-5.6-luna' for the Orq router, 'gpt-5.6-luna' for OpenAI)."
-            ),
+            help=_OPENAI_MODEL_HELP,
         ),
     ] = None,
     results_path: Annotated[
@@ -1036,9 +1064,7 @@ def simulate(
 
     - --target TARGET    agent:<key> (default for bare key) or deployment:<key>.
     - --vercel-url URL   Vercel AI SDK HTTP endpoint.
-    - --openai-model M   OpenAI-compatible model. Provider from env:
-      ORQ_API_KEY for the Orq AI Router, else OPENAI_API_KEY
-      (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local). ORQ wins if both set.
+    - --openai-model M   Model on the provider the environment selects; the option's own help names the precedence.
 
     Note: --target agent:<key> invokes a hosted Orq agent through the Responses
     router. --target deployment:<key> uses the deployment callback path.
@@ -1049,9 +1075,7 @@ def simulate(
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
     cfg = _resolve_cli_config(ctx, SimulateCliConfig, _SIMULATE_FLAGS, cli_args, config_source)
-    hooks = _setup_run_output(
-        verbose=verbose, quiet=quiet, yes=yes, executive_summary=cfg.executive_summary, sim_model=_sim_model(cfg)
-    )
+    hooks = _setup_run_output(verbose=verbose, quiet=quiet, yes=yes, cfg=cfg, openai_model=openai_model)
     _validate_input_sources(ctx, cfg)
 
     try:
@@ -1136,14 +1160,7 @@ def run(
         str | None,
         typer.Option(
             '--openai-model',
-            help=(
-                'OpenAI-compatible model name. Provider is resolved from env: '
-                'ORQ_API_KEY routes via the Orq AI Router (ORQ_BASE_URL overrides '
-                'the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for '
-                'vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both '
-                'keys are set; namespace the model accordingly '
-                "(e.g. 'openai/gpt-5.6-luna' for the Orq router, 'gpt-5.6-luna' for OpenAI)."
-            ),
+            help=_OPENAI_MODEL_HELP,
         ),
     ] = None,
     results_path: Annotated[
@@ -1336,9 +1353,7 @@ def run(
 
     - --target TARGET    agent:<key> (default for bare key) or deployment:<key>.
     - --vercel-url URL   Vercel AI SDK HTTP endpoint.
-    - --openai-model M   OpenAI-compatible model. Provider from env:
-      ORQ_API_KEY for the Orq AI Router, else OPENAI_API_KEY
-      (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local). ORQ wins if both set.
+    - --openai-model M   Model on the provider the environment selects; the option's own help names the precedence.
 
     If --target is an agent target, --agent-description may be omitted and is
     fetched from Orq agent context. Other targets require --agent-description.
@@ -1349,9 +1364,7 @@ def run(
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
     cfg = _resolve_cli_config(ctx, GenerateAndSimulateCliConfig, _RUN_FLAGS, cli_args, config_source)
-    hooks = _setup_run_output(
-        verbose=verbose, quiet=quiet, yes=yes, executive_summary=cfg.executive_summary, sim_model=_sim_model(cfg)
-    )
+    hooks = _setup_run_output(verbose=verbose, quiet=quiet, yes=yes, cfg=cfg, openai_model=openai_model)
 
     try:
         resolved_agent_description = asyncio.run(
@@ -1553,6 +1566,9 @@ def generate(
         log_console = Console(stderr=True)
         hooks = RichHooks(console=log_console, verbose=verbose)
     _configure_logging(verbose, console=log_console)
+    from evaluatorq.simulation._config import sim_models
+
+    _require_models_served(sim_models(_sim_llm_config(sim_model), ('sim.generator',)))
     if not quiet:
         # Plan box (beats 1+2: input + what will happen). Subsumes the plain
         # "Using: <provider>" line — provider·model is a row here.

@@ -300,6 +300,7 @@ dependencies = [
 
   [project.optional-dependencies]
   orq = [ "orq-ai-sdk>=4.14" ]
+  anthropic = [ "anthropic>=0.75.0" ]
   otel = [
   "opentelemetry-api>=1.20.0",
   "opentelemetry-sdk>=1.20.0",
@@ -333,7 +334,7 @@ dependencies = [
   "umap-learn>=0.5.6"
 ]
   all = [
-  "evaluatorq[orq,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,dashboard,insights]"
+  "evaluatorq[orq,anthropic,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,dashboard,insights]"
 ]
 
   [project.scripts]

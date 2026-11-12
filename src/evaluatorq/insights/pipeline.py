@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import __version__
-from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.llm_client import as_llm_client, configured_llm_provider, is_anthropic_client, resolve_llm_client
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import start_manifest
@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from orq_ai_sdk import Orq
 
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.insights.models import DimensionName, InsightsPopulation
 
 
@@ -466,19 +467,37 @@ async def insights(  # noqa: C901
     _source_name: str | None = None,
     _orq_scope: Mapping[str, str | None] | None = None,
     _on_saved: Callable[[Path], None] | None = None,
-    llm_client: AsyncOpenAI | None = None,
+    llm_client: LLMClient | None = None,
     embedding_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
 ) -> InsightsRun:
     """Run trace Insights and persist the partial or complete result with a manifest.
 
     Sends only the embedding requests to `embedding_client` instead of `llm_client`.
-    Like `llm_client`, an injected `embedding_client` is never closed here.
+    Like `llm_client`, an injected `embedding_client` is never closed here. Anthropic has no embeddings API: with an Anthropic `llm_client`, or none while ``ANTHROPIC_API_KEY`` is the only LLM key set, and any `dimensions`, `embedding_client` must be an OpenAI-compatible client, and an Anthropic client there is rejected. Both are checked before the run starts, so no summary or label is billed first.
 
     `coding_analysis` retains the legacy full coding bundle. `coding_labels`
     selects a subset of coding labels while keeping the coding-agent gate.
     """
     specs = _label_specs(labels, dimensions)  # resolve unknown presets before client construction or I/O
+    llm_client = as_llm_client(llm_client)
+    embedding_client = as_llm_client(embedding_client)
+    if is_anthropic_client(embedding_client):
+        raise ValueError(
+            'embedding_client must be an OpenAI-compatible client: Anthropic has no embeddings API. '
+            'Pass an AsyncOpenAI client (or one routed through the Orq router) as embedding_client=.'
+        )
+    # The env-resolved client is built lazily (a Filter or Finder population loads without credentials), so ask which
+    # provider it will be instead of building it: an Anthropic one fails at the first embeddings call otherwise, after
+    # the summaries and labels are billed.
+    llm_is_anthropic = is_anthropic_client(llm_client) or (
+        llm_client is None and configured_llm_provider() == 'anthropic'
+    )
+    if dimensions and llm_is_anthropic and embedding_client is None:
+        raise ValueError(
+            'Insights embeds trace text to cluster the dimensions, and Anthropic has no embeddings API. '
+            'Pass an OpenAI-compatible client as embedding_client=, or run with dimensions=() to skip clustering.'
+        )
     coding_by_name = {spec.name: spec for spec in CODING_LABELS[1:]}
     if coding_analysis or coding_labels is None:
         selected_coding = list(CODING_LABELS[1:]) if coding_analysis else []

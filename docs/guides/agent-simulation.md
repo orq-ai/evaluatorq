@@ -34,6 +34,15 @@ Configure the simulator and judge with `LLMCallConfig`. The former `AgentConfig`
     which installs into the interpreter you just named rather than whichever
     `pip` happens to be first on your `PATH`.
 
+=== "Anthropic"
+
+    Requires the simulation extra, the `anthropic` extra, and an `ANTHROPIC_API_KEY` with no `ORQ_API_KEY` or `OPENAI_API_KEY` set, and every model role set to a Claude id. See [Go Anthropic-direct](../configuration.md#go-anthropic-direct):
+
+    ```bash
+    uv add "evaluatorq[simulation,anthropic]"
+    export ANTHROPIC_API_KEY=sk-ant-...
+    ```
+
 ```mermaid
 sequenceDiagram
     participant U as User simulator
@@ -168,7 +177,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
 
 `run_name` is an optional label for this execution in run records, results, and traces. Existing calls with `evaluation_name` still work.
 
-`agent_description` drives generation; `num_personas × num_scenarios` is the requested number of cases. The actual count can differ when generation returns a different number of personas or scenarios or cannot create an opening message for a pair. The simulation-side LLMs resolve their provider by precedence: an explicitly passed `generation_client` wins, then `llm_config.client`, then `ORQ_API_KEY` (the Orq AI Router), then `OPENAI_API_KEY`. See [Configuration](../configuration.md).
+`agent_description` drives generation; `num_personas × num_scenarios` is the requested number of cases. The actual count can differ when generation returns a different number of personas or scenarios or cannot create an opening message for a pair. The simulation-side LLMs resolve their provider by precedence: an explicitly passed `generation_client` wins, then `llm_config.client`, then `ORQ_API_KEY` (the Orq AI Router), then `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`. See [Configuration](../configuration.md).
 
 Pass `generation_instructions="..."` to steer the whole generated set. It is a free-text instruction applied to every persona AND scenario (e.g. `"enterprise B2B buyers, frustrated, replying in German"`), stacked on top of the built-in prompts. Unlike a seed, which names one archetype and yields one object, it shapes the entire batch, and it composes with seeds and `edge_case_percentage`. It is accepted by `generate_and_simulate()`, `generate()`, and the seed helpers below; to steer personas and scenarios differently, call `generate_personas()` / `generate_scenarios()` separately. On the CLI it is `--generation-instructions`.
 

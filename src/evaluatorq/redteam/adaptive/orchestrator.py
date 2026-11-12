@@ -28,11 +28,11 @@ from evaluatorq.common.content_filter import (
     is_content_filter_error,
     regenerate_on_content_filter,
 )
-from evaluatorq.common.judge import ClassifyQuestion, run_judge
+from evaluatorq.common.judge import ClassifyQuestion, classify_fallback_model, run_judge
 from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
-from evaluatorq.common.model_roles import role_model
+from evaluatorq.common.model_roles import model_source, role_model
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.sanitize import delimit, xml_escape
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
@@ -669,6 +669,20 @@ def ensure_target_can_backtrack(target: AgentTarget) -> None:
 _refusal_fallback_warned: set[str] = set()
 
 
+def planned_refusal_judge_model(*, on_router: bool) -> tuple[str, str]:
+    """The model the refusal judge will run on and the setting that supplied it, before any request is sent.
+
+    The pre-flight counterpart of `refusal_judge_model`, with the same rule: a classify-only
+    classifier model runs only on the Orq router, and anywhere else the judge falls back to the
+    fast role. On the router it assumes the catalogue lists the classify endpoint.
+    """
+    model, label = model_source('classifier', 'redteam.refusal_judge')
+    if on_router or not is_known_classify_model(model):
+        return model, label
+    fast, fast_label = model_source('fast')
+    return fast, f'{fast_label} (redteam.refusal_judge, standing in for the classify-only {model})'
+
+
 async def refusal_judge_model(client: AsyncOpenAI) -> tuple[str, bool]:
     """The model the refusal judge runs on, and whether it is asked on the classify endpoint.
 
@@ -684,16 +698,7 @@ async def refusal_judge_model(client: AsyncOpenAI) -> tuple[str, bool]:
     on_router = client_routes_through_orq(client)
     if on_router and await supports_classify(model, client):
         return model, True
-    fallback = role_model('fast')
-    if model not in _refusal_fallback_warned:
-        _refusal_fallback_warned.add(model)
-        reason = (
-            'the catalogue lists no classify endpoint for it' if on_router else 'the client is not on the Orq router'
-        )
-        logger.warning(
-            f'Refusal judge: {model} needs the classify endpoint, but {reason}; judging refusals with {fallback} instead'
-        )
-    return fallback, False
+    return classify_fallback_model(model, on_router=on_router, client=client, warned=_refusal_fallback_warned), False
 
 
 class MultiTurnOrchestrator:

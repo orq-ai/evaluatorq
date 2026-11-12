@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import TYPE_CHECKING
 
+from evaluatorq.common.llm_client import as_llm_client
 from evaluatorq.common.model_roles import role_model
 
 from .classifier import run_classifier
@@ -18,8 +19,9 @@ from .run_store import RunStore
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from openai import AsyncOpenAI
     from orq_ai_sdk import Orq
+
+    from evaluatorq.common.llm_client import LLMClient
 
     from .models import PopulationRequest, Snapshot
     from .settings import DashboardSettings
@@ -28,11 +30,12 @@ if TYPE_CHECKING:
 def build_run_store(
     settings: DashboardSettings,
     *,
-    client: AsyncOpenAI,
+    client: LLMClient,
     orq: Orq,
     cleanup: Callable[[], Awaitable[None]] | None = None,
 ) -> RunStore:
     """Build the shared trace-finder pipeline for one application runtime."""
+    client = as_llm_client(client)
     source = OrqTraceSource(orq)
     explorer = ExplorerStore(
         search=source.search,

@@ -24,6 +24,7 @@ from evaluatorq.common.jury import (
     run_jury,
     single_verdict_error_payload,
 )
+from evaluatorq.common.llm_client import as_llm_client
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.types import ScorerParameter
 
 DEFAULT_HF_REPO = 'orq/redteam-vulnerabilities'
@@ -266,7 +268,7 @@ async def _owasp_judge_fn(
 
 def create_owasp_evaluator(
     evaluator_model: str | None = None,
-    llm_client: AsyncOpenAI | None = None,
+    llm_client: LLMClient | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     cfg: LLMCallConfig | EvaluatorConfig | None = None,
     judges: list[str] | None = None,
@@ -291,7 +293,7 @@ def create_owasp_evaluator(
     resolved_cfg = cfg or PIPELINE_CONFIG.evaluator
     # max_retries=0: run_judge owns retry via with_retry, so the SDK's own budget would
     # stack on top of it. An injected client keeps the budget its owner chose.
-    client = llm_client or resolved_cfg.client or create_async_llm_client(max_retries=0)
+    client = as_llm_client(llm_client) or resolved_cfg.client or create_async_llm_client(max_retries=0)
     merged_cfg = resolved_cfg.model_copy(
         update={
             'extra_kwargs': {**resolved_cfg.extra_kwargs, **(llm_kwargs or {})},
