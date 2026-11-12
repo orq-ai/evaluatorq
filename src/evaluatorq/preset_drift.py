@@ -41,6 +41,7 @@ from evaluatorq.jury_presets import (
     PRESETS,
     REVIEWED_SUCCESSORS,
     STALE_SEAT_WAIVERS,
+    UNSCORED_SEAT_WAIVERS,
     all_router_ids,
     judge_family,
     model_identity,
@@ -232,6 +233,8 @@ def _bad_cards(ctx: _Ctx) -> list[Finding]:
     for preset in PRESETS.values():
         for router_id in (*preset.judges, *preset.reserve_judges):
             model = ctx.reachable.get(router_id)
+            if model is None and router_id in UNSCORED_SEAT_WAIVERS:
+                continue
             if model is None:
                 found.append(
                     Finding(
@@ -377,6 +380,16 @@ def _stale_registers(ctx: _Ctx) -> list[Finding]:
                     options=[f'delete {identity!r} from STALE_SEAT_WAIVERS'],
                 )
             )
+    found.extend(
+        Finding(
+            kind='stale_waiver',
+            subject=router_id,
+            detail='Excused for having no score, but no longer seated or now scored.',
+            options=[f'delete {router_id!r} from UNSCORED_SEAT_WAIVERS'],
+        )
+        for router_id in sorted(UNSCORED_SEAT_WAIVERS)
+        if router_id not in all_router_ids() or router_id in ctx.reachable
+    )
     found.extend(
         Finding(
             kind='stale_exemption',

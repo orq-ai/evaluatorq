@@ -441,6 +441,25 @@ STALE_SEAT_WAIVERS: dict[str, str] = {
     ),
 }
 
+# A seat whose router id has no score in the garden is one the upgrade check
+# cannot look at, so the freshness suite fails on it. This register is the
+# written reason a seat stays anyway. Keyed by router id, and only for seats
+# whose job does not depend on rank (a reserve that runs when a main judge
+# fails). A card that later gains a score makes its entry pointless, and the
+# freshness suite says so.
+UNSCORED_SEAT_WAIVERS: dict[str, str] = {
+    'deepseek/deepseek-flash': (
+        'balanced-trio reserve, kept for cost. The public catalogue card '
+        '(DeepSeek-V4.1-Flash-1017, 2026-10-17) is absent from /v2/models and has no '
+        'Artificial Analysis score; the same model on tencent/deepseek/deepseek-flash '
+        'and baseten/deepseek-v4.1-flash is 39.5, but a score read from another host '
+        'is not this card, and seating it would let cheap-aggregate swap onto an '
+        'inferred number. Priced at $0.15/$0.60 per 1M off-peak and $0.30/$1.20 in '
+        "weekday peak windows on the card's price variants (public catalogue "
+        '2026-11-12). Retire once the card carries its own score.'
+    ),
+}
+
 # Successors already looked at and deliberately not seated. A model reaching the
 # garden is not a reason to put it in front of customers, but it is a reason to
 # say why not: this dict is that record, and the freshness test fails on any

@@ -85,6 +85,7 @@ Nothing about a seat is committed except the decision to seat it. Rates and defa
 - a newer model in a seated lineage that nobody has reviewed (`REVIEWED_SUCCESSORS`)
 - a same-lineage model that beats a seat on both intelligence and price
 - a seat older than 180 days whose lineage has stopped shipping, unless it has a written waiver in `STALE_SEAT_WAIVERS`
+- a seat whose card has no score, so no upgrade check can run against it, unless it has a written waiver in `UNSCORED_SEAT_WAIVERS` (a reserve kept for cost, for example)
 
 When the check fails, the workflow runs `python -m evaluatorq.preset_drift`, which lists what moved and the options the arithmetic allows: the reserve that can replace a retired seat, the same-lineage models that beat a seat, the newer models nobody has reviewed. A Pi agent, launched through the orq CLI with the router key, then proposes the register changes. It must confirm on the vendor's own pages that a candidate really is newer or superseded, because the catalog knows listing dates and not release notes, and it records each source beside the change. The workflow re-runs the live check on the result and always opens a real pull request: a fix when the check passes again, otherwise one labelled `needs-human-attention` that carries the report and the agent's summary. Nothing merges automatically. The pull request is opened with the repository's default token, which GitHub does not treat as a person: its CI runs may wait as `action_required` until a maintainer approves them, or until someone pushes to the branch.
 

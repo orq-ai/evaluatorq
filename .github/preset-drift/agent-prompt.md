@@ -19,7 +19,7 @@ Use `curl -sL <url>` and read the page. Prefer vendor domains. Treat anything yo
 
 ## What you may edit
 
-- `src/evaluatorq/jury_presets.py`: the preset seats, reserves, `estimated_cost_per_1k`, `REVIEWED_SUCCESSORS`, `DOMINANCE_EXEMPTIONS`, `STALE_SEAT_WAIVERS`.
+- `src/evaluatorq/jury_presets.py`: the preset seats, reserves, `estimated_cost_per_1k`, `REVIEWED_SUCCESSORS`, `DOMINANCE_EXEMPTIONS`, `STALE_SEAT_WAIVERS`, `UNSCORED_SEAT_WAIVERS`.
 - `src/evaluatorq/common/model_frontier.py`: only the dated registers (`MANUAL_MODEL_CARDS`, `SUPERSEDED`, `UNROUTABLE`, `AA_FILLS`).
 - `src/evaluatorq/router_pools.py`: only `REVIEWED_UNDERIVABLE_POOLS` and `DROPPED_POOLS`.
 - `docs/jury-presets.md` and the `[Unreleased]` section of `CHANGELOG.md`, so they match the code.

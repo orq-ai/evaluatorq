@@ -41,6 +41,7 @@ from evaluatorq.jury_presets import (
     DOMINANCE_EXEMPTIONS,
     MAX_SEAT_AGE_DAYS,
     STALE_SEAT_WAIVERS,
+    UNSCORED_SEAT_WAIVERS,
     PRESETS,
     REVIEWED_SUCCESSORS,
     all_router_ids,
@@ -319,7 +320,7 @@ class TestFrontier:
 
     def test_every_seat_is_scored(self, garden):
         """An unscored seat is one the upgrade check silently skips."""
-        unscored = all_router_ids() - set(garden) - set(MANUAL_MODEL_CARDS)
+        unscored = all_router_ids() - set(garden) - set(MANUAL_MODEL_CARDS) - set(UNSCORED_SEAT_WAIVERS)
         assert not unscored, (
             f'{unscored} carry no autorouter intelligence/price pair, so no upgrade check runs against them.'
         )
@@ -368,6 +369,18 @@ def test_stale_seat_waivers_are_dropped_once_the_seat_is_young_again(listed):
     assert not pointless, (
         f'{pointless} are excused for age but are either no longer seated or no longer old. Drop the entries.'
     )
+
+
+@live
+def test_unscored_seat_waivers_are_dropped_once_the_seat_is_scored(garden):
+    """A card that gains a score should retire the excuse, not leave it standing."""
+    pointless = sorted(
+        router_id
+        for router_id in UNSCORED_SEAT_WAIVERS
+        if router_id not in all_router_ids() or router_id in garden or router_id in MANUAL_MODEL_CARDS
+    )
+
+    assert not pointless, f'{pointless} are excused for having no score but are unseated or now scored. Drop the entries.'
 
 
 @live
