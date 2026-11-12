@@ -592,3 +592,48 @@ def test_finder_export_saved_under_a_group_writable_umask_is_listed(tmp_path: Pa
     entries = recent_trace_files(runs_dir=get_insights_runs_dir(), finder_dir=export_dir)
 
     assert [(entry.display_name, entry.trace_count) for entry in entries] == [('trace-finder-1.json', 2)]
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX permission bits do not control access on Windows')
+def test_group_writable_finder_folder_is_left_out_with_one_warning(tmp_path: Path) -> None:
+    from loguru import logger
+
+    from evaluatorq.dashboard.insights_uploads import recent_trace_files
+
+    finder_dir = tmp_path / 'finder-exports'
+    finder_dir.mkdir()
+    for name in ('trace-finder-1.json', 'trace-finder-2.json'):
+        (finder_dir / name).write_text(_run_export(['a']).model_dump_json(), encoding='utf-8')
+        (finder_dir / name).chmod(0o600)
+    finder_dir.chmod(0o775)
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
+    try:
+        entries = recent_trace_files(runs_dir=tmp_path / 'insights-runs', finder_dir=finder_dir)
+    finally:
+        logger.remove(sink)
+
+    assert entries == []
+    assert len(warnings) == 1
+    assert str(finder_dir) in warnings[0]
+    assert 'writable by group or others (mode 0o775)' in warnings[0]
+
+
+def test_unreadable_finder_export_is_left_out_with_a_warning_naming_it(tmp_path: Path) -> None:
+    from loguru import logger
+
+    from evaluatorq.dashboard.insights_uploads import recent_trace_files
+
+    finder_dir = tmp_path / 'finder-exports'
+    finder_dir.mkdir(mode=0o700)
+    finder_dir.chmod(0o700)
+    (finder_dir / 'trace-finder-broken.json').write_text('not json', encoding='utf-8')
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
+    try:
+        entries = recent_trace_files(runs_dir=tmp_path / 'insights-runs', finder_dir=finder_dir)
+    finally:
+        logger.remove(sink)
+
+    assert entries == []
+    assert any('trace-finder-broken.json' in warning for warning in warnings)

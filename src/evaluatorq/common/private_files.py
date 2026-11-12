@@ -9,10 +9,17 @@ from pathlib import Path
 
 
 def _require_owned_directory(path: Path) -> None:
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = path.lstat()
-    if path.is_symlink() or not stat.S_ISDIR(info.st_mode) or (hasattr(os, 'getuid') and info.st_uid != os.getuid()):
-        raise OSError(f'Private file storage is not an owned directory: {path}')
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = path.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        raise OSError(f'Private file storage is a symlink, not a directory: {path}')
+    if not stat.S_ISDIR(info.st_mode):
+        raise OSError(f'Private file storage is not a directory: {path}')
+    if hasattr(os, 'getuid') and info.st_uid != os.getuid():
+        raise OSError(f'Private file storage is owned by uid {info.st_uid}, not this user (uid {os.getuid()}): {path}')
 
 
 def ensure_private_directory(path: Path) -> None:
