@@ -85,7 +85,8 @@ def test_orq_responses_shape_is_unchanged():
         'input_tokens_details': {
             'cached_tokens': 600,
             'cache_creation_tokens': 200,
-            'cache_creation': {'ephemeral_1h_input_tokens': 150, 'ephemeral_5m_input_tokens': 50},
+            'cache_creation_1h_tokens': 150,
+            'cache_creation_5m_tokens': 50,
         },
     })
     assert usage.input_tokens == 1000
