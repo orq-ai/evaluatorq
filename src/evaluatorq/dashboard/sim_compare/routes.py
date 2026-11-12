@@ -12,7 +12,6 @@ from starlette.responses import Response
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard import library
-from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_compare.drawer import render_compare_transcript
 from evaluatorq.dashboard.sim_compare.model import (
@@ -221,6 +220,5 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
             return _fragment_error('Not a matched pair.', 404)
         side_a = build_side(rid_a, cmp.a.run, [pair.a])
         side_b = build_side(rid_b, cmp.b.run, [pair.b])
-        with cli_slug_render_scope():
-            body = render_compare_transcript(pair.a, pair.b, side_a, side_b)
+        body = render_compare_transcript(pair.a, pair.b, side_a, side_b)
         return Response(body, media_type='text/html')
