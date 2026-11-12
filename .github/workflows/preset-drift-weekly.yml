@@ -5,8 +5,8 @@ name: Jury preset drift (weekly)
 # choice: a seat retires, loses its score, gets a newer model in its lineage, or
 # stops being on the frontier. The freshness suite catches that against the live
 # garden. When it fails, deterministic code (`python -m evaluatorq.preset_drift`)
-# lists what moved and which options the arithmetic allows, and a Pi agent, run
-# through the orq CLI, proposes the register changes after confirming on the web
+# lists what moved and which options the arithmetic allows, and a Pi agent,
+# pointed at the orq router, proposes the register changes after confirming on the web
 # that each candidate really is newer or superseded. The result is always a real
 # pull request: a fix when the live suite passes again, otherwise a PR labelled
 # `needs-human-attention`. Nothing is merged automatically.
@@ -42,7 +42,8 @@ concurrency:
 
 env:
   DRIFT_BRANCH_PREFIX: preset-drift
-  PI_MODEL: openai/gpt-6-sol
+  # The router served openai/gpt-5.6-luna when asked for openai/gpt-6-sol on this key, so name the model that runs.
+  PI_MODEL: openai/gpt-5.6-luna
   # Open the PR against this branch instead of the default one. Empty in
   # production; set it to rehearse the workflow without a PR against main.
   DRIFT_BASE: ""
@@ -100,9 +101,9 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install the orq CLI and Pi
+      - name: Install Pi
         if: steps.drift.outcome == 'failure' && steps.existing.outputs.open == ''
-        run: npm install -g @orq-ai/cli @mariozechner/pi-coding-agent
+        run: npm install -g @mariozechner/pi-coding-agent
 
       - name: Let the agent propose the register changes
         id: agent
@@ -110,13 +111,20 @@ jobs:
         continue-on-error: true
         timeout-minutes: 25
         env:
-          # The router key, not the workspace key: the workspace key reads the catalogue but is refused by the gateway.
+          # The router key, not the workspace key: the workspace key reads the catalogue but the router refuses it (401).
           ORQ_API_KEY: ${{ secrets.ORQ_REVIEW_API_KEY }}
           DRIFT_SUMMARY: ${{ runner.temp }}/drift-summary.md
         run: |
           set -o pipefail
-          # `orq launch pi` points Pi at the orq router with the key above and maps -p to Pi's one-shot prompt.
-          orq launch pi --no-mcp --no-skills --model "$PI_MODEL" -p "$(cat .github/preset-drift/agent-prompt.md)" 2>&1 | tee "$RUNNER_TEMP/agent.log"
+          # Pi's provider config, written here rather than by `orq launch pi`: with orq CLI 12.6.11 that command
+          # writes the key as the literal text "$ORQ_API_KEY", which Pi sends as-is and the router rejects with a
+          # 401 (checked on Pi 0.60 through 0.73). "ORQ_API_KEY" without the dollar sign is read as the env var.
+          export PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi"
+          mkdir -p "$PI_CODING_AGENT_DIR"
+          cat > "$PI_CODING_AGENT_DIR/models.json" <<JSON
+          {"providers":{"orq":{"baseUrl":"https://api.orq.ai/v3/router","apiKey":"ORQ_API_KEY","api":"openai-responses","models":[{"id":"$PI_MODEL","name":"$PI_MODEL","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}]}}}
+          JSON
+          pi --provider orq --model "$PI_MODEL" -p "$(cat .github/preset-drift/agent-prompt.md)" 2>&1 | tee "$RUNNER_TEMP/agent.log"
 
       - name: Re-run the live checks on the agent's change
         id: recheck
