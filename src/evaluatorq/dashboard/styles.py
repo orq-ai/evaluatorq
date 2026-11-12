@@ -3040,7 +3040,6 @@ _SIM_COMPARE_CSS = """
 .cmp-bar select:hover { background: var(--app-gray-50); }
 .cmp-bar select:focus-visible { outline: none; box-shadow: var(--ring); }
 .cmp-bar .btn-secondary { font-size: 12.5px; }
-.cmp-bar-vs { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
 
 .report-hero-title .cmp-vs { color: var(--orange-500); }
 .cmp-note { font-size: 12px; color: var(--text-muted); margin: 0 0 12px; }
@@ -3113,11 +3112,6 @@ button.cmp-head.is-on .cmp-head-go { color: var(--teal-600); }
 }
 .kpi-band--cmp .kpi-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .cmp-tile-ab { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
-.cmp-delta { display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-  font-variant-numeric: tabular-nums; border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
-.cmp-delta--good { background: var(--green-100); color: var(--teal-600); }
-.cmp-delta--bad { background: var(--red-50); color: var(--red-700); }
-.cmp-delta--flat { background: var(--surface-sunken); color: var(--text-muted); }
 
 .cmp-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 0 0 16px; }
 .cmp-report .cmp-grid > .rk-panel { margin: 0; }
@@ -3178,11 +3172,6 @@ button.cmp-head.is-on .cmp-head-go { color: var(--teal-600); }
 .sim-report .sim-th-caret-word { font: 500 10.5px var(--font-sans); text-transform: none; letter-spacing: 0; margin-left: 6px; color: var(--text-muted); }
 .cmp-outcome { white-space: nowrap; }
 .cmp-arrow { color: var(--text-faint); margin: 0 6px; }
-.cmp-change { font-family: var(--font-mono); font-size: 11px; font-weight: 600; border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
-.cmp-change--bad { background: var(--red-50); color: var(--red-700); }
-.cmp-change--good { background: var(--green-100); color: var(--teal-600); }
-.cmp-change--flat { background: var(--surface-sunken); color: var(--text-body); }
-.cmp-change--warn { background: color-mix(in srgb, #c9a13f 16%, transparent); color: var(--amber-ink); }
 .cmp-unmatched { margin-top: 12px; font-size: 12px; color: var(--text-muted); }
 .cmp-unmatched summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 .cmp-unmatched ul { margin: 6px 0 0; padding-left: 22px; columns: 2; }

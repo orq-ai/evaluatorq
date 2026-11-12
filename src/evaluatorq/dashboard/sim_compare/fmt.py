@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from evaluatorq.common.reports import esc, status_badge
+from evaluatorq.dashboard.report_kit import pill
 from evaluatorq.dashboard.sim_compare.model import _FLAT
 
 
@@ -10,12 +10,12 @@ def _delta_pill(delta: float | None, text: str, *, higher_better: bool | None = 
     """Signed change pill. Colour follows good/bad (green/red), not direction;
     ``higher_better=None`` keeps it neutral (e.g. conversation count, turns)."""
     if delta is None:
-        return '<span class="cmp-delta cmp-delta--flat">n/a</span>'
+        return pill('n/a', tone='neutral')
     if abs(delta) < _FLAT:
-        return '<span class="cmp-delta cmp-delta--flat">no change</span>'
-    arrow = '&#x25B2;' if delta > 0 else '&#x25BC;'
-    tone = 'flat' if higher_better is None else 'good' if (delta > 0) == higher_better else 'bad'
-    return f'<span class="cmp-delta cmp-delta--{tone}">{arrow} {esc(text)}</span>'
+        return pill('no change', tone='neutral')
+    arrow = '\u25b2' if delta > 0 else '\u25bc'
+    tone = 'neutral' if higher_better is None else 'good' if (delta > 0) == higher_better else 'danger'
+    return pill(f'{arrow} {text}', tone=tone)
 
 
 def _run_key(which: str) -> str:
@@ -23,29 +23,29 @@ def _run_key(which: str) -> str:
     return f'<span class="cmp-key cmp-key--{which.lower()}" aria-hidden="true"></span><b class="cmp-key-letter">{which}</b>'
 
 
-_STATUS_BADGE = {
-    'met': ('Goal met', 'pass'),
-    'missed': ('Goal missed', 'fail'),
+_STATUS_PILL = {
+    'met': ('Goal met', 'good'),
+    'missed': ('Goal missed', 'danger'),
     'error': ('Error', 'warn'),
 }
 
 
 def _badge(status: str) -> str:
-    text, tone = _STATUS_BADGE[status]
-    return status_badge(text, tone)
+    text, tone = _STATUS_PILL[status]
+    return pill(text, tone=tone)
 
 
 _CHANGE_PILL = {
-    'regressed': ('Regressed', 'bad'),
+    'regressed': ('Regressed', 'danger'),
     'improved': ('Improved', 'good'),
     'error': ('Error', 'warn'),
-    'same': ('Same', 'flat'),
+    'same': ('Same', 'neutral'),
 }
 
 
 def _change_pill(change: str) -> str:
     text, tone = _CHANGE_PILL[change]
-    return f'<span class="cmp-change cmp-change--{tone}">{text}</span>'
+    return pill(text, tone=tone, dot=True)
 
 
 def _tone(delta: float) -> str:
