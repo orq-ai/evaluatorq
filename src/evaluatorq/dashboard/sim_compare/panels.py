@@ -9,7 +9,6 @@ from typing import Any
 from evaluatorq.common.reports import esc, kpi_cards
 from evaluatorq.dashboard.filters import _sim_options_from_results
 from evaluatorq.dashboard.report_kit import panel
-from evaluatorq.dashboard.report_kit import pill as rk_pill
 from evaluatorq.dashboard.report_tabs import sim_entity_dialog
 from evaluatorq.dashboard.sim_compare.fmt import _delta_pill, _fmt_num, _fmt_rate, _run_key
 from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
@@ -169,9 +168,9 @@ def _headlines(cmp: Comparison, view: str, state: TableState | None = None, *, o
     if cmp.outcome_filtered:
         rows.append(
             row(
-                'n/a',
-                'Goal rate not comparable',
-                'A filter picks conversations by their goal outcome, so the rate measures the filter, not the runs',
+                '—',
+                'Goal rate hidden',
+                'You filtered by goal outcome, so the rate would only reflect the filter',
                 target='all',
                 go='All conversations',
             )
@@ -276,7 +275,7 @@ def _filter_strip(cmp: Comparison, state: TableState, *, oob: bool = False) -> s
 
 def _tiles(cmp: Comparison) -> str:
     """Single-run style number tiles: B's value large, then ``A → B`` and a delta
-    pill. Under an outcome filter the goal tiles say "not comparable" instead."""
+    pill. Under an outcome filter the goal tiles hide their values and say why."""
     a, b = cmp.aggregates
 
     def tile(
@@ -289,14 +288,14 @@ def _tiles(cmp: Comparison) -> str:
         higher: bool | None,
         outcome: bool = False,
     ) -> dict:
-        d = None if va is None or vb is None else vb - va
         if outcome and cmp.outcome_filtered:
-            pill = (
-                '<span title="A filter picks conversations by goal outcome">'
-                f'{rk_pill("not comparable", tone="neutral")}</span>'
-            )
-        else:
-            pill = _delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
+            return {
+                'label': label,
+                'value': '—',
+                'sub_html': '<span class="cmp-tile-note">Hidden: you filtered by goal outcome</span>',
+            }
+        d = None if va is None or vb is None else vb - va
+        pill = _delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
         return {
             'label': label,
             'value': fmt(vb),

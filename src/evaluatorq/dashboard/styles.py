@@ -3115,20 +3115,20 @@ _SIM_COMPARE_CSS = """
   padding: 4px 10px; font: 500 12px var(--font-sans); color: var(--text-body); cursor: pointer; }
 .cmp-fbar-copy:hover { border-color: var(--border-strong); color: var(--text-strong); }
 
-/* Number tiles: B large, then A -> B and the delta pill */
-.cmp-report .kpi-band--cmp { margin: 0 0 16px; }
+/* Number tiles: B large, then A -> B and the delta pill. Wrap on the space the tiles get,
+   not the viewport: the sidebar and filter rail take ~470px of it. */
+.cmp-report .kpi-band--cmp { margin: 0 0 16px; grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 @media (max-width: 760px) {
-  .cmp-report .kpi-band--cmp { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cmp-report .filter-swap-container .filter-form { order: -1; }
   .cmp-status { font-size: 12px; }
   .cmp-fbar-copy { margin-left: 0; }
 }
 .kpi-band--cmp .kpi-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .cmp-tile-ab { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
+.cmp-tile-note { font-size: 12px; color: var(--text-muted); line-height: 1.35; }
 
-.cmp-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 0 0 16px; }
+.cmp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 16px; margin: 0 0 16px; }
 .cmp-report .cmp-grid > .rk-panel { margin: 0; }
-@media (max-width: 1100px) { .cmp-grid { grid-template-columns: 1fr; } }
 .cmp-subhead { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
   color: var(--text-faint); margin: 14px 0 8px; }
 .cmp-subhead:first-child { margin-top: 2px; }

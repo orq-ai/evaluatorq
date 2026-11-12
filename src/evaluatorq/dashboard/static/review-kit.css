@@ -2,7 +2,7 @@
    the active-filter bar and its chips. The values come from the Insights page, the design reference. */
 
 /* headline rows */
-.rk-heads{margin:6px 0 18px;background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:14px;overflow:hidden}
+.rk-heads{container-type:inline-size;margin:6px 0 18px;background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:14px;overflow:hidden}
 .rk-heads:empty{display:none}
 .rk-head{position:relative;display:grid;grid-template-columns:var(--rk-head-cols,132px minmax(0,1fr) 172px);gap:16px;align-items:center;width:100%;padding:12px 16px;border-bottom:1px solid var(--border-subtle);text-align:left;transition:background .15s}
 .rk-head:last-child{border-bottom:0}
@@ -16,7 +16,7 @@
 .rk-head--bad .rk-head-number,.rk-head--bad .rk-head-go{color:var(--red-700)}
 .rk-head--good .rk-head-number{color:var(--green-600)}
 .rk-head--warn .rk-head-number{color:var(--amber-ink,var(--orange-700))}
-@media(max-width:850px){.rk-head{grid-template-columns:110px minmax(0,1fr);gap:8px 12px}.rk-head-go{grid-column:2;text-align:left}}
+@container (max-width:640px){.rk-head{grid-template-columns:minmax(0,1fr);gap:4px}.rk-head-go{text-align:left}}
 
 /* filter bar and chips */
 .rk-fbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:34px;margin-bottom:12px;font-size:13px}

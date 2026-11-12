@@ -543,9 +543,12 @@ def test_outcome_filter_makes_goal_rate_not_comparable():
     cmp = _cmp({'goal_outcome': ['Achieved']})
     assert cmp.outcome_filtered
     heads = _headlines(cmp, 'all')
-    assert 'Goal rate not comparable' in heads
+    assert 'Goal rate hidden' in heads
     assert 'Goal rate held steady' not in heads and 'Goal rate rose' not in heads
-    assert _tiles(cmp).count('not comparable') == 2
+    tiles = _tiles(cmp)
+    assert tiles.count('Hidden: you filtered by goal outcome') == 2
+    # the hidden tiles drop their A -> B values; the other three keep them
+    assert tiles.count('cmp-tile-ab') == 3
     # a persona filter selects on something else, so the rate stays comparable
     assert not _cmp({'persona': ['alice']}).outcome_filtered
 
