@@ -818,11 +818,9 @@ async def span_tree_fragment(
     except Exception as error:  # noqa: BLE001 - raw status text is optional and must not block summaries
         logger.warning('Span status lookup failed for trace {}: {}', trace_id, type(error).__name__)
         error_message = None
-    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
     from evaluatorq.dashboard.trace_finder.views import span_tree
 
-    with cli_slug_render_scope():
-        return await asyncio.to_thread(span_tree, trace_id, spans, first_error_message=error_message)
+    return await asyncio.to_thread(span_tree, trace_id, spans, first_error_message=error_message)
 
 
 def register_finder_routes(app: Any) -> None:  # noqa: C901
@@ -1463,12 +1461,10 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             # htmx does not swap a 4xx body, so a 404 here would leave the click silently doing nothing.
             logger.warning('Find drawer requested trace {} that is not in the current run', trace_id)
             return _html(missing_trace_drawer(trace_id))
-        from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-        with cli_slug_render_scope():
-            html = await asyncio.to_thread(
-                drawer, detail, msg=msg, row=row, traces_layout=req.query_params.get('surface') == 'traces'
-            )
+        html = await asyncio.to_thread(
+            drawer, detail, msg=msg, row=row, traces_layout=req.query_params.get('surface') == 'traces'
+        )
         return _html(html)
 
     @app.get('/find/export.json')
