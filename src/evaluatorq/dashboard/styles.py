@@ -3071,6 +3071,7 @@ _SIM_COMPARE_CSS = """
 .cmp-head-btn:focus-visible { outline: none; }
 .cmp-head-btn::after { content: ''; position: absolute; inset: 0; }
 .cmp-head-scn { position: relative; z-index: 1; color: var(--text-link); text-decoration: underline; text-underline-offset: 2px; }
+.cmp-head-scn:hover { color: var(--text-link); }
 .cmp-head-scn:focus-visible { outline: none; box-shadow: var(--ring); border-radius: 3px; }
 .cmp-fchip-dim { color: var(--text-muted); }
 .rk-fchip-x:focus-visible, .rk-fbar-clear:focus-visible, .cmp-fbar-copy:focus-visible { outline: none; box-shadow: var(--ring); }
@@ -3110,10 +3111,17 @@ _SIM_COMPARE_CSS = """
 .cmp-stack-bar i, .cmp-stack-bar a { display: block; min-width: 3px; flex-basis: 0; }
 .cmp-heat-scroll { overflow-x: auto; max-width: 100%; }
 .cmp-report .cmp-heat-scroll + .cmp-note { margin-top: 8px; }
+/* report.css stacks every table under 760px except .heatmap-table; keep this one a grid that scrolls inside .cmp-heat-scroll. */
+@media (max-width: 760px) {
+  .cmp-report .cmp-heat-scroll .rk-heatmap tr { display: table-row; margin: 0; border: 0; border-radius: 0; }
+  .cmp-report .cmp-heat-scroll .rk-heatmap th, .cmp-report .cmp-heat-scroll .rk-heatmap td { display: table-cell; }
+  .cmp-report .cmp-heat-scroll .rk-heat-row { max-width: 120px; white-space: normal; }
+}
 .cmp-report .rk-heat-row { position: sticky; left: 0; background: var(--surface-card); }
 .cmp-report .rk-heat-col { min-width: 88px; max-width: 140px; overflow-wrap: anywhere; }
 .cmp-report .cmp-heat-cell { padding: 0; font-size: 13px; font-weight: 600; }
 .cmp-heat-link { display: flex; align-items: center; justify-content: center; height: 100%; min-height: 34px; color: inherit; text-decoration: none; border-radius: 5px; font-variant-numeric: tabular-nums; }
+.cmp-heat-link:hover, .cmp-heat-link:visited { color: inherit; }
 .cmp-heat-link:hover { filter: brightness(.94); }
 .cmp-heat-link:focus-visible { outline: none; box-shadow: var(--ring); }
 .cmp-heat-cell.is-on .cmp-heat-link { box-shadow: inset 0 0 0 2px var(--ink-900); }
@@ -3121,6 +3129,7 @@ _SIM_COMPARE_CSS = """
 .cmp-seg-link.is-on { box-shadow: inset 0 0 0 2px var(--surface-card); }
 .cmp-seg-link:focus-visible, .cmp-legend-link:focus-visible { outline: none; box-shadow: var(--ring); }
 .cmp-legend-link { display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px; margin: 0 -6px; border-radius: 6px; color: inherit; text-decoration: none; }
+.cmp-legend-link:hover, .cmp-legend-link:visited { color: inherit; }
 .cmp-legend-link:hover { background: var(--surface-sunken); }
 .cmp-legend-link.is-on { background: var(--teal-50); box-shadow: inset 0 0 0 1px var(--teal-600); color: var(--text-strong); }
 .cmp-stack-empty { font-size: 11.5px; color: var(--text-faint); align-self: center; padding: 0 8px; }

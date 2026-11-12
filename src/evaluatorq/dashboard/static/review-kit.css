@@ -25,7 +25,7 @@
 .rk-fbar-hint{color:var(--text-faint)}
 .rk-fbar-right{margin-left:auto}
 .rk-fbar-clear{color:var(--teal-600);font-weight:500;text-decoration:none}
-.rk-fbar-clear:hover{text-decoration:underline}
+.rk-fbar-clear:hover{color:var(--teal-600);text-decoration:underline}
 .rk-fchip{display:inline-flex;align-items:center;gap:6px;background:var(--surface-card);border:1px solid var(--border-default);border-radius:999px;padding:3px 6px 3px 10px;font-size:12px;max-width:360px;animation:rk-pop .18s ease}
 .rk-fchip-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rk-fchip-dot{width:8px;height:8px;border-radius:50%;flex:none}
