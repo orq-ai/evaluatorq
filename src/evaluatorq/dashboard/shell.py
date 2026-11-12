@@ -235,6 +235,18 @@ def _resolve_nav(active_surface: str | None, active_nav: str | None) -> str:
     return 'dashboard'
 
 
+WORKSPACE_PENDING_ROUTE = '/orq-workspace/pending'
+
+
+def _workspace_slug_poller() -> str:
+    """Reload a report page once a background workspace lookup lands, so its trace links appear."""
+    from evaluatorq.dashboard.orq_workspace import discovery_pending, resolve_slug
+
+    if resolve_slug() is not None or not discovery_pending():
+        return ''
+    return f'<div hidden hx-get="{WORKSPACE_PENDING_ROUTE}" hx-trigger="every 2s" hx-swap="none"></div>\n'
+
+
 def page(
     title: str,
     body_html: str,
@@ -280,6 +292,7 @@ def page(
         else ''
     )
     body_classes = f'eq-dashboard {body_class}'.strip()
+    slug_poller = _workspace_slug_poller() if active_surface else ''
 
     return (
         '<!DOCTYPE html>\n'
@@ -296,6 +309,7 @@ def page(
         f'<body class="{body_classes}">\n'
         f'{_SIDEBAR_TOGGLE_SCRIPT}'
         f'{_AUTH_TOAST_SCRIPT}'
+        f'{slug_poller}'
         '<div class="app-shell">\n'
         f'{sidebar}\n'
         '<div class="app-main">\n'

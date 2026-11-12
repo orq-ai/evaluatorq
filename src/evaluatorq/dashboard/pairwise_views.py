@@ -19,7 +19,6 @@ from starlette.responses import Response
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
-from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 from evaluatorq.dashboard.pairwise_palette import pw_side_colour, pw_side_label
 from evaluatorq.dashboard.report_kit import panel, short_model
 from evaluatorq.dashboard.sim_compare import resolve_run
@@ -331,16 +330,15 @@ def register_pairwise_view_routes(app: Any, roots: list[Path] | None = None) -> 
             focus: int | None = int(req.query_params.get('focus', ''))
         except (ValueError, TypeError):
             focus = None
-        with cli_slug_render_scope():
-            html = render_pairwise_row_list(
-                rid,
-                run,
-                entries,
-                sort=req.query_params.get('sort', 'index'),
-                direction=req.query_params.get('dir', 'asc'),
-                page=page,
-                focus=focus,
-            )
+        html = render_pairwise_row_list(
+            rid,
+            run,
+            entries,
+            sort=req.query_params.get('sort', 'index'),
+            direction=req.query_params.get('dir', 'asc'),
+            page=page,
+            focus=focus,
+        )
         return Response(html, media_type='text/html')
 
     @app.get('/r/{rid}/pairwise/comparison')

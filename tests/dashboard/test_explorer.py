@@ -3089,7 +3089,7 @@ def test_span_tree_preserves_duplicate_ids_and_marks_the_error_node() -> None:
 
 
 
-def test_span_tree_discovers_cli_workspace_once_per_render(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_span_tree_discovers_cli_workspace_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from evaluatorq.dashboard import orq_workspace
     from evaluatorq.dashboard.orq_scope import OrqScope
     from evaluatorq.dashboard.trace_finder.views import span_tree
@@ -3098,6 +3098,8 @@ def test_span_tree_discovers_cli_workspace_once_per_render(monkeypatch: pytest.M
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
     monkeypatch.setattr(orq_workspace.shutil, 'which', lambda _name: '/usr/bin/orq')
+    monkeypatch.setattr(orq_workspace, '_CLI_CONFIG_DIR', tmp_path / 'orq-cli')
+    monkeypatch.setattr(orq_workspace, '_cli_slug_cache', {})
     slugs = iter(('first-workspace', 'second-workspace'))
     calls = 0
 
@@ -3110,13 +3112,14 @@ def test_span_tree_discovers_cli_workspace_once_per_render(monkeypatch: pytest.M
     monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
     spans = [{'span_id': f'span-{index}', 'name': f'span-{index}'} for index in range(100)]
 
-    first = span_tree('trace', spans)
-    assert first.count('href="https://my.orq.ai/first-workspace/traces/') == 100
+    span_tree('trace', spans)
+    for thread in list(orq_workspace._pending.values()):
+        thread.join(timeout=2)
     assert calls == 1
 
-    second = span_tree('trace', spans)
-    assert second.count('href="https://my.orq.ai/second-workspace/traces/') == 100
-    assert calls == 2
+    rendered = span_tree('trace', spans)
+    assert rendered.count('href="https://my.orq.ai/first-workspace/traces/') == 100
+    assert calls == 1
 
 
 def test_results_self_poll_answers_out_of_band_and_marks_the_render(explorer_client) -> None:

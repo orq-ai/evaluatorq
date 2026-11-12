@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
+import time
 
 import pytest
 
@@ -17,7 +17,14 @@ def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
     monkeypatch.setattr(ow.shutil, 'which', lambda _name: None)
+    monkeypatch.setattr(ow, '_CLI_CONFIG_DIR', tmp_path / 'orq-cli')
     ow._cli_slug_cache.clear()
+
+
+def _settle() -> None:
+    """Wait for every background workspace lookup to finish."""
+    for thread in list(ow._pending.values()):
+        thread.join(timeout=2)
 
 
 # --- workspace slug ---------------------------------------------------------
@@ -64,6 +71,8 @@ def test_resolve_slug_from_authenticated_cli_and_cache(monkeypatch: pytest.Monke
 
     monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
 
+    assert ow.resolve_slug() is None
+    _settle()
     assert ow.resolve_slug() == 'orq-research'
     assert ow.resolve_slug() == 'orq-research'
     assert calls == [(None, False)]
@@ -80,84 +89,108 @@ def test_resolve_slug_from_cli_session_without_api_key(monkeypatch: pytest.Monke
         return OrqScope(workspace_key='orq-research', workspace_id='research-id')
 
     monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+    ow.resolve_slug()
+    _settle()
     assert ow.resolve_slug() == 'orq-research'
     assert calls == [(None, True)]
 
 
-def test_cli_session_scope_is_not_cached_across_profile_switches(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_first_render_does_not_wait_for_the_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.dashboard.orq_scope import OrqScope
 
     monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
-    slugs = iter(('first-workspace', 'second-workspace'))
-    calls = 0
-
-    def discover(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
-        nonlocal calls
-        calls += 1
-        assert profile is None
-        assert use_cli_session is True
-        return OrqScope(workspace_key=next(slugs))
-
-    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
-    assert ow.resolve_slug() == 'first-workspace'
-    assert ow.resolve_slug() == 'second-workspace'
-    assert calls == 2
-
-
-def test_cli_session_slug_is_cached_only_for_one_render(monkeypatch: pytest.MonkeyPatch) -> None:
-    from evaluatorq.dashboard.orq_scope import OrqScope
-
-    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
-    slugs = iter(('first-workspace', 'second-workspace'))
-    calls = 0
-
-    def discover(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
-        nonlocal calls
-        calls += 1
-        assert profile is None
-        assert use_cli_session is True
-        return OrqScope(workspace_key=next(slugs))
-
-    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
-    with ow.cli_slug_render_scope():
-        first = thread_trace_url('thread-1')
-        second = thread_trace_url('thread-2')
-    assert calls == 1
-    assert first is not None and '/first-workspace/traces?' in first
-    assert second is not None and '/first-workspace/traces?' in second
-
-    # A new render resolves the CLI's newly selected profile again.
-    with ow.cli_slug_render_scope():
-        third = thread_trace_url('thread-3')
-    assert calls == 2
-    assert third is not None and '/second-workspace/traces?' in third
-
-
-def test_uncached_slug_lookup_does_not_block_running_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    from evaluatorq.dashboard.orq_scope import OrqScope
-
-    monkeypatch.setenv('ORQ_API_KEY', 'slow-key')
-    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
-    ow._cli_slug_cache.clear()
-    started = threading.Event()
     release = threading.Event()
 
     def discover(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
-        started.set()
-        assert release.wait(timeout=2)
+        assert release.wait(timeout=5)
         return OrqScope(workspace_key='orq-research')
 
     monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+    started = time.monotonic()
+    first = thread_trace_url('thread-1')
+    assert time.monotonic() - started < 0.5
+    assert first is None
+    assert ow.discovery_pending()
 
-    async def exercise() -> None:
-        lookup = asyncio.create_task(asyncio.to_thread(ow.resolve_slug))
-        assert await asyncio.to_thread(started.wait, 1)
-        # The loop can run this coroutine while the CLI lookup remains blocked.
-        await asyncio.sleep(0)
-        release.set()
-        assert await lookup == 'orq-research'
+    release.set()
+    _settle()
+    assert not ow.discovery_pending()
+    later = thread_trace_url('thread-1')
+    assert later is not None and '/orq-research/traces?' in later
 
-    asyncio.run(exercise())
+
+def test_a_cli_account_switch_starts_a_new_lookup_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.orq_scope import OrqScope
+
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
+    slugs = iter(('first-workspace', 'second-workspace'))
+    monkeypatch.setattr(
+        'evaluatorq.dashboard.orq_scope.discover_orq_scope',
+        lambda _profile, *, use_cli_session=False: OrqScope(workspace_key=next(slugs)),
+    )
+    ow.resolve_slug()
+    _settle()
+    assert ow.resolve_slug() == 'first-workspace'
+
+    # `orq` rewrites its config when the account changes; the cached slug must not survive it.
+    ow._CLI_CONFIG_DIR.mkdir()
+    (ow._CLI_CONFIG_DIR / 'config.json').write_text('{}')
+    assert ow.resolve_slug() is None
+    _settle()
+    assert ow.resolve_slug() == 'second-workspace'
+
+
+def test_a_dashboard_profile_switch_does_not_reuse_the_old_slug(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.orq_scope import OrqScope
+    from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
+    monkeypatch.setattr(
+        'evaluatorq.dashboard.orq_scope.discover_orq_scope',
+        lambda profile, *, use_cli_session=False: OrqScope(workspace_key=f'{profile}-workspace'),
+    )
+    for profile in ('first', 'second'):
+        save_settings(DashboardSettings.model_validate({'orq_auth_method': 'cli_profile', 'orq_profile': profile}))
+        assert ow.resolve_slug() is None
+        _settle()
+        assert ow.resolve_slug() == f'{profile}-workspace'
+
+
+def test_report_pages_poll_until_the_lookup_lands(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.orq_scope import OrqScope
+    from evaluatorq.dashboard.shell import WORKSPACE_PENDING_ROUTE, page
+
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
+    release = threading.Event()
+
+    def discover(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        assert release.wait(timeout=5)
+        return OrqScope(workspace_key='orq-research')
+
+    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+    assert WORKSPACE_PENDING_ROUTE in page('Run', '', active_surface='sim')
+    assert WORKSPACE_PENDING_ROUTE not in page('Settings', '', active_nav='settings')
+
+    release.set()
+    _settle()
+    assert WORKSPACE_PENDING_ROUTE not in page('Run', '', active_surface='sim')
+
+
+def test_pending_route_asks_htmx_to_reload_once_the_lookup_lands(monkeypatch: pytest.MonkeyPatch) -> None:
+    from starlette.testclient import TestClient
+
+    from evaluatorq.dashboard.app import build_app
+    from evaluatorq.dashboard.shell import WORKSPACE_PENDING_ROUTE
+
+    client = TestClient(build_app([]))
+    monkeypatch.setattr(ow, '_pending', {'key': threading.Thread()})
+    pending = client.get(WORKSPACE_PENDING_ROUTE)
+    assert pending.status_code == 204
+    assert 'HX-Refresh' not in pending.headers
+
+    monkeypatch.setattr(ow, '_pending', {})
+    done = client.get(WORKSPACE_PENDING_ROUTE)
+    assert done.headers['HX-Refresh'] == 'true'
 @pytest.mark.parametrize('method', ['environment', 'cli_profile'])
 def test_legacy_saved_workspace_does_not_create_trace_links(
     monkeypatch: pytest.MonkeyPatch, tmp_path, method: str

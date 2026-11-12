@@ -7,59 +7,80 @@ anyone with access — no API key, no workspace config, no ``orq`` CLI. This mod
 is the fallback for runs without an ``experiment_url``: it reads the
 workspace from the environment, then discovers the active CLI credential's
 slug. Links are hidden when no workspace slug is available.
+
+CLI discovery runs on a background thread and is cached per credential, so a
+report render never waits on the ``orq`` CLI (#271).
 """
 
 from __future__ import annotations
 
 import shutil
-from contextlib import contextmanager
-from contextvars import ContextVar
+import threading
+from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from loguru import logger
 
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw, env_text
 
-if TYPE_CHECKING:
-    from collections.abc import Generator
-
 # Retained for backward-compatible imports; the canonical value lives in common.env_config.
 DEFAULT_BASE_URL = DEFAULT_ORQ_BASE_URL
-_cli_slug_cache: dict[tuple[str | None, str | None, bool], tuple[float, str | None]] = {}
-_render_cli_slug_cache: ContextVar[dict[tuple[str | None, str | None], str | None] | None] = ContextVar(
-    'render_cli_slug_cache', default=None
-)
+_CacheKey = tuple[str | None, str | None, tuple[object, ...] | None]
+_cli_slug_cache: dict[_CacheKey, tuple[float, str | None]] = {}
+_pending: dict[_CacheKey, threading.Thread] = {}
+_lock = threading.Lock()
+_CLI_CONFIG_DIR = Path.home() / '.orq'
 
 
-@contextmanager
-def cli_slug_render_scope() -> Generator[None, None, None]:
-    """Reuse CLI-session slug discovery for one render, then discard it."""
-    token = _render_cli_slug_cache.set({})
-    try:
-        yield
-    finally:
-        _render_cli_slug_cache.reset(token)
+def _cli_session_stamp() -> tuple[object, ...]:
+    """Identify the CLI's active session: switching it rewrites these files, so the key changes at once."""
+    files = (_CLI_CONFIG_DIR / 'config.json', _CLI_CONFIG_DIR / 'credentials.json')
+    return tuple(path.stat().st_mtime_ns if path.exists() else None for path in files)
 
 
 def _cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool = False) -> str | None:
-    """Cache credential lookups and reuse CLI-session discovery within one render."""
-    key = (profile, fingerprint, use_cli_session)
-    render_cache = _render_cli_slug_cache.get() if use_cli_session else None
-    if render_cache is not None and (profile, fingerprint) in render_cache:
-        return render_cache[profile, fingerprint]
-    cached = _cli_slug_cache.get(key) if not use_cli_session else None
-    if cached is not None and cached[0] > monotonic():
-        return cached[1]
+    """Return the cached slug for this credential and refresh it in the background when missing or stale.
 
-    slug = _discover_cli_slug(profile, fingerprint, use_cli_session=use_cli_session)
-    if render_cache is not None:
-        render_cache[profile, fingerprint] = slug
-    return slug
+    Never runs the CLI on the caller's thread: a first render shows no fallback links and
+    `discovery_pending` tells the page to reload once the lookup lands.
+    """
+    key: _CacheKey = (profile, fingerprint, _cli_session_stamp() if use_cli_session else None)
+    with _lock:
+        cached = _cli_slug_cache.get(key)
+        if cached is not None and cached[0] > monotonic():
+            return cached[1]
+        if key not in _pending:
+            thread = threading.Thread(
+                target=_discover_in_background,
+                args=(key, profile, use_cli_session),
+                name='orq-workspace-slug',
+                daemon=True,
+            )
+            _pending[key] = thread
+            thread.start()
+    # ponytail: a stale value for the same credential is still that credential's workspace.
+    return cached[1] if cached is not None else None
 
 
-def _discover_cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool) -> str | None:
+def discovery_pending() -> bool:
+    """Whether a workspace lookup is still running."""
+    with _lock:
+        return bool(_pending)
+
+
+def _discover_in_background(key: _CacheKey, profile: str | None, use_cli_session: bool) -> None:  # noqa: FBT001
+    slug = None
+    try:
+        slug = _discover_cli_slug(profile, use_cli_session=use_cli_session)
+    finally:
+        with _lock:
+            # A found slug holds for 5 minutes; a failed lookup is retried after 30 seconds.
+            _cli_slug_cache[key] = (monotonic() + (300 if slug else 30), slug)
+            del _pending[key]
+
+
+def _discover_cli_slug(profile: str | None, *, use_cli_session: bool) -> str | None:
     from evaluatorq.dashboard.orq_scope import discover_orq_scope
 
     scope = discover_orq_scope(profile, use_cli_session=use_cli_session)
@@ -69,8 +90,6 @@ def _discover_cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_
             'Could not resolve the Orq workspace slug from the CLI: {}',
             scope.error or 'the credential has no matching listed workspace',
         )
-    if not use_cli_session:
-        _cli_slug_cache[profile, fingerprint, False] = (monotonic() + (300 if slug and fingerprint else 30), slug)
     return slug
 
 
