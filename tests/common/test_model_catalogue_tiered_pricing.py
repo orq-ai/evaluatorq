@@ -204,13 +204,11 @@ def test_above_threshold_cache_read_and_unrepriced_cache_write():
 
 
 def test_above_threshold_cache_write_and_audio_without_own_rate_bill_at_standard_input_rate():
-    info = _parse(
-        {
-            k: v
-            for k, v in GEMINI_METADATA.items()
-            if k not in ('million_tokens_cache_write_cost', 'million_tokens_audio_input_cost')
-        }
-    )
+    info = _parse({
+        k: v
+        for k, v in GEMINI_METADATA.items()
+        if k not in ('million_tokens_cache_write_cost', 'million_tokens_audio_input_cost')
+    })
     assert info.cache_write_cost_per_1k is None
     assert info.audio_input_cost_per_1k is None
     cost = cost_of(info, 300_000, 0, cache_creation_tokens=50_000, audio_input_tokens=50_000)
