@@ -793,3 +793,108 @@ def test_pairing_rule_shows_only_with_active_filters(roots: list[Path]):
     off = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
     assert on.count(rule.replace("'", '&#x27;')) + on.count(rule) == 1
     assert rule not in off and rule.replace("'", '&#x27;') not in off
+
+
+# ---------------------------------------------------------------------------
+# "Where it changed" persona x scenario heatmap
+# ---------------------------------------------------------------------------
+
+
+def _where(selections: dict[str, list[str]] | None = None) -> str:
+    from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
+
+    return _where_panel(_cmp(selections))
+
+
+def _heat_cell(html: str, persona: str, scenario: str) -> str:
+    """The ``<td>`` of the heatmap cell for (persona, scenario)."""
+    cols = re.findall(r'<th class="rk-heat-col">([^<]*)</th>', html)
+    row = re.search(rf'<th class="rk-heat-row">{persona}</th>(.*?)</tr>', html, re.S)
+    assert row, persona
+    tds = re.findall(r'<td.*?</td>', row.group(1), re.S)
+    return tds[cols.index(scenario)]
+
+
+def test_where_cell_sign_and_tone():
+    html = _where()
+    worse = _heat_cell(html, 'alice', 'billing')
+    better = _heat_cell(html, 'bob', 'refund')
+    assert '\N{MINUS SIGN}100 pts' in worse
+    assert '+100 pts' in better
+    assert 'background:#e58f89' in worse  # red: met in A, missed in B
+    assert 'background:#7fc8a5' in better  # green: missed in A, met in B
+    assert '1 pair: 1 regressed, 0 improved' in worse
+    assert 'rk-heat-empty' in _heat_cell(html, 'alice', 'refund')
+
+
+def test_where_cell_is_neutral_when_nothing_moved():
+    from evaluatorq.dashboard.sim_compare.heatmap import _cell_value
+    from evaluatorq.dashboard.sim_compare.model import MatchedPair
+
+    cmp = _cmp()
+    by = {c: p for p, c in cmp.changes}
+    text, fill, title = _cell_value(cmp, [(by['regressed'], 'regressed'), (by['improved'], 'improved')])
+    assert text == '0 pts'
+    assert fill == '#eceff1'
+    assert '2 pairs: 1 regressed, 1 improved' in title
+    assert isinstance(by['regressed'], MatchedPair)
+
+
+def test_where_cell_counts_errors_apart_from_misses():
+    from evaluatorq.dashboard.sim_compare.heatmap import _cell_value
+
+    cmp = _cmp()
+    pair = cmp.matching.matched[0]
+    errored = cmp.a.__class__(**{**cmp.a.__dict__, 'errored': frozenset({pair.a.index})})
+    cmp = cmp.__class__(**{**cmp.__dict__, 'a': errored})
+    text, _, title = _cell_value(cmp, [(pair, 'error')])
+    assert text == 'err'
+    assert '1 with an error' in title
+
+
+def test_where_cell_link_sets_persona_and_scenario_and_keeps_other_filters():
+    html = _where({'terminated_by': ['judge'], 'persona': ['alice']})
+    link = re.search(r'href="([^"]*)"', _heat_cell(html, 'alice', 'billing'))
+    assert link
+    query = link.group(1).replace('&amp;', '&')
+    assert 'persona=alice' in query and 'scenario=billing' in query
+    assert query.count('persona=') == 1
+    assert 'terminated_by=judge' in query
+
+
+def test_where_active_cell_toggles_off_and_keeps_other_filters():
+    html = _where({'persona': ['alice'], 'scenario': ['billing'], 'terminated_by': ['judge']})
+    cell = _heat_cell(html, 'alice', 'billing')
+    assert 'is-on' in cell and 'aria-current="true"' in cell
+    query = re.search(r'href="([^"]*)"', cell).group(1).replace('&amp;', '&')
+    assert 'persona=' not in query and 'scenario=' not in query
+    assert 'terminated_by=judge' in query
+
+
+def test_where_panel_hidden_for_one_persona_and_one_scenario():
+    from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
+    from evaluatorq.dashboard.sim_compare.model import build_comparison
+
+    run_a = _run('a', [_result('alice', 'billing', goal=True, score=1, turns=2)], {})
+    run_b = _run('b', [_result('alice', 'billing', goal=False, score=0, turns=2)], {})
+    assert _where_panel(build_comparison('ra', 'rb', run_a, run_b, {})) == ''
+    assert 'Where it changed' in _where()
+
+
+def test_where_panel_caps_columns_and_says_how_many_are_left():
+    from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
+    from evaluatorq.dashboard.sim_compare.model import build_comparison
+
+    names = [f's{i:02d}' for i in range(15)]
+    run_a = _run('a', [_result('alice', n, goal=True, score=1, turns=2) for n in names], {})
+    run_b = _run('b', [_result('alice', n, goal=False, score=0, turns=2) for n in names], {})
+    html = _where_panel(build_comparison('ra', 'rb', run_a, run_b, {}))
+    assert html.count('rk-heat-col') == 12
+    assert '+3 more scenarios' in html
+
+
+def test_compare_page_places_the_heatmap_after_outcomes(roots: list[Path]):
+    rid_a, rid_b = _rids(roots)
+    client = TestClient(build_app(roots))
+    html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
+    assert html.index('Outcomes') < html.index('Where it changed') < html.index('id="cmp-conversations"')

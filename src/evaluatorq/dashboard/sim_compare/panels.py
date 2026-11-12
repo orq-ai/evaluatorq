@@ -12,6 +12,7 @@ from evaluatorq.dashboard.report_kit import panel
 from evaluatorq.dashboard.report_kit import pill as rk_pill
 from evaluatorq.dashboard.report_tabs import sim_entity_dialog
 from evaluatorq.dashboard.sim_compare.fmt import _delta_pill, _fmt_num, _fmt_rate, _run_key
+from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
 from evaluatorq.dashboard.sim_compare.model import _FLAT, Comparison, MatchedPair, ScoreRow, Side
 from evaluatorq.dashboard.sim_compare.state import TableState, _base_state, _qs, _swap_link, _toggled
 from evaluatorq.dashboard.sim_compare.table import render_conversations, resolve_view
@@ -523,6 +524,7 @@ def render_compare_body(cmp: Comparison, state: TableState) -> str:
         f'{_headlines(cmp, resolve_view(cmp, state), state)}'
         f'{_tiles(cmp)}'
         f'<div class="cmp-grid">{_outcomes_panel(cmp, state)}{_scores_panel(cmp.scores)}</div>'
+        f'{_where_panel(cmp, state)}'
         f'{render_conversations(cmp, state)}'
     )
 

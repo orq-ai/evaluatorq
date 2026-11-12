@@ -3137,6 +3137,15 @@ _SIM_COMPARE_CSS = """
 .cmp-stack-key { display: inline-flex; align-items: center; }
 .cmp-stack-bar { display: flex; gap: 2px; height: 22px; border-radius: 4px; overflow: hidden; background: var(--chart-track); }
 .cmp-stack-bar i, .cmp-stack-bar a { display: block; min-width: 3px; flex-basis: 0; }
+.cmp-heat-scroll { overflow-x: auto; max-width: 100%; }
+.cmp-report .cmp-heat-scroll + .cmp-note { margin-top: 8px; }
+.cmp-report .rk-heat-row { position: sticky; left: 0; background: var(--surface-card); }
+.cmp-report .rk-heat-col { min-width: 88px; max-width: 140px; overflow-wrap: anywhere; }
+.cmp-report .cmp-heat-cell { padding: 0; font-size: 13px; font-weight: 600; }
+.cmp-heat-link { display: flex; align-items: center; justify-content: center; height: 100%; min-height: 34px; color: inherit; text-decoration: none; border-radius: 5px; font-variant-numeric: tabular-nums; }
+.cmp-heat-link:hover { filter: brightness(.94); }
+.cmp-heat-link:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-heat-cell.is-on .cmp-heat-link { box-shadow: inset 0 0 0 2px var(--ink-900); }
 .cmp-seg-link:hover { filter: brightness(.9); }
 .cmp-seg-link.is-on { box-shadow: inset 0 0 0 2px var(--surface-card); }
 .cmp-seg-link:focus-visible, .cmp-legend-link:focus-visible { outline: none; box-shadow: var(--ring); }
