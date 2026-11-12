@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_valid
 from typing_extensions import Self
 
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
-from evaluatorq.common.private_files import write_private_atomic
+from evaluatorq.common.private_files import ensure_private_directory, write_private_atomic
 from evaluatorq.common.run_manifest import fail_if_running, start_manifest
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import ManifestStatus, RunManifest
@@ -763,8 +763,9 @@ def finder_export_reference_path(runs_dir: Path, run_id: str) -> Path:
 
 
 def ensure_private_finder_reference_dir(path: Path) -> None:
-    """Create or validate the private Finder lease directory."""
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    """Create or validate the private Finder lease directory and the runs folder that holds it."""
+    ensure_private_directory(path.parent)
+    path.mkdir(mode=0o700, exist_ok=True)
     validate_private_finder_reference_dir(path)
 
 

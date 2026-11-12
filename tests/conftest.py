@@ -30,6 +30,35 @@ def _is_loopback(address: object) -> bool:
 
 
 @pytest.fixture(autouse=True)
+def _pin_umask():
+    """Run every test under umask 022, so the modes of files a test creates do not depend on the developer's shell.
+
+    Insights rejects group-writable storage, so under a umask 002 shell the tests that build their
+    own folders failed. A test of umask behaviour requests `group_writable_umask` instead.
+    """
+    if os.name == "nt":
+        yield
+        return
+    previous = os.umask(0o022)
+    try:
+        yield
+    finally:
+        os.umask(previous)
+
+
+@pytest.fixture
+def group_writable_umask():
+    """Run the test under umask 002, the default on many Linux desktops."""
+    if os.name == "nt":
+        pytest.skip("POSIX permission bits do not control access on Windows")
+    previous = os.umask(0o002)
+    try:
+        yield
+    finally:
+        os.umask(previous)
+
+
+@pytest.fixture(autouse=True)
 def _reset_cli_model_flags(monkeypatch, tmp_path):
     """Keep the global --fast-model/--model-override state, and a developer's own model env and settings, out of tests.
 

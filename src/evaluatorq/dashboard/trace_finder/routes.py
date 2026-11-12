@@ -6,9 +6,7 @@ import asyncio
 import contextlib
 import itertools
 import json
-import os
 import secrets
-import tempfile
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +25,7 @@ from evaluatorq.common.orq_client import (
     list_orq_profiles,
     resolve_orq_client,
 )
+from evaluatorq.common.private_files import write_private_atomic
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.dashboard.auth import DashboardAuth, build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.insights_launch import (
@@ -228,20 +227,8 @@ def _prune_finder_exports_locked(export_dir: Path) -> None:
 def _save_finder_export(export_dir: Path, export_name: str, payload: str) -> None:
     """Persist one completed export and prune older unreferenced files off-loop."""
     with _finder_export_lock(export_dir):
-        temporary: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode='w', encoding='utf-8', dir=export_dir, prefix='.finder-', suffix='.tmp', delete=False
-            ) as handle:
-                temporary = Path(handle.name)
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            temporary.replace(export_dir / export_name)
-        finally:
-            if temporary is not None:
-                with contextlib.suppress(OSError):
-                    temporary.unlink(missing_ok=True)
+        # Insights rejects a group-writable exports folder; this sets the mode instead of the umask.
+        write_private_atomic(export_dir / export_name, payload)
         _prune_finder_exports_locked(export_dir)
 
 

@@ -576,3 +576,19 @@ def test_store_upload_does_not_clean_foreign_files_when_private_storage_is_rejec
         with pytest.raises(OSError):
             store_upload(runs_dir=tmp_path, contents=contents, kind='snapshot')
     assert protected.read_bytes() == contents
+
+
+@pytest.mark.usefixtures('group_writable_umask')
+def test_finder_export_saved_under_a_group_writable_umask_is_listed(tmp_path: Path, monkeypatch) -> None:
+    from evaluatorq.dashboard.insights_launch import get_finder_exports_dir
+    from evaluatorq.dashboard.insights_uploads import recent_trace_files
+    from evaluatorq.dashboard.trace_finder.routes import _save_finder_export
+    from evaluatorq.insights.store import get_insights_runs_dir
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = get_finder_exports_dir()
+    _save_finder_export(export_dir, 'trace-finder-1.json', _run_export(['a', 'b']).model_dump_json())
+
+    entries = recent_trace_files(runs_dir=get_insights_runs_dir(), finder_dir=export_dir)
+
+    assert [(entry.display_name, entry.trace_count) for entry in entries] == [('trace-finder-1.json', 2)]

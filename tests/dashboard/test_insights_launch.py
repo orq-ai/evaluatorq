@@ -7,6 +7,7 @@ import html
 import json
 import os
 import re
+import stat
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -2595,3 +2596,14 @@ def test_chosen_models_reach_insights_and_blank_ones_keep_the_pipeline_default(
     assert seen['embedding_model'] == 'acme/embed'
     assert 'classifier_model' not in seen
     assert 'compiler_model' not in seen
+
+
+@pytest.mark.usefixtures('group_writable_umask')
+def test_finder_lease_folder_is_created_under_a_group_writable_umask(tmp_path: Path) -> None:
+    runs_dir = tmp_path / 'insights-runs'
+    lease_dir = finder_export_reference_path(runs_dir, 'run-1').parent
+
+    ensure_private_finder_reference_dir(lease_dir)
+
+    assert stat.S_IMODE(runs_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(lease_dir.stat().st_mode) == 0o700
