@@ -656,6 +656,17 @@ def erasure_allowance(max_backtracks: int, turn: int, max_turns: int) -> int:
     return math.ceil(max_backtracks * (turn + 1) / max_turns)
 
 
+def _decision_history_entry(message: 'ChatCompletionMessageParam') -> str:
+    """Render one attacker-conversation message for the backtrack decision prompt.
+
+    User messages are built by the orchestrator, which already escaped the target reply inside
+    them, so escaping them again would show the attacker ``&amp;lt;`` instead of ``&lt;``. The
+    system and assistant messages carry raw text and are escaped here.
+    """
+    content = str(message.get('content') or '')
+    return f'{message["role"]}: {content if message["role"] == "user" else xml_escape(content)}'
+
+
 class MultiTurnOrchestrator:
     """Orchestrates multi-turn attacks using an adversarial LLM.
 
@@ -1350,7 +1361,7 @@ class MultiTurnOrchestrator:
         ``None`` means no usable answer, and the caller keeps the turn: a wrong erasure can
         hide evidence from the scorer, while a wrong keep only loses one retry.
         """
-        history = '\n\n'.join(f'{m["role"]}: {m.get("content") or ""}' for m in adversarial_messages)
+        history = '\n\n'.join(_decision_history_entry(m) for m in adversarial_messages)
         # Only timeout_ms and retry_count carry over from the attacker config: the rest is
         # tuned for prompt generation, and temperature=None omits the parameter.
         attacker = self._cfg.attacker
@@ -1360,7 +1371,7 @@ class MultiTurnOrchestrator:
             cfg=LLMCallConfig(model=self.model, timeout_ms=attacker.timeout_ms, retry_count=attacker.retry_count),
             prompt_template=BACKTRACK_DECISION_PROMPT,
             replacements={
-                'conversation': xml_escape(history),
+                'conversation': history,
                 'erasures_left': str(erasures_left),
                 'user_message': xml_escape(attack_prompt),
                 'agent_reply': xml_escape(response.text),
@@ -1693,7 +1704,7 @@ class MultiTurnOrchestrator:
                     )
                     decision = await self._try_backtrack(
                         can_erase=can_erase,
-                        erasures_left=max_backtracks - len(backtracked_turns),
+                        erasures_left=erasure_allowance(max_backtracks, turn, max_turns) - len(backtracked_turns),
                         attack_prompt=attack_prompt,
                         attacker=current_attacker,
                         response=tgt_result,

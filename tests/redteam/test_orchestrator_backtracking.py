@@ -219,16 +219,29 @@ class TestSeveralErasures:
         assert [t.target.text for t in result.turns] == ['a2', 'a4']
 
     @pytest.mark.asyncio
-    async def test_each_decision_sees_the_remaining_budget_and_the_whole_conversation(self) -> None:
+    async def test_each_decision_sees_the_erasures_available_now_and_the_whole_conversation(self) -> None:
+        # Budget 2 over 2 turns releases one erasure per turn, so turn 0 may spend only one.
         orchestrator, llm = _orchestrator(['q1', ERASE, 'q2', 'q3', KEEP], max_backtracks=2)
 
         await _run(orchestrator, _Target(['no', 'a2', 'a3']), max_turns=2)
 
         calls = llm.chat.completions.create.call_args_list
         first, second = (str(calls[i].kwargs['messages'][-1]['content']) for i in (1, 4))
-        assert '<erasures_left>2</erasures_left>' in first
+        assert '<erasures_left>1</erasures_left>' in first
         assert '<erasures_left>1</erasures_left>' in second
         assert 'q2' in second and 'a2' in second and 'system:' in second
+
+    @pytest.mark.asyncio
+    async def test_the_decision_history_escapes_each_target_reply_once(self) -> None:
+        orchestrator, llm = _orchestrator(['q1', KEEP, 'q2', KEEP], max_backtracks=2)
+
+        await _run(orchestrator, _Target(['a <b>1</b>', 'no']), max_turns=2)
+
+        calls = llm.chat.completions.create.call_args_list
+        conversation = str(calls[3].kwargs['messages'][-1]['content']).split('</conversation>')[0]
+        assert 'a &lt;b&gt;1&lt;/b&gt;' in conversation
+        assert '&amp;' not in conversation
+        assert '<target_response>' in conversation
 
 
 class TestBudgetAndScope:
