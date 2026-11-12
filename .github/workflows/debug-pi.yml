@@ -1,0 +1,45 @@
+name: Debug Pi key
+on:
+  push:
+    branches: [test/preset-drift-e2e]
+permissions:
+  contents: read
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KEY: ${{ secrets.ORQ_REVIEW_API_KEY }}
+      WKEY: ${{ secrets.ORQ_WORKSPACE_API_KEY }}
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Direct router calls (status codes only)
+        run: |
+          for host in https://api.orq.ai/v3/router https://my.orq.ai/v3/router; do
+            for model in openai/gpt-6-sol openai/gpt-5.6-luna; do
+              for who in KEY WKEY; do
+                code=$(curl -s -o /tmp/out.json -w '%{http_code}' -X POST "$host/chat/completions" \
+                  -H "Authorization: Bearer ${!who}" -H 'Content-Type: application/json' \
+                  -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"say ok\"}],\"max_tokens\":8}")
+                echo "$host $model $who -> $code $(head -c 160 /tmp/out.json | tr '\n' ' ')"
+              done
+            done
+          done
+      - name: Catalogue reads
+        run: |
+          for who in KEY WKEY; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${!who}" https://my.orq.ai/v2/models)
+            echo "/v2/models $who -> $code"
+          done
+      - name: Pi through orq launch, variants
+        run: |
+          npm install -g @orq-ai/cli @mariozechner/pi-coding-agent >/dev/null 2>&1
+          export ORQ_API_KEY="$KEY"
+          echo "--- default flags"
+          orq launch pi --no-mcp --no-skills --model openai/gpt-6-sol -p "Reply with the single word ok." 2>&1 | tail -3 | cut -c1-200
+          echo "--- --no-fetch-models"
+          orq launch pi --no-mcp --no-skills --no-fetch-models --model openai/gpt-6-sol -p "Reply with the single word ok." 2>&1 | tail -3 | cut -c1-200
+          echo "--- dry-run"
+          orq launch pi --dry-run --no-mcp --no-skills --no-fetch-models --model openai/gpt-6-sol -p "x" 2>&1 | tail -8 | cut -c1-200
