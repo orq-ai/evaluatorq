@@ -425,9 +425,13 @@
     ta.style.opacity = '0';
     document.body.appendChild(ta);
     ta.select();
-    const ok = document.execCommand('copy');
-    ta.remove();
-    return ok ? Promise.resolve() : Promise.reject();
+    try {
+      return document.execCommand('copy') ? Promise.resolve() : Promise.reject();
+    } catch (err) {
+      return Promise.reject(err);
+    } finally {
+      ta.remove();
+    }
   }
   document.body.addEventListener('click', function (evt) {
     const btn = evt.target.closest('[data-copy-link]');
