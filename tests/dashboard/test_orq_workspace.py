@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+import json
 import os
 import threading
 import time
@@ -113,25 +115,58 @@ def test_first_render_does_not_wait_for_the_cli(monkeypatch: pytest.MonkeyPatch)
     assert later is not None and '/orq-research/traces?' in later
 
 
-def test_a_cli_account_switch_starts_a_new_lookup_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+_mtimes = itertools.count(10**18, 10**9)
+
+
+def _write_cli_files(config: dict, credentials: dict) -> None:
+    ow._CLI_CONFIG_DIR.mkdir(exist_ok=True)
+    for name, data in (('config.json', config), ('credentials.json', credentials)):
+        path = ow._CLI_CONFIG_DIR / name
+        path.write_text(json.dumps(data))
+        # A distinct mtime per write, so a coarse filesystem clock cannot hide the change.
+        stamp = next(_mtimes)
+        os.utime(path, ns=(stamp, stamp))
+
+
+@pytest.mark.parametrize(
+    ('change', 'looks_up_again'),
+    [
+        pytest.param({'current': 'b'}, True, id='switch-profile'),
+        pytest.param({'credentials': {'a': 'key-a2'}}, True, id='re-login-same-profile'),
+        pytest.param({'unrelated': {'path_profiles': {'/repo': 'a'}}}, False, id='unrelated-write'),
+    ],
+)
+def test_only_a_cli_account_change_starts_a_new_lookup(
+    monkeypatch: pytest.MonkeyPatch, change: dict, looks_up_again: bool
+) -> None:
     from evaluatorq.dashboard.orq_scope import OrqScope
 
     monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
-    slugs = iter(('first-workspace', 'second-workspace'))
-    monkeypatch.setattr(
-        'evaluatorq.dashboard.orq_scope.discover_orq_scope',
-        lambda _profile, *, use_cli_session=False: OrqScope(workspace_key=next(slugs)),
-    )
+    calls: list[str] = []
+
+    def discover(_profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        calls.append('call')
+        return OrqScope(workspace_key=f'workspace-{len(calls)}')
+
+    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+    keys = {'a': 'key-a', 'b': 'key-b'}
+    config: dict = {'current': 'a', 'orqi-code': {'path_profiles': {}}}
+    _write_cli_files(config, {'profiles': {name: {'api_key': key} for name, key in keys.items()}})
     ow.resolve_slug()
     settle_workspace_lookup()
-    assert ow.resolve_slug() == 'first-workspace'
+    assert ow.resolve_slug() == 'workspace-1'
 
-    # `orq` rewrites its config when the account changes; the cached slug must not survive it.
-    ow._CLI_CONFIG_DIR.mkdir()
-    (ow._CLI_CONFIG_DIR / 'config.json').write_text('{}')
-    assert ow.resolve_slug() is None
+    if 'current' in change:
+        config['current'] = change['current']
+    if 'credentials' in change:
+        keys.update(change['credentials'])
+    if 'unrelated' in change:
+        config['orqi-code'] = change['unrelated']
+    _write_cli_files(config, {'profiles': {name: {'api_key': key} for name, key in keys.items()}})
+    ow.resolve_slug()
     settle_workspace_lookup()
-    assert ow.resolve_slug() == 'second-workspace'
+    assert ow.resolve_slug() == ('workspace-2' if looks_up_again else 'workspace-1')
+    assert len(calls) == (2 if looks_up_again else 1)
 
 
 def test_a_dashboard_profile_switch_does_not_reuse_the_old_slug(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -217,10 +252,8 @@ def test_a_new_cli_session_replaces_the_old_cache_entry(monkeypatch: pytest.Monk
         'evaluatorq.dashboard.orq_scope.discover_orq_scope',
         lambda _profile, *, use_cli_session=False: OrqScope(workspace_key='ws'),
     )
-    ow._CLI_CONFIG_DIR.mkdir()
-    for content in ('{}', '{"current": "b"}'):
-        (ow._CLI_CONFIG_DIR / 'config.json').write_text(content)
-        os.utime(ow._CLI_CONFIG_DIR / 'config.json', ns=(len(content), len(content)))
+    for current in ('a', 'b'):
+        _write_cli_files({'current': current}, {})
         ow.resolve_slug()
         settle_workspace_lookup()
     assert len(ow._cli_slug_cache) == 1

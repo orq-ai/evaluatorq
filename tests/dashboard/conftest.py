@@ -51,6 +51,7 @@ def _isolated_workspace_lookup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     monkeypatch.setattr(orq_workspace, '_cli_slug_cache', {})
     monkeypatch.setattr(orq_workspace, '_pending', {})
     monkeypatch.setattr(orq_workspace, '_CLI_CONFIG_DIR', tmp_path / 'orq-cli-home')
+    monkeypatch.setattr(orq_workspace, '_session_memo', None)
 
 
 def settle_workspace_lookup() -> None:

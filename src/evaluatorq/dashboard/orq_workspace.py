@@ -14,6 +14,7 @@ report render never waits on the ``orq`` CLI (#271).
 
 from __future__ import annotations
 
+import json
 import shutil
 import threading
 from pathlib import Path
@@ -26,13 +27,14 @@ from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw, env_text
 
 # Retained for backward-compatible imports; the canonical value lives in common.env_config.
 DEFAULT_BASE_URL = DEFAULT_ORQ_BASE_URL
-_CacheKey = tuple[str | None, str | None, tuple[int | None, ...] | None]
+_CacheKey = tuple[str | None, str | None, str | None]
 _FOUND_TTL_S = 300
 _MISSING_TTL_S = 30
 _cli_slug_cache: dict[_CacheKey, tuple[float, str | None]] = {}
 _pending: dict[_CacheKey, threading.Thread] = {}
 _lock = threading.Lock()
 _CLI_CONFIG_DIR = Path.home() / '.orq'
+_session_memo: tuple[tuple[int | None, int | None], str] | None = None
 
 
 def _mtime_ns(path: Path) -> int | None:
@@ -43,9 +45,46 @@ def _mtime_ns(path: Path) -> int | None:
 
 
 def _cache_key(profile: str | None, fingerprint: str | None, *, use_cli_session: bool) -> _CacheKey:
-    """Key a lookup by credential; for the CLI session, by the files `orq` rewrites when the account switches."""
+    """Key a lookup by credential; for the CLI session, by the account the CLI is signed in as."""
+    return (profile, fingerprint, _cli_session_identity() if use_cli_session else None)
+
+
+def _cli_session_identity() -> str:
+    """Identify the CLI's active account, re-reading its files only when one of them changed."""
+    global _session_memo
     stamp = (_mtime_ns(_CLI_CONFIG_DIR / 'config.json'), _mtime_ns(_CLI_CONFIG_DIR / 'credentials.json'))
-    return (profile, fingerprint, stamp if use_cli_session else None)
+    if _session_memo is None or _session_memo[0] != stamp:
+        _session_memo = (stamp, _read_cli_session_identity())
+    return _session_memo[1]
+
+
+def _read_cli_session_identity() -> str:
+    """Hash the active profile's key and host, so other writes to the files (path bindings, flags) keep the cache.
+
+    A re-login under the same profile name changes the key and so the identity.
+    """
+    from evaluatorq.trace_finder.settings import credential_fingerprint
+
+    def profile_entry(data: object, name: str) -> dict:
+        profiles = data.get('profiles') if isinstance(data, dict) else None
+        entry = profiles.get(name) if isinstance(profiles, dict) else None
+        return entry if isinstance(entry, dict) else {}
+
+    def load(name: str) -> object:
+        try:
+            return json.loads((_CLI_CONFIG_DIR / name).read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return None
+
+    config = load('config.json')
+    current = config.get('current') if isinstance(config, dict) else None
+    if not isinstance(current, str):
+        return ''
+    entry = profile_entry(load('credentials.json'), current) or profile_entry(config, current)
+    key, host = entry.get('api_key'), entry.get('server') or entry.get('base_url')
+    if not isinstance(key, str):
+        return f'profile:{current}'
+    return credential_fingerprint(key, host if isinstance(host, str) else None) or f'profile:{current}'
 
 
 def _cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool = False) -> str | None:
