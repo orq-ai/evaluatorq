@@ -20,6 +20,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -939,8 +940,8 @@ class LLMConfig(BaseModel):
 
     ```python
     config = LLMConfig(
-        attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet", temperature=0.9),
-        evaluator=EvaluatorConfig(model="openai/gpt-5.6-luna", temperature=0.0),
+        attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet"),
+        evaluator=EvaluatorConfig(model="openai/gpt-5.6-luna"),
     )
     ```
     """
@@ -1012,11 +1013,9 @@ class LLMConfig(BaseModel):
         OpenAI client just because ``ORQ_API_KEY`` is in the environment for
         tracing/result-upload.
 
-        Run-attribution ``metadata`` is NOT merged here: calls that route through
-        execute_chat_completion/parse get it natively
-        (llm_call.apply_pipeline_metadata); native Chat/Responses call sites use
-        top-level metadata, while Orq-agent SDK calls use pipeline_metadata_param()
-        as a top-level request kwarg.
+        Run-attribution ``metadata`` is NOT merged here: OpenAI-client call sites get it
+        from ``llm_call.apply_pipeline_metadata``, and Orq SDK calls use
+        ``pipeline_metadata_param()``.
         """
         from evaluatorq.common.llm_client import client_routes_through_orq
 
@@ -2175,6 +2174,21 @@ class RedTeamReport(BaseModel):
         if isinstance(value, str):
             return normalize_framework(value)
         return value
+
+    @field_validator('pipeline_warnings')
+    @classmethod
+    def _scrub_pipeline_warnings(cls, warnings: list[str]) -> list[str]:
+        """A warning can quote a provider exception, which can quote a credential; scrub it like a judge failure reason."""
+        return [scrub_known_secrets(warning) for warning in warnings]
+
+    @field_serializer('pipeline_warnings')
+    def _scrub_pipeline_warnings_on_save(self, warnings: list[str]) -> list[str]:
+        """A caller can still append to the list directly, past the validator, so scrub again on the way out."""
+        return [scrub_known_secrets(warning) for warning in warnings]
+
+    def add_pipeline_warnings(self, *warnings: str) -> None:
+        """Add warnings to the report, scrubbed, so every reader of the live list (renderers, dashboards) sees them safe."""
+        self.pipeline_warnings.extend(scrub_known_secrets(warning) for warning in warnings)
 
 
 # ---------------------------------------------------------------------------

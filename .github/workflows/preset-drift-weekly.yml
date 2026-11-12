@@ -1,0 +1,221 @@
+name: Jury preset drift (weekly)
+
+# Jury presets and router pools are priced and ranked from the live /v2/models
+# garden, so nothing in the repo goes stale on a timer. What can drift is the
+# choice: a seat retires, loses its score, gets a newer model in its lineage, or
+# stops being on the frontier. The freshness suite catches that against the live
+# garden. When it fails, deterministic code (`python -m evaluatorq.preset_drift`)
+# lists what moved and which options the arithmetic allows, and a Pi agent,
+# launched through the orq CLI, proposes the register changes after confirming on the web
+# that each candidate really is newer or superseded. The result is always a real
+# pull request: a fix when the live suite passes again, otherwise a PR labelled
+# `needs-human-attention`. Nothing is merged automatically.
+#
+# The PR is opened with the default GITHUB_TOKEN. GitHub does not treat that as a
+# person: in a rehearsal its CI runs sat as `action_required` until a maintainer
+# approved them, so the required checks need a click, or a push to the branch. Switch the push and `gh pr create` steps to a PAT or a GitHub
+# App token if the PR must arrive with checks already running.
+#
+# Needs repo secret ORQ_WORKSPACE_API_KEY: a workspace-scoped orq key that reads
+# the garden. A project-scoped key sees a truncated garden, so the suite's scope
+# check fails on purpose and missing models read as retired. Falls back to
+# ORQ_API_KEY so the workflow still runs (and reports that failure) before the
+# secret exists. The agent uses ORQ_REVIEW_API_KEY, the key with router access;
+# the workspace key is refused by the gateway.
+#
+# The agent runs with no GitHub credentials in its environment (the checkout does
+# not persist them), because it reads web pages and a page can try to instruct it.
+# Only the later push and PR steps hold the token.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Mondays 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: preset-drift
+  cancel-in-progress: false
+
+env:
+  DRIFT_BRANCH_PREFIX: preset-drift
+  # The router served openai/gpt-5.6-luna when asked for openai/gpt-6-sol on this key, so name the model that runs.
+  PI_MODEL: openai/gpt-5.6-luna
+  # Open the PR against this branch instead of the default one. Empty in
+  # production; set it to rehearse the workflow without a PR against main.
+  DRIFT_BASE: ""
+
+jobs:
+  preset-drift:
+    name: Preset freshness and pool derivation (live garden)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
+
+      - name: Run live preset checks
+        id: drift
+        continue-on-error: true
+        env:
+          ORQ_API_KEY: ${{ secrets.ORQ_WORKSPACE_API_KEY || secrets.ORQ_API_KEY }}
+        run: |
+          set -o pipefail
+          uv run pytest -m integration tests/integration/test_preset_freshness.py tests/unit/test_router_pools.py 2>&1 | tee drift-check.log
+
+      - name: Build the deterministic drift report
+        if: steps.drift.outcome == 'failure'
+        env:
+          ORQ_API_KEY: ${{ secrets.ORQ_WORKSPACE_API_KEY || secrets.ORQ_API_KEY }}
+        run: |
+          # Exit 1 means "findings", which is the expected case here.
+          uv run python -m evaluatorq.preset_drift --output drift-report.json || true
+          test -s drift-report.json
+
+      - name: Skip when a drift PR is already open
+        id: existing
+        if: steps.drift.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          open="$(gh pr list --label preset-drift --state open --json number --jq '.[0].number // empty')"
+          echo "open=$open" >> "$GITHUB_OUTPUT"
+          if [ -n "$open" ]; then echo "::notice::Drift PR #$open is already open; not opening another."; fi
+
+      - name: Set up Node for the agent
+        if: steps.drift.outcome == 'failure' && steps.existing.outputs.open == ''
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install the orq CLI and Pi
+        if: steps.drift.outcome == 'failure' && steps.existing.outputs.open == ''
+        # Pi now ships as @earendil-works/pi-coding-agent. The old @mariozechner/pi-coding-agent name
+        # stops at 0.73.1, and `orq launch pi` gets a 401 from the router with it.
+        run: npm install -g @orq-ai/cli @earendil-works/pi-coding-agent
+
+      - name: Let the agent propose the register changes
+        id: agent
+        if: steps.drift.outcome == 'failure' && steps.existing.outputs.open == ''
+        continue-on-error: true
+        timeout-minutes: 25
+        env:
+          # The router key, not the workspace key: the workspace key reads the catalogue but the router refuses it (401).
+          ORQ_API_KEY: ${{ secrets.ORQ_REVIEW_API_KEY }}
+          DRIFT_SUMMARY: ${{ runner.temp }}/drift-summary.md
+        run: |
+          set -o pipefail
+          # `orq launch pi` points Pi at the orq router with the key above and maps -p to Pi's one-shot prompt.
+          # Everything the agent prints or writes for the PR body passes through redact first, so the router key cannot ride into a public PR.
+          redact() {
+            python3 -c 'import os, sys; key = os.environ.get("ORQ_API_KEY", ""); sys.stdout.write(sys.stdin.read().replace(key, "***") if key else sys.stdin.read())'
+          }
+          status=0
+          orq launch pi --no-mcp --no-skills --model "$PI_MODEL" -p "$(cat .github/preset-drift/agent-prompt.md)" 2>&1 | redact | tee "$RUNNER_TEMP/agent.log" || status=$?
+          if [ -f "$DRIFT_SUMMARY" ]; then
+            redact < "$DRIFT_SUMMARY" > "$DRIFT_SUMMARY.redacted"
+            mv "$DRIFT_SUMMARY.redacted" "$DRIFT_SUMMARY"
+          fi
+          exit "$status"
+
+      - name: Re-run the live checks on the agent's change
+        id: recheck
+        if: steps.drift.outcome == 'failure' && steps.existing.outputs.open == ''
+        continue-on-error: true
+        env:
+          ORQ_API_KEY: ${{ secrets.ORQ_WORKSPACE_API_KEY || secrets.ORQ_API_KEY }}
+        run: uv run pytest -m integration tests/integration/test_preset_freshness.py tests/unit/test_router_pools.py
+
+      - name: Open the pull request
+        if: steps.drift.outcome == 'failure' && steps.existing.outputs.open == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRIFT_SUMMARY: ${{ runner.temp }}/drift-summary.md
+          AGENT_OUTCOME: ${{ steps.agent.outcome }}
+          RECHECK_OUTCOME: ${{ steps.recheck.outcome }}
+        run: |
+          set -euo pipefail
+          # Scratch files must not ride into the commit.
+          mkdir -p "$RUNNER_TEMP/drift"
+          mv drift-report.json drift-check.log "$RUNNER_TEMP/drift/"
+
+          fixed=false
+          if [ "$AGENT_OUTCOME" = success ] && [ "$RECHECK_OUTCOME" = success ] \
+             && [ -n "$(git status --porcelain)" ] \
+             && grep -qx 'STATUS: fixed' "$DRIFT_SUMMARY" 2>/dev/null; then
+            fixed=true
+          fi
+
+          branch="${DRIFT_BRANCH_PREFIX}/$(date -u +%Y-%m-%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+
+          body="$RUNNER_TEMP/pr-body.md"
+          {
+            if [ "$fixed" = true ]; then
+              echo "The weekly preset freshness check failed. An agent (Pi, through the orq router) proposed the changes below, and the live check passes again on this branch."
+              title="fix(jury): reseat presets after weekly drift"
+            else
+              echo "**Needs human attention.** The weekly preset freshness check failed and the automated change did not make it pass, or the agent could not confirm what it needed. Read the sections below and decide."
+              title="chore(jury): preset drift needs human attention"
+            fi
+            echo
+            echo "This PR is agent output. Review the diff and the sources before merging. It was opened with the default token, so its CI runs may be waiting for a maintainer to approve them (\`action_required\`), or you can push to the branch."
+            echo
+            if [ -f "$DRIFT_SUMMARY" ]; then
+              cat "$DRIFT_SUMMARY"
+            else
+              echo "The agent wrote no summary (agent step: $AGENT_OUTCOME). The end of its log:"
+              echo
+              echo '```'
+              tail -n 30 "$RUNNER_TEMP/agent.log" 2>/dev/null | cut -c1-300 || true
+              echo '```'
+            fi
+            echo
+            echo "## Deterministic drift report"
+            echo
+            echo '```json'
+            cat "$RUNNER_TEMP/drift/drift-report.json"
+            echo '```'
+            echo
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$body"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "$title"
+          else
+            # A PR needs a commit; with nothing to change this one only carries the report.
+            git commit --allow-empty -m "$title"
+          fi
+
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$branch"
+
+          for label in preset-drift needs-human-attention agent-output; do
+            gh label create "$label" --force >/dev/null 2>&1 || true
+          done
+          labels=preset-drift,agent-output
+          if [ "$fixed" != true ]; then labels="$labels,needs-human-attention"; fi
+          base="${DRIFT_BASE:-$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)}"
+          gh pr create --base "$base" --head "$branch" \
+            --title "$title" --body-file "$body" --label "$labels"
+
+      - name: Leave the run red when the check failed
+        if: steps.drift.outcome == 'failure'
+        run: |
+          echo "::error::The preset freshness check failed. See the pull request, or the open drift PR, for what moved."
+          exit 1

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from evaluatorq.common.env_config import env_raw
-from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.llm_client import as_llm_client, resolve_orq_credential, resolve_results_base_url
 from evaluatorq.common.llm_limit import active_llm_parallelism, llm_concurrency_limit
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM, resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
@@ -30,6 +30,7 @@ from evaluatorq.simulation._config import (
     DEFAULT_MAX_TOOL_RESULT_CHARS,
     DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     SimulationConfig,
+    require_sim_models_served,
     sim_llm_config,
     sim_role_config,
 )
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from opentelemetry.trace import Span
 
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.simulation.agents.base import BaseAgent
@@ -269,7 +271,7 @@ async def simulate(
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
     experiment_description: str | None = None,
@@ -363,10 +365,10 @@ async def simulate(
             events. Sync or async; ``async def`` is preferred (a sync hook
             works but emits a one-time ``DeprecationWarning``). Defaults to
             ``DefaultHooks`` (loguru baseline).
-        generation_client: Optional pre-built ``AsyncOpenAI`` used for datapoint
+        generation_client: Optional pre-built ``AsyncOpenAI`` (or Anthropic SDK client) used for datapoint
             generation (first-message). When omitted, generation falls back to
             the same env-based provider resolution as
-            `generate_and_simulate` (``ORQ_API_KEY`` → ``OPENAI_API_KEY``).
+            `generate_and_simulate`; see `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence.
         dataset_id: When set, fetch simulation datapoints from the named Orq
             dataset instead of taking them inline. Mutually exclusive with
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
@@ -585,7 +587,7 @@ async def _simulate_run(
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     upload_results: bool = True,
     experiment_description: str | None = None,
     orq_folder_path: str | None = None,
@@ -618,6 +620,14 @@ async def _simulate_run(
     # GENERATE phase). Minted before the span opens so it can be stamped as a
     # span attribute rather than set after the fact.
     resolved_llm_config = sim_llm_config(llm_config)
+    # The generator writes first messages for persona x scenario runs, the summary and the recommendations.
+    require_sim_models_served(
+        resolved_llm_config,
+        generation_client=generation_client,
+        user_simulator=user_simulator,
+        judge=judge,
+        generating=datapoints is None or executive_summary or bool(recommendations),
+    )
     run_id = uuid.uuid4().hex
 
     try:
@@ -735,7 +745,7 @@ async def generate_and_simulate(
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
     experiment_description: str | None = None,
@@ -763,9 +773,8 @@ async def generate_and_simulate(
     ``<key>``), for agents with a memory store attached. When omitted, a fresh
     per-target id is minted so memory-backed agents still work out of the box.
     Persona/scenario/first-message generation resolves its provider via
-    the shared factory: an injected ``generation_client`` → ``llm_config.client``
-    → ``ORQ_API_KEY`` (Orq router) → ``OPENAI_API_KEY`` (with optional
-    ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint). No API key is
+    the shared factory: an injected ``generation_client``, then ``llm_config.client``, then the environment
+    (see `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence). No API key is
     needed when a client is injected.
     ``llm_config`` drives persona/scenario/first-message generation, the
     user-simulator, and the judge — the model name and anything beyond it
@@ -950,7 +959,7 @@ async def _generate_datapoints_inner(
     num_personas: int,
     num_scenarios: int,
     llm_config: LLMCallConfig,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     hooks: SimulationHooks | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
@@ -1043,7 +1052,7 @@ async def _generate_and_simulate_run(
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     upload_results: bool = True,
     experiment_description: str | None = None,
     orq_folder_path: str | None = None,
@@ -1078,6 +1087,9 @@ async def _generate_and_simulate_run(
     # both stages are recorded. Minted before the span opens so it can be stamped
     # as a span attribute rather than set after the fact.
     resolved_llm_config = sim_llm_config(llm_config)
+    require_sim_models_served(
+        resolved_llm_config, generation_client=generation_client, user_simulator=user_simulator, judge=judge
+    )
     run_id = uuid.uuid4().hex
 
     try:
@@ -1214,7 +1226,7 @@ async def generate(
     num_scenarios: int = 5,
     llm_config: LLMCallConfig | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     generation_instructions: str = '',
@@ -1251,9 +1263,8 @@ async def generate(
     judge remain stochastic at simulate time, so scores still vary run to run.
 
     Provider resolution matches `generate_and_simulate`: an injected
-    ``generation_client`` → ``llm_config.client`` → ``ORQ_API_KEY`` (Orq router)
-    → ``OPENAI_API_KEY`` (with optional ``OPENAI_BASE_URL`` for an
-    OpenAI-compatible endpoint).
+    ``generation_client``, then ``llm_config.client``, then the environment (see
+    `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence).
     ``llm_config`` drives persona/scenario/first-message generation — the model
     name, temperature, reasoning effort and timeouts on those calls; see
     `simulate` for the full semantics.
@@ -1266,6 +1277,7 @@ async def generate(
     await init_tracing_if_needed()
 
     resolved_llm_config = sim_llm_config(llm_config)
+    require_sim_models_served(resolved_llm_config, generation_client=generation_client, simulating=False)
     # Minted before the span opens so it can be stamped as a span attribute.
     run_id = uuid.uuid4().hex
 
@@ -1338,15 +1350,15 @@ async def generate_personas(
     context: str = '',
     generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
 ) -> list[Persona]:
     """Generate one ``Persona`` per archetype seed (e.g. ``"angry customer"``).
 
     The intermediate tier between fully-auto generation
     (`generate_and_simulate`) and hand-built ``Persona`` objects: you name
     each archetype, the LLM fills every trait. Provider resolves via the shared
-    factory: an injected ``generation_client`` → ``llm_config.client`` →
-    ``ORQ_API_KEY`` → ``OPENAI_API_KEY``.
+    factory: an injected ``generation_client``, then ``llm_config.client``, then the
+    environment (see `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence).
 
     ``generation_instructions`` is an optional free-text steer applied to every
     persona on top of its seed (e.g. ``"all replying in German"``).
@@ -1365,7 +1377,7 @@ async def generate_personas(
     # opens `orq.simulation.persona_generation` with a child LLM span, and on the
     # sim paths those already nest under the run's root span.
     gen = PersonaGenerator(
-        client=generation_client,
+        client=as_llm_client(generation_client),
         config=sim_llm_config(llm_config),
     )
     try:
@@ -1397,7 +1409,7 @@ async def generate_persona(
     context: str = '',
     generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
 ) -> Persona:
     """Generate one ``Persona`` from a short archetype seed (e.g. ``"angry customer"``).
 
@@ -1425,7 +1437,7 @@ async def generate_scenarios(
     context: str = '',
     generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
 ) -> list[Scenario]:
     """Generate one ``Scenario`` per situation seed (e.g. ``"disputes a refund denial"``).
 
@@ -1446,7 +1458,7 @@ async def generate_scenarios(
     description = agent_description or 'a general-purpose conversational assistant'
     # No run id bound here — see the note in generate_personas.
     gen = ScenarioGenerator(
-        client=generation_client,
+        client=as_llm_client(generation_client),
         config=sim_llm_config(llm_config),
     )
     try:
@@ -1478,7 +1490,7 @@ async def generate_scenario(
     context: str = '',
     generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
-    generation_client: AsyncOpenAI | None = None,
+    generation_client: LLMClient | None = None,
 ) -> Scenario:
     """Generate one ``Scenario`` from a short situation seed.
 
@@ -2861,6 +2873,7 @@ async def _simulate_via_evaluatorq(
             # evaluatorq returns scorer failures as results; simulation handles
             # dropped rows separately through SimulationDroppedError below.
             _base_url=upload_base_url,
+            _orq_api_key=resolve_orq_credential(generation_client),
             _experiment_url_out=experiment_url_out,
         )
     finally:

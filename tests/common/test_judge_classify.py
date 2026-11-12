@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from loguru import logger
-from openai import APITimeoutError, RateLimitError
+from openai import RateLimitError
 from pydantic import ValidationError
 
 import evaluatorq
@@ -31,6 +31,7 @@ from evaluatorq.common.judge import (
     run_judge,
 )
 from evaluatorq.contracts import LLMCallConfig
+from tests.common.llm_error_factories import TIMEOUT_FACTORIES
 
 ORQ_URL = 'https://my.orq.ai/v3/router'
 JEV = 'typesafe/jev-latest'
@@ -269,8 +270,9 @@ async def test_run_classify_maps_a_timeout_to_a_timeout_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_classify_maps_provider_timeout_to_a_timeout_error() -> None:
-    client = _client(APITimeoutError(request=MagicMock()))
+@pytest.mark.parametrize('make_timeout', TIMEOUT_FACTORIES)
+async def test_run_classify_maps_provider_timeout_to_a_timeout_error(make_timeout: Any) -> None:
+    client = _client(make_timeout())
     request = ClassifyRequest(state='reply', questions={'risk': _noul_question()})
 
     outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
@@ -279,11 +281,12 @@ async def test_run_classify_maps_provider_timeout_to_a_timeout_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_classify_judge_reraises_provider_timeout_for_run_judge_retry() -> None:
-    timeout = APITimeoutError(request=MagicMock())
+@pytest.mark.parametrize('make_timeout', TIMEOUT_FACTORIES)
+async def test_classify_judge_reraises_provider_timeout_for_run_judge_retry(make_timeout: Any) -> None:
+    timeout = make_timeout()
     client = _client(timeout)
 
-    with pytest.raises(APITimeoutError) as caught:
+    with pytest.raises(type(timeout)) as caught:
         await judge_mod._classify_judge(
             client=client,
             model=JEV,
@@ -522,6 +525,34 @@ async def test_non_classify_model_ignores_a_classify_question():
     assert outcome.payload is not None
     assert outcome.payload.value is True
     client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_classify_question_on_the_router_becomes_the_prompt():
+    """A router client with a model that does not serve classify must not send an empty user message."""
+    client = _client()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"value": true, "explanation": "ok"}'))],
+            usage={'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5},
+        )
+    )
+
+    await run_judge(
+        client=client,
+        model='gpt-5-mini',
+        cfg=LLMCallConfig(model='gpt-5-mini', api='chat_completions', retry_count=0),
+        prompt_template='',
+        replacements={},
+        classify=_noul_question(),
+    )
+
+    call = client.chat.completions.create.await_args
+    assert call is not None
+    sent = call.kwargs['messages']
+    user_text = ' '.join(str(m['content']) for m in sent if m['role'] == 'user')
+    assert user_text.strip(), 'the judge was sent an empty prompt'
+    assert 'Question:' in user_text
 
 
 @pytest.mark.asyncio
@@ -923,10 +954,12 @@ async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question
     )
 
     assert len(calls) == 2
-    assert all('Judge the supplied state' in call['prompt_template'] for call in calls)
-    prompt_contexts = [json.loads(call['replacements']['classify_question']) for call in calls]
-    assert {context['instructions'] for context in prompt_contexts} == {'tone?', 'risk?'}
-    assert all(context['state'] == 'reply' for context in prompt_contexts)
+    # No prompt is sent: run_judge turns the classify question (with the state) into the prompt itself.
+    assert all(call['prompt_template'] == '' for call in calls)
+    assert {call['classify'].instructions for call in calls} == {'tone?', 'risk?'}
+    assert all(call['classify'].state == 'reply' for call in calls)
+    texts = [judge_mod._classify_question_prompt(call['classify']) for call in calls]
+    assert all('<state>"reply"</state>' in t for t in texts), 'the state is delimited as data'
     client.post.assert_not_called()
     assert outcomes['tone'].payload is not None
     assert outcomes['tone'].payload.value == 'answered-tone?'
@@ -935,9 +968,10 @@ async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question
 
 
 @pytest.mark.asyncio
-async def test_run_classify_judges_maps_an_api_error_to_every_question_key() -> None:
+@pytest.mark.parametrize('make_timeout', TIMEOUT_FACTORIES)
+async def test_run_classify_judges_maps_an_api_error_to_every_question_key(make_timeout: Any) -> None:
     """A failed classify call is a failure for every dimension it was asked about, not just one."""
-    client = _client(APITimeoutError(request=MagicMock()))
+    client = _client(make_timeout())
     questions = {
         'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
         'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
@@ -1122,3 +1156,33 @@ async def test_the_dropped_question_degrade_warns_once_per_model():
     emitted = [line for line in lines if 'does not serve the classify endpoint' in line]
     assert len(emitted) == 1, emitted
     assert client.chat.completions.create.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_a_classify_only_model_the_router_catalogue_denies_is_judged_on_the_fast_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The router case of `classify_fallback_model`: the classify-only id cannot be prompted, so the fast role answers."""
+    from evaluatorq.common.model_roles import role_model
+
+    denied = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=False)
+
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {JEV: denied, 'jev-latest': denied}
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+    model_catalogue.reset_catalogue_cache()
+    client = _client()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"value": true, "explanation": "ok"}'))],
+            usage={'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5},
+        )
+    )
+
+    await _judge(client, _noul_question(), api='chat_completions')
+
+    call = client.chat.completions.create.await_args
+    assert call is not None
+    assert call.kwargs['model'] == role_model('fast')
+    client.post.assert_not_called()

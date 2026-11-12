@@ -166,6 +166,20 @@ def coerce_content_text(content: Any) -> str:
     return '\n'.join(rendered)
 
 
+def chat_message_reply_text(message: Any) -> str:
+    """The text a chat completion message says: its content, or its refusal when the content is empty.
+
+    A refusal arrives as ``message.refusal`` with ``content=None`` (OpenAI structured outputs, and the Anthropic adapter for a ``refusal`` stop). Reading only ``content`` turns a model that declined into a silent turn.
+    """
+    content = getattr(message, 'content', None)
+    if content:
+        text = content if isinstance(content, str) else coerce_content_text(content)
+        if text:
+            return text
+    refusal = getattr(message, 'refusal', None)
+    return refusal if isinstance(refusal, str) else ''
+
+
 UNKNOWN_ARGUMENTS = ''
 UNKNOWN_ARGUMENTS_TEXT = 'arguments unavailable'
 NO_RESULT_TEXT = 'no result recorded'

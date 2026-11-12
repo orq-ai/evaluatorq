@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from evaluatorq.common.llm_client import as_llm_client, is_anthropic_client
 from evaluatorq.contracts import DEFAULT_TARGET_TIMEOUT_MS, AgentContext, LLMCallConfig
 from evaluatorq.openresponses.target import OrqResponsesTarget
 from evaluatorq.redteam.backends._errors import (
@@ -47,6 +48,12 @@ class OpenResponsesBackend(Backend):
         require_orq: bool = True,
     ) -> None:
         super().__init__(name='openresponses')
+        client = as_llm_client(client)
+        if is_anthropic_client(client):
+            raise ValueError(
+                'The openresponses backend targets Orq agents through the Orq router and cannot run on an Anthropic client. '
+                "To target a Claude model, use backend='openai' (the Anthropic client is then the target, and the agent key is the model name)."
+            )
         self._client = client
         self._instructions = instructions
         self._timeout_ms = timeout_ms

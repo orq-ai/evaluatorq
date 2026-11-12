@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from evaluatorq.common.messages import coerce_content_text
+from types import SimpleNamespace
+
+from evaluatorq.common.messages import chat_message_reply_text, coerce_content_text
 
 
 def test_plain_string_passes_through():
@@ -37,3 +39,12 @@ def test_empty_list_is_empty_string():
 
 def test_non_string_scalar_is_stringified():
     assert coerce_content_text(123) == "123"
+
+
+def test_chat_message_reply_text_prefers_content_and_falls_back_to_the_refusal():
+    assert chat_message_reply_text(SimpleNamespace(content='hello', refusal=None)) == 'hello'
+    assert chat_message_reply_text(SimpleNamespace(content='hello', refusal='no')) == 'hello'
+    assert chat_message_reply_text(SimpleNamespace(content=None, refusal='I cannot help.')) == 'I cannot help.'
+    assert chat_message_reply_text(SimpleNamespace(content='', refusal='I cannot help.')) == 'I cannot help.'
+    assert chat_message_reply_text(SimpleNamespace(content=None, refusal=None)) == ''
+    assert chat_message_reply_text(SimpleNamespace(content=[{'type': 'text', 'text': 'a'}], refusal=None)) == 'a'

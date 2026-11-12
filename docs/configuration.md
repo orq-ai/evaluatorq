@@ -51,7 +51,7 @@ Five decisions cover almost every real configuration. The rest of this page is r
 
 | Decision | Variable | Default | Notes |
 |---|---|---|---|
-| **Which backend runs my LLM calls?** | `ORQ_API_KEY` or `OPENAI_API_KEY` | — | Set one. `ORQ_API_KEY` unlocks datasets, deployments and tracing, and wins when both are set; `OPENAI_API_KEY` (plus `OPENAI_BASE_URL` for a non-OpenAI host) is the standalone route. |
+| **Which backend runs my LLM calls?** | `ORQ_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` | — | Set one. `ORQ_API_KEY` unlocks datasets, deployments and tracing, and wins over the others; `OPENAI_API_KEY` (plus `OPENAI_BASE_URL` for a non-OpenAI host) is the standalone route and wins over `ANTHROPIC_API_KEY`, which talks to Claude directly. |
 | **Where do run reports land?** | `EVALUATORQ_DIR` | `.evaluatorq` in the current directory | The run store that red teaming (`runs/`) and simulation (`sim-runs/`) write to, and that the [dashboard](dashboard.md) reads. |
 | **Do I want traces?** | `ORQ_DISABLE_TRACING` | off (traces enabled when `ORQ_API_KEY` **or** `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the `otel` extra is installed) | Set to `1`, `true`, `yes` or `on` to send nothing. Point traces elsewhere with `OTEL_EXPORTER_OTLP_ENDPOINT`. See [Tracing](tracing.md). |
 | **Which models run each step?** | `EVALUATORQ_FAST_MODEL`, `EVALUATORQ_SMART_MODEL` | `openai/gpt-6-luna`, `openai/gpt-6-sol` | Four model roles cover every LLM call evaluatorq makes. See [Models](#models). |
@@ -154,7 +154,25 @@ export EVALUATORQ_SMART_MODEL=gpt-6-sol
 eq redteam run -t agent:my-agent
 ```
 
-The classifier role defaults to a model served only by the Orq router, so Ask AI, `eq find`, Insights and the classify judge need `ORQ_API_KEY`.
+The classifier role defaults to a model served only by the Orq router, so Ask AI, `eq find`, Insights and the classify judge need `ORQ_API_KEY` unless you set the classifier role to a Claude id, see [Go Anthropic-direct](#go-anthropic-direct).
+
+### Go Anthropic-direct
+
+With only `ANTHROPIC_API_KEY` set, evaluatorq builds an `AsyncAnthropic` client from it and wraps it in the [Anthropic adapter](anthropic.md), so red teaming and simulation call Claude directly. The key is the last one tried: `ORQ_API_KEY` wins, then `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`. Unset the first two to use Claude when they are present in your shell. The Anthropic SDK reads `ANTHROPIC_BASE_URL` itself and evaluatorq adds no variable for it, so a value left over from another tool redirects your requests. The client needs the `anthropic` extra, and a run with only `ANTHROPIC_API_KEY` set and no extra stops with a missing-credentials error that names `evaluatorq[anthropic]`.
+
+A stray `ANTHROPIC_API_KEY` with the built-in role defaults stops the run before any work, with one error that says Anthropic was chosen because it is the only LLM key set and names each setting to change.
+
+That check covers the models the run will call, and each one must be a Claude id, because the built-in defaults are `openai/` ids that an Anthropic client refuses. Which roles that is depends on the command. `eq sim run` calls the user simulator, the judge and the generator, all on `--sim-model` when you pass it, and the `--openai-model` target. A red-team run calls the smart role for the attacker and the judges, plus every `replacement_judges` entry. The classifier role only matters where a classify-only model would run: off the Orq router its built-in default is replaced by the fast role, so a jury judge set to a classify-only model and the signal classifiers check `EVALUATORQ_FAST_MODEL` instead. A model passed directly, such as `--sim-model` or `LLMConfig(attacker=...)`, is checked in place of the role it replaces. The check rejects an id with another provider's prefix, such as `openai/`; a bare id such as `gpt-6-sol` passes it and fails at the first request instead. Setting all three roles covers every command:
+
+```bash
+export ANTHROPIC_API_KEY=...
+export EVALUATORQ_SMART_MODEL=claude-opus-5-5
+export EVALUATORQ_FAST_MODEL=claude-haiku-5-5
+export EVALUATORQ_CLASSIFIER_MODEL=claude-sonnet-5-5
+eq sim run --agent-description 'A support bot for a bank' --openai-model claude-sonnet-5-5
+```
+
+The red-team CLI targets are Orq agents and deployments, which need `ORQ_API_KEY`, so a Claude model as the red-team target is Python-only, through `OpenAIModelTarget`. Targets that need the Orq router, such as `agent:<key>`, still need `ORQ_API_KEY`, and cost stays unpriced without it. See [Anthropic SDK clients](anthropic.md#without-injecting-a-client).
 
 ## Full environment variable reference
 
@@ -165,6 +183,7 @@ The classifier role defaults to a model served only by the Orq router, so Ask AI
 | `ORQ_API_KEY` | Required for Orq features | — | Authenticates against the Orq platform. Required to fetch datasets, upload results, and invoke deployments. Also auto-enables OpenTelemetry tracing when the `otel` extra is installed (spans go to `<ORQ_BASE_URL>/v2/otel`, so `https://my.orq.ai/v2/otel` by default). |
 | `ORQ_BASE_URL` | No | `https://my.orq.ai` | Overrides the Orq API base URL. Affects Orq SDK calls (dataset fetch, deployment invocation) and the derived OTLP tracing endpoint (`<ORQ_BASE_URL>/v2/otel`). Does **not** redirect OpenAI-compatible LLM calls — use `OPENAI_BASE_URL` for that. |
 | `OPENAI_API_KEY` | Red-team / sim only, if not using Orq | — | API key for the OpenAI (or compatible) backend. Used by the red teaming pipeline and agent simulation when `ORQ_API_KEY` is absent. Not required for core `evaluatorq()` evaluation. |
+| `ANTHROPIC_API_KEY` | Red-team / sim only, if not using Orq or OpenAI | — | API key for Claude. Used by the red teaming pipeline and agent simulation when neither `ORQ_API_KEY` nor `OPENAI_API_KEY` is set, and needs the `anthropic` extra. `ANTHROPIC_BASE_URL` is read by the Anthropic SDK itself. |
 | `OPENAI_BASE_URL` | No | OpenAI default | Redirect OpenAI-compatible calls to a different host (vLLM, OpenRouter, Azure, local). Honoured by the red teaming LLM client. **Not** honoured on the simulation conversation path, which resolves its client with `honor_openai_base_url=False` — inject a pre-built client there instead. Simulation's post-run calls (recommendations and the executive summary) do honour it, because they resolve their own client at the default. |
 | `EVALUATORQ_CATALOGUE_TIMEOUT_S` | No | `30` | HTTP timeout in seconds for the `GET /v2/models` model-catalogue fetch, read once at import (unlike the three `EVALUATORQ_LLM_*` vars under [Simulation LLM defaults](#simulation-llm-defaults), which are read at call time). The catalogue supplies per-model prices, Responses support, and accepted reasoning-effort values. A failed fetch is **not** cached immediately: the first two failures leave the catalogue unloaded so a later call can still succeed, and only the third gives up and degrades the rest of the process to unpriced and chat-completions-only. Each failure logs a warning naming the attempt number. |
 
