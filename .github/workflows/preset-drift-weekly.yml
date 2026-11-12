@@ -28,6 +28,8 @@ name: Jury preset drift (weekly)
 # Only the later push and PR steps hold the token.
 
 on:
+  push:
+    branches: [test/preset-drift-e2e]
   schedule:
     - cron: "0 7 * * 1" # Mondays 07:00 UTC
   workflow_dispatch:
@@ -46,7 +48,7 @@ env:
   PI_MODEL: openai/gpt-5.6-luna
   # Open the PR against this branch instead of the default one. Empty in
   # production; set it to rehearse the workflow without a PR against main.
-  DRIFT_BASE: ""
+  DRIFT_BASE: test/preset-drift-e2e
 
 jobs:
   preset-drift:
