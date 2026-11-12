@@ -275,7 +275,7 @@ BALANCED_TRIO = JuryPreset(
     # fourth-vendor reserve would quietly reshape it.
     reserve_judges=('deepseek/deepseek-flash',),
     use_when='Default subjective eval. Three families, three error surfaces.',
-    estimated_cost_per_1k=9.99,
+    estimated_cost_per_1k=4.45,
 )
 
 STRONG_JURY = JuryPreset(
