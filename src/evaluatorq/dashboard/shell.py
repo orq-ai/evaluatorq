@@ -240,9 +240,9 @@ WORKSPACE_PENDING_ROUTE = '/orq-workspace/pending'
 
 def _workspace_slug_poller() -> str:
     """Reload a report page once a background workspace lookup lands, so its trace links appear."""
-    from evaluatorq.dashboard.orq_workspace import discovery_pending, resolve_slug
+    from evaluatorq.dashboard.orq_workspace import resolve_slug, slug_lookup_pending
 
-    if resolve_slug() is not None or not discovery_pending():
+    if resolve_slug() is not None or not slug_lookup_pending():
         return ''
     return f'<div hidden hx-get="{WORKSPACE_PENDING_ROUTE}" hx-trigger="every 2s" hx-swap="none"></div>\n'
 

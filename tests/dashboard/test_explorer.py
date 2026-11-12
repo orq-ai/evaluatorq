@@ -25,6 +25,7 @@ from evaluatorq.dashboard.trace_finder import routes as finder_routes
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.trace_finder.explorer import ExplorerStore
 from tests.dashboard.test_finder import FakeStore, csrf_data
+from tests.dashboard.conftest import settle_workspace_lookup
 
 
 def test_parse_range_applies_browser_offset() -> None:
@@ -3111,8 +3112,7 @@ def test_span_tree_discovers_cli_workspace_once(monkeypatch: pytest.MonkeyPatch,
     spans = [{'span_id': f'span-{index}', 'name': f'span-{index}'} for index in range(100)]
 
     span_tree('trace', spans)
-    for thread in list(orq_workspace._pending.values()):
-        thread.join(timeout=2)
+    settle_workspace_lookup()
     assert calls == 1
 
     rendered = span_tree('trace', spans)

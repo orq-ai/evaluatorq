@@ -14,6 +14,7 @@ from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id
 from evaluatorq.pairwise import PairwiseComparison, PairwiseVote, RepetitionObservation
 from evaluatorq.pairwise_run import PairwiseRun, new_run
+from tests.dashboard.conftest import settle_workspace_lookup
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -392,8 +393,7 @@ def test_row_list_discovers_the_cli_workspace_once(tmp_path: Path, monkeypatch: 
         )
     c, rid = _client(run, tmp_path)
     c.get(f'/r/{rid}/pairwise/row-list')
-    for thread in list(orq_workspace._pending.values()):
-        thread.join(timeout=2)
+    settle_workspace_lookup()
     text = c.get(f'/r/{rid}/pairwise/row-list').text
     assert text.count('trace00000003') >= 1
     assert calls == 1

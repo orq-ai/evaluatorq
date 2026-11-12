@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -9,6 +10,7 @@ import pytest
 
 from evaluatorq.dashboard import orq_workspace as ow
 from evaluatorq.dashboard.trace_links import thread_trace_url
+from tests.dashboard.conftest import settle_workspace_lookup
 
 
 @pytest.fixture(autouse=True)
@@ -17,12 +19,6 @@ def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
     monkeypatch.setattr(ow.shutil, 'which', lambda _name: None)
-
-
-def _settle() -> None:
-    """Wait for every background workspace lookup to finish."""
-    for thread in list(ow._pending.values()):
-        thread.join(timeout=2)
 
 
 # --- workspace slug ---------------------------------------------------------
@@ -70,7 +66,7 @@ def test_resolve_slug_from_authenticated_cli_and_cache(monkeypatch: pytest.Monke
     monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
 
     assert ow.resolve_slug() is None
-    _settle()
+    settle_workspace_lookup()
     assert ow.resolve_slug() == 'orq-research'
     assert ow.resolve_slug() == 'orq-research'
     assert calls == [(None, False)]
@@ -88,7 +84,7 @@ def test_resolve_slug_from_cli_session_without_api_key(monkeypatch: pytest.Monke
 
     monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
     ow.resolve_slug()
-    _settle()
+    settle_workspace_lookup()
     assert ow.resolve_slug() == 'orq-research'
     assert calls == [(None, True)]
 
@@ -108,11 +104,11 @@ def test_first_render_does_not_wait_for_the_cli(monkeypatch: pytest.MonkeyPatch)
     first = thread_trace_url('thread-1')
     assert time.monotonic() - started < 0.5
     assert first is None
-    assert ow.discovery_pending()
+    assert ow.slug_lookup_pending()
 
     release.set()
-    _settle()
-    assert not ow.discovery_pending()
+    settle_workspace_lookup()
+    assert not ow.slug_lookup_pending()
     later = thread_trace_url('thread-1')
     assert later is not None and '/orq-research/traces?' in later
 
@@ -127,14 +123,14 @@ def test_a_cli_account_switch_starts_a_new_lookup_at_once(monkeypatch: pytest.Mo
         lambda _profile, *, use_cli_session=False: OrqScope(workspace_key=next(slugs)),
     )
     ow.resolve_slug()
-    _settle()
+    settle_workspace_lookup()
     assert ow.resolve_slug() == 'first-workspace'
 
     # `orq` rewrites its config when the account changes; the cached slug must not survive it.
     ow._CLI_CONFIG_DIR.mkdir()
     (ow._CLI_CONFIG_DIR / 'config.json').write_text('{}')
     assert ow.resolve_slug() is None
-    _settle()
+    settle_workspace_lookup()
     assert ow.resolve_slug() == 'second-workspace'
 
 
@@ -150,7 +146,7 @@ def test_a_dashboard_profile_switch_does_not_reuse_the_old_slug(monkeypatch: pyt
     for profile in ('first', 'second'):
         save_settings(DashboardSettings.model_validate({'orq_auth_method': 'cli_profile', 'orq_profile': profile}))
         assert ow.resolve_slug() is None
-        _settle()
+        settle_workspace_lookup()
         assert ow.resolve_slug() == f'{profile}-workspace'
 
 
@@ -170,25 +166,66 @@ def test_report_pages_poll_until_the_lookup_lands(monkeypatch: pytest.MonkeyPatc
     assert WORKSPACE_PENDING_ROUTE not in page('Settings', '', active_nav='settings')
 
     release.set()
-    _settle()
+    settle_workspace_lookup()
     assert WORKSPACE_PENDING_ROUTE not in page('Run', '', active_surface='sim')
 
 
-def test_pending_route_asks_htmx_to_reload_once_the_lookup_lands(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pending_route_reloads_only_when_the_lookup_found_a_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
     from starlette.testclient import TestClient
 
     from evaluatorq.dashboard.app import build_app
+    from evaluatorq.dashboard.orq_scope import OrqScope
     from evaluatorq.dashboard.shell import WORKSPACE_PENDING_ROUTE
 
-    client = TestClient(build_app([]))
-    monkeypatch.setattr(ow, '_pending', {'key': threading.Thread()})
-    pending = client.get(WORKSPACE_PENDING_ROUTE)
-    assert pending.status_code == 204
-    assert 'HX-Refresh' not in pending.headers
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
+    release = threading.Event()
+    found: list[str | None] = ['orq-research']
 
-    monkeypatch.setattr(ow, '_pending', {})
-    done = client.get(WORKSPACE_PENDING_ROUTE)
-    assert done.headers['HX-Refresh'] == 'true'
+    def discover(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        assert release.wait(timeout=5)
+        return OrqScope(workspace_key=found[0])
+
+    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+    client = TestClient(build_app([]))
+    ow.resolve_slug()
+    assert client.get(WORKSPACE_PENDING_ROUTE).status_code == 204
+    release.set()
+    settle_workspace_lookup()
+    assert client.get(WORKSPACE_PENDING_ROUTE).headers['HX-Refresh'] == 'true'
+
+    # A lookup that finds nothing stops the poll (htmx 286) instead of reloading for nothing.
+    found[0] = None
+    ow._cli_slug_cache.clear()
+    ow.resolve_slug()
+    settle_workspace_lookup()
+    stopped = client.get(WORKSPACE_PENDING_ROUTE)
+    assert stopped.status_code == 286
+    assert 'HX-Refresh' not in stopped.headers
+
+
+def test_a_lookup_for_another_credential_does_not_count_as_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
+    monkeypatch.setattr(ow, '_pending', {('other-profile', None, None): threading.Thread()})
+    assert not ow.slug_lookup_pending()
+
+
+def test_a_new_cli_session_replaces_the_old_cache_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.orq_scope import OrqScope
+
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
+    monkeypatch.setattr(
+        'evaluatorq.dashboard.orq_scope.discover_orq_scope',
+        lambda _profile, *, use_cli_session=False: OrqScope(workspace_key='ws'),
+    )
+    ow._CLI_CONFIG_DIR.mkdir()
+    for content in ('{}', '{"current": "b"}'):
+        (ow._CLI_CONFIG_DIR / 'config.json').write_text(content)
+        os.utime(ow._CLI_CONFIG_DIR / 'config.json', ns=(len(content), len(content)))
+        ow.resolve_slug()
+        settle_workspace_lookup()
+    assert len(ow._cli_slug_cache) == 1
+
+
 @pytest.mark.parametrize('method', ['environment', 'cli_profile'])
 def test_legacy_saved_workspace_does_not_create_trace_links(
     monkeypatch: pytest.MonkeyPatch, tmp_path, method: str

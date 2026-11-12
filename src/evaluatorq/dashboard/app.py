@@ -242,12 +242,14 @@ def _dashboard_css(v: str = '') -> Response:
 
 
 def _workspace_pending() -> Response:
-    """204 while the workspace lookup runs; then ask htmx to reload the page so trace links render."""
-    from evaluatorq.dashboard.orq_workspace import discovery_pending
+    """204 while the lookup runs; then reload the page if it found a workspace, else stop polling (286)."""
+    from evaluatorq.dashboard.orq_workspace import resolve_slug, slug_lookup_pending
 
-    if discovery_pending():
+    if slug_lookup_pending():
         return Response(status_code=204)
-    return Response('', headers={'HX-Refresh': 'true'})
+    if resolve_slug() is not None:
+        return Response('', headers={'HX-Refresh': 'true'})
+    return Response('', status_code=286)
 
 
 async def _auth_status(req: Request) -> JSONResponse:
@@ -1265,8 +1267,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     async def lifespan(runtime: FastHTML) -> AsyncIterator[None]:
         from evaluatorq.dashboard.orq_workspace import resolve_slug
 
-        # Start the fallback workspace lookup now; it runs on a background thread.
-        await asyncio.to_thread(resolve_slug)
+        resolve_slug()
         try:
             yield
         finally:

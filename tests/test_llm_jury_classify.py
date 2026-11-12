@@ -717,7 +717,6 @@ async def test_a_catalogue_only_classify_model_is_seated_without_manual_registra
 async def test_a_prompt_only_panel_prompts_a_catalogue_only_classify_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # `supports_classify` is additive: most catalogue classify models also serve chat (#247).
     model = 'acme/sorter'
     info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
 

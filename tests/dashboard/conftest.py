@@ -53,6 +53,14 @@ def _isolated_workspace_lookup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     monkeypatch.setattr(orq_workspace, '_CLI_CONFIG_DIR', tmp_path / 'orq-cli-home')
 
 
+def settle_workspace_lookup() -> None:
+    """Wait for every background workspace lookup to finish."""
+    from evaluatorq.dashboard import orq_workspace
+
+    for thread in list(orq_workspace._pending.values()):
+        thread.join(timeout=2)
+
+
 # ---------------------------------------------------------------------------
 # Result builder
 # ---------------------------------------------------------------------------
