@@ -757,6 +757,7 @@ async def evaluatorq(
     on_datapoint_complete: DataPointComplete | None = None,
     _send_results: bool = True,
     _base_url: str | None = None,
+    _orq_api_key: str | None = None,
     _trace_type: str = 'evaluatorq',
     _experiment_url_out: list[str] | None = None,
 ) -> EvaluatorqResult:
@@ -879,7 +880,9 @@ async def evaluatorq(
         if single_trace:
             await _enter_single_trace(span_stack, tracing_context, name, _trace_type)
 
-        orq_api_key = env_raw('ORQ_API_KEY')
+        # A caller that passes _base_url passes the key for that host too, so an Orq-routed client's
+        # results never go to its host under a different ORQ_API_KEY.
+        orq_api_key = _orq_api_key or env_raw('ORQ_API_KEY')
 
         start_time = datetime.now(timezone.utc)
 
