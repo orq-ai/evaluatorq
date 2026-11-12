@@ -42,6 +42,9 @@ concurrency:
 env:
   DRIFT_BRANCH_PREFIX: preset-drift
   PI_MODEL: openai/gpt-6-sol
+  # Open the PR against this branch instead of the default one. Empty in
+  # production; set it to rehearse the workflow without a PR against main.
+  DRIFT_BASE: ""
 
 jobs:
   preset-drift:
@@ -187,7 +190,7 @@ jobs:
           done
           labels=preset-drift,agent-output
           if [ "$fixed" != true ]; then labels="$labels,needs-human-attention"; fi
-          base="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
+          base="${DRIFT_BASE:-$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)}"
           gh pr create --base "$base" --head "$branch" \
             --title "$title" --body-file "$body" --label "$labels"
 
