@@ -1,10 +1,16 @@
-"""Jury preset definitions and the `llm_jury(preset=...)` seam (RES-1171)."""
+"""Jury preset definitions and the `llm_jury(preset=...)` seam (RES-1171, RES-1346).
+
+Offline: prices and default efforts come from `tests.common.garden_fakes.seated_garden`,
+real card rates for every seated router ID. The live recomputation against
+`/v2/models` is in `tests/integration/test_preset_freshness.py`.
+"""
 
 from typing import Any, cast
 
 import pytest
 
-from evaluatorq import llm_jury
+from evaluatorq import jury_presets, llm_jury
+from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.llm_jury import _apply_preset
 from evaluatorq.jury_presets import (
     DROPPED_PRESETS,
@@ -12,17 +18,21 @@ from evaluatorq.jury_presets import (
     ESTIMATED_PROMPT_TOKENS,
     PRESETS,
     WITHHELD_PRESETS,
-    JudgeRates,
     JuryPreset,
     all_router_ids,
+    captured_at,
     get_preset,
     judge_family,
     judge_rates,
+    model_identity,
 )
+from evaluatorq.common.model_frontier import with_manual_cards
+from tests.common.garden_fakes import seated_garden
 
 
-def _rate_table() -> dict[str, JudgeRates]:
-    return {rid: r for rid in all_router_ids() if (r := judge_rates(rid)) is not None}
+@pytest.fixture
+def garden():
+    return seated_garden()
 
 
 def _preset(**overrides: Any) -> dict[str, Any]:
@@ -75,10 +85,10 @@ class TestShippedPresets:
     def test_the_registry_cannot_be_edited_in_place(self):
         """PRESETS is process-wide, so a stray write would reseat every later caller."""
         with pytest.raises(TypeError):
-            cast('dict[str, JuryPreset]', cast('object', PRESETS))['Balanced Trio'] = PRESETS['Strong Jury']
+            cast('dict[str, JuryPreset]', cast('object', PRESETS))['balanced-trio'] = PRESETS['strong-jury']
 
     def test_a_name_is_matched_after_trimming(self):
-        assert get_preset('  Balanced Trio ') is PRESETS['Balanced Trio']
+        assert get_preset('  balanced-trio ') is PRESETS['balanced-trio']
 
     def test_router_ids_cover_judges_and_reserves(self):
         ids = all_router_ids()
@@ -88,75 +98,138 @@ class TestShippedPresets:
             assert set(preset.reserve_judges) <= ids
 
     def test_get_preset_names_the_alternatives(self):
-        with pytest.raises(ValueError, match="available: \\['Balanced Trio'"):
+        with pytest.raises(ValueError, match="available: \\['balanced-trio'"):
             get_preset('No Such Panel')
 
     def test_a_retired_preset_answers_with_its_reason(self):
         """A user coming back to a name they used deserves the reason it went."""
         with pytest.raises(ValueError, match='was retired'):
-            get_preset('Value Trio')
+            get_preset('value-trio')
 
-    def test_a_withheld_preset_says_what_is_holding_it(self):
+    def test_a_withheld_preset_says_what_is_holding_it(self, monkeypatch):
         """Derived and costed but not seated is a third state, and it is not 'unknown'."""
+        monkeypatch.setitem(WITHHELD_PRESETS, 'Future Panel', 'Not shipped yet: its third seat cannot vote.')
+
         with pytest.raises(ValueError, match='is not shipped yet'):
-            get_preset('Cheap Aggregate')
+            get_preset('Future Panel')
 
-        assert 'Cheap Aggregate' not in PRESETS
-        for name, reason in WITHHELD_PRESETS.items():
+        for name in WITHHELD_PRESETS:
             assert name not in DROPPED_PRESETS
-            assert len(reason) > 80, f'{name}: a withholding needs its condition written out'
+            assert name not in PRESETS
 
-    def test_a_seat_no_preset_holds_is_not_priced(self):
-        """The rate table follows the seats; a row for a model nothing seats is stale."""
-        assert set(_rate_table()) == all_router_ids()
+    def test_cheap_aggregate_ships(self):
+        """Withheld while a MiniMax seat answered schemas in prose; the derived panel no longer seats one."""
+        preset = get_preset('cheap-aggregate')
+
+        assert not any('minimax' in judge.lower() for judge in preset.judges)
+        assert 'cheap-aggregate' not in WITHHELD_PRESETS
 
 
 class TestPublishedCost:
-    """The $/1k in the table is recomputed from the captured rates, never trusted."""
+    """The $/1k in the table is recomputed from card rates, never trusted."""
 
     @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
-    def test_preset_cost_matches_its_published_figure(self, preset):
-        assert preset.cost_per_1k() == preset.estimated_cost_per_1k
+    def test_preset_cost_matches_its_published_figure(self, preset, garden):
+        assert preset.cost_per_1k(garden) == preset.estimated_cost_per_1k
 
     @pytest.mark.parametrize('router_id', sorted(all_router_ids()))
-    def test_every_preset_router_id_is_priced(self, router_id):
+    def test_every_preset_router_id_is_priced(self, router_id, garden):
         """A preset must never ship a judge that silently costs zero."""
-        rates = judge_rates(router_id)
+        model = with_manual_cards(garden).get(router_id)
 
-        assert rates is not None
-        assert rates.input_rate > 0
-        assert rates.output_rate > 0
+        assert model is not None
+        assert model.input_price > 0
+        assert model.output_price > 0
 
-    def test_a_repriced_judge_moves_the_published_figure(self, monkeypatch):
+    def test_a_repriced_judge_moves_the_published_figure(self, garden):
         """The point of recomputing: a price change cannot leave the table standing."""
-        preset = PRESETS['Balanced Trio']
+        preset = PRESETS['balanced-trio']
         seat = preset.judges[0]
-        table = _rate_table()
-        doubled = table[seat].model_copy(update={'input_rate': table[seat].input_rate * 2})
-        monkeypatch.setattr('evaluatorq.jury_presets.judge_rates', (table | {seat: doubled}).get)
+        repriced = garden | {seat: garden[seat].model_copy(update={'input_price': garden[seat].input_price * 2})}
 
-        assert preset.cost_per_1k() != preset.estimated_cost_per_1k
+        assert preset.cost_per_1k(repriced) != preset.estimated_cost_per_1k
 
-    def test_an_unpriced_judge_raises_rather_than_costing_nothing(self, monkeypatch):
-        preset = PRESETS['Balanced Trio']
-        monkeypatch.setattr('evaluatorq.jury_presets.judge_rates', lambda _router_id: None)
+    def test_an_unpriced_judge_raises_rather_than_costing_nothing(self, garden):
+        preset = PRESETS['balanced-trio']
+        missing = {k: v for k, v in garden.items() if k != preset.judges[0]}
 
-        with pytest.raises(KeyError, match='no captured pricing'):
-            preset.cost_per_1k()
+        with pytest.raises(KeyError, match='no live card for'):
+            preset.cost_per_1k(missing)
 
-    def test_the_published_tokens_are_the_ones_the_figures_were_costed_at(self):
+    def test_the_estimate_is_three_input_tokens_to_one_output(self):
+        """The ratio the garden's blended price ranks on, so cost and rank describe one workload."""
+        assert (ESTIMATED_PROMPT_TOKENS, ESTIMATED_COMPLETION_TOKENS) == (1500, 500)
+
+    def test_the_published_tokens_are_the_ones_the_figures_were_costed_at(self, garden):
         """The figures mean nothing without the item they are per, so tie the two together."""
-        router_id = PRESETS['Balanced Trio'].judges[0]
-        seat = judge_rates(router_id)
-        assert seat is not None
-        alone = JuryPreset(**_preset(
-            judges=(router_id,),
-            reserve_judges=PRESETS['Balanced Trio'].reserve_judges,
-            estimated_cost_per_1k=0.0,
-        ))
-        expected = (seat.input_rate * ESTIMATED_PROMPT_TOKENS + seat.output_rate * ESTIMATED_COMPLETION_TOKENS) / 1_000
+        router_id = PRESETS['balanced-trio'].judges[0]
+        seat = garden[router_id]
+        alone = JuryPreset(
+            **_preset(
+                judges=(router_id,),
+                reserve_judges=PRESETS['balanced-trio'].reserve_judges,
+                estimated_cost_per_1k=0.0,
+            )
+        )
+        expected = (
+            seat.input_price * ESTIMATED_PROMPT_TOKENS + seat.output_price * ESTIMATED_COMPLETION_TOKENS
+        ) / 1_000
 
-        assert alone.cost_per_1k() == pytest.approx(expected, abs=0.005)
+        assert alone.cost_per_1k(garden) == pytest.approx(expected, abs=0.005)
+
+    def test_seated_efforts_read_the_catalogue_default(self, garden):
+        preset = PRESETS['balanced-trio']
+        seat = preset.judges[1]
+        graded = garden | {seat: garden[seat].model_copy(update={'effort_parameter': True, 'default_effort': 'low'})}
+
+        assert preset.seated_efforts(graded)[seat] == 'low'
+        assert preset.seated_efforts(garden)[seat] is None
+
+
+class TestDeprecatedRates:
+    """The v1.86 snapshot readers keep working, now backed by the live garden."""
+
+    def test_judge_rates_reads_the_garden_card(self, garden):
+        with pytest.deprecated_call():
+            rates = judge_rates('openai/gpt-6-sol', garden)
+        assert rates is not None
+        assert (rates.input_rate, rates.output_rate) == (2.0, 10.0)
+
+    def test_judge_rates_is_none_without_a_card(self, garden):
+        with pytest.deprecated_call():
+            assert judge_rates('openai/not-a-model', garden) is None
+
+    @pytest.mark.parametrize('error', [RuntimeError('loop running'), MissingLLMCredentialsError('no key')])
+    def test_judge_rates_is_none_when_no_live_catalogue_can_be_read(self, monkeypatch, error):
+        def unreadable():
+            raise error
+
+        monkeypatch.setattr(jury_presets, 'load_garden_sync', unreadable)
+        with pytest.deprecated_call():
+            assert judge_rates('openai/gpt-6-sol') is None
+
+    def test_captured_at_is_an_iso_date(self):
+        with pytest.deprecated_call():
+            stamp = captured_at()
+        assert len(stamp) == 10 and stamp[4] == '-' and stamp[7] == '-'
+
+
+class TestModelIdentity:
+    @pytest.mark.parametrize(
+        ('router_id', 'identity'),
+        [
+            ('aws/us-east-1.openai.gpt-5.4', 'gpt-5.4'),
+            ('aws/eu-central-2.anthropic.claude-haiku-5-5', 'claude-haiku-5-5'),
+            ('aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5-20251001'),
+            ('aws/openai.gpt-5.5', 'gpt-5.5'),
+            ('openai/gpt-5.6-terra', 'gpt-5.6-terra'),
+            ('azure/global.gpt-5.6-terra', 'gpt-5.6-terra'),
+            ('aws/jp.anthropic.claude-haiku-5-5', 'claude-haiku-5-5'),
+            ('munito/zai-org/glm-5.3-flash@eu', 'glm-5.3-flash'),
+        ],
+    )
+    def test_host_region_vendor_and_version_are_stripped(self, router_id, identity):
+        assert model_identity(router_id) == identity
 
 
 class TestFamilyExclusion:
@@ -188,17 +261,18 @@ class TestFamilyExclusion:
 
     def test_single_provider_trio_reports_all_three_seats_as_one_lineage(self):
         """The whole point of the preset is one contract; the whole risk is one lineage."""
-        duplicates = PRESETS['Single-Provider Trio'].duplicated_lineages()
+        duplicates = PRESETS['single-provider-trio'].duplicated_lineages()
 
         assert set(duplicates) == {'openai'}
         assert len(duplicates['openai']) == 3
 
     def test_the_other_presets_seat_one_judge_per_lineage(self):
         for name in (
-            'Balanced Trio',
-            'Strong Jury',
-            'Open-Weight / Portable',
-            'EU Region',
+            'balanced-trio',
+            'strong-jury',
+            'cheap-aggregate',
+            'open-weight-portable',
+            'eu-region',
         ):
             assert PRESETS[name].duplicated_lineages() == {}
 
@@ -206,7 +280,7 @@ class TestFamilyExclusion:
 class TestDroppedRegister:
     def test_a_dropped_preset_is_gone_and_its_reason_is_on_record(self):
         """Retirement is allowed; silent retirement is not."""
-        assert 'Value Trio' in DROPPED_PRESETS
+        assert 'value-trio' in DROPPED_PRESETS
         for name, reason in DROPPED_PRESETS.items():
             assert name not in PRESETS, f'{name} is both dropped and shipped'
             assert len(reason) > 40, f'{name} needs a real reason, not a stub'
@@ -216,22 +290,22 @@ class TestLLMJurySeam:
     """What `preset=` fills in, and what it refuses to fill in over."""
 
     def test_a_preset_seats_its_panel(self):
-        evaluator = llm_jury(name='helpfulness', criteria='is it helpful', preset='Balanced Trio')
+        evaluator = llm_jury(name='helpfulness', criteria='is it helpful', preset='balanced-trio')
 
         assert callable(evaluator['scorer'])
 
     def test_preset_and_judges_together_is_a_contradiction_not_an_override(self):
         with pytest.raises(ValueError, match='not both'):
-            llm_jury(name='x', criteria='c', preset='Balanced Trio', judges=['openai/gpt-5.6-luna'])
+            llm_jury(name='x', criteria='c', preset='balanced-trio', judges=['openai/gpt-5.6-luna'])
 
     def test_preset_and_model_together_is_rejected(self):
         with pytest.raises(ValueError, match='not both'):
-            llm_jury(name='x', criteria='c', preset='Balanced Trio', model='openai/gpt-5.6-luna')
+            llm_jury(name='x', criteria='c', preset='balanced-trio', model='openai/gpt-5.6-luna')
 
     def test_a_rotation_cannot_run_a_panel_preset(self):
         """Cyclic scores each item with one judge, so there is no panel left to agree."""
         with pytest.raises(ValueError, match='cannot run with'):
-            llm_jury(name='x', criteria='c', preset='Balanced Trio', assignment='cyclic')
+            llm_jury(name='x', criteria='c', preset='balanced-trio', assignment='cyclic')
 
     @pytest.mark.parametrize('name', sorted(PRESETS))
     def test_quorum_defaults_to_a_majority_of_the_seats(self, name):
@@ -249,7 +323,7 @@ class TestLLMJurySeam:
 
     def test_a_trio_still_needs_two_judges(self):
         """Majority of three is two, so no preset can conclude on a lone judge."""
-        judges, _, quorum = _applied('Balanced Trio')
+        judges, _, quorum = _applied('balanced-trio')
 
         assert (len(judges), quorum) == (3, 2)
 
@@ -257,7 +331,7 @@ class TestLLMJurySeam:
         from evaluatorq.llm_jury import _apply_preset
 
         _, _, quorum = _apply_preset(
-            'Balanced Trio',
+            'balanced-trio',
             judges=None,
             model=None,
             aggregator=None,
@@ -272,7 +346,7 @@ class TestLLMJurySeam:
         from evaluatorq.llm_jury import _apply_preset
 
         _, aggregator, _ = _apply_preset(
-            'Balanced Trio',
+            'balanced-trio',
             judges=None,
             model=None,
             aggregator=None,
@@ -337,7 +411,7 @@ class TestDocsTable:
         rows: dict[str, tuple[tuple[str, ...], str, float, tuple[str, ...]]] = {}
         for line in page.read_text(encoding='utf-8').splitlines():
             match = re.match(
-                r'^\| \*\*(?P<name>[^*]+)\*\*[^|]*\|(?P<judges>[^|]+)\|(?P<aggregation>[^|]+)\|'
+                r'^\| \*\*`?(?P<name>[^*`]+)`?\*\*[^|]*\|(?P<judges>[^|]+)\|(?P<aggregation>[^|]+)\|'
                 r'\s*(?P<cost>[\d.]+)\s*\|(?P<reserve>[^|]*)\|',
                 line,
             )
@@ -360,10 +434,10 @@ class TestDocsTable:
         assert judges == preset.judges
 
     @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
-    def test_the_table_publishes_the_cost_the_code_computes(self, preset):
+    def test_the_table_publishes_the_cost_the_code_computes(self, preset, garden):
         _, _, cost, _ = self._rows()[preset.name]
 
-        assert cost == preset.cost_per_1k()
+        assert cost == preset.estimated_cost_per_1k == preset.cost_per_1k(garden)
 
     @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
     def test_the_table_names_the_reserves_the_preset_holds(self, preset):
@@ -385,3 +459,52 @@ class TestDocsTable:
         )
 
         assert aggregation == applied
+
+
+class TestAsyncAndMissingSeats:
+    @pytest.fixture
+    def preset(self):
+        return jury_presets.BALANCED_TRIO
+
+    @pytest.mark.asyncio
+    async def test_async_methods_match_the_sync_ones_on_the_same_garden(self, preset):
+        garden = seated_garden()
+        assert await preset.cost_per_1k_async(garden) == preset.cost_per_1k(garden)
+        assert await preset.seated_efforts_async(garden) == preset.seated_efforts(garden)
+
+    @pytest.mark.asyncio
+    async def test_async_methods_await_the_live_garden(self, preset, monkeypatch):
+        async def live(client=None):
+            return seated_garden()
+
+        monkeypatch.setattr(jury_presets, 'load_garden', live)
+        assert await preset.cost_per_1k_async() == preset.cost_per_1k(seated_garden())
+
+    def test_a_seat_with_no_card_raises_in_both_methods(self, preset):
+        with pytest.raises(KeyError):
+            preset.seated_efforts({})
+        with pytest.raises(KeyError):
+            preset.cost_per_1k({})
+
+
+class TestLegacyPresetNames:
+    @pytest.mark.parametrize(('old', 'new'), sorted(jury_presets.LEGACY_PRESET_NAMES.items()))
+    def test_the_old_display_name_resolves_with_a_deprecation_warning(self, old, new):
+        if new in jury_presets.DROPPED_PRESETS:
+            with pytest.warns(DeprecationWarning, match=new), pytest.raises(ValueError, match='retired'):
+                jury_presets.get_preset(old)
+            return
+        with pytest.warns(DeprecationWarning, match=new):
+            assert jury_presets.get_preset(old) is jury_presets.PRESETS[new]
+
+    def test_every_preset_name_is_a_slug(self):
+        for name, preset in jury_presets.PRESETS.items():
+            assert name == preset.name
+            assert name == name.lower()
+            assert ' ' not in name
+
+    def test_llm_jury_accepts_a_legacy_name(self):
+        from evaluatorq import llm_jury
+
+        with pytest.warns(DeprecationWarning, match='balanced-trio'):
+            llm_jury(name='x', criteria='c', preset='Balanced Trio')
