@@ -39,9 +39,8 @@ Do not edit tests, workflows, or anything else. Do not run `git commit`, `git pu
 
 1. `uv run ruff check src && uv run ruff format --check src`
 2. `uv run pytest -m 'not integration' tests/unit/test_jury_presets.py tests/unit/test_router_pools.py tests/unit/test_preset_drift.py tests/common/test_model_frontier.py`
-3. `uv run pytest -m integration tests/integration/test_preset_freshness.py tests/unit/test_router_pools.py`
 
-Step 3 is the live check that failed. If it still fails after your change, say which test and why in the summary.
+You cannot run the live check yourself: your key reaches the model router but not the workspace catalogue. The workflow re-runs it after you finish and decides from the result. So reason from `drift-report.json` and the sources you verified, and say in the summary what you expect the live check to do.
 
 ## What to write when you are done
 
@@ -52,4 +51,4 @@ Write `$DRIFT_SUMMARY` (a path in the environment) as Markdown with these sectio
 - `## Not changed`: findings you left alone and why.
 - `## Needs human`: anything that requires a person's decision, with the options.
 
-End the file with exactly one line: `STATUS: fixed` if the live check passes after your edits, otherwise `STATUS: needs-human`.
+End the file with exactly one line: `STATUS: fixed` if you believe your edits resolve every finding that was not `needs_human`, otherwise `STATUS: needs-human`. The workflow still re-runs the live check and downgrades the PR if it fails.

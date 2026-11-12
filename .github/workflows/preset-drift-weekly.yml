@@ -16,11 +16,12 @@ name: Jury preset drift (weekly)
 # required checks. Switch the push and `gh pr create` steps to a PAT or a GitHub
 # App token if the PR must arrive with checks already running.
 #
-# Needs repo secret ORQ_WORKSPACE_API_KEY: a workspace-scoped orq key, used both
-# to read the garden and as the agent's gateway key. A project-scoped key sees a
-# truncated garden, so the suite's scope check fails on purpose and missing
-# models read as retired. Falls back to ORQ_API_KEY so the workflow still runs
-# (and reports that failure) before the secret exists.
+# Needs repo secret ORQ_WORKSPACE_API_KEY: a workspace-scoped orq key that reads
+# the garden. A project-scoped key sees a truncated garden, so the suite's scope
+# check fails on purpose and missing models read as retired. Falls back to
+# ORQ_API_KEY so the workflow still runs (and reports that failure) before the
+# secret exists. The agent uses ORQ_REVIEW_API_KEY, the key with router access;
+# the workspace key is refused by the gateway.
 #
 # The agent runs with no GitHub credentials in its environment (the checkout does
 # not persist them), because it reads web pages and a page can try to instruct it.
@@ -109,11 +110,13 @@ jobs:
         continue-on-error: true
         timeout-minutes: 25
         env:
-          ORQ_API_KEY: ${{ secrets.ORQ_WORKSPACE_API_KEY || secrets.ORQ_API_KEY }}
+          # The router key, not the workspace key: the workspace key reads the catalogue but is refused by the gateway.
+          ORQ_API_KEY: ${{ secrets.ORQ_REVIEW_API_KEY }}
           DRIFT_SUMMARY: ${{ runner.temp }}/drift-summary.md
         run: |
+          set -o pipefail
           # `orq launch pi` points Pi at the orq router with the key above and maps -p to Pi's one-shot prompt.
-          orq launch pi --no-mcp --no-skills --model "$PI_MODEL" -p "$(cat .github/preset-drift/agent-prompt.md)"
+          orq launch pi --no-mcp --no-skills --model "$PI_MODEL" -p "$(cat .github/preset-drift/agent-prompt.md)" 2>&1 | tee "$RUNNER_TEMP/agent.log"
 
       - name: Re-run the live checks on the agent's change
         id: recheck
@@ -163,7 +166,11 @@ jobs:
             if [ -f "$DRIFT_SUMMARY" ]; then
               cat "$DRIFT_SUMMARY"
             else
-              echo "The agent wrote no summary."
+              echo "The agent wrote no summary (agent step: $AGENT_OUTCOME). The end of its log:"
+              echo
+              echo '```'
+              tail -n 30 "$RUNNER_TEMP/agent.log" 2>/dev/null | cut -c1-300 || true
+              echo '```'
             fi
             echo
             echo "## Deterministic drift report"
