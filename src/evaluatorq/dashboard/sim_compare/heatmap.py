@@ -6,7 +6,7 @@ from collections import Counter
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.reports import esc
-from evaluatorq.dashboard.report_kit import _interp_color, panel
+from evaluatorq.dashboard.report_kit import _interp_color, heatmap, panel
 from evaluatorq.dashboard.sim_compare.state import TableState, first_page, swap_link
 
 if TYPE_CHECKING:
@@ -79,16 +79,15 @@ def where_panel(cmp: Comparison, state: TableState | None = None) -> str:
     narrowing = cmp.narrowing
     rows, more_rows = _axis(personas, narrowing.get('persona', []), 'persona')
     cols, more_cols = _axis(scenarios, narrowing.get('scenario', []), 'scenario')
-    cells: dict[tuple[str, str], list[tuple[MatchedPair, str]]] = {}
+    grouped: dict[tuple[str, str], list[tuple[MatchedPair, str]]] = {}
     for pair, change in cmp.changes:
-        cells.setdefault((pair.a.persona, pair.a.scenario), []).append((pair, change))
+        grouped.setdefault((pair.a.persona, pair.a.scenario), []).append((pair, change))
+    cells = [{'persona': p, 'scenario': s, 'pairs': pairs} for (p, s), pairs in grouped.items()]
     base = first_page(state)
 
-    def cell(persona: str, scenario: str) -> str:
-        pairs = cells.get((persona, scenario))
-        if not pairs:
-            return '<td class="rk-heat-cell rk-heat-empty">&mdash;</td>'
-        text, fill, title = _cell_value(cmp, pairs)
+    def cell(c: dict) -> str:
+        persona, scenario = c['persona'], c['scenario']
+        text, fill, title = _cell_value(cmp, c['pairs'])
         on = narrowing.get('persona') == [persona] and narrowing.get('scenario') == [scenario]
         target = {k: v for k, v in narrowing.items() if k not in ('persona', 'scenario')}
         if not on:
@@ -104,8 +103,6 @@ def where_panel(cmp: Comparison, state: TableState | None = None) -> str:
             f'{esc(text)}</a></td>'
         )
 
-    header = ''.join(f'<th class="rk-heat-col">{esc(s)}</th>' for s in cols)
-    body = ''.join(f'<tr><th class="rk-heat-row">{esc(p)}</th>{"".join(cell(p, s) for s in cols)}</tr>' for p in rows)
     notes = ' · '.join(n for n in (more_rows, more_cols) if n)
     foot = f'<p class="cmp-note">{esc(notes)}</p>' if notes else ''
     legend = (
@@ -115,10 +112,7 @@ def where_panel(cmp: Comparison, state: TableState | None = None) -> str:
         f'<span><i style="background:{_FLAT_FILL};box-shadow:inset 0 0 0 1px var(--border-subtle)"></i>No change</span>'
         f'<span><i style="background:{_BETTER}"></i>Better in B</span></div>'
     )
-    table = (
-        f'<div class="cmp-heat-scroll"><table class="rk-heatmap"><thead><tr><th></th>{header}</tr></thead>'
-        f'<tbody>{body}</tbody></table></div>'
-    )
+    table = f'<div class="cmp-heat-scroll">{heatmap(rows, cols, cells, render_cell=cell)}</div>'
     return panel(
         'Where it changed', f'{legend}{table}{foot}', sub='Goal-rate change from A to B per persona and scenario'
     )
