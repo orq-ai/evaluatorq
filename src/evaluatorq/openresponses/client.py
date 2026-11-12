@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.llm_client import LLMClient
+
 
 def build_simulation_client(
-    config_client: AsyncOpenAI | None = None,
+    config_client: LLMClient | None = None,
     *,
     extra_api_key: str | None = None,
     require_orq: bool = False,
@@ -22,18 +24,12 @@ def build_simulation_client(
     truth for env-var precedence). Returns (client, owned) where owned=False means
     the caller must not close it.
 
-    Resolution order:
-    1. ``config_client`` — injected client, used as-is (not owned).
-    2. ``extra_api_key`` argument, treated as an ORQ key and routed through
-       the Orq router.
-    3. ``ORQ_API_KEY`` env var — routes through
-       ``ORQ_BASE_URL/v3/router`` (default: ``https://my.orq.ai/v3/router``).
-    4. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
-       traffic goes to OpenAI directly, not to the Orq router.
+    See `evaluatorq.common.llm_client.resolve_llm_client` for provider precedence.
+    An ``extra_api_key`` is treated as an ORQ key and routed through the Orq router.
 
-    When ``require_orq`` is True, step 4 is disabled: the client must route
-    through Orq (used by ORQ-agent targets whose ``agent/<key>`` model id only
-    resolves on the Orq router).
+    When ``require_orq`` is True, the ``OPENAI_API_KEY`` and ``ANTHROPIC_API_KEY``
+    fallbacks are disabled: the client must route through Orq (used by ORQ-agent
+    targets whose ``agent/<key>`` model id only resolves on the Orq router).
 
     ``max_retries`` feeds the SDK's client-side retry budget; the default ``0``
     keeps ``with_retry`` as the single retry owner for simulation calls. Pass

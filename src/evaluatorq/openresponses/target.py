@@ -7,7 +7,6 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from openai import BadRequestError
 from typing_extensions import Self
 
 from evaluatorq.common.llm_call import (
@@ -17,6 +16,7 @@ from evaluatorq.common.llm_call import (
     strip_known_rejected_responses_reasoning,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS
 from evaluatorq.common.prompt_cache import caching_applies, mark_responses_input
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
@@ -308,7 +308,7 @@ class OrqResponsesTarget(AgentTarget):
                     kwargs=kwargs,
                     timeout_s=timeout_s,
                 )
-            except BadRequestError as exc:
+            except BAD_REQUEST_ERRORS as exc:
                 # Same drop-and-retry-once contract as `execute_response`: only a 400
                 # naming `reasoning` in both request and error body counts.
                 if not is_responses_reasoning_rejection(kwargs, exc):

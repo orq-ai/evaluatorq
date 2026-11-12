@@ -50,14 +50,16 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, NamedTuple, TypeVar, cast
 
-from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError, pydantic_function_tool
+from openai import AsyncOpenAI, LengthFinishReasonError, pydantic_function_tool
 from pydantic import BaseModel, ValidationError
 
 from evaluatorq.common.extract_json import extract_json_from_response
 from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse, execute_response
+from evaluatorq.common.llm_client import is_anthropic_client
+from evaluatorq.common.llm_errors import STATUS_ERRORS, error_text, status_code
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
-from evaluatorq.common.retry import with_retry, without_client_retries
+from evaluatorq.common.retry import MAX_RETRY_ATTEMPTS, with_retry, without_client_retries
 from evaluatorq.common.tracing import with_llm_span
 from evaluatorq.contracts import (
     _RESERVED_COMPLETION_KEYS,
@@ -236,14 +238,14 @@ _TOOL_KEYWORDS = (
 )
 
 
-def _looks_like_capability_rejection(exc: APIStatusError, keywords: tuple[str, ...]) -> bool:
-    err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+def _looks_like_capability_rejection(exc: BaseException, keywords: tuple[str, ...]) -> bool:
+    err_body = error_text(exc)
     return any(kw in err_body for kw in keywords)
 
 
-def _rejection_message(exc: APIStatusError) -> str:
+def _rejection_message(exc: BaseException) -> str:
     # Provider bodies can echo prompts; name only fixed capability clues in logs.
-    body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+    body = error_text(exc)
     if 'oneof' in body:
         return 'schema uses oneOf, which the provider rejected'
     for keyword in _SCHEMA_KEYWORDS + _TOOL_KEYWORDS:
@@ -252,7 +254,7 @@ def _rejection_message(exc: APIStatusError) -> str:
     return 'provider rejected the requested capability'
 
 
-def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
+def _looks_like_schema_rejection(exc: BaseException) -> bool:
     return _looks_like_capability_rejection(exc, _SCHEMA_KEYWORDS)
 
 
@@ -463,6 +465,7 @@ async def _generate_structured_via_responses(
     reasoning_effort: str | None = None,
     timeout_s: float = _STRUCTURED_TIMEOUT_S,
     extra_body: dict[str, Any] | None = None,
+    max_attempts: int = MAX_RETRY_ATTEMPTS,
 ) -> StructuredResult[T]:
     """Structured output through the Responses API; ``parsed is None`` means "use the chat legs".
 
@@ -498,12 +501,13 @@ async def _generate_structured_via_responses(
                     extra_body=extra_body,
                     extra_kwargs=extra_kwargs,
                 ),
+                max_attempts=max_attempts,
                 label=label,
             )
-        except APIStatusError as e:
-            if e.status_code == 404:
+        except STATUS_ERRORS as e:
+            if status_code(e) == 404:
                 cause = 'no Responses endpoint (HTTP 404)'
-            elif e.status_code == 400 and _looks_like_schema_rejection(e):
+            elif status_code(e) == 400 and _looks_like_schema_rejection(e):
                 cause = f'Responses structured output rejected (HTTP 400: {_rejection_message(e)})'
             else:
                 raise
@@ -566,6 +570,7 @@ class _ChatLadderCall:
     timeout_s: float = _STRUCTURED_TIMEOUT_S
     extra_body: dict[str, Any] | None = None
     extra_kwargs: dict[str, Any] | None = None
+    max_attempts: int = MAX_RETRY_ATTEMPTS
 
     def executor_kwargs(self, **rung: Any) -> dict[str, Any]:
         """The shared executor arguments, with a rung's own fields layered on."""
@@ -647,10 +652,11 @@ async def _parse_rung(
     try:
         response, raw_usage = await with_retry(
             lambda: execute_chat_parse(**call.executor_kwargs(**rung)),
+            max_attempts=call.max_attempts,
             label=retry_label,
         )
-    except APIStatusError as e:
-        if e.status_code != 400 or not _looks_like_capability_rejection(e, rejection_keywords):
+    except STATUS_ERRORS as e:
+        if status_code(e) != 400 or not _looks_like_capability_rejection(e, rejection_keywords):
             raise
         logger.warning('%s: %s (provider said: %s)', label, rejected, _rejection_message(e))
         return None, None
@@ -710,10 +716,11 @@ async def _leg_json_schema(call: _ChatLadderCall, *, response_format: type[T]) -
     try:
         response, raw_usage = await with_retry(
             lambda: execute_chat_completion(**call.executor_kwargs(response_format=schema_format)),
+            max_attempts=call.max_attempts,
             label=f'{label} (json_schema fallback)',
         )
-    except APIStatusError as e:
-        if e.status_code != 400 or not _looks_like_schema_rejection(e):
+    except STATUS_ERRORS as e:
+        if status_code(e) != 400 or not _looks_like_schema_rejection(e):
             raise
         logger.warning('%s: json_schema not accepted, trying a forced tool call', label)
         return StructuredResult(None, '')
@@ -743,6 +750,9 @@ async def _leg_forced_tool(call: _ChatLadderCall, *, response_format: type[T]) -
     caller_kwargs = call.extra_kwargs or {}
     if 'tools' in caller_kwargs or 'tool_choice' in caller_kwargs:
         logger.debug('%s: caller supplied tools, skipping the forced tool call leg', label)
+        return StructuredResult(None, '')
+    if is_anthropic_client(call.client):
+        logger.debug('%s: Anthropic clients cannot force a tool call, skipping the forced tool call leg', label)
         return StructuredResult(None, '')
 
     tool = pydantic_function_tool(response_format)
@@ -793,6 +803,7 @@ async def _leg_json_object(call: _ChatLadderCall, *, response_format: type[T]) -
     """Rung 4: bare ``json_object``, the last rung. A provider that rejects even this raises."""
     response, raw_usage = await with_retry(
         lambda: execute_chat_completion(**call.executor_kwargs(response_format={'type': 'json_object'})),
+        max_attempts=call.max_attempts,
         label=f'{call.label} (json_object fallback)',
     )
     return _content_result(
@@ -847,6 +858,7 @@ async def generate_structured(
     timeout_s: float | Unset = UNSET,
     extra_body: dict[str, Any] | Unset | None = UNSET,
     config: LLMCallConfig | None = None,
+    max_attempts: int = MAX_RETRY_ATTEMPTS,
 ) -> StructuredResult[T]:
     """Generate structured output, degrading through the rungs in the module docstring.
 
@@ -868,6 +880,9 @@ async def generate_structured(
     attempt can issue a second request if the model rejects ``reasoning_effort``,
     and ``api='responses'`` adds a fifth rung. Worst case is on the order of
     *rungs x 5 x 2* requests — bound a whole call with an outer timeout.
+
+    ``max_attempts`` is the `with_retry` budget of each rung. Leave it at the default unless the caller already
+    owns retry (a caller that wraps this call in its own `with_retry` passes ``1`` so the two layers do not multiply).
 
     ``extra_kwargs`` is merged into every rung's params last, so a caller's
     provider options win. Structural fields (``_STRUCTURAL_KEYS[api]``) raise
@@ -927,6 +942,7 @@ async def generate_structured(
                 reasoning_effort=reasoning_effort,
                 timeout_s=timeout_s,
                 extra_body=extra_body,
+                max_attempts=max_attempts,
             )
             usages.append(via_responses.usage)
             if via_responses.parsed is not None:
@@ -954,6 +970,7 @@ async def generate_structured(
                 timeout_s=timeout_s,
                 extra_body=extra_body,
                 extra_kwargs=extra_kwargs,
+                max_attempts=max_attempts,
             )
             last_raw = ''
             for leg in (_leg_strict_parse, _leg_json_schema, _leg_forced_tool, _leg_json_object):

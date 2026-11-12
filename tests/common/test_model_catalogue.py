@@ -824,6 +824,40 @@ async def test_env_key_used_when_no_client_given(monkeypatch: pytest.MonkeyPatch
     assert headers[0]['Authorization'] == 'Bearer env-key'
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('env_key', ['orq-env-key', None])
+async def test_direct_openai_client_key_never_reaches_the_orq_host(monkeypatch: pytest.MonkeyPatch, env_key: str | None):
+    """A direct OpenAI client's key is an OpenAI key: the Orq catalogue gets ORQ_API_KEY or no call at all."""
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setenv('ORQ_BASE_URL', 'https://prod.example')
+    if env_key is None:
+        monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    else:
+        monkeypatch.setenv('ORQ_API_KEY', env_key)
+
+    calls: list[str] = []
+    headers: list[dict[str, str]] = []
+
+    def _respond() -> _FakeResponse:
+        return _FakeResponse(
+            200,
+            [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'input_cost': 0.00025, 'output_cost': 0.002}],
+        )
+
+    monkeypatch.setattr(httpx, 'AsyncClient', _FakeAsyncClient(calls, _respond, headers))
+
+    direct_client = AsyncOpenAI(api_key='sk-openai-secret')
+
+    await pricing._load_catalogue(direct_client)
+
+    assert all('sk-openai-secret' not in h.get('Authorization', '') for h in headers)
+    if env_key is None:
+        assert calls == []
+    else:
+        assert calls == ['https://prod.example/v2/models']
+        assert headers[0]['Authorization'] == f'Bearer {env_key}'
+
+
 def test_parse_catalogue_survives_a_non_mapping_metadata():
     """A provider returning `metadata` as a list must cost that one entry, not the catalogue.
 
@@ -1175,3 +1209,11 @@ async def test_models_by_provider_embedding_kind_lists_only_embedding_models(mon
         'cohere': ['cohere/embed-v4'],
         'openai': ['openai/text-embedding-4'],
     }
+
+
+@pytest.mark.asyncio
+async def test_pricing_with_no_orq_key_yields_no_model_info_and_no_cost():
+    """Without an Orq key there is no catalogue host: lookup degrades to unpriced instead of raising (RES-1875)."""
+    assert await pricing.get_model_info('claude-sonnet-5-5') is None
+    unpriced = _usage()
+    assert await pricing.price_usage(unpriced, 'claude-sonnet-5-5') is unpriced

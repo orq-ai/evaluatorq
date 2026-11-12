@@ -277,7 +277,7 @@ eq --help
 
 ## Configuration
 
-Everything is environment variables; none are required for local evaluation. `ORQ_API_KEY` unlocks Orq datasets, result upload and automatic tracing; `OPENAI_API_KEY` backs red teaming and simulation without Orq.
+Everything is environment variables; none are required for local evaluation. `ORQ_API_KEY` unlocks Orq datasets, result upload and automatic tracing; `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` backs red teaming and simulation without Orq.
 
 → [Configuration](https://orq-ai.github.io/evaluatorq/configuration/) · [Tracing](https://orq-ai.github.io/evaluatorq/tracing/)
 

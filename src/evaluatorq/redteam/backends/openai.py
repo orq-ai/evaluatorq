@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
-from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.llm_client import as_llm_client, client_provider, client_routes_through_orq, is_anthropic_client
+from evaluatorq.common.messages import chat_message_reply_text
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.retry import without_client_retries
@@ -34,6 +35,8 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionMessageParam
 
+    from evaluatorq.common.llm_client import LLMClient
+
 
 def create_async_llm_client(role_config=None, *, max_retries: int | None = None) -> AsyncOpenAI:
     """Lazy proxy to `create_async_llm_client`.
@@ -48,22 +51,22 @@ def create_async_llm_client(role_config=None, *, max_retries: int | None = None)
     return _create(role_config, max_retries=max_retries)
 
 
-def _openai_map_error(exc: Exception) -> tuple[str, str]:
-    """Map an OpenAI exception to a normalized (error_code, error_message) tuple."""
+def _openai_map_error(exc: Exception, provider: str = 'openai') -> tuple[str, str]:
+    """Map an OpenAI (or, with ``provider='anthropic'``, Anthropic) exception to a normalized (error_code, error_message) tuple."""
     name = type(exc).__name__.lower()
     status_code = extract_status_code(exc)
     provider_code = extract_provider_error_code(exc)
     if status_code is not None:
-        return f'openai.http.{status_code}', f'{type(exc).__name__}: {exc}'
+        return f'{provider}.http.{status_code}', f'{type(exc).__name__}: {exc}'
     if provider_code:
-        return f'openai.code.{provider_code}', f'{type(exc).__name__}: {exc}'
+        return f'{provider}.code.{provider_code}', f'{type(exc).__name__}: {exc}'
     if 'ratelimit' in name:
-        return 'openai.rate_limit', f'{type(exc).__name__}: {exc}'
+        return f'{provider}.rate_limit', f'{type(exc).__name__}: {exc}'
     if 'authentication' in name:
-        return 'openai.auth', f'{type(exc).__name__}: {exc}'
+        return f'{provider}.auth', f'{type(exc).__name__}: {exc}'
     if 'timeout' in name:
-        return 'openai.timeout', f'{type(exc).__name__}: {exc}'
-    return 'openai.unknown', f'{type(exc).__name__}: {exc}'
+        return f'{provider}.timeout', f'{type(exc).__name__}: {exc}'
+    return f'{provider}.unknown', f'{type(exc).__name__}: {exc}'
 
 
 class OpenAIModelTarget(AgentTarget):
@@ -92,7 +95,7 @@ class OpenAIModelTarget(AgentTarget):
         model: str,
         system_prompt: str | None = None,
         *,
-        client: AsyncOpenAI | None = None,
+        client: LLMClient | None = None,
         max_tokens: int | None = None,
         timeout_ms: int | None = None,
         reasoning_effort: str | None = None,
@@ -117,7 +120,11 @@ class OpenAIModelTarget(AgentTarget):
         super().__init__(memory_entity_id=None)
         self.model = model
         # call_target_with_retry is the single retry owner for target calls.
-        self.client = without_client_retries(client) if client is not None else create_async_llm_client(max_retries=0)
+        self.client = (
+            without_client_retries(as_llm_client(client))
+            if client is not None
+            else create_async_llm_client(max_retries=0)
+        )
         self.system_prompt = system_prompt or 'You are a helpful assistant.'
         self.max_tokens = max_tokens or DEFAULT_TARGET_MAX_TOKENS
         self.timeout_ms = timeout_ms or DEFAULT_TARGET_TIMEOUT_MS
@@ -176,7 +183,7 @@ class OpenAIModelTarget(AgentTarget):
                 timeout=self.timeout_ms / 1000.0,
             )
             msg = response.choices[0].message
-            content = msg.content or ''
+            content = chat_message_reply_text(msg)
             record_llm_response(span, response, output_content=content)
 
             tool_call_items: list[ToolCallOutputItem] = []
@@ -242,13 +249,13 @@ class OpenAIModelTarget(AgentTarget):
         return AgentContext(
             key=self.model,
             display_name=self.model,
-            description='OpenAI model target',
+            description='Anthropic model target' if is_anthropic_client(self.client) else 'OpenAI model target',
             model=self.model,
         )
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
         """Map an OpenAI exception to a normalized error code and message tuple."""
-        return _openai_map_error(exc)
+        return _openai_map_error(exc, client_provider(self.client) or 'openai')
 
 
 class OpenAIBackend(Backend):
@@ -271,7 +278,7 @@ class OpenAIBackend(Backend):
     def __init__(
         self,
         *,
-        client: AsyncOpenAI | None = None,
+        client: LLMClient | None = None,
         system_prompt: str | None = None,
         max_tokens: int | None = None,
         timeout_ms: int | None = None,
@@ -279,7 +286,11 @@ class OpenAIBackend(Backend):
     ) -> None:
         super().__init__(name='openai')
         # call_target_with_retry is the single retry owner for target calls.
-        self._client = without_client_retries(client) if client is not None else create_async_llm_client(max_retries=0)
+        self._client = (
+            without_client_retries(as_llm_client(client))
+            if client is not None
+            else create_async_llm_client(max_retries=0)
+        )
         self._system_prompt = system_prompt
         self._max_tokens = max_tokens
         self._timeout_ms = timeout_ms
@@ -299,4 +310,4 @@ class OpenAIBackend(Backend):
         logger.debug('OpenAI backend has no memory store; cleanup is a no-op')
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
-        return _openai_map_error(exc)
+        return _openai_map_error(exc, client_provider(self._client) or 'openai')

@@ -85,6 +85,22 @@ class ClassifierConfig(BaseModel):
     enabled: bool = False
 
 
+def require_classifier_served(config: SignalsConfig) -> None:
+    """Stop before any classification when the env-resolved client cannot serve the classifier model.
+
+    Only acts when ``ANTHROPIC_API_KEY`` is the one LLM key set (`require_models_served_by_provider`). The classify-only
+    default is checked as the fast role model it falls back to off the Orq router.
+    """
+    from evaluatorq.common.judge import models_called_off_router
+    from evaluatorq.common.llm_client import require_models_served_by_provider
+    from evaluatorq.common.model_roles import model_source
+
+    model = config.classifier.model
+    default_model, default_label = model_source('classifier', 'signals')
+    source = default_label if model == default_model else 'SignalsConfig.classifier.model'
+    require_models_served_by_provider(models_called_off_router({source: model}))
+
+
 class TagThresholds(BaseModel):
     """Calibrated tag thresholds: `<tag>.<metric>` to threshold, plus each metric's cohort percentile table."""
 
