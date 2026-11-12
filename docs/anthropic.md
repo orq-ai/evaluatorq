@@ -151,6 +151,39 @@ llm_config = LLMConfig(
 
 evaluatorq sends the request to the beta Messages endpoint with the header `server-side-fallback-2026-07-01`. The adapter sends fallbacks only for `AsyncAnthropic`. It rejects Bedrock and Vertex clients with a `ValueError` before sending, and it cannot tell an Anthropic-managed Google Cloud deployment from one you manage yourself, so every `AsyncAnthropicVertex` client is rejected. Use `AsyncAnthropic` to reach the Claude API when you want fallbacks. Haiku 5.5 has no fallback model, so do not set `fallbacks` on a role that runs it.
 
+## Through the Orq router
+
+The Orq router also serves the Anthropic Messages format, at `https://my.orq.ai/v3/anthropic`. Point an `AsyncAnthropic` client at it with your Orq API key, and the calls get Orq's traces, budgets and routing while evaluatorq still sees an Anthropic client:
+
+```python
+import asyncio
+import os
+
+from anthropic import AsyncAnthropic
+
+from evaluatorq.redteam import OpenAIModelTarget, red_team
+
+os.environ.setdefault('EVALUATORQ_SMART_MODEL', 'claude-opus-5-5')
+os.environ.setdefault('EVALUATORQ_FAST_MODEL', 'claude-haiku-5-5')
+os.environ.setdefault('EVALUATORQ_CLASSIFIER_MODEL', 'claude-sonnet-5-5')
+
+
+async def main() -> None:
+    client = AsyncAnthropic(api_key=os.environ['ORQ_API_KEY'], base_url='https://my.orq.ai/v3/anthropic')
+    target = OpenAIModelTarget(model='claude-haiku-5-5', client=client, system_prompt='You are a helpful assistant.')
+    report = await red_team(target=target, mode='dynamic', llm_client=client, categories=['LLM07'], max_turns=1, max_dynamic_datapoints=1, generate_strategies=False)
+    print(f'Resistance rate: {report.summary.resistance_rate:.0%}')
+
+
+asyncio.run(main())
+```
+
+The router accepts a bare id such as `claude-haiku-5-5` and the prefixed `anthropic/claude-haiku-5-5`; evaluatorq sends the bare one. Every role still needs a Claude id, because the adapter refuses other `provider/` ids before sending, even though the router could serve them. Use the OpenAI-compatible router at `https://my.orq.ai/v3/router` for non-Claude models.
+
+The router ignores the `fallbacks` request field, so `extra_kwargs={'fallbacks': 'default'}` from the previous section does nothing on this route and raises no error. Configure fallbacks for this endpoint in Orq's [routing rules](https://docs.orq.ai/ai-gateway/configuration/routing-rules) instead.
+
+Classify takes the structured judgement described in the next section on this route too, because the router's `/decisions` endpoint is only on `/v3/router`.
+
 ## Classify without the Orq router
 
 Classify questions normally go to the Orq router's `/decisions` endpoint. An Anthropic client does not route through Orq, so one structured judgement on the model you set for the classifier role answers all the questions in a classify request. A classify-only model such as `typesafe/jev-latest` cannot run there, so it is replaced by the fast role model, with one warning per model per process. When the fast role is not a Claude model id either, the call raises `ModelClientMismatchError` and logs no replacement.
