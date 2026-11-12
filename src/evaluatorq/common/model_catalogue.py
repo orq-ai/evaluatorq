@@ -356,7 +356,7 @@ def _metadata_threshold(metadata: dict[str, object]) -> int | None:
     raw = metadata.get('extended_context_threshold')
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
-    if isinstance(raw, float) and not math.isfinite(raw):
+    if isinstance(raw, float) and (not math.isfinite(raw) or not raw.is_integer()):
         return None
     return int(raw) if raw > 0 else None
 
@@ -789,7 +789,8 @@ def cost_of(
     """
     if info.input_cost_per_1k is None or info.output_cost_per_1k is None:
         return None
-    input_rate = info.input_cost_per_1k
+    standard_input_rate = info.input_cost_per_1k
+    input_rate = standard_input_rate
     output_rate = info.output_cost_per_1k
     cache_read_rate = info.cache_read_cost_per_1k
     threshold = info.extended_context_threshold
@@ -814,10 +815,10 @@ def cost_of(
     input_cost = (
         remaining * input_rate
         + cached * (input_rate if cache_read_rate is None else cache_read_rate)
-        + written * (input_rate if info.cache_write_cost_per_1k is None else info.cache_write_cost_per_1k)
-        + audio * (input_rate if info.audio_input_cost_per_1k is None else info.audio_input_cost_per_1k)
+        + written * (standard_input_rate if info.cache_write_cost_per_1k is None else info.cache_write_cost_per_1k)
+        + audio * (standard_input_rate if info.audio_input_cost_per_1k is None else info.audio_input_cost_per_1k)
     ) / 1000
-    return input_cost, output_tokens / 1000 * output_rate
+    return input_cost, max(output_tokens, 0) / 1000 * output_rate
 
 
 async def price_usage(

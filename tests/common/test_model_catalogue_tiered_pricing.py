@@ -111,7 +111,7 @@ def test_zero_rate_is_kept():
     assert _parse({**GEMINI_METADATA, 'million_tokens_cache_read_cost': 0}).cache_read_cost_per_1k == 0.0
 
 
-@pytest.mark.parametrize('bad', [True, 0, -5, float('nan'), float('inf'), 'big', None, [200000]])
+@pytest.mark.parametrize('bad', [True, 0, -5, 1.5, float('nan'), float('inf'), 'big', None, [200000]])
 def test_malformed_threshold_is_dropped(bad: object):
     info = _parse({**GEMINI_METADATA, 'extended_context_threshold': bad})
     assert info.extended_context_threshold is None
@@ -201,6 +201,26 @@ def test_above_threshold_cache_read_and_unrepriced_cache_write():
     cost = cost_of(_tiered(), 300_000, 0, cached_tokens=100_000, cache_creation_tokens=50_000)
     assert cost is not None
     assert cost[0] == pytest.approx(150 * 0.0025 + 100 * 0.00025 + 50 * 0.0045)
+
+
+def test_above_threshold_cache_write_and_audio_without_own_rate_bill_at_standard_input_rate():
+    info = _parse(
+        {
+            k: v
+            for k, v in GEMINI_METADATA.items()
+            if k not in ('million_tokens_cache_write_cost', 'million_tokens_audio_input_cost')
+        }
+    )
+    assert info.cache_write_cost_per_1k is None
+    assert info.audio_input_cost_per_1k is None
+    cost = cost_of(info, 300_000, 0, cache_creation_tokens=50_000, audio_input_tokens=50_000)
+    assert cost is not None
+    assert cost[0] == pytest.approx(200 * 0.0025 + 100 * 0.00125)
+
+
+def test_negative_output_tokens_never_reduce_the_cost():
+    cost = cost_of(_info(), 1_000, -500)
+    assert cost == pytest.approx((0.00125, 0.0))
 
 
 def test_above_threshold_without_above_rates_stays_standard():
