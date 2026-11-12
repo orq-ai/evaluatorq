@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.sim_compare.fmt import _badge, _change_pill, _run_key, _tone
@@ -13,7 +13,9 @@ from evaluatorq.dashboard.sim_compare.state import (
     _SORT_KEYS,
     _VIEWS,
     TableState,
+    _base_state,
     _qs,
+    _swap_link,
 )
 from evaluatorq.dashboard.sim_views import (
     _sim_header_row,
@@ -40,6 +42,19 @@ def resolve_view(cmp: Comparison, state: TableState) -> str:
         return state.view
     changed = any(c != 'same' for _, c in cmp.changes)
     return 'changed' if changed else 'all'
+
+
+def _empty(message: str, cmp: Comparison, state: TableState, *, show_all: Any = None) -> str:
+    """The empty table, with a way out: clear the filters when any are active,
+    and (given *show_all*, the segment control builder) widen the segment to all."""
+    actions = []
+    if cmp.narrowing:
+        actions.append(f'<a class="cmp-empty-btn" {_swap_link(cmp, {}, _base_state(state))}>Clear all filters</a>')
+    if show_all and resolve_view(cmp, state) != 'all':
+        attrs = show_all(state.sort, state.direction, 1, state.size, v='all')
+        actions.append(f'<button type="button" class="cmp-empty-btn" {attrs}>Show all conversations</button>')
+    buttons = f'<div class="cmp-empty-actions">{"".join(actions)}</div>' if actions else ''
+    return f'<div class="cmp-empty"><p class="sim-empty">{message}</p>{buttons}</div>'
 
 
 def render_conversations(cmp: Comparison, state: TableState) -> str:
@@ -114,9 +129,9 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
             f'{_sim_pager(control, state.sort, state.direction, page_no, pages, total, state.size, noun="pairs", sizes=_PAGE_SIZES)}'
         )
     elif not cmp.matching.matched:
-        table = '<p class="sim-empty">No conversations matched on (persona, scenario).</p>'
+        table = _empty('No conversations matched on (persona, scenario).', cmp, state)
     else:
-        table = f'<p class="sim-empty">No {view} conversations under the current filters.</p>'
+        table = _empty(f'No {view} conversations under the current filters.', cmp, state, show_all=control)
 
     def unmatched(title: str, which: str, entries: list[SimulationEntry]) -> str:
         if not entries:

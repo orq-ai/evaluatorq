@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
+from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filters import FILTERS
 from evaluatorq.dashboard.sim_compare.model import Comparison, narrowing_selections
 
@@ -98,6 +99,30 @@ def _compare_url(cmp: Comparison, narrowing: dict[str, list[str]], state: TableS
     )
     params.extend((name, str(value)) for name, value, default in table if value != default)
     return f'/compare/sim?{urlencode(params)}'
+
+
+def _swap_link(cmp: Comparison, narrowing: dict[str, list[str]], state: TableState) -> str:
+    """``href`` + HTMX attributes that load the compare view for *narrowing*
+    through the filter route, swapping the page and rail like a rail change."""
+    url = _compare_url(cmp, narrowing, state)
+    query = url.partition('?')[2]
+    return f'href="{esc(url)}" hx-get="/compare/sim/filter?{esc(query)}" hx-target="#filter-swap" hx-swap="outerHTML"'
+
+
+def _base_state(state: TableState | None) -> TableState:
+    """*state* back on page 1, which is where any filter change lands."""
+    state = state or TableState()
+    return TableState(state.view, state.sort, state.direction, 1, state.size)
+
+
+def _toggled(narrowing: dict[str, list[str]], dim: str, value: str) -> dict[str, list[str]]:
+    """*narrowing* with *value* added to *dim*, or removed when already there."""
+    values = narrowing.get(dim, [])
+    rest = [v for v in values if v != value]
+    out = {k: v for k, v in narrowing.items() if k != dim}
+    if value in values:
+        return {**out, **({dim: rest} if rest else {})}
+    return {**out, dim: [*values, value]}
 
 
 def parse_compare_params(items: list[tuple[str, str]]) -> tuple[dict[str, list[str]], TableState]:

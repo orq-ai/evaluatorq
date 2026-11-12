@@ -187,7 +187,7 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
             return _fragment_error(str(message), int(status))
         selections, state = parse_compare_params(_items(req))
         cmp = _comparison(rid_a, rid_b, loaded, selections)
-        oob = _headlines(cmp, resolve_view(cmp, state), oob=True) + _filter_strip(cmp, state, oob=True)
+        oob = _headlines(cmp, resolve_view(cmp, state), state, oob=True) + _filter_strip(cmp, state, oob=True)
         return _push(
             Response(render_conversations(cmp, state) + oob, media_type='text/html'),
             canonical_url(cmp, selections, state),

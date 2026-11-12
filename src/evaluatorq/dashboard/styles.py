@@ -3066,14 +3066,19 @@ _SIM_COMPARE_CSS = """
 /* "What changed" rows (Insights headline rows) */
 .cmp-heads:empty { display: none; }
 .cmp-heads { background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: 12px; overflow: hidden; margin: 0 0 16px; }
-.cmp-head { display: grid; grid-template-columns: 200px minmax(0, 1fr) auto; gap: 16px; align-items: center; width: 100%;
-  padding: 12px 16px; border: 0; border-bottom: 1px solid var(--border-subtle); background: none; text-align: left; font: inherit; color: inherit; }
+.cmp-head { position: relative; display: grid; grid-template-columns: 200px minmax(0, 1fr) auto; gap: 16px; align-items: center; width: 100%;
+  padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); text-align: left; transition: background .15s; }
 .cmp-head:last-child { border-bottom: 0; }
-button.cmp-head { cursor: pointer; transition: background .15s; }
-button.cmp-head:hover { background: var(--app-gray-50); }
-button.cmp-head:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--teal-600); }
-button.cmp-head.is-on { background: var(--teal-50); }
-button.cmp-head.is-on .cmp-head-go { color: var(--teal-600); }
+.cmp-head--click:hover { background: var(--app-gray-50); }
+.cmp-head--click:has(.cmp-head-btn:focus-visible) { box-shadow: inset 0 0 0 2px var(--teal-600); }
+.cmp-head--click.is-on { background: var(--teal-50); }
+.cmp-head--click.is-on .cmp-head-go { color: var(--teal-600); }
+/* The action button stretches over the whole row; the scenario link sits above it. */
+.cmp-head-btn { border: 0; background: none; padding: 0; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-align: right; }
+.cmp-head-btn:focus-visible { outline: none; }
+.cmp-head-btn::after { content: ''; position: absolute; inset: 0; }
+.cmp-head-scn { position: relative; z-index: 1; color: var(--text-link); text-decoration: underline; text-underline-offset: 2px; }
+.cmp-head-scn:focus-visible { outline: none; box-shadow: var(--ring); border-radius: 3px; }
 .cmp-head-number { font: 700 18px/1.1 var(--font-mono); letter-spacing: -.02em; color: var(--text-strong); white-space: nowrap; }
 .cmp-head-finding { display: block; font-size: 13px; font-weight: 650; line-height: 1.35; color: var(--text-strong); }
 .cmp-head-why { display: block; font-size: 11.5px; line-height: 1.35; color: var(--text-muted); margin-top: 2px; }
@@ -3098,6 +3103,12 @@ button.cmp-head.is-on .cmp-head-go { color: var(--teal-600); }
 .cmp-fbar-clear { color: var(--text-link); font-weight: 600; text-decoration: none; }
 .cmp-fbar-clear:hover { text-decoration: underline; }
 .cmp-fbar-hint { color: var(--text-muted); }
+.cmp-fbar-rule { flex-basis: 100%; font-size: 11.5px; color: var(--text-muted); }
+.cmp-empty { padding: 8px 0 4px; }
+.cmp-empty-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.cmp-empty-btn { border: 1px solid var(--border-default); border-radius: 7px; background: var(--surface-card); padding: 4px 10px; font: 500 12px var(--font-sans); color: var(--text-body); cursor: pointer; text-decoration: none; }
+.cmp-empty-btn:hover { border-color: var(--border-strong); color: var(--text-strong); }
+.cmp-empty-btn:focus-visible { outline: none; box-shadow: var(--ring); }
 .cmp-fbar-copy { margin-left: auto; border: 1px solid var(--border-default); border-radius: 7px; background: var(--surface-card);
   padding: 4px 10px; font: 500 12px var(--font-sans); color: var(--text-body); cursor: pointer; }
 .cmp-fbar-copy:hover { border-color: var(--border-strong); color: var(--text-strong); }
@@ -3125,7 +3136,13 @@ button.cmp-head.is-on .cmp-head-go { color: var(--teal-600); }
 .cmp-stack-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) 34px; align-items: center; gap: 8px; }
 .cmp-stack-key { display: inline-flex; align-items: center; }
 .cmp-stack-bar { display: flex; gap: 2px; height: 22px; border-radius: 4px; overflow: hidden; background: var(--chart-track); }
-.cmp-stack-bar i { display: block; min-width: 3px; flex-basis: 0; }
+.cmp-stack-bar i, .cmp-stack-bar a { display: block; min-width: 3px; flex-basis: 0; }
+.cmp-seg-link:hover { filter: brightness(.9); }
+.cmp-seg-link.is-on { box-shadow: inset 0 0 0 2px var(--surface-card); }
+.cmp-seg-link:focus-visible, .cmp-legend-link:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-legend-link { display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px; margin: 0 -6px; border-radius: 6px; color: inherit; text-decoration: none; }
+.cmp-legend-link:hover { background: var(--surface-sunken); }
+.cmp-legend-link.is-on { background: var(--teal-50); box-shadow: inset 0 0 0 1px var(--teal-600); color: var(--text-strong); }
 .cmp-stack-empty { font-size: 11.5px; color: var(--text-faint); align-self: center; padding: 0 8px; }
 .cmp-stack-total { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); text-align: right; }
 .cmp-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 11.5px; color: var(--text-muted); }

@@ -13,7 +13,7 @@ from evaluatorq.dashboard.report_kit import pill as rk_pill
 from evaluatorq.dashboard.report_tabs import sim_entity_dialog
 from evaluatorq.dashboard.sim_compare.fmt import _delta_pill, _fmt_num, _fmt_rate, _run_key
 from evaluatorq.dashboard.sim_compare.model import _FLAT, Comparison, MatchedPair, ScoreRow, Side
-from evaluatorq.dashboard.sim_compare.state import TableState, _compare_url, _qs
+from evaluatorq.dashboard.sim_compare.state import TableState, _base_state, _qs, _swap_link, _toggled
 from evaluatorq.dashboard.sim_compare.table import render_conversations, resolve_view
 from evaluatorq.dashboard.view import GOAL_OUTCOME_LABEL, _render_sim_filter_rail, filter_fragment
 from evaluatorq.simulation.metrics import TURN_METRICS
@@ -69,44 +69,61 @@ def _view_attrs(cmp: Comparison, view: str) -> str:
 _GOAL_SCORERS = frozenset({'goal_achieved'})
 
 
-def _headlines(cmp: Comparison, view: str, *, oob: bool = False) -> str:
+def _headlines(cmp: Comparison, view: str, state: TableState | None = None, *, oob: bool = False) -> str:
     """Insights-style "what changed" rows: a big number, a one-line finding with
     its reason, and an action that narrows the conversation table to *view*.
     The row whose view is showing reads "Showing these" and clicking it again
     returns the table to its default view. The table route re-renders this
-    block out of band so the pressed row follows the segment control."""
+    block out of band so the pressed row follows the segment control.
+
+    The row is a ``div`` and its action a ``button`` stretched over the whole
+    row, so the scenario link in the reason text can sit beside the button
+    instead of inside it (a link in a button is invalid HTML)."""
+    base = _base_state(state)
     changes = cmp.changes
     regressed = [p for p, c in changes if c == 'regressed']
     improved = [p for p, c in changes if c == 'improved']
     errored = [p for p, c in changes if c == 'error']
     rows: list[str] = []
 
-    def row(number: str, finding: str, why: str, *, tone: str = '', target: str | None = None, go: str = '') -> str:
+    def row(
+        number: str,
+        finding: str,
+        why: str,
+        *,
+        why_html: str = '',
+        tone: str = '',
+        target: str | None = None,
+        go: str = '',
+    ) -> str:
         tone_cls = f' cmp-head--{tone}' if tone else ''
         on = target is not None and target == view
-        if on:
-            go_html = '<span class="cmp-head-go">Showing these &#x2713;</span>'
-        elif go:
-            go_html = f'<span class="cmp-head-go">{esc(go)} &rarr;</span>'
-        else:
-            go_html = '<span></span>'
-        inner = (
-            f'<span class="cmp-head-number">{esc(number)}</span>'
+        text = (
             f'<span><span class="cmp-head-finding">{esc(finding)}</span>'
-            f'<span class="cmp-head-why">{esc(why)}</span></span>{go_html}'
+            f'<span class="cmp-head-why">{esc(why)}{why_html}</span></span>'
         )
+        lead = f'<span class="cmp-head-number">{esc(number)}</span>{text}'
         if target is None:
-            return f'<div class="cmp-head{tone_cls}">{inner}</div>'
+            return f'<div class="cmp-head{tone_cls}">{lead}<span></span></div>'
+        go_text = 'Showing these &#x2713;' if on else f'{esc(go)} &rarr;'
+        go_name = 'Showing these' if on else go
         # Pressing the showing row again goes back to the default view ('' = changed, or all).
         attrs = _view_attrs(cmp, '' if on else target)
-        return (
-            f'<button type="button" class="cmp-head{tone_cls}{" is-on" if on else ""}" '
-            f'aria-pressed="{"true" if on else "false"}" {attrs}>{inner}</button>'
+        button = (
+            f'<button type="button" class="cmp-head-go cmp-head-btn" aria-pressed="{"true" if on else "false"}" '
+            f'aria-label="{esc(finding)}: {esc(go_name)}" {attrs}>{go_text}</button>'
         )
+        return f'<div class="cmp-head cmp-head--click{tone_cls}{" is-on" if on else ""}">{lead}{button}</div>'
 
     def where(pairs: list[MatchedPair]) -> str:
         scenario, count = Counter(p.a.scenario for p in pairs).most_common(1)[0]
-        return f' · most in {scenario} ({count} of {len(pairs)})' if count > 1 and len(pairs) > 1 else ''
+        if count <= 1 or len(pairs) <= 1:
+            return ''
+        link = (
+            f'<a class="cmp-head-scn" {_swap_link(cmp, _toggled(cmp.narrowing, "scenario", scenario), base)} '
+            f'aria-label="Filter to scenario {esc(scenario)}">{esc(scenario)}</a>'
+        )
+        return f' · most in {link} ({count} of {len(pairs)})'
 
     def plural(n: int) -> str:
         return f'{n} conversation{"" if n == 1 else "s"}'
@@ -116,7 +133,8 @@ def _headlines(cmp: Comparison, view: str, *, oob: bool = False) -> str:
             row(
                 plural(len(regressed)),
                 'Regressed in B',
-                'Goal met in A, missed in B' + where(regressed),
+                'Goal met in A, missed in B',
+                why_html=where(regressed),
                 tone='bad',
                 target='regressed',
                 go='Review regressions',
@@ -127,7 +145,8 @@ def _headlines(cmp: Comparison, view: str, *, oob: bool = False) -> str:
             row(
                 plural(len(improved)),
                 'Improved in B',
-                'Goal missed in A, met in B' + where(improved),
+                'Goal missed in A, met in B',
+                why_html=where(improved),
                 tone='good',
                 target='improved',
                 go='Review improvements',
@@ -138,7 +157,8 @@ def _headlines(cmp: Comparison, view: str, *, oob: bool = False) -> str:
             row(
                 plural(len(errored)),
                 'Error changes',
-                'A conversation errored in one run and not the other' + where(errored),
+                'A conversation errored in one run and not the other',
+                why_html=where(errored),
                 tone='warn',
                 target='error',
                 go='Review errors',
@@ -231,7 +251,7 @@ def _filter_strip(cmp: Comparison, state: TableState, *, oob: bool = False) -> s
     full = cmp.full
     noun = 'rows' if full.a_only or full.b_only else 'pairs'
     count = f'<span class="cmp-fbar-count">Showing <b>{cmp.shown_rows}</b> of <b>{cmp.total_rows}</b> {noun}</span>'
-    base = TableState(state.view, state.sort, state.direction, 1, state.size)
+    base = _base_state(state)
     if cmp.narrowing:
         chips = ''.join(
             f'<span class="cmp-fchip"><span class="cmp-fchip-dim">{esc(_filter_label(dim))}</span>'
@@ -244,16 +264,13 @@ def _filter_strip(cmp: Comparison, state: TableState, *, oob: bool = False) -> s
     else:
         rest = '<span class="cmp-fbar-hint">Use the filters to narrow both runs to the same conversations.</span>'
     copy = '<button type="button" class="cmp-fbar-copy" data-copy-link>Copy link to this view</button>'
+    rule = (
+        '<span class="cmp-fbar-rule">A pair stays when either run\'s conversation matches.</span>'
+        if cmp.narrowing
+        else ''
+    )
     oob_attr = ' hx-swap-oob="true"' if oob else ''
-    return f'<div id="cmp-fbar" class="cmp-fbar" role="status"{oob_attr}>{count}{rest}{copy}</div>'
-
-
-def _swap_link(cmp: Comparison, narrowing: dict[str, list[str]], state: TableState) -> str:
-    """``href`` + HTMX attributes that load the compare view for *narrowing*
-    through the filter route, swapping the page and rail like a rail change."""
-    url = _compare_url(cmp, narrowing, state)
-    query = url.partition('?')[2]
-    return f'href="{esc(url)}" hx-get="/compare/sim/filter?{esc(query)}" hx-target="#filter-swap" hx-swap="outerHTML"'
+    return f'<div id="cmp-fbar" class="cmp-fbar" role="status"{oob_attr}>{count}{rest}{copy}{rule}</div>'
 
 
 def _tiles(cmp: Comparison) -> str:
@@ -320,32 +337,78 @@ def _tiles(cmp: Comparison) -> str:
     )
 
 
-def _stack_rows(cmp: Comparison, segments_for: Any) -> str:
+def _stack_rows(
+    cmp: Comparison,
+    segments_for: Any,
+    *,
+    dim: str = '',
+    values: dict[str, str] | None = None,
+    state: TableState | None = None,
+) -> str:
     """Two stacked 100% bars (A, B) plus a legend that carries each category's
     ``A → B`` count — the Insights "at a glance" bar. Counts live in the legend,
-    not on the segments, where small text over the fills fails contrast."""
+    not on the segments, where small text over the fills fails contrast.
+
+    *values* maps a category label to the filter value of *dim* it stands for.
+    Those categories become links that toggle the value in the filter, in both
+    the legend and the bars; a category without a value (an error has no rail
+    option) stays plain."""
     segs_a: list[tuple[str, str, int]] = segments_for(cmp.a)
     segs_b: list[tuple[str, str, int]] = segments_for(cmp.b)
+    base = _base_state(state)
+    values = values or {}
+
+    def toggle(label: str) -> tuple[str, bool] | None:
+        """The swap-link attributes for *label* and whether its filter is on."""
+        if label not in values:
+            return None
+        on = values[label] in cmp.narrowing.get(dim, [])
+        return _swap_link(cmp, _toggled(cmp.narrowing, dim, values[label]), base), on
+
+    def name(label: str, text: str, *, on: bool) -> str:
+        hint = 'Filter on: select to remove it' if on else 'Select to filter'
+        return f'{label}, {text}. {hint}'
 
     def bar(which: str, counts: list[tuple[str, str, int]]) -> str:
         total = sum(n for _, _, n in counts)
         if not total:
             body = '<span class="cmp-stack-empty">No conversations</span>'
         else:
-            body = ''.join(
-                f'<i style="flex-grow:{n};background:{color}" title="{esc(label)}: {n} of {total}"></i>'
-                for label, color, n in counts
-                if n
-            )
+            parts = []
+            for label, color, n in counts:
+                if not n:
+                    continue
+                tip = f'title="{esc(label)}: {n} of {total}"'
+                link = toggle(label)
+                if link is None:
+                    parts.append(f'<i style="flex-grow:{n};background:{color}" {tip}></i>')
+                    continue
+                attrs, on = link
+                parts.append(
+                    f'<a class="cmp-seg-link{" is-on" if on else ""}" style="flex-grow:{n};background:{color}" {tip} '
+                    f'aria-label="{esc(name(label, f"run {which}: {n} of {total}", on=on))}" {attrs}></a>'
+                )
+            body = ''.join(parts)
         return (
             f'<div class="cmp-stack-row"><span class="cmp-stack-key">{_run_key(which)}</span>'
             f'<div class="cmp-stack-bar">{body}</div><span class="cmp-stack-total">{total}</span></div>'
         )
 
+    def entry(label: str, color: str, na: int, nb: int) -> str:
+        inner = f'<i style="background:{color}"></i>{esc(label)}<b class="cmp-legend-n">{na} &rarr; {nb}</b>'
+        link = toggle(label)
+        if link is None:
+            return f'<span>{inner}</span>'
+        attrs, on = link
+        label_text = esc(name(label, f'{na} to {nb}', on=on))
+        current = ' aria-current="true"' if on else ''
+        return (
+            f'<span><a class="cmp-legend-link{" is-on" if on else ""}" aria-label="{label_text}"{current} '
+            f'{attrs}>{inner}</a></span>'
+        )
+
     legend_html = ''.join(
-        f'<span><i style="background:{color}"></i>{esc(label)}<b class="cmp-legend-n">{na} &rarr; {nb}</b></span>'
-        for (label, color, na), (_, _, nb) in zip(segs_a, segs_b, strict=True)
-        if na or nb
+        entry(label, color, na, nb) for (label, color, na), (_, _, nb) in zip(segs_a, segs_b, strict=True) if na or nb
     )
     return (
         f'<div class="cmp-stack">{bar("A", segs_a)}{bar("B", segs_b)}</div><div class="cmp-legend">{legend_html}</div>'
@@ -362,7 +425,7 @@ _OUTCOME_SEGMENTS = (
 _TERMINATION_INKS = ('var(--ink-900)', 'var(--text-muted)', 'var(--teal-600)', 'var(--text-body)')
 
 
-def _outcomes_panel(cmp: Comparison) -> str:
+def _outcomes_panel(cmp: Comparison, state: TableState | None = None) -> str:
     def segments(side: Side) -> list[tuple[str, str, int]]:
         counts = Counter(side.status(e) for e in side.entries)
         return [(label, color, counts[key]) for key, label, color in _OUTCOME_SEGMENTS]
@@ -377,9 +440,15 @@ def _outcomes_panel(cmp: Comparison) -> str:
         counts = Counter(e.terminated_by for e in side.entries)
         return [(reason, colors[reason], counts[reason]) for reason in reasons]
 
-    outcomes = _stack_rows(cmp, segments)
+    # The rail's goal_outcome options are 'Achieved' / 'Not achieved'; an error has none.
+    goal_values = {'Goal met': 'Achieved', 'Goal missed': 'Not achieved'}
+    outcomes = _stack_rows(cmp, segments, dim='goal_outcome', values=goal_values, state=state)
     # One termination reason is a 100% bar that says nothing; leave it out.
-    ended = _stack_rows(cmp, term_segments) if len(reasons) > 1 else ''
+    ended = (
+        _stack_rows(cmp, term_segments, dim='terminated_by', values={r: r for r in reasons}, state=state)
+        if len(reasons) > 1
+        else ''
+    )
     body = f'<div class="cmp-subhead">Goal outcome</div>{outcomes}' + (
         f'<div class="cmp-subhead">How conversations ended</div>{ended}' if ended else ''
     )
@@ -451,9 +520,9 @@ def render_compare_body(cmp: Comparison, state: TableState) -> str:
     return (
         f'{_hero(cmp)}'
         f'{_filter_strip(cmp, state)}'
-        f'{_headlines(cmp, resolve_view(cmp, state))}'
+        f'{_headlines(cmp, resolve_view(cmp, state), state)}'
         f'{_tiles(cmp)}'
-        f'<div class="cmp-grid">{_outcomes_panel(cmp)}{_scores_panel(cmp.scores)}</div>'
+        f'<div class="cmp-grid">{_outcomes_panel(cmp, state)}{_scores_panel(cmp.scores)}</div>'
         f'{render_conversations(cmp, state)}'
     )
 
@@ -470,7 +539,6 @@ def render_filter_rail(cmp: Comparison, selections: dict[str, list[str]]) -> str
         total=cmp.total_rows,
         post_url=f'/compare/sim/filter?{_qs(cmp)}',
         include='#cmp-table-state',
-        counter_note="A pair stays when either run's conversation matches.",
     )
 
 

@@ -585,14 +585,14 @@ def test_headline_row_toggles_and_follows_the_table(roots: list[Path]):
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)
     page = client.get(f'/compare/sim?a={rid_a}&b={rid_b}&cmp_view=regressed').text
-    pressed = re.search(r'<button type="button" class="cmp-head cmp-head--bad is-on" aria-pressed="true" ([^>]*)>', page)
+    pressed = re.search(r'<div class="cmp-head cmp-head--click cmp-head--bad is-on">.*?<button [^>]*aria-pressed="true" ([^>]*)>', page)
     assert pressed and 'Showing these' in page
     # pressing the showing row again returns the table to its default view
     assert 'cmp_view="' in pressed.group(1)
     conv = client.get(f'/compare/sim/conversations?a={rid_a}&b={rid_b}&cmp_view=improved').text
     oob = conv.split('id="cmp-heads"')[1]
     assert 'hx-swap-oob="true"' in oob.split('>')[0]
-    assert re.search(r'class="cmp-head cmp-head--good is-on" aria-pressed="true"', oob)
+    assert re.search(r'class="cmp-head cmp-head--click cmp-head--good is-on">.*?aria-pressed="true"', oob)
 
 
 def test_single_termination_reason_hides_the_ended_bar():
@@ -719,3 +719,77 @@ def test_comparison_pills_share_the_report_kit_tones():
     assert _badge('error') == pill('Error', tone='warn')
     assert _delta_pill(0.2, '0.20') == pill('▲ 0.20', tone='good')
     assert _delta_pill(0.2, '0.20', higher_better=False) == pill('▲ 0.20', tone='danger')
+
+
+def _all_links(html: str, css: str) -> list[str]:
+    return re.findall(rf'<a class="{css}[^"]*"[^>]*>', html)
+
+
+def test_outcome_legend_entry_links_to_its_filter_value():
+    from evaluatorq.dashboard.sim_compare.panels import _outcomes_panel
+
+    panel = _outcomes_panel(_cmp())
+    met = next(a for a in _all_links(panel, 'cmp-legend-link') if 'Goal met' in a)
+    assert 'goal_outcome=Achieved' in met and 'hx-get="/compare/sim/filter?' in met
+    assert 'Select to filter' in met and 'is-on' not in met
+    # the bar segment carries the same toggle; the error category has no rail value, so no link
+    assert any('goal_outcome=Achieved' in a for a in _all_links(panel, 'cmp-seg-link'))
+    assert not any('Error' in a for a in _all_links(panel, 'cmp-legend-link'))
+
+
+def test_clicking_an_active_outcome_value_removes_it():
+    from evaluatorq.dashboard.sim_compare.panels import _outcomes_panel
+
+    cmp = _cmp({'goal_outcome': ['Achieved']})
+    met = next(a for a in _all_links(_outcomes_panel(cmp), 'cmp-legend-link') if 'Goal met' in a)
+    assert 'is-on' in met and 'aria-current="true"' in met and 'Filter on' in met
+    assert 'goal_outcome' not in met
+    # an inactive value is added beside the active one
+    missed = next(a for a in _all_links(_outcomes_panel(cmp), 'cmp-legend-link') if 'Goal missed' in a)
+    assert 'goal_outcome=Achieved' in missed and 'goal_outcome=Not+achieved' in missed
+
+
+def test_termination_reason_toggles_terminated_by():
+    from evaluatorq.dashboard.sim_compare.panels import _outcomes_panel
+
+    cmp = _cmp()
+    assert len({e.terminated_by for s in (cmp.a, cmp.b) for e in s.entries}) > 1
+    assert any('terminated_by=' in a for a in _all_links(_outcomes_panel(cmp), 'cmp-legend-link'))
+
+
+def test_headline_scenario_is_a_link_outside_the_button():
+    from evaluatorq.dashboard.sim_compare.model import build_comparison
+    from evaluatorq.dashboard.sim_compare.panels import _headlines
+
+    def run(name: str, goal: bool):
+        return _run(name, [_result(p, 'billing', goal=goal, score=0.5, turns=3) for p in ('ann', 'ben')], {})
+
+    cmp = build_comparison('ra', 'rb', run('A', True), run('B', False), {})
+    heads = _headlines(cmp, 'changed')
+    link = re.search(r'<a class="cmp-head-scn" ([^>]*)>billing</a>', heads)
+    assert link and 'scenario=billing' in link.group(1) and 'hx-get="/compare/sim/filter?' in link.group(1)
+    assert 'most in' in heads and '(2 of 2)' in heads
+    for button in re.findall(r'<button.*?</button>', heads, flags=re.S):
+        assert '<a ' not in button
+
+
+def test_empty_state_offers_clear_all_only_with_active_filters(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}&persona=alice&cmp_view=error').text
+    empty = html.split('class="cmp-empty"')[1].split('</section>')[0]
+    assert 'Clear all filters' in empty and 'Show all conversations' in empty
+    # no filters: the empty segment still offers "Show all", but nothing to clear
+    bare = client.get(f'/compare/sim?a={rid_a}&b={rid_b}&cmp_view=error').text
+    empty = bare.split('class="cmp-empty"')[1].split('</section>')[0]
+    assert 'Clear all filters' not in empty and 'Show all conversations' in empty
+
+
+def test_pairing_rule_shows_only_with_active_filters(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    rule = "A pair stays when either run's conversation matches."
+    on = client.get(f'/compare/sim?a={rid_a}&b={rid_b}&persona=alice').text
+    off = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
+    assert on.count(rule.replace("'", '&#x27;')) + on.count(rule) == 1
+    assert rule not in off and rule.replace("'", '&#x27;') not in off
