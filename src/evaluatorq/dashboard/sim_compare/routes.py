@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects at runtime
@@ -18,10 +18,10 @@ from evaluatorq.dashboard.sim_compare.drawer import render_compare_transcript
 from evaluatorq.dashboard.sim_compare.model import (
     Comparison,
     RunStamp,
-    _side,
+    build_side,
     cached_comparison,
 )
-from evaluatorq.dashboard.sim_compare.panels import _filter_strip, _headlines, _swap, render_compare_page
+from evaluatorq.dashboard.sim_compare.panels import filter_strip, render_compare_page, render_headlines, render_swap
 from evaluatorq.dashboard.sim_compare.state import canonical_url, parse_compare_params
 from evaluatorq.dashboard.sim_compare.table import render_conversations, resolve_view
 from evaluatorq.dashboard.ui_components import stylesheet_asset
@@ -29,8 +29,6 @@ from evaluatorq.dashboard.view import report_back_link
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from evaluatorq.simulation.contracts import SimulationRun
 
 # ---------------------------------------------------------------------------
 # Loading (distinguishes not-found from load-failure, unlike sim_views._load_run)
@@ -59,7 +57,7 @@ def _resolve_stamped(rid: str, roots: list[Path] | None, surface: str) -> tuple[
     if path is None:
         return 'missing', None, None
     try:
-        stamp = (str(path.resolve()), path.stat().st_mtime_ns)
+        stamp = library.stamp(path)
         # Strict read: a corrupt/unreadable file must surface as an error, not be masked
         # as an unknown surface (which load_surface does for lenient directory scans).
         found, _raw = library.load_surface_strict(path)
@@ -95,31 +93,37 @@ def _fragment_error(message: str, status: int) -> Response:
     return Response(f'<p class="sim-empty">{esc(message)}</p>', status_code=status, media_type='text/html')
 
 
-class _LoadedPair(NamedTuple):
-    run_a: SimulationRun
-    run_b: SimulationRun
-    stamps: tuple[RunStamp, RunStamp]
+class CompareError(Exception):
+    """A compare request that cannot be served: *message* for the page, *status* for the response."""
+
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.message, self.status = message, status
 
 
-def _load_pair(rid_a: str, rid_b: str, roots: list[Path] | None) -> _LoadedPair | tuple[str, int]:
-    """Both runs, or ``(message, status)`` naming which one failed and why."""
+def _load_pair(rid_a: str, rid_b: str, roots: list[Path] | None) -> tuple[RunStamp, RunStamp]:
+    """The stamps of both runs' files, once both load as sim runs.
+
+    Raises:
+        CompareError: naming which run failed and why.
+    """
     if not rid_a or not rid_b:
-        return 'Pick two runs to compare.', 400
+        raise CompareError('Pick two runs to compare.', 400)
     if rid_a == rid_b:
-        return 'Pick two different runs to compare.', 400
-    status_a, run_a, stamp_a = _resolve_stamped(rid_a, roots, 'sim')
-    status_b, run_b, stamp_b = _resolve_stamped(rid_b, roots, 'sim')
+        raise CompareError('Pick two different runs to compare.', 400)
+    status_a, _, stamp_a = _resolve_stamped(rid_a, roots, 'sim')
+    status_b, _, stamp_b = _resolve_stamped(rid_b, roots, 'sim')
     if 'error' in (status_a, status_b):
         which = 'A' if status_a == 'error' else 'B'
-        return f'Run {which} could not be loaded (the report may be corrupt).', 422
-    if run_a is None or run_b is None:
-        which = 'A' if run_a is None else 'B'
-        return f'Run {which} was not found or is not a simulation run.', 404
-    return _LoadedPair(run_a, run_b, (stamp_a, stamp_b))
+        raise CompareError(f'Run {which} could not be loaded (the report may be corrupt).', 422)
+    if stamp_a is None or stamp_b is None:
+        which = 'A' if stamp_a is None else 'B'
+        raise CompareError(f'Run {which} was not found or is not a simulation run.', 404)
+    return stamp_a, stamp_b
 
 
-def _comparison(rid_a: str, rid_b: str, loaded: _LoadedPair, selections: dict[str, list[str]]) -> Comparison:
-    return cached_comparison(loaded.stamps, rid_a, rid_b, loaded.run_a, loaded.run_b, selections)
+def _comparison(rid_a: str, rid_b: str, roots: list[Path] | None, selections: dict[str, list[str]]) -> Comparison:
+    return cached_comparison(_load_pair(rid_a, rid_b, roots), rid_a, rid_b, selections)
 
 
 def _push(response: Response, url: str) -> Response:
@@ -130,13 +134,12 @@ def _push(response: Response, url: str) -> Response:
 
 def _filter_response(roots: list[Path] | None, rid_a: str, rid_b: str, items: list[tuple[str, str]]) -> Response:
     """Blocking half of the filter route (disk loads and rendering), run off the event loop."""
-    loaded = _load_pair(rid_a, rid_b, roots)
-    if not isinstance(loaded, _LoadedPair):
-        message, status = loaded
-        return _fragment_error(str(message), int(status))
     selections, state = parse_compare_params(items)
-    cmp = _comparison(rid_a, rid_b, loaded, selections)
-    return _push(Response(_swap(cmp, selections, state), media_type='text/html'), canonical_url(cmp, state))
+    try:
+        cmp = _comparison(rid_a, rid_b, roots, selections)
+    except CompareError as e:
+        return _fragment_error(e.message, e.status)
+    return _push(Response(render_swap(cmp, selections, state), media_type='text/html'), canonical_url(cmp, state))
 
 
 # ---------------------------------------------------------------------------
@@ -156,12 +159,12 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
     @app.get('/compare/sim')
     def compare_sim(req: Request) -> Response:
         rid_a, rid_b = _ids(req)
-        loaded = _load_pair(rid_a, rid_b, roots)
-        if not isinstance(loaded, _LoadedPair):
-            message, status = loaded
-            return error_page(str(message), int(status), 'sim')
         selections, state = parse_compare_params(_items(req))
-        body = render_compare_page(_comparison(rid_a, rid_b, loaded, selections), selections, state)
+        try:
+            cmp = _comparison(rid_a, rid_b, roots, selections)
+        except CompareError as e:
+            return error_page(e.message, e.status, 'sim')
+        body = render_compare_page(cmp, selections, state)
         return Response(
             page(
                 'Compare',
@@ -189,13 +192,12 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
     @app.get('/compare/sim/conversations')
     def compare_sim_conversations(req: Request) -> Response:
         rid_a, rid_b = _ids(req)
-        loaded = _load_pair(rid_a, rid_b, roots)
-        if not isinstance(loaded, _LoadedPair):
-            message, status = loaded
-            return _fragment_error(str(message), int(status))
         selections, state = parse_compare_params(_items(req))
-        cmp = _comparison(rid_a, rid_b, loaded, selections)
-        oob = _headlines(cmp, resolve_view(cmp, state), state, oob=True) + _filter_strip(cmp, state, oob=True)
+        try:
+            cmp = _comparison(rid_a, rid_b, roots, selections)
+        except CompareError as e:
+            return _fragment_error(e.message, e.status)
+        oob = render_headlines(cmp, resolve_view(cmp, state), state, oob=True) + filter_strip(cmp, state, oob=True)
         return _push(
             Response(render_conversations(cmp, state) + oob, media_type='text/html'),
             canonical_url(cmp, state),
@@ -209,17 +211,16 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
             ib = int(req.query_params.get('ib', ''))
         except (TypeError, ValueError):
             return _fragment_error('Invalid conversation index.', 400)
-        loaded = _load_pair(rid_a, rid_b, roots)
-        if not isinstance(loaded, _LoadedPair):
-            message, status = loaded
-            return _fragment_error(str(message), int(status))
+        try:
+            cmp = _comparison(rid_a, rid_b, roots, {})
+        except CompareError as e:
+            return _fragment_error(e.message, e.status)
         # Row links carry original indices, so resolve against the full, unfiltered matching.
-        full = _comparison(rid_a, rid_b, loaded, {}).full
-        pair = next((p for p in full.matched if p.a.index == ia and p.b.index == ib), None)
+        pair = next((p for p in cmp.full.matched if p.a.index == ia and p.b.index == ib), None)
         if pair is None:
             return _fragment_error('Not a matched pair.', 404)
-        side_a = _side(rid_a, loaded.run_a, [pair.a])
-        side_b = _side(rid_b, loaded.run_b, [pair.b])
+        side_a = build_side(rid_a, cmp.a.run, [pair.a])
+        side_b = build_side(rid_b, cmp.b.run, [pair.b])
         with cli_slug_render_scope():
             body = render_compare_transcript(pair.a, pair.b, side_a, side_b)
         return Response(body, media_type='text/html')

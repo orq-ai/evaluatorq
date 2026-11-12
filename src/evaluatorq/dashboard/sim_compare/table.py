@@ -5,17 +5,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.reports import esc
-from evaluatorq.dashboard.sim_compare.fmt import _badge, _change_pill, _run_key, _tone
+from evaluatorq.dashboard.sim_compare.fmt import change_pill, delta_tone, run_key, status_badge
 from evaluatorq.dashboard.sim_compare.state import (
-    _COLUMNS,
-    _DIRECTION_LABELS,
-    _PAGE_SIZES,
-    _SORT_KEYS,
-    _VIEWS,
+    COLUMNS,
+    DIRECTION_LABELS,
+    PAGE_SIZES,
+    SORT_KEYS,
+    VIEWS,
     TableState,
-    _base_state,
-    _qs,
-    _swap_link,
+    first_page,
+    run_query,
+    swap_link,
 )
 from evaluatorq.dashboard.sim_views import (
     _sim_header_row,
@@ -49,7 +49,7 @@ def _empty(message: str, cmp: Comparison, state: TableState, *, show_all: Any = 
     and (given *show_all*, the segment control builder) widen the segment to all."""
     actions = []
     if cmp.narrowing:
-        actions.append(f'<a class="cmp-empty-btn" {_swap_link(cmp, {}, _base_state(state))}>Clear all filters</a>')
+        actions.append(f'<a class="cmp-empty-btn" {swap_link(cmp, {}, first_page(state))}>Clear all filters</a>')
     if show_all and resolve_view(cmp, state) != 'all':
         attrs = show_all(state.sort, state.direction, 1, state.size, v='all')
         actions.append(f'<button type="button" class="cmp-empty-btn" {attrs}>Show all conversations</button>')
@@ -61,11 +61,11 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
     """The conversation section: segment control, sortable/paged table whose
     rows open the paired transcript in the drawer, and the unmatched lists."""
     changes = cmp.changes
-    counts = {key: sum(1 for _, c in changes if _in_view(c, key)) for key, _ in _VIEWS}
+    counts = {key: sum(1 for _, c in changes if _in_view(c, key)) for key, _ in VIEWS}
     view = resolve_view(cmp, state)
 
     def control(sort: str, direction: str, page: int, size: int, *, v: str = state.view) -> str:
-        qs = _qs(cmp, cmp_view=v, cmp_sort=sort, cmp_dir=direction, cmp_page=page, cmp_size=size)
+        qs = run_query(cmp, cmp_view=v, cmp_sort=sort, cmp_dir=direction, cmp_page=page, cmp_size=size)
         return (
             f'hx-get="/compare/sim/conversations?{esc(qs)}" hx-include="#filter-form" '
             'hx-target="#cmp-conversations" hx-swap="outerHTML"'
@@ -80,12 +80,12 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
             f'{control(state.sort, state.direction, 1, state.size, v=key)}>{label}'
             f'<span class="cmp-seg-n">{counts[key]}</span></button>'
         )
-        for key, label in _VIEWS
+        for key, label in VIEWS
     )
 
     visible = sorted(
         ((p, c) for p, c in changes if _in_view(c, view)),
-        key=_SORT_KEYS[state.sort],
+        key=SORT_KEYS[state.sort],
         reverse=state.direction == 'desc',
     )
     total = len(visible)
@@ -98,17 +98,17 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
         a, b = pair.a, pair.b
         d_score = b.goal_completion_score - a.goal_completion_score
         d_turns = b.turn_count - a.turn_count
-        url = f'/compare/sim/transcript?{_qs(cmp, ia=a.index, ib=b.index)}'
+        url = f'/compare/sim/transcript?{run_query(cmp, ia=a.index, ib=b.index)}'
         rows.append(
             f'<tr class="sim-conv-row cmp-conv-row" role="button" tabindex="0" '
             f'data-sim-entity-trigger data-entity-kind="conversation" data-drawer-url="{esc(url)}">'
             f'<td class="sim-conv-persona">{esc(a.persona)}</td>'
             f'<td class="sim-conv-scenario">{esc(a.scenario)}</td>'
             f'<td class="cmp-num">{a.goal_completion_score:.2f} &rarr; {b.goal_completion_score:.2f}'
-            f' <span class="cmp-num-d cmp-num-d--{_tone(d_score)}">{d_score:+.2f}</span></td>'
+            f' <span class="cmp-num-d cmp-num-d--{delta_tone(d_score)}">{d_score:+.2f}</span></td>'
             f'<td class="cmp-num">{a.turn_count} &rarr; {b.turn_count} <span class="cmp-num-d">{d_turns:+d}</span></td>'
-            f'<td>{_change_pill(change)}</td>'
-            f'<td class="cmp-outcome">{_badge(cmp.a.status(a))}<span class="cmp-arrow">&rarr;</span>{_badge(cmp.b.status(b))}</td>'
+            f'<td>{change_pill(change)}</td>'
+            f'<td class="cmp-outcome">{status_badge(cmp.a.status(a))}<span class="cmp-arrow">&rarr;</span>{status_badge(cmp.b.status(b))}</td>'
             '</tr>'
         )
 
@@ -118,15 +118,15 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
             state.sort,
             state.direction,
             state.size,
-            columns=_COLUMNS,
+            columns=COLUMNS,
             trailing=('Outcome A → B',),
-            direction_labels=_DIRECTION_LABELS,
+            direction_labels=DIRECTION_LABELS,
         )
         table = (
             '<div class="sim-conv-table-shell">'
             f'<table class="sim-conv-table cmp-conv-table">{header}<tbody>{"".join(rows)}</tbody></table>'
             '</div>'
-            f'{_sim_pager(control, state.sort, state.direction, page_no, pages, total, state.size, noun="pairs", sizes=_PAGE_SIZES)}'
+            f'{_sim_pager(control, state.sort, state.direction, page_no, pages, total, state.size, noun="pairs", sizes=PAGE_SIZES)}'
         )
     elif not cmp.matching.matched:
         table = _empty('No conversations matched on (persona, scenario).', cmp, state)
@@ -138,7 +138,7 @@ def render_conversations(cmp: Comparison, state: TableState) -> str:
             return ''
         items = ''.join(f'<li>{esc(e.persona)} &middot; {esc(e.scenario)}</li>' for e in entries)
         return (
-            f'<details class="cmp-unmatched"><summary>{_run_key(which)} {esc(title)} '
+            f'<details class="cmp-unmatched"><summary>{run_key(which)} {esc(title)} '
             f'<span class="cmp-seg-n">{len(entries)}</span></summary><ul>{items}</ul></details>'
         )
 

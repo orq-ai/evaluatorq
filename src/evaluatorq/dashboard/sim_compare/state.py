@@ -13,24 +13,24 @@ if TYPE_CHECKING:
     from evaluatorq.dashboard.sim_compare.model import Comparison
 
 
-def _qs(cmp: Comparison, **params: Any) -> str:
+def run_query(cmp: Comparison, **params: Any) -> str:
     return urlencode({'a': cmp.a.rid, 'b': cmp.b.rid, **params})
 
 
-_VIEWS = (
+VIEWS = (
     ('changed', 'Changed'),
     ('regressed', 'Regressed'),
     ('improved', 'Improved'),
     ('error', 'Errors'),
     ('all', 'All'),
 )
-_VIEW_KEYS = {key for key, _ in _VIEWS}
+_VIEW_KEYS = {key for key, _ in VIEWS}
 
 # Worst first: a regression outranks an error, which outranks an improvement.
 _SEVERITY = {'regressed': 0, 'error': 1, 'improved': 2, 'same': 3}
 
 # (param, header label, sort key over (pair, change))
-_COLUMNS: list[tuple[str, str, Any]] = [
+COLUMNS: list[tuple[str, str, Any]] = [
     ('persona', 'Persona', lambda pc: pc[0].a.persona.lower()),
     ('scenario', 'Scenario', lambda pc: pc[0].a.scenario.lower()),
     ('score', 'Goal score A → B', lambda pc: pc[0].b.goal_completion_score - pc[0].a.goal_completion_score),
@@ -41,10 +41,10 @@ _COLUMNS: list[tuple[str, str, Any]] = [
         lambda pc: (_SEVERITY[pc[1]], pc[0].b.goal_completion_score - pc[0].a.goal_completion_score),
     ),
 ]
-_SORT_KEYS = {param: key for param, _, key in _COLUMNS}
+SORT_KEYS = {param: key for param, _, key in COLUMNS}
 _DEFAULT_SORT = 'change'  # regressions first, then by the biggest score drop
-_DIRECTION_LABELS = {'change': ('worst first', 'best first')}
-_PAGE_SIZES = (10, 25, 50)
+DIRECTION_LABELS = {'change': ('worst first', 'best first')}
+PAGE_SIZES = (10, 25, 50)
 _DEFAULT_SIZE = 10
 
 
@@ -72,10 +72,10 @@ class TableState:
             size = _DEFAULT_SIZE
         return cls(
             view if view in _VIEW_KEYS else '',
-            sort if sort in _SORT_KEYS else _DEFAULT_SORT,
+            sort if sort in SORT_KEYS else _DEFAULT_SORT,
             direction if direction in ('asc', 'desc') else 'asc',
             max(1, page),
-            size if size in _PAGE_SIZES else _DEFAULT_SIZE,
+            size if size in PAGE_SIZES else _DEFAULT_SIZE,
         )
 
 
@@ -103,7 +103,7 @@ def _compare_url(cmp: Comparison, narrowing: dict[str, list[str]], state: TableS
     return f'/compare/sim?{urlencode(params)}'
 
 
-def _swap_link(cmp: Comparison, narrowing: dict[str, list[str]], state: TableState) -> str:
+def swap_link(cmp: Comparison, narrowing: dict[str, list[str]], state: TableState) -> str:
     """``href`` + HTMX attributes that load the compare view for *narrowing*
     through the filter route, swapping the page and rail like a rail change."""
     url = _compare_url(cmp, narrowing, state)
@@ -111,13 +111,13 @@ def _swap_link(cmp: Comparison, narrowing: dict[str, list[str]], state: TableSta
     return f'href="{esc(url)}" hx-get="/compare/sim/filter?{esc(query)}" hx-target="#filter-swap" hx-swap="outerHTML"'
 
 
-def _base_state(state: TableState | None) -> TableState:
+def first_page(state: TableState | None) -> TableState:
     """*state* back on page 1, which is where any filter change lands."""
     state = state or TableState()
     return TableState(state.view, state.sort, state.direction, 1, state.size)
 
 
-def _toggled(narrowing: dict[str, list[str]], dim: str, value: str) -> dict[str, list[str]]:
+def toggled(narrowing: dict[str, list[str]], dim: str, value: str) -> dict[str, list[str]]:
     """*narrowing* with *value* added to *dim*, or removed when already there."""
     values = narrowing.get(dim, [])
     rest = [v for v in values if v != value]

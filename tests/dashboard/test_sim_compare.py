@@ -538,13 +538,13 @@ def test_compare_control_on_sim_report(roots: list[Path]):
 
 
 def test_outcome_filter_makes_goal_rate_not_comparable():
-    from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
+    from evaluatorq.dashboard.sim_compare.heatmap import where_panel
     from evaluatorq.dashboard.sim_compare.model import ScoreRow
-    from evaluatorq.dashboard.sim_compare.panels import _headlines, _scores_panel, _tiles
+    from evaluatorq.dashboard.sim_compare.panels import render_headlines, _scores_panel, _tiles
 
     cmp = _cmp({'goal_outcome': ['Achieved']})
     assert cmp.outcome_filter == 'goal outcome'
-    heads = _headlines(cmp, 'all')
+    heads = render_headlines(cmp, 'all')
     assert 'Goal rate hidden' in heads
     assert 'Goal rate held steady' not in heads and 'Goal rate rose' not in heads
     tiles = _tiles(cmp)
@@ -557,8 +557,8 @@ def test_outcome_filter_makes_goal_rate_not_comparable():
     assert 'Hidden: goal_achieved, because you filtered by goal outcome' in scores
     assert 'cmp-score-label">goal_achieved' not in scores and 'cmp-score-label">helpfulness' in scores
     assert 'Hidden: goal_achieved' not in _scores_panel(rows)
-    assert ' pts<' not in _where_panel(cmp)
-    assert 'pair' in _where_panel(cmp)
+    assert ' pts<' not in where_panel(cmp)
+    assert 'pair' in where_panel(cmp)
     assert _cmp({'max_goal_score': ['0.5']}).outcome_filter == 'goal score'
     # a persona filter selects on something else, so the rate stays comparable
     assert not _cmp({'persona': ['alice']}).outcome_filter
@@ -566,7 +566,7 @@ def test_outcome_filter_makes_goal_rate_not_comparable():
 
 def test_biggest_score_move_skips_the_goal_scorer():
     from evaluatorq.dashboard.sim_compare.model import ScoreRow
-    from evaluatorq.dashboard.sim_compare.panels import _headlines
+    from evaluatorq.dashboard.sim_compare.panels import render_headlines
 
     cmp = _cmp()
     cmp.__dict__['scores'] = [
@@ -574,7 +574,7 @@ def test_biggest_score_move_skips_the_goal_scorer():
         ScoreRow('criteria_met', 0.5, 0.4),
         ScoreRow('Turns', 4.0, 9.0, higher_better=False),
     ]
-    heads = _headlines(cmp, 'changed')
+    heads = render_headlines(cmp, 'changed')
     assert 'Biggest score move: criteria_met worsened' in heads
     assert 'goal_achieved' not in heads and 'Turns' not in heads
 
@@ -696,43 +696,40 @@ def test_rail_goal_outcome_chips_read_goal_met_and_missed(roots: list[Path]):
     assert 'value="Achieved"' in rail and 'Goal met' in rail and '>Achieved<' not in rail
 
 
-def test_comparison_is_cached_per_file_stamp_and_selections(roots: list[Path]):
+def test_comparison_is_cached_per_file_stamp_and_narrowing(roots: list[Path]):
     import os
 
-    from evaluatorq.dashboard.sim_compare import model
+    from evaluatorq.dashboard import library
+    from evaluatorq.dashboard.sim_compare.model import cached_comparison
+    from evaluatorq.dashboard.sim_views import _entries_from_run
 
-    model._build_cached.cache_clear()
-    rid_a, rid_b = _rids(roots)
-    client = TestClient(build_app(roots=roots))
-    url = f'/compare/sim/conversations?a={rid_a}&b={rid_b}'
+    paths = (roots[1] / 'a.json', roots[1] / 'b.json')
+    stamps = (library.stamp(paths[0]), library.stamp(paths[1]))
+    first = cached_comparison(stamps, 'ra', 'rb', {})
+    assert cached_comparison(stamps, 'ra', 'rb', {}) is first
 
-    assert client.get(f'{url}&cmp_sort=turns').status_code == 200
-    assert client.get(f'{url}&cmp_sort=score&cmp_page=1').status_code == 200
-    info = model._build_cached.cache_info()
-    assert (info.misses, info.hits) == (1, 1)
+    # A selection that drops nothing (the rail posts every control) is the same slice.
+    everyone = sorted({e.persona for run in (_run_a(), _run_b()) for e in _entries_from_run(run)})
+    assert cached_comparison(stamps, 'ra', 'rb', {'persona': everyone}) is first
 
-    # Same files, different selections: a new entry.
-    assert client.get(f'{url}&goal_outcome=Achieved').status_code == 200
-    assert model._build_cached.cache_info().misses == 2
+    # A selection that narrows is a different slice.
+    assert cached_comparison(stamps, 'ra', 'rb', {'goal_outcome': ['Achieved']}) is not first
 
-    # A rewrite changes the mtime, so the same request rebuilds.
-    path = roots[1] / 'a.json'
-    stat = path.stat()
-    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
-    assert client.get(f'{url}&cmp_sort=turns').status_code == 200
-    assert model._build_cached.cache_info().misses == 3
-    model._build_cached.cache_clear()
+    # A rewrite changes the stamp, so the same request rebuilds.
+    stat = paths[0].stat()
+    os.utime(paths[0], ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    assert cached_comparison((library.stamp(paths[0]), stamps[1]), 'ra', 'rb', {}) is not first
 
 
 def test_comparison_pills_share_the_report_kit_tones():
     from evaluatorq.dashboard.report_kit import pill
-    from evaluatorq.dashboard.sim_compare.fmt import _badge, _change_pill, _delta_pill
+    from evaluatorq.dashboard.sim_compare.fmt import status_badge, change_pill, delta_pill
 
-    assert _change_pill('regressed') == pill('Regressed', tone='danger', dot=True)
-    assert _change_pill('improved') == pill('Improved', tone='good', dot=True)
-    assert _badge('error') == pill('Error', tone='warn')
-    assert _delta_pill(0.2, '0.20') == pill('▲ 0.20', tone='good')
-    assert _delta_pill(0.2, '0.20', higher_better=False) == pill('▲ 0.20', tone='danger')
+    assert change_pill('regressed') == pill('Regressed', tone='danger', dot=True)
+    assert change_pill('improved') == pill('Improved', tone='good', dot=True)
+    assert status_badge('error') == pill('Error', tone='warn')
+    assert delta_pill(0.2, '0.20') == pill('▲ 0.20', tone='good')
+    assert delta_pill(0.2, '0.20', higher_better=False) == pill('▲ 0.20', tone='danger')
 
 
 def _all_links(html: str, css: str) -> list[str]:
@@ -773,13 +770,13 @@ def test_termination_reason_toggles_terminated_by():
 
 def test_headline_scenario_is_a_link_outside_the_button():
     from evaluatorq.dashboard.sim_compare.model import build_comparison
-    from evaluatorq.dashboard.sim_compare.panels import _headlines
+    from evaluatorq.dashboard.sim_compare.panels import render_headlines
 
     def run(name: str, goal: bool):
         return _run(name, [_result(p, 'billing', goal=goal, score=0.5, turns=3) for p in ('ann', 'ben')], {})
 
     cmp = build_comparison('ra', 'rb', run('A', True), run('B', False), {})
-    heads = _headlines(cmp, 'changed')
+    heads = render_headlines(cmp, 'changed')
     link = re.search(r'<a class="cmp-head-scn" ([^>]*)>billing</a>', heads)
     assert link and 'scenario=billing' in link.group(1) and 'hx-get="/compare/sim/filter?' in link.group(1)
     assert 'most in' in heads and '(2 of 2)' in heads
@@ -815,9 +812,9 @@ def test_pairing_rule_shows_only_with_active_filters(roots: list[Path]):
 
 
 def _where(selections: dict[str, list[str]] | None = None) -> str:
-    from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
+    from evaluatorq.dashboard.sim_compare.heatmap import where_panel
 
-    return _where_panel(_cmp(selections))
+    return where_panel(_cmp(selections))
 
 
 def _heat_cell(html: str, persona: str, scenario: str) -> str:
@@ -886,23 +883,23 @@ def test_where_active_cell_toggles_off_and_keeps_other_filters():
 
 
 def test_where_panel_hidden_for_one_persona_and_one_scenario():
-    from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
+    from evaluatorq.dashboard.sim_compare.heatmap import where_panel
     from evaluatorq.dashboard.sim_compare.model import build_comparison
 
     run_a = _run('a', [_result('alice', 'billing', goal=True, score=1, turns=2)], {})
     run_b = _run('b', [_result('alice', 'billing', goal=False, score=0, turns=2)], {})
-    assert _where_panel(build_comparison('ra', 'rb', run_a, run_b, {})) == ''
+    assert where_panel(build_comparison('ra', 'rb', run_a, run_b, {})) == ''
     assert 'Where it changed' in _where()
 
 
 def test_where_panel_caps_columns_and_says_how_many_are_left():
-    from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
+    from evaluatorq.dashboard.sim_compare.heatmap import where_panel
     from evaluatorq.dashboard.sim_compare.model import build_comparison
 
     names = [f's{i:02d}' for i in range(15)]
     run_a = _run('a', [_result('alice', n, goal=True, score=1, turns=2) for n in names], {})
     run_b = _run('b', [_result('alice', n, goal=False, score=0, turns=2) for n in names], {})
-    html = _where_panel(build_comparison('ra', 'rb', run_a, run_b, {}))
+    html = where_panel(build_comparison('ra', 'rb', run_a, run_b, {}))
     assert html.count('rk-heat-col') == 12
     assert '+3 more scenarios' in html
 

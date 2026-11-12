@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.sim_detail import first_divergence, flipped_criteria
-from evaluatorq.dashboard.sim_compare.fmt import _badge, _change_pill, _run_key, _tone
+from evaluatorq.dashboard.sim_compare.fmt import change_pill, delta_tone, run_key, status_badge
 from evaluatorq.dashboard.sim_compare.model import MatchedPair, Side, pair_change
 from evaluatorq.dashboard.sim_views import (
     render_transcript_fragment,
@@ -28,11 +28,11 @@ def _differences(entry_a: SimulationEntry, entry_b: SimulationEntry, side_a: Sid
 
     d_score = entry_b.goal_completion_score - entry_a.goal_completion_score
     rows = [
-        ('Outcome', ab(_badge(side_a.status(entry_a)), _badge(side_b.status(entry_b)))),
+        ('Outcome', ab(status_badge(side_a.status(entry_a)), status_badge(side_b.status(entry_b)))),
         (
             'Goal score',
             ab(f'{entry_a.goal_completion_score:.2f}', f'{entry_b.goal_completion_score:.2f}')
-            + f' <span class="cmp-num-d cmp-num-d--{_tone(d_score)}">{d_score:+.2f}</span>',
+            + f' <span class="cmp-num-d cmp-num-d--{delta_tone(d_score)}">{d_score:+.2f}</span>',
         ),
         ('Turns', ab(str(entry_a.turn_count), str(entry_b.turn_count))),
     ]
@@ -68,8 +68,8 @@ def render_compare_transcript(entry_a: SimulationEntry, entry_b: SimulationEntry
     def column(which: str, entry: SimulationEntry, side: Side) -> str:
         return (
             '<div class="cmp-side">'
-            f'<div class="cmp-side-title">{_run_key(which)}<span class="cmp-side-name">{esc(side.name)}</span>'
-            f'<span class="cmp-side-id">#{entry.index}</span>{_badge(side.status(entry))}</div>'
+            f'<div class="cmp-side-title">{run_key(which)}<span class="cmp-side-name">{esc(side.name)}</span>'
+            f'<span class="cmp-side-id">#{entry.index}</span>{status_badge(side.status(entry))}</div>'
             f'{render_transcript_fragment(entry, summary=False, mark_index=split)}</div>'
         )
 
@@ -78,7 +78,7 @@ def render_compare_transcript(entry_a: SimulationEntry, entry_b: SimulationEntry
     head = (
         '<header class="cmp-pair-head">'
         f'<div class="cmp-pair-title">{esc(entry_a.persona)} <span class="cmp-pair-sep">·</span> {esc(entry_a.scenario)}</div>'
-        f'{_change_pill(change)}</header>'
+        f'{change_pill(change)}</header>'
     )
     return (
         f'{head}{_differences(entry_a, entry_b, side_a, side_b)}'

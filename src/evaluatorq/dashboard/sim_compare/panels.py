@@ -10,10 +10,10 @@ from evaluatorq.common.reports import esc, kpi_cards, pct
 from evaluatorq.dashboard.filters import _sim_options_from_results
 from evaluatorq.dashboard.report_kit import panel
 from evaluatorq.dashboard.report_tabs import sim_entity_dialog
-from evaluatorq.dashboard.sim_compare.fmt import _delta_pill, _fmt_num, _run_key
-from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
-from evaluatorq.dashboard.sim_compare.model import _FLAT, Comparison, MatchedPair, ScoreRow, Side
-from evaluatorq.dashboard.sim_compare.state import TableState, _base_state, _qs, _swap_link, _toggled
+from evaluatorq.dashboard.sim_compare.fmt import delta_pill, fmt_num, run_key
+from evaluatorq.dashboard.sim_compare.heatmap import where_panel
+from evaluatorq.dashboard.sim_compare.model import FLAT_DELTA, Comparison, MatchedPair, ScoreRow, Side
+from evaluatorq.dashboard.sim_compare.state import TableState, first_page, run_query, swap_link, toggled
 from evaluatorq.dashboard.sim_compare.table import render_conversations, resolve_view
 from evaluatorq.dashboard.view import GOAL_OUTCOME_LABEL, _render_sim_filter_rail, filter_fragment
 from evaluatorq.simulation.metrics import TURN_METRICS
@@ -31,7 +31,7 @@ def _hero(cmp: Comparison) -> str:
         date = side.run.created_at.strftime('%Y-%m-%d %H:%M')
         n = len(side.run.results)
         return (
-            f'<span class="cmp-run">{_run_key(which)}'
+            f'<span class="cmp-run">{run_key(which)}'
             f'<span class="cmp-run-name">{esc(side.name)}</span>'
             f'<span class="cmp-run-meta">{date} · {n} conversations</span></span>'
         )
@@ -60,7 +60,7 @@ def _hero(cmp: Comparison) -> str:
 def _view_attrs(cmp: Comparison, view: str) -> str:
     """HTMX attributes that load the conversation table at *view* (keeping the filter)."""
     return (
-        f'hx-get="/compare/sim/conversations?{esc(_qs(cmp, cmp_view=view))}" hx-include="#filter-form" '
+        f'hx-get="/compare/sim/conversations?{esc(run_query(cmp, cmp_view=view))}" hx-include="#filter-form" '
         'hx-target="#cmp-conversations" hx-swap="outerHTML show:#cmp-conversations:top"'
     )
 
@@ -69,7 +69,7 @@ def _view_attrs(cmp: Comparison, view: str) -> str:
 _GOAL_SCORERS = frozenset({'goal_achieved'})
 
 
-def _headlines(cmp: Comparison, view: str, state: TableState | None = None, *, oob: bool = False) -> str:
+def render_headlines(cmp: Comparison, view: str, state: TableState | None = None, *, oob: bool = False) -> str:
     """Insights-style "what changed" rows: a big number, a one-line finding with
     its reason, and an action that narrows the conversation table to *view*.
     The row whose view is showing reads "Showing these" and clicking it again
@@ -79,7 +79,7 @@ def _headlines(cmp: Comparison, view: str, state: TableState | None = None, *, o
     The row is a ``div`` and its action a ``button`` stretched over the whole
     row, so the scenario link in the reason text can sit beside the button
     instead of inside it (a link in a button is invalid HTML)."""
-    base = _base_state(state)
+    base = first_page(state)
     changes = cmp.changes
     regressed = [p for p, c in changes if c == 'regressed']
     improved = [p for p, c in changes if c == 'improved']
@@ -120,7 +120,7 @@ def _headlines(cmp: Comparison, view: str, state: TableState | None = None, *, o
         if count <= 1 or len(pairs) <= 1:
             return ''
         link = (
-            f'<a class="cmp-head-scn" {_swap_link(cmp, _toggled(cmp.narrowing, "scenario", scenario), base)} '
+            f'<a class="cmp-head-scn" {swap_link(cmp, toggled(cmp.narrowing, "scenario", scenario), base)} '
             f'aria-label="Filter to scenario {esc(scenario)}">{esc(scenario)}</a>'
         )
         return f' · most in {link} ({count} of {len(pairs)})'
@@ -191,7 +191,7 @@ def _headlines(cmp: Comparison, view: str, state: TableState | None = None, *, o
     moved = [
         r
         for r in cmp.scores
-        if r.in_unit_range and r.label not in _GOAL_SCORERS and r.delta is not None and abs(r.delta) >= _FLAT
+        if r.in_unit_range and r.label not in _GOAL_SCORERS and r.delta is not None and abs(r.delta) >= FLAT_DELTA
     ]
     if moved:
         top = max(moved, key=lambda r: abs(r.delta or 0.0))
@@ -201,7 +201,7 @@ def _headlines(cmp: Comparison, view: str, state: TableState | None = None, *, o
             row(
                 f'{delta:+.2f}',
                 f'Biggest score move: {top.label} {"improved" if better else "worsened"}',
-                f'{_fmt_num(top.a)} in A, {_fmt_num(top.b)} in B',
+                f'{fmt_num(top.a)} in A, {fmt_num(top.b)} in B',
             )
         )
     if not regressed and not improved and not errored and cmp.matching.matched:
@@ -242,7 +242,7 @@ def _filter_value_text(dim: str, values: list[str]) -> str:
     return shown + (f' +{len(values) - 2}' if len(values) > 2 else '')
 
 
-def _filter_strip(cmp: Comparison, state: TableState, *, oob: bool = False) -> str:
+def filter_strip(cmp: Comparison, state: TableState, *, oob: bool = False) -> str:
     """Insights-style filter bar: how many rows the filters keep, one removable
     chip per active filter, clear all, and a copy-link button (the URL holds
     the filters, segment and sort). Chips swap the page like the rail does and
@@ -251,16 +251,16 @@ def _filter_strip(cmp: Comparison, state: TableState, *, oob: bool = False) -> s
     full = cmp.full
     noun = 'rows' if full.a_only or full.b_only else 'pairs'
     count = f'<span class="rk-fbar-count">Showing <b>{cmp.shown_rows}</b> of <b>{cmp.total_rows}</b> {noun}</span>'
-    base = _base_state(state)
+    base = first_page(state)
     if cmp.narrowing:
         chips = ''.join(
             f'<span class="rk-fchip"><span class="rk-fchip-label cmp-fchip-dim">{esc(_filter_label(dim))}</span>'
             f'{esc(_filter_value_text(dim, values))}'
-            f'<a class="rk-fchip-x" {_swap_link(cmp, {k: v for k, v in cmp.narrowing.items() if k != dim}, base)} '
+            f'<a class="rk-fchip-x" {swap_link(cmp, {k: v for k, v in cmp.narrowing.items() if k != dim}, base)} '
             f'aria-label="Remove the {esc(_filter_label(dim))} filter">&times;</a></span>'
             for dim, values in cmp.narrowing.items()
         )
-        rest = f'{chips}<a class="rk-fbar-clear" {_swap_link(cmp, {}, base)}>Clear all</a>'
+        rest = f'{chips}<a class="rk-fbar-clear" {swap_link(cmp, {}, base)}>Clear all</a>'
     else:
         rest = '<span class="rk-fbar-hint">Use the filters to narrow both runs to the same conversations.</span>'
     copy = (
@@ -297,7 +297,7 @@ def _tiles(cmp: Comparison) -> str:
                 'sub_html': f'<span class="cmp-tile-note">Hidden: you filtered by {cmp.outcome_filter}</span>',
             }
         d = None if va is None or vb is None else vb - va
-        pill = _delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
+        pill = delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
         return {
             'label': label,
             'value': fmt(vb),
@@ -327,12 +327,12 @@ def _tiles(cmp: Comparison) -> str:
                 'Avg goal score',
                 a.avg_score,
                 b.avg_score,
-                _fmt_num,
+                fmt_num,
                 lambda d: f'{d:+.2f}',
                 higher=True,
                 outcome=True,
             ),
-            tile('Avg turns', a.avg_turns, b.avg_turns, lambda v: _fmt_num(v, 1), lambda d: f'{d:+.1f}', higher=None),
+            tile('Avg turns', a.avg_turns, b.avg_turns, lambda v: fmt_num(v, 1), lambda d: f'{d:+.1f}', higher=None),
             tile('Errors', a.errors, b.errors, lambda v: f'{v:.0f}', lambda d: f'{d:+.0f}', higher=False),
         ],
         modifier='cmp',
@@ -357,7 +357,7 @@ def _stack_rows(
     option) stays plain."""
     segs_a: list[tuple[str, str, int]] = segments_for(cmp.a)
     segs_b: list[tuple[str, str, int]] = segments_for(cmp.b)
-    base = _base_state(state)
+    base = first_page(state)
     values = values or {}
 
     def toggle(label: str) -> tuple[str, bool] | None:
@@ -365,7 +365,7 @@ def _stack_rows(
         if label not in values:
             return None
         on = values[label] in cmp.narrowing.get(dim, [])
-        return _swap_link(cmp, _toggled(cmp.narrowing, dim, values[label]), base), on
+        return swap_link(cmp, toggled(cmp.narrowing, dim, values[label]), base), on
 
     def name(label: str, text: str, *, on: bool) -> str:
         hint = 'Filter on: select to remove it' if on else 'Select to filter'
@@ -392,7 +392,7 @@ def _stack_rows(
                 )
             body = ''.join(parts)
         return (
-            f'<div class="cmp-stack-row"><span class="cmp-stack-key">{_run_key(which)}</span>'
+            f'<div class="cmp-stack-row"><span class="cmp-stack-key">{run_key(which)}</span>'
             f'<div class="cmp-stack-bar">{body}</div><span class="cmp-stack-total">{total}</span></div>'
         )
 
@@ -477,7 +477,7 @@ def _scores_panel(rows: list[ScoreRow], outcome_filter: str = '') -> str:
         return v is None and dropped > 0
 
     def value_text(v: float | None, dropped: int) -> str:
-        return 'failed' if failed(v, dropped) else _fmt_num(v)
+        return 'failed' if failed(v, dropped) else fmt_num(v)
 
     def drop_title(which: str, dropped: int) -> str:
         return f' title="{which}: scorer failed on {dropped} conversation{"" if dropped == 1 else "s"}"'
@@ -514,7 +514,7 @@ def _scores_panel(rows: list[ScoreRow], outcome_filter: str = '') -> str:
             else '<div class="cmp-score-tracks"></div>'
         )
         + f'<div class="cmp-score-ab">{ab_text(r)}</div>'
-        f'<div>{_delta_pill(r.delta, f"{r.delta:+.2f}" if r.delta is not None else "", higher_better=r.higher_better)}</div>'
+        f'<div>{delta_pill(r.delta, f"{r.delta:+.2f}" if r.delta is not None else "", higher_better=r.higher_better)}</div>'
         '</div>'
         for r in rows
     )
@@ -522,7 +522,7 @@ def _scores_panel(rows: list[ScoreRow], outcome_filter: str = '') -> str:
         r.label for r in rows if r.delta is None and not failed(r.a, r.dropped_a) and not failed(r.b, r.dropped_b)
     ]
     note = f'<p class="cmp-note">Measured by one run only: {esc(", ".join(one_sided))}</p>' if one_sided else ''
-    legend = f'<div class="cmp-legend"><span>{_run_key("A")}</span><span>{_run_key("B")}</span></div>'
+    legend = f'<div class="cmp-legend"><span>{run_key("A")}</span><span>{run_key("B")}</span></div>'
     sub = 'Mean per conversation, 0 to 1' if all(r.in_unit_range for r in rows) else 'Mean per conversation'
     return panel('Scores', f'{legend}<div class="cmp-scores">{body}</div>{note}{hidden_note}', sub=sub)
 
@@ -531,11 +531,11 @@ def render_compare_body(cmp: Comparison, state: TableState) -> str:
     """Everything left of the filter rail."""
     return (
         f'{_hero(cmp)}'
-        f'{_filter_strip(cmp, state)}'
-        f'{_headlines(cmp, resolve_view(cmp, state), state)}'
+        f'{filter_strip(cmp, state)}'
+        f'{render_headlines(cmp, resolve_view(cmp, state), state)}'
         f'{_tiles(cmp)}'
         f'<div class="cmp-grid">{_outcomes_panel(cmp, state)}{_scores_panel(cmp.scores, cmp.outcome_filter)}</div>'
-        f'{_where_panel(cmp, state)}'
+        f'{where_panel(cmp, state)}'
         f'{render_conversations(cmp, state)}'
     )
 
@@ -549,12 +549,12 @@ def render_filter_rail(cmp: Comparison, selections: dict[str, list[str]]) -> str
         selections,
         shown=cmp.shown_rows,
         total=cmp.total_rows,
-        post_url=f'/compare/sim/filter?{_qs(cmp)}',
+        post_url=f'/compare/sim/filter?{run_query(cmp)}',
         include='#cmp-table-state',
     )
 
 
-def _swap(cmp: Comparison, selections: dict[str, list[str]], state: TableState) -> str:
+def render_swap(cmp: Comparison, selections: dict[str, list[str]], state: TableState) -> str:
     return filter_fragment(cmp.a.rid, 'sim', render_compare_body(cmp, state), render_filter_rail(cmp, selections))
 
 
@@ -566,7 +566,7 @@ def render_compare_page(cmp: Comparison, selections: dict[str, list[str]], state
     """
     return (
         '<div class="report-aligned sim-report cmp-report">'
-        f'<section class="report-view">{_swap(cmp, selections, state)}</section>'
+        f'<section class="report-view">{render_swap(cmp, selections, state)}</section>'
         f'{sim_entity_dialog("sim-entity-dialog--wide")}'
         '</div>'
     )

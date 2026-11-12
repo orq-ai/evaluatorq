@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cached_property, lru_cache
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.matching import pair_indices_by_key
+from evaluatorq.dashboard import library
 from evaluatorq.dashboard.filters import FILTERS
 from evaluatorq.dashboard.sim_views import (
     _entries_from_run,
     filtered_entries,
 )
+from evaluatorq.simulation.contracts import SimulationRun
 from evaluatorq.simulation.metrics import TURN_METRICS, is_errored_result
 from evaluatorq.simulation.reports.sections import (
     _build_evaluator_scores_section,
@@ -20,9 +22,9 @@ from evaluatorq.simulation.reports.sections import (
 )
 
 if TYPE_CHECKING:
-    from evaluatorq.simulation.contracts import SimulationEntry, SimulationResult, SimulationRun
+    from evaluatorq.simulation.contracts import SimulationEntry, SimulationResult
 
-_FLAT = 0.005
+FLAT_DELTA = 0.005
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +160,7 @@ def narrowing_selections(
     }
 
 
-def _side(rid: str, run: SimulationRun, entries: list[SimulationEntry]) -> Side:
+def build_side(rid: str, run: SimulationRun, entries: list[SimulationEntry]) -> Side:
     errored = frozenset(i for i, r in enumerate(run.results) if is_errored_result(result=r))
     entries = sorted(entries, key=lambda e: e.index)
     return Side(rid, run, entries, errored, [run.results[e.index] for e in entries])
@@ -175,21 +177,13 @@ def build_comparison(
         [e for e in full.a_only if e.index in keep_a],
         [e for e in full.b_only if e.index in keep_b],
     )
-    side_a = _side(rid_a, run_a, [*(p.a for p in matching.matched), *matching.a_only])
-    side_b = _side(rid_b, run_b, [*(p.b for p in matching.matched), *matching.b_only])
+    side_a = build_side(rid_a, run_a, [*(p.a for p in matching.matched), *matching.a_only])
+    side_b = build_side(rid_b, run_b, [*(p.b for p in matching.matched), *matching.b_only])
     return Comparison(side_a, side_b, matching, full, narrowing_selections(run_a, run_b, selections))
 
 
 # (resolved path, mtime_ns) of a report file: a rewrite changes the stamp, so a stale entry is never hit.
 RunStamp = tuple[str, int]
-
-
-@dataclass(frozen=True)
-class _Runs:
-    """The loaded runs, riding along an ``lru_cache`` call without being part of its key."""
-
-    a: SimulationRun = field(compare=False)
-    b: SimulationRun = field(compare=False)
 
 
 # Two runs per entry, each holding every transcript: keep few. 16 covers a session's back-and-forth between slices.
@@ -199,26 +193,24 @@ def _build_cached(
     stamp_b: RunStamp,
     rid_a: str,
     rid_b: str,
-    frozen_selections: tuple[tuple[str, tuple[str, ...]], ...],
-    runs: _Runs,
+    narrowing: tuple[tuple[str, tuple[str, ...]], ...],
 ) -> Comparison:
-    return build_comparison(rid_a, rid_b, runs.a, runs.b, {dim: list(values) for dim, values in frozen_selections})
+    run_a, run_b = (library.load_model_at(s, SimulationRun.model_validate) for s in (stamp_a, stamp_b))
+    return build_comparison(rid_a, rid_b, run_a, run_b, {dim: list(values) for dim, values in narrowing})
 
 
 def cached_comparison(
-    stamps: tuple[RunStamp, RunStamp],
-    rid_a: str,
-    rid_b: str,
-    run_a: SimulationRun,
-    run_b: SimulationRun,
-    selections: dict[str, list[str]],
+    stamps: tuple[RunStamp, RunStamp], rid_a: str, rid_b: str, selections: dict[str, list[str]]
 ) -> Comparison:
-    """``build_comparison`` memoised on the two files' stamps and the selections.
+    """``build_comparison`` memoised on the two files' stamps and the filters that narrow.
 
-    The result is shared between requests: treat it as read-only.
+    Keyed on ``narrowing_selections`` rather than the raw selections, so the rail's
+    posted defaults and a chip link to the same slice share one entry. The result
+    is shared between requests: treat it as read-only.
     """
-    frozen = tuple((dim, tuple(values)) for dim, values in selections.items())
-    return _build_cached(stamps[0], stamps[1], rid_a, rid_b, frozen, _Runs(run_a, run_b))
+    run_a, run_b = (library.load_model_at(s, SimulationRun.model_validate) for s in stamps)
+    narrowing = narrowing_selections(run_a, run_b, selections)
+    return _build_cached(*stamps, rid_a, rid_b, tuple((dim, tuple(values)) for dim, values in narrowing.items()))
 
 
 def pair_change(a: Side, b: Side, pair: MatchedPair) -> str:

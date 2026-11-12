@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.report_kit import _interp_color, panel
-from evaluatorq.dashboard.sim_compare.state import TableState, _base_state, _swap_link
+from evaluatorq.dashboard.sim_compare.state import TableState, first_page, swap_link
 
 if TYPE_CHECKING:
     from evaluatorq.dashboard.sim_compare.model import Comparison, MatchedPair
@@ -65,7 +65,7 @@ def _axis(labels: Counter[str], selected: list[str], noun: str) -> tuple[list[st
     return kept, f'+{hidden} more {noun}{"" if hidden == 1 else "s"}' if hidden else ''
 
 
-def _where_panel(cmp: Comparison, state: TableState | None = None) -> str:
+def where_panel(cmp: Comparison, state: TableState | None = None) -> str:
     """Persona x scenario grid of the goal-rate change; each cell filters the page to that pair.
 
     The axes come from every matched pair so the grid keeps its shape while a
@@ -82,7 +82,7 @@ def _where_panel(cmp: Comparison, state: TableState | None = None) -> str:
     cells: dict[tuple[str, str], list[tuple[MatchedPair, str]]] = {}
     for pair, change in cmp.changes:
         cells.setdefault((pair.a.persona, pair.a.scenario), []).append((pair, change))
-    base = _base_state(state)
+    base = first_page(state)
 
     def cell(persona: str, scenario: str) -> str:
         pairs = cells.get((persona, scenario))
@@ -100,7 +100,7 @@ def _where_panel(cmp: Comparison, state: TableState | None = None) -> str:
         current = ' aria-current="true"' if on else ''
         return (
             f'<td class="{cls}"{style} title="{esc(title)}">'
-            f'<a class="cmp-heat-link" {_swap_link(cmp, target, base)} aria-label="{esc(label)}"{current}>'
+            f'<a class="cmp-heat-link" {swap_link(cmp, target, base)} aria-label="{esc(label)}"{current}>'
             f'{esc(text)}</a></td>'
         )
 
