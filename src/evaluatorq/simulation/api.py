@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from evaluatorq.common.env_config import env_raw
-from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.llm_client import resolve_orq_credential, resolve_results_base_url
 from evaluatorq.common.llm_limit import active_llm_parallelism, llm_concurrency_limit
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM, resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
@@ -2861,6 +2861,7 @@ async def _simulate_via_evaluatorq(
             # evaluatorq returns scorer failures as results; simulation handles
             # dropped rows separately through SimulationDroppedError below.
             _base_url=upload_base_url,
+            _orq_api_key=resolve_orq_credential(generation_client),
             _experiment_url_out=experiment_url_out,
         )
     finally:
