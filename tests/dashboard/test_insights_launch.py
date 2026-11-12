@@ -1399,13 +1399,16 @@ def test_finder_export_fifo_is_rejected_without_blocking(monkeypatch: pytest.Mon
         InsightsLaunchSpec(source='finder', finder_export='pipe.json')
 
 
-@pytest.mark.usefixtures('group_writable_umask')
 def test_finder_insights_launch_records_source_until_run_finishes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Under umask 002, start_manifest creates insights-runs group-writable, as it does in production;
-    # the launch must repair that folder before it writes the lease there.
+    # the launch must repair that folder before it writes the lease there. The conftest umask pin
+    # restores the umask afterwards. Windows has no umask, but the launch itself still runs there.
     import json
+
+    if os.name != 'nt':
+        os.umask(0o002)
 
     import tempfile
 
@@ -1426,9 +1429,10 @@ def test_finder_insights_launch_records_source_until_run_finishes(
 
     reference = finder_export_reference_path(tmp_path / 'insights-runs', run_id)
     assert json.loads(reference.read_text(encoding='utf-8')) == {'finder_export': str(export_path)}
-    assert reference.stat().st_mode & 0o777 == 0o600
-    assert reference.parent.stat().st_mode & 0o777 == 0o700
-    assert (tmp_path / 'insights-runs').stat().st_mode & 0o777 == 0o700
+    if os.name != 'nt':
+        assert reference.stat().st_mode & 0o777 == 0o600
+        assert reference.parent.stat().st_mode & 0o777 == 0o700
+        assert (tmp_path / 'insights-runs').stat().st_mode & 0o777 == 0o700
     assert read_private_finder_reference(reference) == {'finder_export': str(export_path)}
     assert len(list_manifests(tmp_path / 'insights-runs')) == 1
 
