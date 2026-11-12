@@ -1156,3 +1156,33 @@ async def test_the_dropped_question_degrade_warns_once_per_model():
     emitted = [line for line in lines if 'does not serve the classify endpoint' in line]
     assert len(emitted) == 1, emitted
     assert client.chat.completions.create.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_a_classify_only_model_the_router_catalogue_denies_is_judged_on_the_fast_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The router case of `classify_fallback_model`: the classify-only id cannot be prompted, so the fast role answers."""
+    from evaluatorq.common.model_roles import role_model
+
+    denied = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=False)
+
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {JEV: denied, 'jev-latest': denied}
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+    model_catalogue.reset_catalogue_cache()
+    client = _client()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"value": true, "explanation": "ok"}'))],
+            usage={'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5},
+        )
+    )
+
+    await _judge(client, _noul_question(), api='chat_completions')
+
+    call = client.chat.completions.create.await_args
+    assert call is not None
+    assert call.kwargs['model'] == role_model('fast')
+    client.post.assert_not_called()

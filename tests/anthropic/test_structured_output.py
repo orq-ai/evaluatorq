@@ -371,7 +371,11 @@ def test_without_fallbacks_the_plain_call_is_used() -> None:
     assert fake.beta.messages.calls == []
 
 
-@pytest.mark.parametrize('cls', [AsyncAnthropicBedrock, AsyncAnthropicVertex])
+class _CallerClient(AsyncAnthropicBedrock):
+    """A caller's subclass whose own name names no platform."""
+
+
+@pytest.mark.parametrize('cls', [AsyncAnthropicBedrock, AsyncAnthropicVertex, _CallerClient])
 def test_fallbacks_on_bedrock_or_vertex_raise_value_error(cls: type[FakeClient]) -> None:
     fake = cls()
     client = AnthropicLLMClient(fake)

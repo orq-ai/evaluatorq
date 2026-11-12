@@ -33,6 +33,7 @@ from evaluatorq.anthropic.convert import (
     adapt_schema,
     apply_shared_params,
     apply_tools,
+    as_mapping,
     build_output_config,
     build_system,
     content_blocks,
@@ -44,7 +45,10 @@ from evaluatorq.anthropic.convert import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from anthropic.types import Message
+    from pydantic import BaseModel
 
 _SUPPORTED_KEYS = frozenset({
     'model',
@@ -74,7 +78,7 @@ def _item_text(output: Any) -> str:
 
 
 def convert_input(
-    items: str | list[dict[str, Any]], instructions: str | None
+    items: str | Sequence[dict[str, Any] | BaseModel], instructions: str | None
 ) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
     """Split Responses ``input`` into Anthropic ``(system, messages)``.
 
@@ -86,7 +90,7 @@ def convert_input(
     if instructions:
         system_blocks.append({'type': 'text', 'text': instructions})
     out: list[dict[str, Any]] = []
-    for item in items:
+    for item in map(as_mapping, items):
         kind = item.get('type') or ('message' if 'role' in item else None)
         if kind == 'message':
             role = item.get('role')

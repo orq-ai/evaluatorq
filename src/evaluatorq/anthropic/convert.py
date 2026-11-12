@@ -25,7 +25,10 @@ from openai.types.chat.chat_completion_message_function_tool_call import Functio
 from evaluatorq.common.llm_client import LLMConfigurationError, ModelClientMismatchError
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from anthropic.types import Message
+    from pydantic import BaseModel
 
 DEFAULT_MAX_TOKENS = 16000
 """``max_tokens`` sent when the caller passed none; Anthropic requires one."""
@@ -203,6 +206,21 @@ def normalize_model(model: str) -> str:
     return model
 
 
+def as_mapping(value: Any) -> dict[str, Any]:
+    """A message, tool call or Responses input item as a dict.
+
+    The OpenAI SDK accepts its own Pydantic objects wherever it accepts dicts (a ``ChatCompletionMessage`` replayed from an earlier completion, or a ``ResponseFunctionToolCall`` from ``response.output``), so the adapter does too.
+    """
+    if isinstance(value, dict):
+        return value
+    dump = getattr(value, 'model_dump', None)
+    if callable(dump):
+        return cast('dict[str, Any]', dump(exclude_none=True))
+    raise TypeError(
+        f'The Anthropic adapter cannot convert a {type(value).__name__}; pass a dict or an OpenAI SDK object.'
+    )
+
+
 def _part_dict(part: Any) -> dict[str, Any]:
     """A content part as a dict: a dict as is, a Pydantic part (such as ``openai.types``) through ``model_dump``, any other object through its attributes."""
     if isinstance(part, dict):
@@ -291,7 +309,9 @@ def order_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return merged
 
 
-def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
+def convert_messages(
+    messages: Sequence[dict[str, Any] | BaseModel],
+) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
     """Split OpenAI messages into Anthropic ``(system, messages)``.
 
     ``system`` and ``developer`` messages move to ``system``; ``tool`` messages become ``tool_result`` blocks, with consecutive results merged into a single user turn.
@@ -305,7 +325,7 @@ def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[st
             out.append({'role': 'user', 'content': list(pending_results)})
             pending_results.clear()
 
-    for message in messages:
+    for message in map(as_mapping, messages):
         role = message.get('role')
         if role == 'tool':
             pending_results.append({
@@ -325,7 +345,7 @@ def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[st
                 logger.debug('Dropping a user message with empty content before sending it to Anthropic.')
         elif role == 'assistant':
             blocks = content_blocks(message.get('content'), role='assistant')
-            for call in message.get('tool_calls') or []:
+            for call in map(as_mapping, message.get('tool_calls') or []):
                 blocks.append({
                     'type': 'tool_use',
                     'id': call['id'],

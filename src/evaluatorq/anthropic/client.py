@@ -34,7 +34,8 @@ class _Sender:
         """Send ``request`` through ``messages.create`` (or the beta endpoint for fallbacks) and return the raw Anthropic message."""
         if 'fallbacks' in request.get('extra_body', {}):
             platform = type(self._client).__name__
-            if any(name in platform for name in _PLATFORMS_WITHOUT_FALLBACKS):
+            hierarchy = [cls.__name__ for cls in type(self._client).__mro__]
+            if any(name in cls for cls in hierarchy for name in _PLATFORMS_WITHOUT_FALLBACKS):
                 raise LLMConfigurationError(
                     f'Server-side fallbacks are available on the Claude API only, not on {platform} '
                     '(Amazon Bedrock and Google Vertex AI). Remove extra_kwargs={"fallbacks": ...} from the LLMCallConfig.'
