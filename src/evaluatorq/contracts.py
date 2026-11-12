@@ -771,13 +771,16 @@ class Usage(BaseModel):
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
             ('cached_tokens', 'cache_read'),
         )
-        # Flat Anthropic shape (anthropic.types.Usage, and OpenCode renamed to the same keys): the
-        # top-level `input_tokens` EXCLUDES these, unlike the nested shape where they are a subset.
-        # Provenance, not model name, decides: a count read from the flat keys is added to
-        # `input_tokens` below so the subset contract holds. A nested count wins, so a payload
-        # carrying both shapes is never counted twice.
-        cached_flat_exclusive = 0 if cached_nested else _usage_first_int(usage, ('cache_read_input_tokens',))
-        cached = cached_nested or cached_flat_exclusive or _usage_first_int(usage, ('cached_input_tokens',))
+        # Native Anthropic usage (and OpenCode, renamed to the same keys) has no input-side details
+        # object and its `input_tokens` EXCLUDES the flat cache counters, so they are added below to
+        # keep the subset contract. With a details object (Orq, OpenAI, the Anthropic adapter's
+        # Chat/Responses faces) the input count already includes every cache counter, flat or not.
+        input_details_present = any(
+            _usage_get(usage, name) is not None
+            for name in ('input_tokens_details', 'prompt_tokens_details', 'input_token_details')
+        )
+        cached_flat = _usage_first_int(usage, ('cache_read_input_tokens',))
+        cached = cached_nested or cached_flat or _usage_first_int(usage, ('cached_input_tokens',))
         # Anthropic prices a 1h cache write above a 5m one, so the tier split is
         # billing-relevant even though Orq folds both into the flat input_cost.
         # Orq nests the tiers under input_tokens_details; Anthropic puts them in a
@@ -801,22 +804,20 @@ class Usage(BaseModel):
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
             ('cache_creation_tokens', 'cache_creation_input_tokens'),
         )
-        # Flat Anthropic cache writes (top-level `cache_creation_input_tokens`, or only the
-        # top-level `cache_creation` tier object) are likewise exclusive of `input_tokens`.
-        cache_creation_flat_exclusive = 0
-        if not cache_creation_nested:
-            tiers = _usage_get(usage, 'cache_creation')
-            cache_creation_flat_exclusive = _usage_first_int(usage, ('cache_creation_input_tokens',)) or (
-                _usage_first_int(tiers, ('ephemeral_1h_input_tokens',))
-                + _usage_first_int(tiers, ('ephemeral_5m_input_tokens',))
-            )
+        # Flat cache writes: top-level `cache_creation_input_tokens`, or only the `cache_creation` tier object.
+        tiers = _usage_get(usage, 'cache_creation')
+        cache_creation_flat = _usage_first_int(usage, ('cache_creation_input_tokens',)) or (
+            _usage_first_int(tiers, ('ephemeral_1h_input_tokens',))
+            + _usage_first_int(tiers, ('ephemeral_5m_input_tokens',))
+        )
         cache_creation = (
             cache_creation_nested
-            or cache_creation_flat_exclusive
+            or cache_creation_flat
             or _usage_first_int(usage, ('cache_write_input_tokens',))
             or cache_creation_1h + cache_creation_5m
         )
-        inp += cached_flat_exclusive + cache_creation_flat_exclusive
+        if not input_details_present:
+            inp += cached_flat + cache_creation_flat
         # Provider total is trusted only when > 0; otherwise input + output with the adjusted input.
         total = reported_total if reported_total > 0 else inp + out
         # Codex CLI reports reasoning flat as `reasoning_output_tokens`.

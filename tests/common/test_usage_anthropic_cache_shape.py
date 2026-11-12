@@ -122,6 +122,32 @@ def test_both_shapes_present_are_not_double_counted():
     assert (usage.cached_tokens, usage.cache_creation_tokens) == (800, 100)
 
 
+
+@pytest.mark.parametrize('face', ['chat', 'responses'])
+def test_anthropic_adapter_usage_is_not_double_counted(face):
+    """The adapter already folds cache counters into its prompt count and also emits the flat
+    ``cache_creation_input_tokens`` key; ``Usage.extract`` must not add the cache again."""
+    anthropic_types = pytest.importorskip('anthropic.types')
+    from evaluatorq.anthropic.convert import convert_usage
+    from evaluatorq.anthropic.responses import convert_response_usage
+
+    message = anthropic_types.Message(
+        id='msg_1',
+        type='message',
+        role='assistant',
+        model='claude-sonnet-5-5',
+        content=[anthropic_types.TextBlock(type='text', text='hi')],
+        stop_reason='end_turn',
+        stop_sequence=None,
+        usage=anthropic_types.Usage(
+            input_tokens=10, output_tokens=5, cache_read_input_tokens=100, cache_creation_input_tokens=50
+        ),
+    )
+    converted = convert_usage(message) if face == 'chat' else convert_response_usage(message)
+    usage = _extract(converted)
+    assert (usage.input_tokens, usage.cached_tokens, usage.cache_creation_tokens) == (160, 100, 50)
+    assert usage.total_tokens == 165
+
 def test_cost_of_prices_an_anthropic_cache_heavy_call_on_all_tokens():
     info = ModelInfo(
         0.003,
