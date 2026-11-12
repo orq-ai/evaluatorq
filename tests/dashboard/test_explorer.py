@@ -3098,8 +3098,6 @@ def test_span_tree_discovers_cli_workspace_once(monkeypatch: pytest.MonkeyPatch,
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
     monkeypatch.setattr(orq_workspace.shutil, 'which', lambda _name: '/usr/bin/orq')
-    monkeypatch.setattr(orq_workspace, '_CLI_CONFIG_DIR', tmp_path / 'orq-cli')
-    monkeypatch.setattr(orq_workspace, '_cli_slug_cache', {})
     slugs = iter(('first-workspace', 'second-workspace'))
     calls = 0
 

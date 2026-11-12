@@ -75,9 +75,11 @@ def _discover_in_background(key: _CacheKey, profile: str | None, use_cli_session
         slug = _discover_cli_slug(profile, use_cli_session=use_cli_session)
     finally:
         with _lock:
-            # A found slug holds for 5 minutes; a failed lookup is retried after 30 seconds.
-            _cli_slug_cache[key] = (monotonic() + (300 if slug else 30), slug)
-            del _pending[key]
+            # Only the registered lookup for this key may publish; an orphaned one is dropped.
+            if _pending.get(key) is threading.current_thread():
+                # A found slug holds for 5 minutes; a failed lookup is retried after 30 seconds.
+                _cli_slug_cache[key] = (monotonic() + (300 if slug else 30), slug)
+                del _pending[key]
 
 
 def _discover_cli_slug(profile: str | None, *, use_cli_session: bool) -> str | None:

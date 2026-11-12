@@ -366,7 +366,7 @@ def test_report_ignores_an_invalid_cmp_parameter(tmp_path: Path, cmp: str) -> No
     assert list(_rows(html)) == list(range(1, 26))
 
 
-def test_row_list_discovers_the_cli_workspace_once_per_render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_row_list_discovers_the_cli_workspace_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.dashboard import orq_workspace
     from evaluatorq.dashboard.orq_scope import OrqScope
 
@@ -391,6 +391,9 @@ def test_row_list_discovers_the_cli_workspace_once_per_render(tmp_path: Path, mo
             response_b='b',
         )
     c, rid = _client(run, tmp_path)
+    c.get(f'/r/{rid}/pairwise/row-list')
+    for thread in list(orq_workspace._pending.values()):
+        thread.join(timeout=2)
     text = c.get(f'/r/{rid}/pairwise/row-list').text
     assert text.count('trace00000003') >= 1
     assert calls == 1
