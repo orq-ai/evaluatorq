@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from functools import cached_property
+from dataclasses import dataclass, field
+from functools import cached_property, lru_cache
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.matching import pair_indices_by_key
@@ -177,6 +177,47 @@ def build_comparison(
     side_a = _side(rid_a, run_a, [*(p.a for p in matching.matched), *matching.a_only])
     side_b = _side(rid_b, run_b, [*(p.b for p in matching.matched), *matching.b_only])
     return Comparison(side_a, side_b, matching, full, narrowing_selections(run_a, run_b, selections))
+
+
+# (resolved path, mtime_ns) of a report file: a rewrite changes the stamp, so a stale entry is never hit.
+RunStamp = tuple[str, int]
+
+
+@dataclass(frozen=True)
+class _Runs:
+    """The loaded runs, riding along an ``lru_cache`` call without being part of its key."""
+
+    a: SimulationRun = field(compare=False)
+    b: SimulationRun = field(compare=False)
+
+
+# Two runs per entry, each holding every transcript: keep few. 16 covers a session's back-and-forth between slices.
+@lru_cache(maxsize=16)
+def _build_cached(
+    stamp_a: RunStamp,
+    stamp_b: RunStamp,
+    rid_a: str,
+    rid_b: str,
+    frozen_selections: tuple[tuple[str, tuple[str, ...]], ...],
+    runs: _Runs,
+) -> Comparison:
+    return build_comparison(rid_a, rid_b, runs.a, runs.b, {dim: list(values) for dim, values in frozen_selections})
+
+
+def cached_comparison(
+    stamps: tuple[RunStamp, RunStamp],
+    rid_a: str,
+    rid_b: str,
+    run_a: SimulationRun,
+    run_b: SimulationRun,
+    selections: dict[str, list[str]],
+) -> Comparison:
+    """``build_comparison`` memoised on the two files' stamps and the selections.
+
+    The result is shared between requests: treat it as read-only.
+    """
+    frozen = tuple((dim, tuple(values)) for dim, values in selections.items())
+    return _build_cached(stamps[0], stamps[1], rid_a, rid_b, frozen, _Runs(run_a, run_b))
 
 
 def pair_change(a: Side, b: Side, pair: MatchedPair) -> str:

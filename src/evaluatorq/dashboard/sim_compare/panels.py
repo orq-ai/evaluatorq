@@ -4,21 +4,19 @@ from __future__ import annotations
 
 from collections import Counter
 from itertools import cycle
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from evaluatorq.common.reports import esc, kpi_cards
 from evaluatorq.dashboard.filters import _sim_options_from_results
 from evaluatorq.dashboard.report_kit import panel
+from evaluatorq.dashboard.report_kit import pill as rk_pill
 from evaluatorq.dashboard.report_tabs import sim_entity_dialog
 from evaluatorq.dashboard.sim_compare.fmt import _delta_pill, _fmt_num, _fmt_rate, _run_key
-from evaluatorq.dashboard.sim_compare.model import _FLAT, Comparison, MatchedPair, ScoreRow, Side, build_comparison
+from evaluatorq.dashboard.sim_compare.model import _FLAT, Comparison, MatchedPair, ScoreRow, Side
 from evaluatorq.dashboard.sim_compare.state import TableState, _compare_url, _qs
 from evaluatorq.dashboard.sim_compare.table import render_conversations, resolve_view
 from evaluatorq.dashboard.view import GOAL_OUTCOME_LABEL, _render_sim_filter_rail, filter_fragment
 from evaluatorq.simulation.metrics import TURN_METRICS
-
-if TYPE_CHECKING:
-    from evaluatorq.simulation.contracts import SimulationRun
 
 # ---------------------------------------------------------------------------
 # Page sections
@@ -275,7 +273,10 @@ def _tiles(cmp: Comparison) -> str:
     ) -> dict:
         d = None if va is None or vb is None else vb - va
         if outcome and cmp.outcome_filtered:
-            pill = '<span class="cmp-delta cmp-delta--flat" title="A filter picks conversations by goal outcome">not comparable</span>'
+            pill = (
+                '<span title="A filter picks conversations by goal outcome">'
+                f'{rk_pill("not comparable", tone="neutral")}</span>'
+            )
         else:
             pill = _delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
         return {
@@ -477,24 +478,15 @@ def _swap(cmp: Comparison, selections: dict[str, list[str]], state: TableState) 
     return filter_fragment(cmp.a.rid, 'sim', render_compare_body(cmp, state), render_filter_rail(cmp, selections))
 
 
-def render_compare_page(
-    rid_a: str,
-    rid_b: str,
-    run_a: SimulationRun,
-    run_b: SimulationRun,
-    selections: dict[str, list[str]] | None = None,
-    state: TableState | None = None,
-) -> str:
+def render_compare_page(cmp: Comparison, selections: dict[str, list[str]], state: TableState) -> str:
     """Full compare-page body: the filter swap container plus the drawer dialog.
 
     The dialog sits outside ``#filter-swap`` so a filter change does not tear
     down an open drawer; both live inside ``.sim-report`` for the drawer styles.
     """
-    selections = selections or {}
-    cmp = build_comparison(rid_a, rid_b, run_a, run_b, selections)
     return (
         '<div class="report-aligned sim-report cmp-report">'
-        f'<section class="report-view">{_swap(cmp, selections, state or TableState())}</section>'
+        f'<section class="report-view">{_swap(cmp, selections, state)}</section>'
         f'{sim_entity_dialog("sim-entity-dialog--wide")}'
         '</div>'
     )

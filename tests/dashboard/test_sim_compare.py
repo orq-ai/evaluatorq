@@ -680,3 +680,42 @@ def test_rail_goal_outcome_chips_read_goal_met_and_missed(roots: list[Path]):
     html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
     rail = html.split('id="filter-form"')[1]
     assert 'value="Achieved"' in rail and 'Goal met' in rail and '>Achieved<' not in rail
+
+
+def test_comparison_is_cached_per_file_stamp_and_selections(roots: list[Path]):
+    import os
+
+    from evaluatorq.dashboard.sim_compare import model
+
+    model._build_cached.cache_clear()
+    rid_a, rid_b = _rids(roots)
+    client = TestClient(build_app(roots=roots))
+    url = f'/compare/sim/conversations?a={rid_a}&b={rid_b}'
+
+    assert client.get(f'{url}&cmp_sort=turns').status_code == 200
+    assert client.get(f'{url}&cmp_sort=score&cmp_page=1').status_code == 200
+    info = model._build_cached.cache_info()
+    assert (info.misses, info.hits) == (1, 1)
+
+    # Same files, different selections: a new entry.
+    assert client.get(f'{url}&goal_outcome=Achieved').status_code == 200
+    assert model._build_cached.cache_info().misses == 2
+
+    # A rewrite changes the mtime, so the same request rebuilds.
+    path = roots[1] / 'a.json'
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    assert client.get(f'{url}&cmp_sort=turns').status_code == 200
+    assert model._build_cached.cache_info().misses == 3
+    model._build_cached.cache_clear()
+
+
+def test_comparison_pills_share_the_report_kit_tones():
+    from evaluatorq.dashboard.report_kit import pill
+    from evaluatorq.dashboard.sim_compare.fmt import _badge, _change_pill, _delta_pill
+
+    assert _change_pill('regressed') == pill('Regressed', tone='danger', dot=True)
+    assert _change_pill('improved') == pill('Improved', tone='good', dot=True)
+    assert _badge('error') == pill('Error', tone='warn')
+    assert _delta_pill(0.2, '0.20') == pill('▲ 0.20', tone='good')
+    assert _delta_pill(0.2, '0.20', higher_better=False) == pill('▲ 0.20', tone='danger')
