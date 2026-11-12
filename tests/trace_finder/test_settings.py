@@ -187,6 +187,11 @@ def test_settings_lock_failure_preserves_file_and_releases_lock(monkeypatch: pyt
     assert load_settings(path).fast_model == 'edited/fast'
 
 
+# A spawned child re-imports evaluatorq before it reaches the lock, which can take more than ten seconds
+# on a loaded parallel CI worker. The bound only decides how long a real deadlock takes to fail.
+_SPAWN_TIMEOUT_S = 60
+
+
 @pytest.mark.parametrize('initially_exists', [False, True])
 def test_concurrent_save_rereads_latest_document_under_process_lock(
     initially_exists: bool, tmp_path: Path
@@ -204,13 +209,13 @@ def test_concurrent_save_rereads_latest_document_under_process_lock(
 
     try:
         first.start()
-        assert held.wait(timeout=10), 'first save did not pause after capturing the current document state'
+        assert held.wait(timeout=_SPAWN_TIMEOUT_S), 'first save did not pause after capturing the current document state'
         second.start()
-        assert waiting.wait(timeout=10), 'second save did not reach the lock'
+        assert waiting.wait(timeout=_SPAWN_TIMEOUT_S), 'second save did not reach the lock'
         assert not transaction_io.wait(timeout=1), 'second save entered the file transaction while the first held its lock'
         release.set()
         for process in (first, second):
-            process.join(timeout=10)
+            process.join(timeout=_SPAWN_TIMEOUT_S)
             assert not process.is_alive(), 'settings writer remained blocked after the preceding save completed'
             assert process.exitcode == 0
     finally:
@@ -219,7 +224,7 @@ def test_concurrent_save_rereads_latest_document_under_process_lock(
             if process.is_alive():
                 process.terminate()
             if process.pid is not None:
-                process.join(timeout=10)
+                process.join(timeout=_SPAWN_TIMEOUT_S)
     saved = json.loads(path.read_text(encoding='utf-8'))
     assert saved['fast_model'] == 'new/fast'
     assert saved['smart_model'] == 'new/smart'

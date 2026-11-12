@@ -350,6 +350,7 @@ dev = [
   "pytest>=8.0.0",
   "pytest-asyncio>=1.2.0",
   "pytest-timeout>=2.3.0",
+  "pytest-xdist>=3.6.0",
   "tomli>=2.0.0; python_version < '3.11'",
   "ty==0.0.90",
   "ruff>=0.14.3",
