@@ -3063,46 +3063,17 @@ _SIM_COMPARE_CSS = """
 .cmp-chip { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); background: var(--surface-sunken); border-radius: 999px; padding: 2px 9px; }
 .cmp-chip--warn { background: var(--amber-100); color: var(--amber-ink); font-weight: 600; cursor: help; }
 
-/* "What changed" rows (Insights headline rows) */
-.cmp-heads:empty { display: none; }
-.cmp-heads { background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: 12px; overflow: hidden; margin: 0 0 16px; }
-.cmp-head { position: relative; display: grid; grid-template-columns: 200px minmax(0, 1fr) auto; gap: 16px; align-items: center; width: 100%;
-  padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); text-align: left; transition: background .15s; }
-.cmp-head:last-child { border-bottom: 0; }
-.cmp-head--click:hover { background: var(--app-gray-50); }
-.cmp-head--click:has(.cmp-head-btn:focus-visible) { box-shadow: inset 0 0 0 2px var(--teal-600); }
-.cmp-head--click.is-on { background: var(--teal-50); }
-.cmp-head--click.is-on .cmp-head-go { color: var(--teal-600); }
+/* "What changed" rows and the filter bar share static/review-kit.css (rk-*) with the Insights page; only the comparison extras live here. */
+.cmp-heads { --rk-head-cols: 200px minmax(0, 1fr) auto; }
+.rk-head:has(.cmp-head-btn:focus-visible) { box-shadow: inset 0 0 0 2px var(--teal-600); }
 /* The action button stretches over the whole row; the scenario link sits above it. */
 .cmp-head-btn { border: 0; background: none; padding: 0; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-align: right; }
 .cmp-head-btn:focus-visible { outline: none; }
 .cmp-head-btn::after { content: ''; position: absolute; inset: 0; }
 .cmp-head-scn { position: relative; z-index: 1; color: var(--text-link); text-decoration: underline; text-underline-offset: 2px; }
 .cmp-head-scn:focus-visible { outline: none; box-shadow: var(--ring); border-radius: 3px; }
-.cmp-head-number { font: 700 18px/1.1 var(--font-mono); letter-spacing: -.02em; color: var(--text-strong); white-space: nowrap; }
-.cmp-head-finding { display: block; font-size: 13px; font-weight: 650; line-height: 1.35; color: var(--text-strong); }
-.cmp-head-why { display: block; font-size: 11.5px; line-height: 1.35; color: var(--text-muted); margin-top: 2px; }
-.cmp-head-go { font-size: 12px; font-weight: 600; color: var(--teal-600); white-space: nowrap; }
-.cmp-head--bad .cmp-head-number, .cmp-head--bad .cmp-head-go { color: var(--red-700); }
-.cmp-head--good .cmp-head-number { color: var(--green-600); }
-.cmp-head--warn .cmp-head-number { color: var(--amber-ink); }
-@media (max-width: 850px) {
-  .cmp-head { grid-template-columns: 1fr; gap: 4px; }
-}
-
-/* Active-filter bar (Insights .fbar) */
-.cmp-fbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 0 0 14px; font-size: 12.5px; color: var(--text-muted); }
-.cmp-fbar-count b { font-family: var(--font-mono); font-weight: 700; color: var(--text-strong); }
-.cmp-fchip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 10px; border: 1px solid var(--border-default);
-  border-radius: 999px; background: var(--surface-card); color: var(--text-strong); font-size: 12px; }
 .cmp-fchip-dim { color: var(--text-muted); }
-.cmp-fchip-x { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--text-muted);
-  text-decoration: none; font-size: 14px; line-height: 1; }
-.cmp-fchip-x:hover { background: var(--surface-sunken); color: var(--text-strong); }
-.cmp-fchip-x:focus-visible, .cmp-fbar-clear:focus-visible, .cmp-fbar-copy:focus-visible { outline: none; box-shadow: var(--ring); }
-.cmp-fbar-clear { color: var(--text-link); font-weight: 600; text-decoration: none; }
-.cmp-fbar-clear:hover { text-decoration: underline; }
-.cmp-fbar-hint { color: var(--text-muted); }
+.rk-fchip-x:focus-visible, .rk-fbar-clear:focus-visible, .cmp-fbar-copy:focus-visible { outline: none; box-shadow: var(--ring); }
 .cmp-fbar-rule { flex-basis: 100%; font-size: 11.5px; color: var(--text-muted); }
 .cmp-empty { padding: 8px 0 4px; }
 .cmp-empty-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
@@ -3118,7 +3089,7 @@ _SIM_COMPARE_CSS = """
 @media (max-width: 760px) {
   .cmp-report .kpi-band--cmp { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cmp-report .filter-swap-container .filter-form { order: -1; }
-  .cmp-status, .cmp-fbar { font-size: 12px; }
+  .cmp-status { font-size: 12px; }
   .cmp-fbar-copy { margin-left: 0; }
 }
 .kpi-band--cmp .kpi-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }

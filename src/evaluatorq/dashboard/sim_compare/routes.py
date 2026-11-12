@@ -24,6 +24,7 @@ from evaluatorq.dashboard.sim_compare.model import (
 from evaluatorq.dashboard.sim_compare.panels import _filter_strip, _headlines, _swap, render_compare_page
 from evaluatorq.dashboard.sim_compare.state import canonical_url, parse_compare_params
 from evaluatorq.dashboard.sim_compare.table import render_conversations, resolve_view
+from evaluatorq.dashboard.ui_components import stylesheet_asset
 from evaluatorq.dashboard.view import report_back_link
 
 if TYPE_CHECKING:
@@ -162,7 +163,14 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
         selections, state = parse_compare_params(_items(req))
         body = render_compare_page(_comparison(rid_a, rid_b, loaded, selections), selections, state)
         return Response(
-            page('Compare', body, active_surface='sim', back_html=report_back_link('sim')), media_type='text/html'
+            page(
+                'Compare',
+                body,
+                active_surface='sim',
+                back_html=report_back_link('sim'),
+                head_html=stylesheet_asset(filename='review-kit.css'),
+            ),
+            media_type='text/html',
         )
 
     @app.post('/compare/sim/filter')

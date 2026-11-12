@@ -569,7 +569,7 @@ def test_filter_bar_lists_active_filters_with_remove_links(roots: list[Path]):
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)
     html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}&persona=alice&goal_outcome=Achieved').text
-    bar = html.split('class="cmp-fbar"')[1].split('</div>')[0]
+    bar = html.split('class="rk-fbar"')[1].split('</div>')[0]
     assert 'Showing <b>1</b> of <b>4</b> rows' in bar
     assert 'Persona</span>alice' in bar and 'Goal outcome</span>Goal met' in bar
     # removing the persona chip keeps the goal-outcome filter, and clear all drops both
@@ -578,21 +578,21 @@ def test_filter_bar_lists_active_filters_with_remove_links(roots: list[Path]):
     assert f'href="/compare/sim?a={rid_a}&amp;b={rid_b}" hx-get="/compare/sim/filter?a={rid_a}&amp;b={rid_b}"' in bar
     assert 'aria-label="Remove the Persona filter"' in bar
     unfiltered = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
-    assert 'Clear all' not in unfiltered.split('class="cmp-fbar"')[1].split('</div>')[0]
+    assert 'Clear all' not in unfiltered.split('class="rk-fbar"')[1].split('</div>')[0]
 
 
 def test_headline_row_toggles_and_follows_the_table(roots: list[Path]):
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)
     page = client.get(f'/compare/sim?a={rid_a}&b={rid_b}&cmp_view=regressed').text
-    pressed = re.search(r'<div class="cmp-head cmp-head--click cmp-head--bad is-on">.*?<button [^>]*aria-pressed="true" ([^>]*)>', page)
+    pressed = re.search(r'<div class="rk-head rk-head--click rk-head--bad is-on">.*?<button [^>]*aria-pressed="true" ([^>]*)>', page)
     assert pressed and 'Showing these' in page
     # pressing the showing row again returns the table to its default view
     assert 'cmp_view="' in pressed.group(1)
     conv = client.get(f'/compare/sim/conversations?a={rid_a}&b={rid_b}&cmp_view=improved').text
     oob = conv.split('id="cmp-heads"')[1]
     assert 'hx-swap-oob="true"' in oob.split('>')[0]
-    assert re.search(r'class="cmp-head cmp-head--click cmp-head--good is-on">.*?aria-pressed="true"', oob)
+    assert re.search(r'class="rk-head rk-head--click rk-head--good is-on">.*?aria-pressed="true"', oob)
 
 
 def test_single_termination_reason_hides_the_ended_bar():

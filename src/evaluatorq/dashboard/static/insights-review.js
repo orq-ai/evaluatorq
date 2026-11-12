@@ -488,11 +488,11 @@ function renderHeadlines() {
   HEADS = CANDIDATES.filter(c => c.needs()).map(c => { const h = c.make(); return h && {...h, lead: c.k === 'Fix first'}; }).filter(Boolean);
   HEADS.sort((a, b) => Number(b.lead) - Number(a.lead));
   const el = $('heads');
-  if (!HEADS.length) { el.innerHTML = `<div class="head empty">${DIMS.length ? `No theme is large enough (${MIN_N}+ traces) to highlight. Explore the themes below.` : 'This run has no themes to highlight. Explore its labels, traces and activity.'}</div>`; return; }
-  el.innerHTML = HEADS.map((h, i) => `<button class="head ${h.lead ? 'lead ' : ''}${isOn(h.f) ? 'on' : ''}" data-h="${i}" aria-pressed="${isOn(h.f)}">
-    <span class="number">${h.number}</span><span><span class="finding">${h.finding}</span><span class="why" style="display:block">${h.why}</span></span>
-    <span class="go">${isOn(h.f) ? 'Showing these ✓' : esc(h.action)}</span></button>`).join('');
-  el.querySelectorAll('.head[data-h]').forEach(b => b.onclick = () => {
+  if (!HEADS.length) { el.innerHTML = `<div class="rk-head rk-head--empty">${DIMS.length ? `No theme is large enough (${MIN_N}+ traces) to highlight. Explore the themes below.` : 'This run has no themes to highlight. Explore its labels, traces and activity.'}</div>`; return; }
+  el.innerHTML = HEADS.map((h, i) => `<button class="rk-head rk-head--click${h.lead ? ' rk-head--bad' : ''}${isOn(h.f) ? ' is-on' : ''}" data-h="${i}" aria-pressed="${isOn(h.f)}">
+    <span class="rk-head-number">${h.number}</span><span><span class="rk-head-finding">${h.finding}</span><span class="rk-head-why">${h.why}</span></span>
+    <span class="rk-head-go">${isOn(h.f) ? 'Showing these ✓' : esc(h.action)}</span></button>`).join('');
+  el.querySelectorAll('.rk-head[data-h]').forEach(b => b.onclick = () => {
     const f = HEADS[+b.dataset.h].f;
     if (f.t === 'c') { S.dim = C[f.id].dim; S.sel = isOn(f) ? null : {kind: 'cluster', id: f.id}; }
     toggle(f);
@@ -503,13 +503,13 @@ function renderHeadlines() {
 function renderFilterbar() {
   const v = visible().length;
   const activity = S.view === 'activity' ? S.activityItem : null;
-  $('fbar').innerHTML = `<span class="count">Showing <b class="num">${v}</b> of <b class="num">${N}</b> traces</span>` +
+  $('fbar').innerHTML = `<span class="rk-fbar-count">Showing <b class="num">${v}</b> of <b class="num">${N}</b> traces</span>` +
     (S.filters.length || activity
-      ? S.filters.map((f, i) => `<span class="fchip"><i style="background:${fcolor(f)}"></i><span>${esc(flabel(f))}</span><button data-rm="${i}" aria-label="Remove filter">×</button></span>`).join('') +
-        (activity ? `<span class="fchip"><span>${esc(cap(activity.kind))} · ${esc(activity.name)}</span><button id="clearActivity" aria-label="Remove activity selection">×</button></span>` : '') +
-        `<button class="linkbtn" id="clearAll">Clear all</button>`
-      : `<span class="hint">Click a theme, label value, or activity item to narrow the trace list.</span>`) +
-    `<button class="btn sm right" id="copyLink" title="The address holds your filters, view and selection">Copy link to this view</button>`;
+      ? S.filters.map((f, i) => `<span class="rk-fchip"><i class="rk-fchip-dot" style="background:${fcolor(f)}"></i><span class="rk-fchip-label">${esc(flabel(f))}</span><button class="rk-fchip-x" data-rm="${i}" aria-label="Remove filter">×</button></span>`).join('') +
+        (activity ? `<span class="rk-fchip"><span class="rk-fchip-label">${esc(cap(activity.kind))} · ${esc(activity.name)}</span><button class="rk-fchip-x" id="clearActivity" aria-label="Remove activity selection">×</button></span>` : '') +
+        `<button class="rk-fbar-clear" id="clearAll">Clear all</button>`
+      : `<span class="rk-fbar-hint">Click a theme, label value, or activity item to narrow the trace list.</span>`) +
+    `<button class="btn sm rk-fbar-right" id="copyLink" title="The address holds your filters, view and selection">Copy link to this view</button>`;
   $('fbar').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { S.filters.splice(+b.dataset.rm, 1); commit(); });
   const ci = $('clearActivity'); if (ci) ci.onclick = () => { S.activityItem = null; commit(); };
   const ca = $('clearAll'); if (ca) ca.onclick = () => { S.filters = []; S.activityItem = null; commit(); };

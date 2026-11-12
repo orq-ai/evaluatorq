@@ -97,24 +97,24 @@ def _headlines(cmp: Comparison, view: str, state: TableState | None = None, *, o
         target: str | None = None,
         go: str = '',
     ) -> str:
-        tone_cls = f' cmp-head--{tone}' if tone else ''
+        tone_cls = f' rk-head--{tone}' if tone else ''
         on = target is not None and target == view
         text = (
-            f'<span><span class="cmp-head-finding">{esc(finding)}</span>'
-            f'<span class="cmp-head-why">{esc(why)}{why_html}</span></span>'
+            f'<span><span class="rk-head-finding">{esc(finding)}</span>'
+            f'<span class="rk-head-why">{esc(why)}{why_html}</span></span>'
         )
-        lead = f'<span class="cmp-head-number">{esc(number)}</span>{text}'
+        lead = f'<span class="rk-head-number">{esc(number)}</span>{text}'
         if target is None:
-            return f'<div class="cmp-head{tone_cls}">{lead}<span></span></div>'
+            return f'<div class="rk-head{tone_cls}">{lead}<span></span></div>'
         go_text = 'Showing these &#x2713;' if on else f'{esc(go)} &rarr;'
         go_name = 'Showing these' if on else go
         # Pressing the showing row again goes back to the default view ('' = changed, or all).
         attrs = _view_attrs(cmp, '' if on else target)
         button = (
-            f'<button type="button" class="cmp-head-go cmp-head-btn" aria-pressed="{"true" if on else "false"}" '
+            f'<button type="button" class="rk-head-go cmp-head-btn" aria-pressed="{"true" if on else "false"}" '
             f'aria-label="{esc(finding)}: {esc(go_name)}" {attrs}>{go_text}</button>'
         )
-        return f'<div class="cmp-head cmp-head--click{tone_cls}{" is-on" if on else ""}">{lead}{button}</div>'
+        return f'<div class="rk-head rk-head--click{tone_cls}{" is-on" if on else ""}">{lead}{button}</div>'
 
     def where(pairs: list[MatchedPair]) -> str:
         scenario, count = Counter(p.a.scenario for p in pairs).most_common(1)[0]
@@ -208,7 +208,7 @@ def _headlines(cmp: Comparison, view: str, state: TableState | None = None, *, o
     if not regressed and not improved and not errored and cmp.matching.matched:
         rows.insert(0, row('0', 'No outcome changes', 'Every matched conversation kept its goal outcome'))
     oob_attr = ' hx-swap-oob="true"' if oob else ''
-    return f'<section id="cmp-heads" class="cmp-heads" aria-label="What changed"{oob_attr}>{"".join(rows)}</section>'
+    return f'<section id="cmp-heads" class="rk-heads cmp-heads" aria-label="What changed"{oob_attr}>{"".join(rows)}</section>'
 
 
 _FILTER_LABELS = {
@@ -251,19 +251,19 @@ def _filter_strip(cmp: Comparison, state: TableState, *, oob: bool = False) -> s
     out of band so the links carry the current segment and sort."""
     full = cmp.full
     noun = 'rows' if full.a_only or full.b_only else 'pairs'
-    count = f'<span class="cmp-fbar-count">Showing <b>{cmp.shown_rows}</b> of <b>{cmp.total_rows}</b> {noun}</span>'
+    count = f'<span class="rk-fbar-count">Showing <b>{cmp.shown_rows}</b> of <b>{cmp.total_rows}</b> {noun}</span>'
     base = _base_state(state)
     if cmp.narrowing:
         chips = ''.join(
-            f'<span class="cmp-fchip"><span class="cmp-fchip-dim">{esc(_filter_label(dim))}</span>'
+            f'<span class="rk-fchip"><span class="rk-fchip-label cmp-fchip-dim">{esc(_filter_label(dim))}</span>'
             f'{esc(_filter_value_text(dim, values))}'
-            f'<a class="cmp-fchip-x" {_swap_link(cmp, {k: v for k, v in cmp.narrowing.items() if k != dim}, base)} '
+            f'<a class="rk-fchip-x" {_swap_link(cmp, {k: v for k, v in cmp.narrowing.items() if k != dim}, base)} '
             f'aria-label="Remove the {esc(_filter_label(dim))} filter">&times;</a></span>'
             for dim, values in cmp.narrowing.items()
         )
-        rest = f'{chips}<a class="cmp-fbar-clear" {_swap_link(cmp, {}, base)}>Clear all</a>'
+        rest = f'{chips}<a class="rk-fbar-clear" {_swap_link(cmp, {}, base)}>Clear all</a>'
     else:
-        rest = '<span class="cmp-fbar-hint">Use the filters to narrow both runs to the same conversations.</span>'
+        rest = '<span class="rk-fbar-hint">Use the filters to narrow both runs to the same conversations.</span>'
     copy = '<button type="button" class="cmp-fbar-copy" data-copy-link>Copy link to this view</button>'
     rule = (
         '<span class="cmp-fbar-rule">A pair stays when either run\'s conversation matches.</span>'
@@ -271,7 +271,7 @@ def _filter_strip(cmp: Comparison, state: TableState, *, oob: bool = False) -> s
         else ''
     )
     oob_attr = ' hx-swap-oob="true"' if oob else ''
-    return f'<div id="cmp-fbar" class="cmp-fbar" role="status"{oob_attr}>{count}{rest}{copy}{rule}</div>'
+    return f'<div id="cmp-fbar" class="rk-fbar" role="status"{oob_attr}>{count}{rest}{copy}{rule}</div>'
 
 
 def _tiles(cmp: Comparison) -> str:
