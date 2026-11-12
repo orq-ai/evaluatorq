@@ -1209,3 +1209,11 @@ async def test_models_by_provider_embedding_kind_lists_only_embedding_models(mon
         'cohere': ['cohere/embed-v4'],
         'openai': ['openai/text-embedding-4'],
     }
+
+
+@pytest.mark.asyncio
+async def test_pricing_with_no_orq_key_yields_no_model_info_and_no_cost():
+    """Without an Orq key there is no catalogue host: lookup degrades to unpriced instead of raising (RES-1875)."""
+    assert await pricing.get_model_info('claude-sonnet-5-5') is None
+    unpriced = _usage()
+    assert await pricing.price_usage(unpriced, 'claude-sonnet-5-5') is unpriced

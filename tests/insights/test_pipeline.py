@@ -1698,6 +1698,21 @@ async def test_insights_with_an_anthropic_client_and_no_embedding_client_fails_b
 
 
 @pytest.mark.asyncio
+async def test_insights_with_only_the_anthropic_key_and_no_embedding_client_fails_before_any_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The env-resolved client is built later, so the check reads the provider the environment picks."""
+    from evaluatorq.common.llm_client import LLM_CREDENTIAL_KEYS
+
+    for name in LLM_CREDENTIAL_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-test')
+    with pytest.raises(ValueError, match=r'embedding_client='):
+        await pipeline.insights(_population(), dimensions=('intent',), runs_dir=tmp_path / 'runs')
+    assert not (tmp_path / 'runs').exists(), 'the run directory was created before the check'
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('wrapped', [False, True])
 async def test_insights_rejects_an_anthropic_client_as_the_embedding_client(tmp_path: Path, wrapped: bool) -> None:
     import anthropic

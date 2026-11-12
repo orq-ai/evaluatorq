@@ -12,6 +12,21 @@ uv add "evaluatorq[anthropic]"
 
 The extra installs `anthropic>=0.75.0`. Nothing else in evaluatorq imports it, so a base install is unaffected. Without the extra, your own `from anthropic import AsyncAnthropic` raises `ModuleNotFoundError`, because the package is not installed.
 
+## Without injecting a client
+
+You can skip the client when the environment carries the key. With `ANTHROPIC_API_KEY` set and neither `ORQ_API_KEY` nor `OPENAI_API_KEY`, evaluatorq builds an `AsyncAnthropic` itself and wraps it, so the simulation CLI and every Python entry point work with no code. In Python, `red_team()`, `simulate()` and `generate_and_simulate()` resolve the client themselves when only `ANTHROPIC_API_KEY` is set and the three roles are set to Claude ids. The red-team CLI targets are Orq agents and deployments, which need `ORQ_API_KEY`, so a Claude model as the red-team target is Python-only, through `OpenAIModelTarget` (see [Test a Claude target](#test-a-claude-target)). The command below simulates conversations with a Claude model as the target:
+
+```bash
+export ANTHROPIC_API_KEY=...
+export EVALUATORQ_SMART_MODEL=claude-opus-5-5
+export EVALUATORQ_FAST_MODEL=claude-haiku-5-5
+export EVALUATORQ_CLASSIFIER_MODEL=claude-sonnet-5-5
+eq sim run --agent-description 'A support bot for a bank' \
+  --openai-model claude-sonnet-5-5
+```
+
+The precedence is `ORQ_API_KEY` (the Orq router), then `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`, so a shell that already exports one of the first two keeps resolving as before. Unset them to use Claude directly. Targets that only exist on the Orq router, such as `agent:<key>`, never fall through to the Anthropic key. The Anthropic SDK reads `ANTHROPIC_BASE_URL` on its own, and the client retries through the SDK's own retry budget. Bedrock and Vertex are not resolved from the environment: build the client yourself and pass it as below.
+
 ## Pass the client
 
 Every entry point that takes an injected client accepts an Anthropic client directly. You do not wrap it yourself: the entry points below wrap it, and so does the shared code that makes every chat and Responses call, so a client that reaches a call some other way, such as `apply_recommendations(llm_client=...)`, is wrapped there.

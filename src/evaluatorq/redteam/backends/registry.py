@@ -37,6 +37,7 @@ def create_async_llm_client(
     1. ``role_config.client`` if provided
     2. ORQ env (``ORQ_API_KEY`` + optional ``ORQ_BASE_URL``, defaults to https://my.orq.ai)
     3. Standard OpenAI env (``OPENAI_API_KEY`` + optional ``OPENAI_BASE_URL``)
+    4. ``ANTHROPIC_API_KEY`` (needs the ``evaluatorq[anthropic]`` extra)
 
     When using ORQ, the router suffix ``/v3/router`` is appended automatically
     to produce the OpenAI-compatible completions endpoint.
@@ -58,12 +59,6 @@ def create_async_llm_client(
             honor_openai_base_url=True,
             max_retries=max_retries,
         ).client
-    except ImportError as exc:
-        msg = (
-            'openai package is required for LLM-based attack generation. '
-            'Install it with: uv add openai (or: python -m pip install openai)'
-        )
-        raise BackendError(msg) from exc
     except MissingLLMCredentialsError as exc:
         raise CredentialError(str(exc)) from exc
 
