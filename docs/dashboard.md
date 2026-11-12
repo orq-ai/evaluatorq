@@ -141,7 +141,7 @@ Files that cannot be parsed (invalid JSON) are silently skipped.  Files that par
 
 ## Landing
 
-`GET /` opens the combined dashboard: a stat band (total runs, per-surface counts, attack resistance), runs-by-type and attack-resistance breakdowns, findings by severity, token usage, and a **recent runs** list across both stores.  The left sidebar switches surface — **Red Team** and **Agent Sim** open filtered run lists at `?surface=…`, sorted by creation time (newest first).  Each run row drills into its report view; reports whose JSON is only partially valid surface an error badge instead of a traceback.  The **export** action on a report downloads the standalone self-contained HTML for offline sharing.
+`GET /` opens the combined dashboard: a stat band (total runs, per-surface counts, attack resistance), runs-by-type and attack-resistance breakdowns, findings by severity, token usage, and a **recent runs** list across both stores.  The left sidebar switches surface — **Red Team** and **Agent Sim** open filtered run lists at `?surface=…`, sorted by creation time (newest first). Drag its right edge to resize it (arrow keys also work when the edge has focus, and a double-click resets it), or collapse it with **⌘ B** (Ctrl B elsewhere); both settings are remembered in the browser.  Each run row drills into its report view; reports whose JSON is only partially valid surface an error badge instead of a traceback.  The **export** action on a report downloads the standalone self-contained HTML for offline sharing.
 
 ### How attack resistance is counted
 
