@@ -122,7 +122,6 @@ def test_both_shapes_present_are_not_double_counted():
     assert (usage.cached_tokens, usage.cache_creation_tokens) == (800, 100)
 
 
-
 @pytest.mark.parametrize('face', ['chat', 'responses'])
 def test_anthropic_adapter_usage_is_not_double_counted(face):
     """The adapter already folds cache counters into its prompt count and also emits the flat
@@ -147,6 +146,7 @@ def test_anthropic_adapter_usage_is_not_double_counted(face):
     usage = _extract(converted)
     assert (usage.input_tokens, usage.cached_tokens, usage.cache_creation_tokens) == (160, 100, 50)
     assert usage.total_tokens == 165
+
 
 def test_cost_of_prices_an_anthropic_cache_heavy_call_on_all_tokens():
     info = ModelInfo(
@@ -201,3 +201,42 @@ async def test_price_usage_prices_anthropic_cache_tokens(monkeypatch: pytest.Mon
     assert priced is not None
     assert priced.input_cost == pytest.approx(0.01 * 0.003 + 100 * 0.0003 + 50 * 0.00375)
     assert priced.output_cost == pytest.approx(0.015)
+
+
+def test_openai_chat_audio_prompt_tokens_are_extracted():
+    usage = _extract({
+        'prompt_tokens': 1000,
+        'completion_tokens': 50,
+        'total_tokens': 1050,
+        'prompt_tokens_details': {'audio_tokens': 300, 'cached_tokens': 100},
+    })
+    assert usage.input_tokens == 1000
+    assert (usage.audio_input_tokens, usage.cached_tokens) == (300, 100)
+
+
+def test_langchain_input_token_details_audio_is_extracted():
+    usage = _extract({
+        'input_tokens': 1000,
+        'output_tokens': 50,
+        'total_tokens': 1050,
+        'input_token_details': {'audio': 250},
+    })
+    assert usage.audio_input_tokens == 250
+    assert usage.input_tokens == 1000
+
+
+def test_output_side_audio_is_not_counted_as_audio_input():
+    usage = _extract({
+        'input_tokens': 100,
+        'output_tokens': 50,
+        'output_tokens_details': {'audio_tokens': 40},
+    })
+    assert usage.audio_input_tokens == 0
+
+
+def test_audio_input_tokens_add_and_subtract_clamped():
+    a = Usage(input_tokens=10, audio_input_tokens=4, calls=1)
+    b = Usage(input_tokens=10, audio_input_tokens=7, calls=1)
+    assert (a + b).audio_input_tokens == 11
+    assert (b - a).audio_input_tokens == 3
+    assert (a - b).audio_input_tokens == 0

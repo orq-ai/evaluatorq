@@ -631,6 +631,7 @@ class Usage(BaseModel):
     cache_creation_5m_tokens: int = Field(
         default=0, ge=0, description='Cache-write tokens at the 5m TTL tier (subset of cache_creation_tokens)'
     )
+    audio_input_tokens: int = Field(default=0, ge=0, description='Audio input tokens (subset of input_tokens)')
     reasoning_tokens: int = Field(default=0, ge=0, description='Reasoning output tokens (subset of output_tokens)')
     input_cost: float | None = Field(
         default=None,
@@ -675,6 +676,7 @@ class Usage(BaseModel):
             cache_creation_tokens: int = 0,
             cache_creation_1h_tokens: int = 0,
             cache_creation_5m_tokens: int = 0,
+            audio_input_tokens: int = 0,
             reasoning_tokens: int = 0,
             input_cost: float | None = None,
             prompt_cost: float | None = None,
@@ -796,20 +798,19 @@ class Usage(BaseModel):
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details', 'cache_creation'),
             ('cache_creation_5m_tokens', 'ephemeral_5m_input_tokens'),
         ) or _usage_first_int(usage, ('cache_creation_5m_tokens',))
-        # Both Anthropic and Orq v3 do report a pre-summed total, so the tier sum is
-        # only a last-resort fallback for a payload that carries the split alone —
-        # without it those cache-write tokens would vanish from cache_creation_tokens.
         cache_creation_nested = _usage_detail_int(
             usage,
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
             ('cache_creation_tokens', 'cache_creation_input_tokens'),
         )
-        # Flat cache writes: top-level `cache_creation_input_tokens`, or only the `cache_creation` tier object.
         tiers = _usage_get(usage, 'cache_creation')
         cache_creation_flat = _usage_first_int(usage, ('cache_creation_input_tokens',)) or (
             _usage_first_int(tiers, ('ephemeral_1h_input_tokens',))
             + _usage_first_int(tiers, ('ephemeral_5m_input_tokens',))
         )
+        # Both Anthropic and Orq v3 do report a pre-summed total, so the tier sum is
+        # only a last-resort fallback for a payload that carries the split alone —
+        # without it those cache-write tokens would vanish from cache_creation_tokens.
         cache_creation = (
             cache_creation_nested
             or cache_creation_flat
@@ -818,8 +819,12 @@ class Usage(BaseModel):
         )
         if not input_details_present:
             inp += cached_flat + cache_creation_flat
-        # Provider total is trusted only when > 0; otherwise input + output with the adjusted input.
         total = reported_total if reported_total > 0 else inp + out
+        audio_input = _usage_detail_int(
+            usage,
+            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
+            ('audio_tokens', 'audio'),
+        )
         # Codex CLI reports reasoning flat as `reasoning_output_tokens`.
         reasoning = _usage_detail_int(
             usage,
@@ -858,6 +863,7 @@ class Usage(BaseModel):
             cache_creation_tokens=cache_creation,
             cache_creation_1h_tokens=cache_creation_1h,
             cache_creation_5m_tokens=cache_creation_5m,
+            audio_input_tokens=audio_input,
             reasoning_tokens=reasoning,
             input_cost=input_cost,
             output_cost=output_cost,
@@ -892,6 +898,7 @@ class Usage(BaseModel):
             cache_creation_tokens=self.cache_creation_tokens + other.cache_creation_tokens,
             cache_creation_1h_tokens=self.cache_creation_1h_tokens + other.cache_creation_1h_tokens,
             cache_creation_5m_tokens=self.cache_creation_5m_tokens + other.cache_creation_5m_tokens,
+            audio_input_tokens=self.audio_input_tokens + other.audio_input_tokens,
             reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
             input_cost=self._combine_cost(self.input_cost, other.input_cost),
             output_cost=self._combine_cost(self.output_cost, other.output_cost),
@@ -920,6 +927,7 @@ class Usage(BaseModel):
             cache_creation_tokens=max(self.cache_creation_tokens - other.cache_creation_tokens, 0),
             cache_creation_1h_tokens=max(self.cache_creation_1h_tokens - other.cache_creation_1h_tokens, 0),
             cache_creation_5m_tokens=max(self.cache_creation_5m_tokens - other.cache_creation_5m_tokens, 0),
+            audio_input_tokens=max(self.audio_input_tokens - other.audio_input_tokens, 0),
             reasoning_tokens=max(self.reasoning_tokens - other.reasoning_tokens, 0),
             input_cost=self._combine_cost(self.input_cost, other.input_cost, sign=-1),
             output_cost=self._combine_cost(self.output_cost, other.output_cost, sign=-1),
