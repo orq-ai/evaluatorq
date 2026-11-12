@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from evaluatorq.common.cli_oauth import DECISIONS_PATH
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS
+from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS, error_text
 from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.model_input import classifier_question_wire_payloads
@@ -136,7 +136,7 @@ def _is_reasoning_effort_rejection(params: dict[str, Any], exc: BaseException) -
     then every later call to that model silently at the provider default while
     the caller believes it is running where it configured.
     """
-    err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+    err_body = error_text(exc)
     if 'reasoning_effort' not in params or 'reasoning' not in err_body:
         return False
     return any(marker in err_body for marker in _UNSUPPORTED_PARAMETER_MARKERS)
@@ -158,7 +158,7 @@ def strip_known_rejected_responses_reasoning(model: str, params: dict[str, Any])
 
 def is_responses_reasoning_rejection(params: dict[str, Any], exc: BaseException) -> bool:
     """True if ``exc`` is the reasoning-unsupported 400 for this Responses call."""
-    err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+    err_body = error_text(exc)
     return 'reasoning' in params and 'reasoning' in err_body
 
 

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from loguru import logger
-from openai import APITimeoutError, RateLimitError
+from openai import RateLimitError
 from pydantic import ValidationError
 
 import evaluatorq
@@ -31,6 +31,7 @@ from evaluatorq.common.judge import (
     run_judge,
 )
 from evaluatorq.contracts import LLMCallConfig
+from tests.common.llm_error_factories import TIMEOUT_FACTORIES
 
 ORQ_URL = 'https://my.orq.ai/v3/router'
 JEV = 'typesafe/jev-latest'
@@ -269,8 +270,9 @@ async def test_run_classify_maps_a_timeout_to_a_timeout_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_classify_maps_provider_timeout_to_a_timeout_error() -> None:
-    client = _client(APITimeoutError(request=MagicMock()))
+@pytest.mark.parametrize('make_timeout', TIMEOUT_FACTORIES)
+async def test_run_classify_maps_provider_timeout_to_a_timeout_error(make_timeout: Any) -> None:
+    client = _client(make_timeout())
     request = ClassifyRequest(state='reply', questions={'risk': _noul_question()})
 
     outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
@@ -279,11 +281,12 @@ async def test_run_classify_maps_provider_timeout_to_a_timeout_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_classify_judge_reraises_provider_timeout_for_run_judge_retry() -> None:
-    timeout = APITimeoutError(request=MagicMock())
+@pytest.mark.parametrize('make_timeout', TIMEOUT_FACTORIES)
+async def test_classify_judge_reraises_provider_timeout_for_run_judge_retry(make_timeout: Any) -> None:
+    timeout = make_timeout()
     client = _client(timeout)
 
-    with pytest.raises(APITimeoutError) as caught:
+    with pytest.raises(type(timeout)) as caught:
         await judge_mod._classify_judge(
             client=client,
             model=JEV,
@@ -935,9 +938,10 @@ async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question
 
 
 @pytest.mark.asyncio
-async def test_run_classify_judges_maps_an_api_error_to_every_question_key() -> None:
+@pytest.mark.parametrize('make_timeout', TIMEOUT_FACTORIES)
+async def test_run_classify_judges_maps_an_api_error_to_every_question_key(make_timeout: Any) -> None:
     """A failed classify call is a failure for every dimension it was asked about, not just one."""
-    client = _client(APITimeoutError(request=MagicMock()))
+    client = _client(make_timeout())
     questions = {
         'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
         'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),

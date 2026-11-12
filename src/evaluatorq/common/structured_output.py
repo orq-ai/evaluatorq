@@ -55,7 +55,7 @@ from pydantic import BaseModel, ValidationError
 
 from evaluatorq.common.extract_json import extract_json_from_response
 from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse, execute_response
-from evaluatorq.common.llm_errors import STATUS_ERRORS, status_code
+from evaluatorq.common.llm_errors import STATUS_ERRORS, error_text, status_code
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
@@ -238,13 +238,13 @@ _TOOL_KEYWORDS = (
 
 
 def _looks_like_capability_rejection(exc: BaseException, keywords: tuple[str, ...]) -> bool:
-    err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+    err_body = error_text(exc)
     return any(kw in err_body for kw in keywords)
 
 
 def _rejection_message(exc: BaseException) -> str:
     # Provider bodies can echo prompts; name only fixed capability clues in logs.
-    body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+    body = error_text(exc)
     if 'oneof' in body:
         return 'schema uses oneOf, which the provider rejected'
     for keyword in _SCHEMA_KEYWORDS + _TOOL_KEYWORDS:

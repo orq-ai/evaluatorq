@@ -22,7 +22,13 @@ from evaluatorq.common.llm_call import (
     execute_response,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS, CONNECTION_ERRORS, STATUS_ERRORS, TIMEOUT_ERRORS
+from evaluatorq.common.llm_errors import (
+    BAD_REQUEST_ERRORS,
+    CONNECTION_ERRORS,
+    STATUS_ERRORS,
+    TIMEOUT_ERRORS,
+    error_text,
+)
 from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, UNKNOWN_ARGUMENTS_TEXT, coerce_content_text
 from evaluatorq.common.model_catalogue import is_known_classify_model, qualified_model, supports_classify
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
@@ -970,7 +976,7 @@ async def _chat_verdict(
                 extra_kwargs=cfg.extra_kwargs or None,
             )
         except BAD_REQUEST_ERRORS as exc:
-            err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+            err = error_text(exc)
             # Only fall back when the error looks like a structured-output
             # rejection. A miss here intentionally re-raises rather than
             # silently degrading — do not widen this to a bare
@@ -1137,7 +1143,7 @@ async def _attempt(
             # process-wide — a one-off 400 (content policy, a bad extra_kwargs)
             # must not cost every later judge call its router-reported cost.
             responses_model[0] = None
-            err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+            err = error_text(exc)
             # Match phrases that name the *endpoint* as unsupported, not bare words.
             # 'response' alone matches almost any 400 that mentions a response, and
             # 'parameter' matches "Unknown parameter: reasoning_effort" — a param
