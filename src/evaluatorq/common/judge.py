@@ -21,15 +21,25 @@ from evaluatorq.common.llm_call import (
     execute_classify,
     execute_response,
 )
-from evaluatorq.common.llm_client import ModelClientMismatchError, client_routes_through_orq, is_anthropic_client
-from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS, CONNECTION_ERRORS, STATUS_ERRORS, TIMEOUT_ERRORS
+from evaluatorq.common.llm_client import (
+    LLMConfigurationError,
+    client_routes_through_orq,
+    is_anthropic_client,
+)
+from evaluatorq.common.llm_errors import (
+    BAD_REQUEST_ERRORS,
+    CONNECTION_ERRORS,
+    STATUS_ERRORS,
+    TIMEOUT_ERRORS,
+    error_text,
+)
 from evaluatorq.common.messages import UNKNOWN_ARGUMENTS, UNKNOWN_ARGUMENTS_TEXT, coerce_content_text
 from evaluatorq.common.model_catalogue import is_known_classify_model, qualified_model, supports_classify
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.sanitize import delimit
-from evaluatorq.common.structured_output import warn_unread_config_fields
+from evaluatorq.common.structured_output import generate_structured, usage_from_exception, warn_unread_config_fields
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.common.tracing import set_span_attrs, with_llm_span
 from evaluatorq.contracts import (
@@ -516,10 +526,9 @@ async def _responses_judge(
         extra_kwargs=cfg.extra_kwargs or None,
     )
     raw = getattr(response, 'output_text', '') or ''
-    refusal = first_responses_refusal(response)
-    if refusal is not None:
-        payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=refusal)
-        return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)
+    abstention = _refusal_abstention(first_responses_refusal(response))
+    if abstention is not None:
+        return JudgeOutcome(payload=abstention, token_usage=usage, raw_content=raw)
     reason = responses_stop_reason(response)
     if reason == 'length':
         logger.error('Judge [{}] Responses output hit max_tokens={}', model, cfg.max_tokens)
@@ -571,6 +580,17 @@ async def _responses_judge(
     return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)
 
 
+def _refusal_abstention(refusal: object) -> EvaluatorResponsePayload | None:
+    """The one refusal rule of every judge leg: a refusal is an abstention explained by the refusal text, never a parse error.
+
+    Only a non-empty string counts; the SDK types ``refusal`` as ``str | None``, so
+    anything else (a duck-typed message without the field) is not a refusal.
+    """
+    if not isinstance(refusal, str) or not refusal:
+        return None
+    return EvaluatorResponsePayload(value=None, abstain=True, explanation=refusal)
+
+
 async def _json_object_judge(
     *,
     client: AsyncOpenAI,
@@ -604,7 +624,11 @@ async def _json_object_judge(
         extra_body=cfg.extra_body or None,
         extra_kwargs=cfg.extra_kwargs or None,
     )
-    raw = response.choices[0].message.content or '{}'
+    message = response.choices[0].message
+    abstention = _refusal_abstention(getattr(message, 'refusal', None))
+    if abstention is not None:
+        return abstention, usage, message.content or ''
+    raw = message.content or '{}'
     # Routed Anthropic/Gemini sometimes ignore json_object and wrap the verdict in
     # a ```json fence; strip it before parsing (raw stays original for the trace).
     cleaned = _strip_code_fences(raw)
@@ -782,8 +806,6 @@ async def _classify_structured(
     *, client: AsyncOpenAI, model: str, cfg: LLMCallConfig, request: ClassifyRequest
 ) -> tuple[ClassifyResponse | None, TokenUsage | None, str]:
     """Answer ``request`` with one structured judgement instead of the ``/decisions`` endpoint; no response when nothing validated."""
-    from evaluatorq.common.structured_output import generate_structured
-
     schema, names = _classify_fallback_schema(request)
     result = await generate_structured(
         client,
@@ -809,13 +831,6 @@ async def _classify_structured(
         else:
             answers[key] = ClassifyAnswer(type='score', score=float(value))
     return ClassifyResponse(answers=answers, model=model), result.usage, result.raw
-
-
-def _classify_failure_usage(exc: BaseException, usage: TokenUsage | None) -> TokenUsage | None:
-    """Spend billed before ``exc``: what the structured fallback attached to it, else what the call already returned."""
-    from evaluatorq.common.structured_output import usage_from_exception
-
-    return usage_from_exception(exc) or usage
 
 
 async def run_classify(
@@ -890,7 +905,7 @@ async def run_classify(
             error_kind=JudgeError.TIMEOUT,
             error_message=f'timed out after {cfg.timeout_ms}ms',
             error_exc=exc,
-            token_usage=_classify_failure_usage(exc, usage),
+            token_usage=usage_from_exception(exc) or usage,
         )
     except ValidationError as exc:
         logger.error('Judge [{}] classify reply did not validate: {}', model, exc)
@@ -904,10 +919,10 @@ async def run_classify(
         kind = _classify(exc)
         logger.error('Judge [{}] classify API error ({}): {}', model, kind.value, exc)
         return ClassifyOutcome(
-            error_kind=kind, error_message=str(exc), error_exc=exc, token_usage=_classify_failure_usage(exc, usage)
+            error_kind=kind, error_message=str(exc), error_exc=exc, token_usage=usage_from_exception(exc) or usage
         )
-    except ModelClientMismatchError:
-        # A configuration mistake that fails every call alike: stop the run instead of recording an outcome per item.
+    except LLMConfigurationError:
+        # A configuration mistake fails every call alike: re-raise it instead of recording one judge error per item.
         raise
     except Exception as exc:
         logger.exception('Judge [{}] classify call failed (unknown): {}', model, exc)
@@ -915,7 +930,7 @@ async def run_classify(
             error_kind=JudgeError.UNKNOWN,
             error_message=str(exc),
             error_exc=exc,
-            token_usage=_classify_failure_usage(exc, usage),
+            token_usage=usage_from_exception(exc) or usage,
         )
 
 
@@ -1054,10 +1069,9 @@ async def run_classify_judges(
                     client=client,
                     model=model,
                     cfg=cfg,
-                    prompt_template=_CLASSIFY_PROMPT_TEMPLATE,
-                    replacements={
-                        'classify_question': _classify_question_text(question.model_copy(update={'state': state}))
-                    },
+                    # No prompt: `run_judge` turns the classify question itself into the prompt.
+                    prompt_template='',
+                    replacements={},
                     span_attributes=span_attributes,
                     classify=question.model_copy(update={'state': state}),
                 )
@@ -1088,7 +1102,7 @@ async def run_classify_judges(
             endpoint='classify',
         )
         return {key: failed.model_copy() for key in questions}
-    except ModelClientMismatchError:
+    except LLMConfigurationError:
         raise
     except Exception as e:
         kind = _classify(e) if isinstance(e, CONNECTION_ERRORS + STATUS_ERRORS) else JudgeError.UNKNOWN
@@ -1140,7 +1154,7 @@ async def _chat_verdict(
                 extra_kwargs=cfg.extra_kwargs or None,
             )
         except BAD_REQUEST_ERRORS as exc:
-            err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+            err = error_text(exc)
             # Only fall back when the error looks like a structured-output
             # rejection. A miss here intentionally re-raises rather than
             # silently degrading — do not widen this to a bare
@@ -1161,9 +1175,9 @@ async def _chat_verdict(
             return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content[0])
 
         msg = response.choices[0].message
-        if getattr(msg, 'refusal', None):
-            payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=msg.refusal or '')
-            return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content[0])
+        abstention = _refusal_abstention(getattr(msg, 'refusal', None))
+        if abstention is not None:
+            return JudgeOutcome(payload=abstention, token_usage=usage, raw_content=raw_content[0])
         parsed = msg.parsed
         if parsed is None:
             # No refusal, but the SDK could not produce a parsed object (truncated
@@ -1224,7 +1238,12 @@ async def _chat_verdict(
         extra_body=cfg.extra_body or None,
         extra_kwargs=cfg.extra_kwargs or None,
     )
-    raw_content[0] = response.choices[0].message.content or '{}'
+    message = response.choices[0].message
+    abstention = _refusal_abstention(getattr(message, 'refusal', None))
+    if abstention is not None:
+        raw_content[0] = message.content or ''
+        return JudgeOutcome(payload=abstention, token_usage=usage, raw_content=raw_content[0])
+    raw_content[0] = message.content or '{}'
     payload = EvaluatorResponsePayload.model_validate_json(_strip_code_fences(raw_content[0]))
     return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content[0])
 
@@ -1307,7 +1326,7 @@ async def _attempt(
             # process-wide — a one-off 400 (content policy, a bad extra_kwargs)
             # must not cost every later judge call its router-reported cost.
             responses_model[0] = None
-            err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+            err = error_text(exc)
             # Match phrases that name the *endpoint* as unsupported, not bare words.
             # 'response' alone matches almost any 400 that mentions a response, and
             # 'parameter' matches "Unknown parameter: reasoning_effort" — a param
@@ -1551,7 +1570,7 @@ async def run_judge(
         kind = _classify(e)
         logger.error('Judge [{}] API error ({}): {}', model, kind.value, e)
         return JudgeOutcome(error_kind=kind, error_message=str(e), error_exc=e)
-    except ModelClientMismatchError:
+    except LLMConfigurationError:
         raise
     except Exception as e:
         logger.exception('Judge [{}] failed (unknown): {}', model, e)

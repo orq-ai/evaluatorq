@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from loguru import logger
 
 from evaluatorq.common.judge import ClassifyQuestion, run_judge
-from evaluatorq.common.llm_client import ModelClientMismatchError, as_llm_client, resolve_llm_client
+from evaluatorq.common.llm_client import LLMConfigurationError, as_llm_client, resolve_llm_client
 from evaluatorq.common.redact import normalize_placeholders, scrub_known_secrets
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.signals.config import SignalsConfig
@@ -147,8 +147,8 @@ async def _classify(client: AsyncOpenAI, model: str, subject: _Subject, question
         if not isinstance(value, str) or value not in _DOOR_CRITERIA:
             raise ValueError(f'classifier returned invalid door {value!r}')
         return cast('Door', value)
-    except ModelClientMismatchError:
-        raise  # a wrong model for this client fails every call alike: stop the run
+    except LLMConfigurationError:
+        raise  # a configuration mistake fails every call alike: re-raise it
     except Exception as exc:  # noqa: BLE001 - one subject's failure must not lose the other classifications
         logger.warning('Door classification failed for {}: {}', _label(subject)[:_EVIDENCE_CHARS], exc)
         return 'unknown'

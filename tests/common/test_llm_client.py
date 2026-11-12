@@ -18,6 +18,7 @@ from evaluatorq.common.llm_client import (
     is_anthropic_client,
     require_models_served_by_provider,
     resolve_llm_client,
+    resolve_orq_credential,
     resolve_results_base_url,
 )
 
@@ -56,6 +57,25 @@ def test_non_orq_client_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> No
     uploads always go to Orq, resolved from env."""
     monkeypatch.setenv("ORQ_BASE_URL", "https://my.staging.orq.ai")
     assert resolve_results_base_url(_client("https://api.openai.com/v1")) == "https://my.staging.orq.ai"
+
+
+def _keyed_client(base_url: str, api_key: str) -> AsyncOpenAI:
+    return cast("AsyncOpenAI", cast(object, SimpleNamespace(base_url=base_url, api_key=api_key)))
+
+
+def test_orq_credential_uses_an_orq_routed_clients_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORQ_API_KEY", "env-key")
+    assert resolve_orq_credential(_keyed_client("https://my.staging.orq.ai/v3/router", "client-key")) == "client-key"
+
+
+@pytest.mark.parametrize("base_url", ["https://api.openai.com/v1", "https://api.anthropic.com"])
+def test_orq_credential_never_returns_a_provider_clients_key(monkeypatch: pytest.MonkeyPatch, base_url: str) -> None:
+    """A direct provider client's key is not an Orq key, so it falls back to ORQ_API_KEY or nothing."""
+    client = _keyed_client(base_url, "sk-provider-secret")
+    monkeypatch.setenv("ORQ_API_KEY", "env-key")
+    assert resolve_orq_credential(client) == "env-key"
+    monkeypatch.delenv("ORQ_API_KEY")
+    assert resolve_orq_credential(client) is None
 
 
 # --- ANTHROPIC_API_KEY resolution (RES-1875) ---------------------------------

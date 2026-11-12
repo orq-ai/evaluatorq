@@ -183,11 +183,75 @@ def test_tools_convert_and_auto_choice_passes():
     assert 'tool_choice' not in sent
 
 
-@pytest.mark.parametrize('choice', ['required', {'type': 'function', 'function': {'name': 'f'}}])
-def test_forced_tool_choice_raises(choice):
+@pytest.mark.parametrize(
+    ('choice', 'expected'),
+    [
+        ('required', {'type': 'any'}),
+        ({'type': 'function', 'function': {'name': 'f'}}, {'type': 'tool', 'name': 'f'}),
+        ({'type': 'function', 'name': 'f'}, {'type': 'tool', 'name': 'f'}),
+    ],
+)
+def test_forced_tool_choice_is_translated(choice, expected):
     tools = [{'type': 'function', 'function': {'name': 'f', 'parameters': {}}}]
-    with pytest.raises(ValueError, match='tool_choice'):
+    _, sent = call(tools=tools, tool_choice=choice)
+    assert sent['tool_choice'] == expected
+    assert [tool['name'] for tool in sent['tools']] == ['f']
+
+
+def test_none_tool_choice_keeps_the_tools():
+    # Anthropic has {'type': 'none'}: the tools stay in the request (and in the cached prefix), the model just cannot call them.
+    tools = [{'type': 'function', 'function': {'name': 'f', 'parameters': {}}}]
+    _, sent = call(tools=tools, tool_choice='none')
+    assert sent['tool_choice'] == {'type': 'none'}
+    assert [tool['name'] for tool in sent['tools']] == ['f']
+
+
+@pytest.mark.parametrize('choice', ['sometimes', {'type': 'function'}, {'type': 'allowed_tools', 'tools': []}])
+def test_untranslatable_tool_choice_raises(choice):
+    tools = [{'type': 'function', 'function': {'name': 'f', 'parameters': {}}}]
+    with pytest.raises(ValueError, match='cannot translate tool_choice'):
         call(tools=tools, tool_choice=choice)
+
+
+class _ObjectPart:
+    def __init__(self, text):
+        self.type = 'text'
+        self.text = text
+
+
+def test_object_content_parts_are_read_like_dict_parts():
+    from pydantic import BaseModel
+
+    class PydanticPart(BaseModel):
+        type: str
+        text: str
+
+    _, sent = call(messages=[{'role': 'user', 'content': [_ObjectPart('plain'), PydanticPart(type='text', text='x')]}])
+    assert sent['messages'] == [{'role': 'user', 'content': [{'type': 'text', 'text': 'plain'}, {'type': 'text', 'text': 'x'}]}]
+
+
+def test_object_refusal_part_in_an_assistant_turn_is_read():
+    from openai.types.responses import ResponseOutputRefusal
+
+    _, sent = call(
+        messages=[
+            {'role': 'user', 'content': 'q'},
+            {'role': 'assistant', 'content': [ResponseOutputRefusal(type='refusal', refusal='no')]},
+            {'role': 'user', 'content': 'why'},
+        ]
+    )
+    assert sent['messages'][1] == {'role': 'assistant', 'content': [{'type': 'text', 'text': 'no'}]}
+
+
+def test_a_conversation_that_starts_with_an_assistant_turn_gets_a_user_turn_first():
+    from evaluatorq.anthropic.convert import LEADING_USER_TEXT
+
+    _, sent = call(messages=[{'role': 'assistant', 'content': 'opening'}, {'role': 'user', 'content': 'reply'}])
+    assert sent['messages'] == [
+        {'role': 'user', 'content': [{'type': 'text', 'text': LEADING_USER_TEXT}]},
+        {'role': 'assistant', 'content': [{'type': 'text', 'text': 'opening'}]},
+        {'role': 'user', 'content': [{'type': 'text', 'text': 'reply'}]},
+    ]
 
 
 def test_tool_use_response_becomes_tool_calls():

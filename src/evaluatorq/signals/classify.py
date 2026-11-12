@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, cast
 from loguru import logger
 
 from evaluatorq.common.judge import ClassifyQuestion, run_judge
-from evaluatorq.common.llm_client import ModelClientMismatchError, as_llm_client, resolve_llm_client
+from evaluatorq.common.llm_client import LLMConfigurationError, as_llm_client, resolve_llm_client
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.signals.config import SignalsConfig, ToolRole
 from evaluatorq.signals.walk import calls, walk
@@ -91,8 +91,8 @@ async def classify_tool_roles(
                 if not isinstance(value, str) or value not in _ROLE_CRITERIA:
                     raise ValueError(f'classifier returned invalid role {value!r}')
                 roles[name] = cast('ToolRole', value)
-            except ModelClientMismatchError:
-                raise  # a wrong model for this client fails every tool alike: stop the run
+            except LLMConfigurationError:
+                raise  # a configuration mistake fails every tool alike: re-raise it
             except Exception as exc:  # noqa: BLE001 - one tool's failure must not lose other classifications
                 logger.warning('Tool role classification failed for tool {}: {}', name, exc)
                 roles[name] = 'other'

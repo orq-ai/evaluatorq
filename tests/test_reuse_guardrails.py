@@ -1373,39 +1373,39 @@ def test_env_raw_default_detector_resolves_constants() -> None:
     assert _env_raw_defaults(source) == [(3, 'X', 'https://my.orq.ai')]
 
 
-LLM_SDK_ERROR_NAMES = frozenset({
-    'APIError',
-    'APIStatusError',
-    'APIConnectionError',
-    'APITimeoutError',
-    'BadRequestError',
-    'OpenAIError',
-    'AnthropicError',
-    'RateLimitError',
-    'NotFoundError',
-    'AuthenticationError',
-    'PermissionDeniedError',
-    'InternalServerError',
-    'UnprocessableEntityError',
-    'ConflictError',
-})
+# Exception classes `src` may import straight from an SDK. Everything else an SDK exports is banned.
+# LengthFinishReasonError is a client-side parse error with no Anthropic counterpart (see common/llm_errors.py).
+LLM_SDK_ERROR_ALLOWLIST = frozenset({'LengthFinishReasonError'})
+
+
+def _sdk_exception_names(sdk: str) -> set[str]:
+    """Every public exception class the SDK defines, read from its top level and its private ``_exceptions`` module."""
+    import importlib
+
+    names: set[str] = set()
+    for module_name in (sdk, f'{sdk}._exceptions'):
+        module = importlib.import_module(module_name)
+        for name, value in list(vars(module).items()):
+            if isinstance(value, type) and issubclass(value, Exception) and not name.startswith('_'):
+                names.add(name)
+    return names - LLM_SDK_ERROR_ALLOWLIST
 
 
 def test_llm_sdk_error_classes_are_banned_outside_llm_errors() -> None:
     """Ruff TID251 must keep banning each SDK exception class, so errors are caught through ``common.llm_errors``.
 
-    An ``except openai.APIStatusError`` lets an Anthropic client's errors slip past it, and the reverse.
+    An ``except openai.APIStatusError`` lets an Anthropic client's errors slip past it, and the reverse. The
+    expected set is read from the installed SDKs, so a class a new SDK release adds fails here until it is banned
+    or allowlisted. The private ``_exceptions`` modules are banned whole.
     """
+    pytest.importorskip('anthropic')
     toml = pytest.importorskip('tomli' if sys.version_info < (3, 11) else 'tomllib')
     config = toml.loads((REPO_ROOT / 'pyproject.toml').read_text(encoding='utf-8'))
     ruff = config['tool']['ruff']['lint']
     banned = ruff['flake8-tidy-imports']['banned-api']
-    expected = {
-        f'{module}.{name}'
-        for module in ('openai', 'anthropic', 'openai._exceptions', 'anthropic._exceptions')
-        for name in LLM_SDK_ERROR_NAMES | {'APIResponseValidationError'}
-        if not (name == 'OpenAIError' and module.startswith('anthropic'))
-        if not (name == 'AnthropicError' and module.startswith('openai'))
-    }
+    expected = {f'{sdk}.{name}' for sdk in ('openai', 'anthropic') for name in _sdk_exception_names(sdk)}
+    expected |= {'openai._exceptions', 'anthropic._exceptions'}
     assert not expected - set(banned), f'pyproject.toml banned-api lost: {sorted(expected - set(banned))}'
+    allowed_but_banned = {f'{sdk}.{name}' for sdk in ('openai', 'anthropic') for name in LLM_SDK_ERROR_ALLOWLIST}
+    assert not allowed_but_banned & set(banned), f'allowlisted yet banned: {sorted(allowed_but_banned & set(banned))}'
     assert 'TID251' in ruff['per-file-ignores']['src/evaluatorq/common/llm_errors.py']

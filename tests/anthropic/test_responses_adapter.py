@@ -139,12 +139,29 @@ def test_flat_tools_become_anthropic_tools():
     assert sent['tool_choice'] == {'type': 'auto'}
 
 
-def test_forced_tool_choice_and_non_function_tools_raise():
+def test_forced_tool_choice_is_translated_and_non_function_tools_raise():
     tool = {'type': 'function', 'name': 'f', 'parameters': {'type': 'object', 'properties': {}}}
-    with pytest.raises(ValueError, match='HTTP 400'):
-        respond(tools=[tool], tool_choice='required')
+    _, sent = respond(tools=[tool], tool_choice='required')
+    assert sent['tool_choice'] == {'type': 'any'}
+    _, sent = respond(tools=[tool], tool_choice={'type': 'function', 'name': 'f'})
+    assert sent['tool_choice'] == {'type': 'tool', 'name': 'f'}
     with pytest.raises(ValueError, match='function tools'):
         respond(tools=[{'type': 'web_search_preview'}])
+
+
+def test_input_that_starts_with_an_assistant_turn_gets_a_user_turn_first():
+    # From turn 2 on, the user simulator's request is the transcript with roles swapped, so it opens with its own line.
+    from evaluatorq.anthropic.convert import LEADING_USER_TEXT
+
+    items = [
+        {'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'Hi, I need help.'}]},
+        {'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'With my order.'}]},
+        {'role': 'user', 'content': [{'type': 'input_text', 'text': 'Sure, what is the number?'}]},
+    ]
+    _, sent = respond(input=items)
+    assert [turn['role'] for turn in sent['messages']] == ['user', 'assistant', 'user']
+    assert sent['messages'][0]['content'] == [{'type': 'text', 'text': LEADING_USER_TEXT}]
+    assert [block['text'] for block in sent['messages'][1]['content']] == ['Hi, I need help.', 'With my order.']
 
 
 def test_params_map():

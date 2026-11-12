@@ -24,6 +24,8 @@ so existing setups resolve as before; unset the other keys to use Claude directl
 
 from __future__ import annotations
 
+import contextlib
+import weakref
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast, overload
 
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
@@ -61,10 +63,17 @@ def orq_base_url() -> str:
     return env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL).rstrip('/')
 
 
-class ModelClientMismatchError(ValueError):
+class LLMConfigurationError(ValueError):
+    """A client, model or request setting that no call can succeed with, raised before any request is sent.
+
+    A run-wide configuration mistake: every call would fail the same way. Judge, classify and signals code re-raises it instead of turning it into a per-item judge error. A per-item handler further up (a red-team attack, a simulation row) still records it on that row and the batch carries on until RES-1879 lands, so the error appears once per row rather than stopping the run.
+    """
+
+
+class ModelClientMismatchError(LLMConfigurationError):
     """A model id that the client it was sent to cannot serve, such as an OpenAI default model reaching an Anthropic client.
 
-    A run-wide configuration mistake: every call would fail the same way. Judge, classify and signals code re-raises it instead of turning it into a per-item outcome, so the run stops where the mistake is named.
+    Judge, classify and signals code re-raises it like every `LLMConfigurationError`; a per-item handler further up still records it on each row until RES-1879 lands.
     """
 
 
@@ -87,12 +96,18 @@ class ResolvedClient(NamedTuple):
     """``True`` when requests hit the Orq router (``…/v3/router``)."""
 
 
-def is_anthropic_client(obj: object) -> bool:
-    """True for an Anthropic SDK adapter (``evaluatorq.anthropic``), detected by its marker.
+def client_provider(obj: object) -> str | None:
+    """The provider marker of an evaluatorq adapter (``'anthropic'`` for `AnthropicLLMClient`), else ``None``."""
+    provider = getattr(obj, 'evaluatorq_provider', None)
+    return provider if isinstance(provider, str) else None
 
-    Reads a class attribute instead of importing the adapter, so it works when the ``anthropic`` extra is not installed.
+
+def is_anthropic_client(obj: object) -> bool:
+    """True for an Anthropic SDK adapter (``evaluatorq.anthropic``) or a raw Anthropic SDK client that has not been wrapped yet.
+
+    Reads a class attribute and the module names in the MRO instead of importing anything, so it works when the ``anthropic`` extra is not installed.
     """
-    return getattr(obj, 'evaluatorq_provider', None) == 'anthropic'
+    return client_provider(obj) == 'anthropic' or _is_anthropic_sdk_client(obj)
 
 
 def _is_anthropic_sdk_client(client: object) -> bool:
@@ -100,6 +115,10 @@ def _is_anthropic_sdk_client(client: object) -> bool:
     if not hasattr(client, 'messages'):
         return False
     return any(cls.__module__ == 'anthropic' or cls.__module__.startswith('anthropic.') for cls in type(client).__mro__)
+
+
+_WRAPPED: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
+"""One adapter per raw Anthropic client, so state such as the warn-once refusal flag survives repeated wrapping."""
 
 
 @overload
@@ -113,16 +132,25 @@ def as_llm_client(client: Any) -> AsyncOpenAI: ...
 def as_llm_client(client: Any) -> AsyncOpenAI | None:
     """Return ``client`` ready for evaluatorq: a raw Anthropic SDK client is wrapped, anything else passes through.
 
-    Every public entry point that accepts an injected client calls this, so the adapter is built in one place. ``None``, an OpenAI client and an already wrapped adapter come back unchanged. A raw ``AsyncAnthropic``, ``AsyncAnthropicBedrock`` or ``AsyncAnthropicVertex`` (or a subclass of one) is recognised by the module name of a class in its MRO and its ``messages`` attribute, so nothing here imports ``anthropic``; the adapter module is imported only when a raw client is seen.
+    Public entry points that accept an injected client call this, and so do the executors in `common.llm_call`, the only code that calls ``.chat`` or ``.responses``; an entry point that forgets still works. ``None``, an OpenAI client and an already wrapped adapter come back unchanged. A raw ``AsyncAnthropic``, ``AsyncAnthropicBedrock`` or ``AsyncAnthropicVertex`` (or a subclass of one) is recognised by the module name of a class in its MRO and its ``messages`` attribute, so nothing here imports ``anthropic``; the adapter module is imported only when a raw client is seen. The same raw client always gets the same adapter.
     """
-    if client is None or is_anthropic_client(client):
+    if client is None or client_provider(client) is not None:
         return client
     if not _is_anthropic_sdk_client(client):
         return client
+    try:
+        cached = _WRAPPED.get(client)
+    except TypeError:  # not weak-referenceable: wrap without caching
+        cached = None
+    if cached is not None:
+        return cast('AsyncOpenAI', cached)
     from evaluatorq.anthropic.client import wrap_anthropic_client
 
+    wrapped = wrap_anthropic_client(client)
+    with contextlib.suppress(TypeError):  # not weak-referenceable: use it uncached
+        _WRAPPED[client] = wrapped
     # The adapter is duck-typed as an `AsyncOpenAI` everywhere downstream.
-    return cast('AsyncOpenAI', wrap_anthropic_client(client))
+    return cast('AsyncOpenAI', wrapped)
 
 
 def client_routes_through_orq(client: AsyncOpenAI | None) -> bool:
@@ -159,6 +187,23 @@ def resolve_results_base_url(
         host = str(client.base_url).rstrip('/')
         return host[: -len(ORQ_ROUTER_SUFFIX)].rstrip('/')
     return env_raw('ORQ_BASE_URL', default_orq_host).rstrip('/')
+
+
+def resolve_orq_credential(client: AsyncOpenAI | None = None) -> str | None:
+    """Resolve the API key to send to the Orq host chosen by `resolve_results_base_url`.
+
+    Returns ``client.api_key`` only when ``client`` routes through the Orq router,
+    because only then is that key an Orq key for that host. Any other client (a
+    direct OpenAI or Anthropic client) holds a provider key that must never be
+    sent to Orq, so its key is ignored and ``ORQ_API_KEY`` is used instead.
+    Returns ``None`` when neither is available, and the caller then makes no
+    authenticated Orq call.
+    """
+    if client is not None and client_routes_through_orq(client):
+        key = getattr(client, 'api_key', None)
+        if isinstance(key, str) and key:
+            return key
+    return env_raw('ORQ_API_KEY') or None
 
 
 def configured_llm_provider(*, extra_api_key: str | None = None, require_orq: bool = False) -> LLMProvider | None:
@@ -349,5 +394,6 @@ __all__ = [
     'is_anthropic_client',
     'require_models_served_by_provider',
     'resolve_llm_client',
+    'resolve_orq_credential',
     'resolve_results_base_url',
 ]

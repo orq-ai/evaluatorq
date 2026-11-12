@@ -15,6 +15,8 @@ from evaluatorq.common.llm_errors import (
     SDK_ERRORS,
     STATUS_ERRORS,
     TIMEOUT_ERRORS,
+    error_body,
+    error_text,
     status_code,
 )
 from tests.common.llm_error_factories import STATUS_FACTORIES, openai_status
@@ -107,3 +109,26 @@ def test_tuples_contain_only_openai_when_anthropic_not_installed(monkeypatch):
         monkeypatch.undo()
         importlib.reload(llm_errors)
     assert anthropic.APIError in llm_errors.API_ERRORS
+
+
+_INNER = {'type': 'invalid_request_error', 'code': 'content_filter', 'message': 'Response_Format Rejected'}
+
+
+def test_error_body_returns_the_inner_object_for_both_sdk_body_shapes():
+    """OpenAI stores the inner error object; Anthropic stores the whole envelope around it."""
+    response = httpx.Response(400, request=_REQUEST)
+    openai_exc = openai.BadRequestError('boom', response=response, body=dict(_INNER))
+    anthropic_exc = anthropic.BadRequestError('boom', response=response, body={'type': 'error', 'error': dict(_INNER)})
+
+    assert error_body(openai_exc) == _INNER
+    assert error_body(anthropic_exc) == _INNER
+    assert error_text(openai_exc) == error_text(anthropic_exc)
+    assert 'response_format rejected' in error_text(anthropic_exc)
+
+
+def test_error_body_and_text_without_a_dict_body():
+    response = httpx.Response(400, request=_REQUEST)
+    assert error_body(ValueError('x')) is None
+    assert error_body(openai.BadRequestError('Raw Message', response=response, body=None)) is None
+    assert error_text(openai.BadRequestError('Raw Message', response=response, body=None)) == 'raw message'
+    assert error_text(openai.BadRequestError('m', response=response, body='Plain Body')) == 'plain body'
