@@ -84,6 +84,41 @@ Finder exports pin matched trace IDs and include the query window used to reload
 
 Explicit `start` and `end` bounds need timezone offsets, and `start` cannot be later than `end`; invalid bounds fail before traces load. Model requests still require an Orq credential.
 
+### Embed with a separate client
+
+Pass `embedding_client` to send only the embedding requests to a different `AsyncOpenAI` client, for example OpenAI directly while everything else goes through Orq. Summaries, the classifier and cluster merging still need `llm_client` to be routed through Orq today, because the classifier calls Orq's Decisions endpoint; `embedding_client` changes only where the vectors come from. Without it, embeddings use `llm_client`. evaluatorq never closes an `embedding_client` you pass, and cached vectors are keyed by that client's `base_url`, so switching endpoints never reuses vectors from another one.
+
+`embedding_model` must be in the embedding endpoint's own id format. The default comes from the `embedding` model role and is an Orq-style id such as `openai/text-embedding-3-small`, which does not resolve on api.openai.com. If the embedding client cannot serve the model you name, the dimension stages fail and the run ends with `status="error"`.
+
+```python
+import asyncio
+import os
+
+from openai import AsyncOpenAI
+
+from evaluatorq.insights import InsightsPopulation, insights
+
+
+async def main() -> None:
+    # Summaries, the classifier and merging go through the Orq router.
+    orq_client = AsyncOpenAI(
+        base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai')}/v3/router",
+        api_key=os.environ["ORQ_API_KEY"],
+    )
+    # Embeddings go to OpenAI directly (reads OPENAI_API_KEY), so the model id is bare.
+    openai_client = AsyncOpenAI()
+    run = await insights(
+        population=InsightsPopulation(window_days=7, limit=200),
+        llm_client=orq_client,
+        embedding_client=openai_client,
+        embedding_model="text-embedding-3-small",
+    )
+    print(run.status)
+
+
+asyncio.run(main())
+```
+
 ## Run from the CLI
 
 The `eq insights` command accepts population filters, label presets or JSON files, and discovered dimensions. Install `evaluatorq[insights]` before running it.

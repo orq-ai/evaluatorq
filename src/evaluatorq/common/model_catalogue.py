@@ -41,8 +41,13 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 import httpx
 from loguru import logger
 
-from evaluatorq.common.env_config import env_float, env_raw
-from evaluatorq.common.llm_client import MissingLLMCredentialsError, orq_base_url, resolve_results_base_url
+from evaluatorq.common.env_config import env_float
+from evaluatorq.common.llm_client import (
+    MissingLLMCredentialsError,
+    orq_base_url,
+    resolve_orq_credential,
+    resolve_results_base_url,
+)
 from evaluatorq.contracts import DEFAULT_CLASSIFIER_MODEL
 
 if TYPE_CHECKING:
@@ -407,23 +412,14 @@ def _catalogue_source(client: AsyncOpenAI | None) -> tuple[str, str | None, Any,
     with the same credential and cache under the same key.
     """
     host = resolve_results_base_url(client) if client is not None else orq_base_url()
-    # An injected client's own key matches its host; an ambient ORQ_API_KEY for a
-    # different workspace would 401 (caching {}) or price against the wrong one.
     oauth_method = inspect.getattr_static(type(client), 'get_model_catalogue', None) if client is not None else None
     oauth_fetch = (
         getattr(client, 'get_model_catalogue')  # noqa: B009 — capability is confirmed statically above
         if inspect.iscoroutinefunction(oauth_method)
         else None
     )
-    api_key = (
-        None
-        if callable(oauth_fetch)
-        else (
-            (getattr(client, 'api_key', None) or env_raw('ORQ_API_KEY'))
-            if client is not None
-            else env_raw('ORQ_API_KEY')
-        )
-    )
+    # A non-Orq client's key is a provider key and never goes to the Orq host.
+    api_key = None if callable(oauth_fetch) else resolve_orq_credential(client)
     credential = (
         'cli-oauth'
         if callable(oauth_fetch)

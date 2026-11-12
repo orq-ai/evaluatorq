@@ -55,3 +55,22 @@ async def test_base_url_defaults_to_none() -> None:
         )
     assert spy.await_args is not None
     assert spy.await_args.kwargs.get("base_url") is None
+
+
+@pytest.mark.asyncio
+async def test_forwards_the_key_for_the_base_url_to_upload() -> None:
+    spy = AsyncMock(return_value=None)
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "prod-key"}),
+        patch.object(_EQ_MOD, "send_results_to_orq", spy),
+    ):
+        await evaluatorq(  # ty: ignore[call-non-callable]
+            "run",
+            data=[DataPoint(inputs={"x": 1})],
+            jobs=[_job],
+            print_results=False,
+            _base_url="https://my.staging.orq.ai",
+            _orq_api_key="staging-key",
+        )
+    assert spy.await_args is not None
+    assert spy.await_args.args[0] == "staging-key"

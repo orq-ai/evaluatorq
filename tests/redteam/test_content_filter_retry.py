@@ -4,6 +4,7 @@ the live objective-generation call (objective_generator)."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import anthropic
 import httpx
 import pytest
 from openai import APIStatusError
@@ -13,6 +14,7 @@ from evaluatorq.common.content_filter import (
     is_content_filter_error,
     regenerate_on_content_filter,
 )
+from tests.common.llm_error_factories import anthropic_status
 
 
 def _cf_error(code: str = 'content_filter') -> APIStatusError:
@@ -54,6 +56,20 @@ class TestClassifiers:
 
     def test_is_content_filter_error_on_body(self):
         assert is_content_filter_error(_BodyOnlyError({'code': 'content_filter'})) is True
+
+    def test_is_content_filter_error_false_for_an_anthropic_error_without_the_code(self):
+        # Message prose is not a signal: only the structured code is.
+        assert is_content_filter_error(anthropic_status(400, 'content_filter')) is False
+
+    def test_is_content_filter_error_reads_the_code_inside_an_anthropic_envelope(self):
+        # Anthropic keeps the whole envelope in `body`, so the code sits one level deeper than in OpenAI's.
+        request = httpx.Request('POST', 'https://api.anthropic.example/v1/messages')
+        exc = anthropic.BadRequestError(
+            'blocked',
+            response=httpx.Response(400, request=request),
+            body={'type': 'error', 'error': {'type': 'invalid_request_error', 'code': 'content_filter'}},
+        )
+        assert is_content_filter_error(exc) is True
 
     def test_is_content_filter_error_false_for_other(self):
         assert is_content_filter_error(_cf_error('rate_limit')) is False

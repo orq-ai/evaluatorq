@@ -152,6 +152,7 @@ src = [ "src" ]
     "src/evaluatorq/common/apply.py" = ["BLE001"]
     "src/evaluatorq/common/async_utils.py" = ["BLE001"]
     "src/evaluatorq/common/judge.py" = ["BLE001"]
+    "src/evaluatorq/common/llm_errors.py" = ["TID251"]
     "src/evaluatorq/common/output_adapters.py" = ["BLE001"]
     "src/evaluatorq/common/reports/executive_summary.py" = ["BLE001"]
     "src/evaluatorq/common/reports/vega.py" = ["BLE001"]
@@ -189,6 +190,48 @@ src = [ "src" ]
     "tenacity".msg = "Use evaluatorq.common.retry.with_retry, or the SDK's own max_retries — one retry layer, not two."
     "backoff".msg = "Use evaluatorq.common.retry.with_retry."
     "requests".msg = "Use httpx (already a runtime dependency); async paths need it anyway."
+
+    # LLM SDK exception classes: catch them through evaluatorq.common.llm_errors, which covers both SDKs.
+    "anthropic.APIConnectionError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.APIError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.APIResponseValidationError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.APIStatusError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.APITimeoutError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.AnthropicError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.AuthenticationError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.BadRequestError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.ConflictError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.DeadlineExceededError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.InternalServerError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.NotFoundError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.OverloadedError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.PermissionDeniedError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.RateLimitError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.RequestTooLargeError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.ServiceUnavailableError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic.UnprocessableEntityError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.APIConnectionError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.APIError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.APIResponseValidationError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.APIStatusError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.APITimeoutError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.AuthenticationError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.BadRequestError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.ConflictError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.ContentFilterFinishReasonError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.InternalServerError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.InvalidWebhookSignatureError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.NotFoundError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.OAuthError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.OpenAIError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.PermissionDeniedError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.RateLimitError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.SubjectTokenProviderError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.UnprocessableEntityError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.WebSocketConnectionClosedError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "openai.WebSocketQueueFullError".msg = "Catch LLM SDK errors through evaluatorq.common.llm_errors, which covers the OpenAI and Anthropic SDKs."
+    "anthropic._exceptions".msg = "Private SDK module: catch LLM SDK errors through evaluatorq.common.llm_errors."
+    "openai._exceptions".msg = "Private SDK module: catch LLM SDK errors through evaluatorq.common.llm_errors."
 
 [tool.ty.src]
 include = [ "src", "tests", "*.py", "docs/*.py" ]
@@ -256,6 +299,7 @@ dependencies = [
 
   [project.optional-dependencies]
   orq = [ "orq-ai-sdk>=4.14" ]
+  anthropic = [ "anthropic>=0.75.0" ]
   otel = [
   "opentelemetry-api>=1.20.0",
   "opentelemetry-sdk>=1.20.0",
@@ -289,7 +333,7 @@ dependencies = [
   "umap-learn>=0.5.6"
 ]
   all = [
-  "evaluatorq[orq,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,dashboard,insights]"
+  "evaluatorq[orq,anthropic,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,dashboard,insights]"
 ]
 
   [project.scripts]

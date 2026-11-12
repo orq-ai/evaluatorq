@@ -22,6 +22,10 @@ from evaluatorq.redteam.contracts import (
     ToolInfo,
     TurnType,
 )
+from tests.common.llm_error_factories import CONNECTION_FACTORIES, STATUS_FACTORIES
+
+_SDK_ERRORS = [*(lambda f=f: f(503) for f in STATUS_FACTORIES), *CONNECTION_FACTORIES]
+_SDK_ERROR_IDS = ['openai-status', 'anthropic-status', 'openai-connection', 'anthropic-connection']
 
 
 class TestFillTemplate:
@@ -335,3 +339,18 @@ class TestAdaptPromptToTools:
             llm_client=client,
         )
         assert result == 'Original prompt'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('make_error', _SDK_ERRORS, ids=_SDK_ERROR_IDS)
+    async def test_sdk_errors_propagate(self, make_error: typing.Callable[[], BaseException]):
+        """A connection or status error from either SDK re-raises instead of falling back to the base prompt."""
+        error = make_error()
+
+        async def _parse(**kwargs: object) -> typing.NoReturn:
+            raise error
+
+        context = AgentContext(key='test_agent', tools=[ToolInfo(name='search')])
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr('evaluatorq.redteam.adaptive.attack_generator.execute_chat_parse', _parse)
+            with pytest.raises(type(error)):
+                await adapt_prompt_to_tools('Original prompt', context, _make_strategy(), llm_client=MagicMock())

@@ -1587,3 +1587,180 @@ async def test_dimension_persists_one_review_layout_across_sentiment_groups(
         assert trace.coords_2d == ({} if projection_fails else {'sentiment': (index + 100, index + 200)})
         assert 'sentiment' in trace.assignments
     assert any('2D' in warning for warning in result.warnings) is projection_fails
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('separate', [True, False])
+async def test_embeddings_use_embedding_client_and_chat_calls_use_llm_client(
+    monkeypatch: pytest.MonkeyPatch, separate: bool
+) -> None:
+    from openai import AsyncOpenAI  # noqa: F401 - names the cast target below
+
+    from evaluatorq.insights import reduce
+    from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.describe import ClusterName
+    from evaluatorq.insights.models import TraceInsight
+
+    traces = [
+        TraceInsight(
+            trace_id=f't{i}', span_id=f's{i}', timestamp=datetime.now(timezone.utc), summary=_summary(),
+        )
+        for i in range(6)
+    ]
+    llm_client = cast('AsyncOpenAI', SimpleNamespace(name='chat'))
+    embedding_client = cast('AsyncOpenAI', SimpleNamespace(name='embed'))
+    embed_clients: list[object] = []
+    chat_clients: list[object] = []
+
+    async def embeddings(texts, *, client, **kwargs):
+        embed_clients.append(client)
+        return {text: [1.0, 0.0] for text in set(texts)}
+
+    async def descriptions(members, *, client, **kwargs):
+        chat_clients.append(client)
+        return {cluster_id: ClusterName(name=f'group {cluster_id}', description='group details') for cluster_id in members}
+
+    async def top_descriptions(children, *, client, **kwargs):
+        chat_clients.append(client)
+        return {top_id: ClusterName(name=f'top {top_id}', description='top details') for top_id in children}
+
+    monkeypatch.setattr(pipeline, 'embed_texts', embeddings)
+    monkeypatch.setattr(pipeline, 'describe_clusters', descriptions)
+    monkeypatch.setattr(pipeline, 'describe_top_level', top_descriptions)
+    monkeypatch.setattr(reduce, 'reduce_3d', lambda *args, **kwargs: None)
+    cache = InsightsCache(enabled=False)
+    try:
+        await pipeline._build_dimension(
+            'intent', traces, client=llm_client, cache=cache, embedding_model='unused', summary_model='unused',
+            max_clusters=15, max_subclusters=15, outlier_zscore=None, parallelism=10,
+            classifier_model='typesafe/jev-latest', embedding_client=embedding_client if separate else None,
+        )
+    finally:
+        cache.close()
+
+    assert embed_clients == [embedding_client if separate else llm_client]
+    assert chat_clients and all(client is llm_client for client in chat_clients)
+
+
+@pytest.mark.asyncio
+async def test_insights_passes_both_clients_to_the_dimension_build_and_closes_neither(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: dict[str, object] = {}
+    closed: list[str] = []
+
+    class _Client:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def close(self) -> None:
+            closed.append(self.name)
+
+    async def fake_build(dimension, traces, *, client, embedding_client=None, **kwargs):
+        seen['client'] = client
+        seen['embedding_client'] = embedding_client
+        return pipeline.DimensionResult(name=dimension, source_field='x', clusters=[])
+
+    monkeypatch.setattr(pipeline, '_build_dimension', fake_build)
+    monkeypatch.setattr(pipeline, 'resolve_orq_client', lambda: object())
+    traces = [_trace(i) for i in range(6)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+    monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+    chat, embed = _Client('chat'), _Client('embed')
+
+    run = await pipeline.insights(
+        _population(),
+        dimensions=('intent',),
+        labels=(),
+        runs_dir=tmp_path / 'runs',
+        llm_client=cast('Any', chat),
+        embedding_client=cast('Any', embed),
+    )
+
+    assert run.status == 'completed'
+    assert seen == {'client': chat, 'embedding_client': embed}
+    assert closed == []
+
+
+@pytest.mark.asyncio
+async def test_insights_with_an_anthropic_client_and_no_embedding_client_fails_before_any_work(tmp_path: Path) -> None:
+    import anthropic
+
+    with pytest.raises(ValueError, match=r'embedding_client='):
+        await pipeline.insights(
+            _population(),
+            dimensions=('intent',),
+            runs_dir=tmp_path / 'runs',
+            llm_client=cast('Any', anthropic.AsyncAnthropic(api_key='test')),
+        )
+    assert not (tmp_path / 'runs').exists(), 'the run directory was created before the check'
+
+
+@pytest.mark.asyncio
+async def test_insights_with_only_the_anthropic_key_and_no_embedding_client_fails_before_any_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The env-resolved client is built later, so the check reads the provider the environment picks."""
+    from evaluatorq.common.llm_client import LLM_CREDENTIAL_KEYS
+
+    for name in LLM_CREDENTIAL_KEYS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-test')
+    with pytest.raises(ValueError, match=r'embedding_client='):
+        await pipeline.insights(_population(), dimensions=('intent',), runs_dir=tmp_path / 'runs')
+    assert not (tmp_path / 'runs').exists(), 'the run directory was created before the check'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('wrapped', [False, True])
+async def test_insights_rejects_an_anthropic_client_as_the_embedding_client(tmp_path: Path, wrapped: bool) -> None:
+    import anthropic
+
+    from evaluatorq.anthropic import wrap_anthropic_client
+
+    raw = anthropic.AsyncAnthropic(api_key='test')
+    with pytest.raises(ValueError, match='no embeddings API'):
+        await pipeline.insights(
+            _population(),
+            dimensions=('intent',),
+            runs_dir=tmp_path / 'runs',
+            llm_client=cast('Any', SimpleNamespace()),
+            embedding_client=cast('Any', wrap_anthropic_client(raw) if wrapped else raw),
+        )
+
+
+@pytest.mark.asyncio
+async def test_insights_wraps_a_raw_anthropic_llm_client_and_keeps_the_embedding_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import anthropic
+
+    from evaluatorq.anthropic import AnthropicLLMClient
+
+    seen: dict[str, object] = {}
+
+    async def fake_build(dimension, traces, *, client, embedding_client=None, **kwargs):
+        seen['client'] = client
+        seen['embedding_client'] = embedding_client
+        return pipeline.DimensionResult(name=dimension, source_field='x', clusters=[])
+
+    monkeypatch.setattr(pipeline, '_build_dimension', fake_build)
+    monkeypatch.setattr(pipeline, 'resolve_orq_client', lambda: object())
+    traces = [_trace(i) for i in range(6)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+    monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+    embed = SimpleNamespace()
+
+    await pipeline.insights(
+        _population(),
+        dimensions=('intent',),
+        labels=(),
+        runs_dir=tmp_path / 'runs',
+        llm_client=cast('Any', anthropic.AsyncAnthropic(api_key='test')),
+        embedding_client=cast('Any', embed),
+    )
+
+    assert isinstance(seen['client'], AnthropicLLMClient)
+    assert seen['embedding_client'] is embed

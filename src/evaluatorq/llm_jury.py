@@ -8,7 +8,13 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel, Field, create_model
 
-from evaluatorq.common.judge import ClassifyQuestion, JudgeOutcome, build_eval_replacements, run_judge
+from evaluatorq.common.judge import (
+    ClassifyQuestion,
+    JudgeOutcome,
+    build_eval_replacements,
+    models_called_off_router,
+    run_judge,
+)
 from evaluatorq.common.jury import (
     TIE_LOSES_VERDICT,
     AggregatorSpec,
@@ -23,9 +29,14 @@ from evaluatorq.common.jury import (
     run_jury,
     validate_aggregator,
 )
-from evaluatorq.common.llm_client import client_routes_through_orq, resolve_llm_client
+from evaluatorq.common.llm_client import (
+    as_llm_client,
+    client_routes_through_orq,
+    require_models_served_by_provider,
+    resolve_llm_client,
+)
 from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
-from evaluatorq.common.model_roles import role_model
+from evaluatorq.common.model_roles import model_source, role_model
 from evaluatorq.common.output_adapters import (
     inputs_to_messages,
     output_error_text,
@@ -37,6 +48,9 @@ from evaluatorq.contracts import DEFAULT_SMART_MODEL, JuryResult, LLMCallConfig
 from evaluatorq.jury_presets import get_preset
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
+
+if typing.TYPE_CHECKING:
+    from evaluatorq.common.llm_client import LLMClient
 
 DEFAULT_JUDGE_MODEL = DEFAULT_SMART_MODEL
 """Built-in judge model. At runtime a call naming neither ``model=`` nor ``judges=`` uses ``role_model('smart')``, which flags, env and settings can change."""
@@ -655,6 +669,28 @@ def _resolve_and_validate_panel(
     return panel, deduped
 
 
+def _require_panel_served(
+    *, client: Any, judges: list[str] | None, model: str | None, panel: list[str], replacement_judges: list[str] | None
+) -> None:
+    """Stop at declaration, before any target call is billed, when the env-resolved client cannot serve the panel.
+
+    Only a panel left to the environment is checked, and only when ``ANTHROPIC_API_KEY`` is the one LLM key set
+    (`require_models_served_by_provider`); declaring a jury still needs no credentials.
+    """
+    if client is not None:
+        return
+    if judges is not None:
+        named = {f'judges[{i}]': judge for i, judge in enumerate(panel)}
+    elif model is not None:
+        named = {'model': model}
+    else:
+        default_model, default_label = model_source('smart')
+        named = {default_label: default_model}
+    for i, judge in enumerate(replacement_judges or []):
+        named[f'replacement_judges[{i}]'] = judge
+    require_models_served_by_provider(models_called_off_router(named))
+
+
 def _apply_preset(
     preset: str | None,
     *,
@@ -932,7 +968,7 @@ def llm_jury(
     extra_kwargs: dict[str, Any] | None = None,
     extra_body: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
-    client: Any = None,
+    client: LLMClient | None = None,
 ) -> Evaluator:
     """Build a jury (or single-judge) LLM evaluator for ``evaluators=[...]``.
 
@@ -1205,7 +1241,10 @@ def llm_jury(
     # client= is used as-is; otherwise we resolve once on first use. A
     # single-element list, not a plain local: the scorer is a module-level
     # function bound by partial and so cannot rebind this frame's names.
-    client_state = [client]
+    client_state = [as_llm_client(client)]
+    _require_panel_served(
+        client=client_state[0], judges=judges, model=model, panel=panel, replacement_judges=replacement_judges
+    )
     verdict_model = _build_verdict_model(
         verdict_kind=verdict_kind,
         labels=label_names,
@@ -1367,7 +1406,7 @@ class PairwiseComparator:
         structured_output: bool,
         extra_kwargs: dict[str, Any] | None,
         extra_body: dict[str, Any] | None,
-        client: Any,
+        client: LLMClient | None,
         reasoning_effort: str | None = None,
         state_fields: list[str] | None = None,
         classify_seated: bool | None = None,
@@ -1390,7 +1429,7 @@ class PairwiseComparator:
         self._extra_kwargs = extra_kwargs
         self._extra_body = extra_body
         self._reasoning_effort = reasoning_effort
-        self._client = client
+        self._client = as_llm_client(client)
         # `classify_seated=None` means the comparator was constructed by hand.
         direct_construction = classify_seated is None
         self._verdict_model = _build_verdict_model(
@@ -1522,7 +1561,7 @@ def llm_jury_pairwise(
     extra_kwargs: dict[str, Any] | None = None,
     extra_body: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
-    client: Any = None,
+    client: LLMClient | None = None,
     state_fields: list[str] | None = None,
 ) -> PairwiseComparator:
     """Build a pairwise (A-vs-B) LLM jury that reuses the shared panel machinery.
@@ -1603,6 +1642,9 @@ def llm_jury_pairwise(
             extra_body=extra_body,
         )
     _warn_unread_criteria(prompt=prompt, criteria=criteria, classify_seated=bool(classify_judges))
+    _require_panel_served(
+        client=client, judges=judges, model=model, panel=deduped, replacement_judges=replacement_judges
+    )
     return PairwiseComparator(
         # Pass the deduped panel so the comparator's no-redundancy check
         # (`len(panel) == 1`) matches the panel run_jury actually runs, keeping
