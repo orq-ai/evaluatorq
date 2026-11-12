@@ -119,7 +119,17 @@ jobs:
         run: |
           set -o pipefail
           # `orq launch pi` points Pi at the orq router with the key above and maps -p to Pi's one-shot prompt.
-          orq launch pi --no-mcp --no-skills --model "$PI_MODEL" -p "$(cat .github/preset-drift/agent-prompt.md)" 2>&1 | tee "$RUNNER_TEMP/agent.log"
+          # Everything the agent prints or writes for the PR body passes through redact first, so the router key cannot ride into a public PR.
+          redact() {
+            python3 -c 'import os, sys; key = os.environ.get("ORQ_API_KEY", ""); sys.stdout.write(sys.stdin.read().replace(key, "***") if key else sys.stdin.read())'
+          }
+          status=0
+          orq launch pi --no-mcp --no-skills --model "$PI_MODEL" -p "$(cat .github/preset-drift/agent-prompt.md)" 2>&1 | redact | tee "$RUNNER_TEMP/agent.log" || status=$?
+          if [ -f "$DRIFT_SUMMARY" ]; then
+            redact < "$DRIFT_SUMMARY" > "$DRIFT_SUMMARY.redacted"
+            mv "$DRIFT_SUMMARY.redacted" "$DRIFT_SUMMARY"
+          fi
+          exit "$status"
 
       - name: Re-run the live checks on the agent's change
         id: recheck

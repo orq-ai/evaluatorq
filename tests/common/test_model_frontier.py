@@ -591,6 +591,28 @@ class TestLiveGarden:
         assert len(calls) == 1
 
 
+    @pytest.mark.asyncio
+    async def test_cards_read_after_a_pricing_lookup_come_from_the_same_fetch(self, monkeypatch):
+        """Pricing usually runs first; the raw cards must already be cached by that read."""
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+        monkeypatch.setattr(model_catalogue, '_catalogues', {})
+        monkeypatch.setattr(model_catalogue, '_raw_catalogues', {})
+        calls: list[str] = []
+
+        async def fetch(host, api_key, oauth_fetch):
+            calls.append(host)
+            return [card('a', 'one')]
+
+        monkeypatch.setattr(model_catalogue, '_fetch_catalogue_payload', fetch)
+
+        info = await model_catalogue.get_model_info('a/one')
+        cards = await model_catalogue.model_cards()
+
+        assert info is not None
+        assert [c['model_id'] for c in cards] == ['one']
+        assert len(calls) == 1
+
+
 class TestRankCheapestTopSuccessors:
     """A newer version retires an older one only when the newer one could itself be seated."""
 
