@@ -20,7 +20,7 @@ from loguru import logger
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.env_config import env_raw
-from evaluatorq.common.llm_client import as_llm_client, resolve_results_base_url
+from evaluatorq.common.llm_client import as_llm_client, resolve_orq_credential, resolve_results_base_url
 from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import validate_reasoning_effort
@@ -327,7 +327,7 @@ async def _send_cleaned_results(
     used (RES-912). Falls back to ``ORQ_BASE_URL`` / the default when it is not
     an Orq-routed client.
     """
-    api_key = env_raw('ORQ_API_KEY')
+    api_key = resolve_orq_credential(inference_client)
     if not api_key:
         logger.debug('Skipping result upload to Orq platform: ORQ_API_KEY not set')
         return
