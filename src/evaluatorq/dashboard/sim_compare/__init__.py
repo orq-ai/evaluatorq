@@ -9,9 +9,12 @@ Routes (registered by ``register_sim_compare_routes``):
     GET  /compare/sim?a={ridA}&b={ridB}[&<filter params>][&cmp_view=&cmp_sort=…]
         Full page: hero with a run/match status line, "what changed" headline
         rows, number tiles with A → B deltas, outcome and termination bars, a
-        scores panel, the conversation table, and the sim filter rail.
+        scores panel, a persona x scenario change heatmap, the conversation
+        table, and the sim filter rail. Bars, legends, heatmap cells and the
+        headline scenario name are filter links.
 
     POST /compare/sim/filter?a={ridA}&b={ridB}
+    GET  /compare/sim/filter?a={ridA}&b={ridB}&<filter params>
         Filter-rail swap: re-renders the body and the rail from the filtered
         conversations of both runs. Sets ``HX-Push-Url`` to the canonical GET
         URL of the resulting view, so the address bar is shareable.
