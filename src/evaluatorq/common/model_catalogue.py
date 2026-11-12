@@ -143,6 +143,9 @@ class ModelCatalogueError(RuntimeError):
 # workspaces on one host; each workspace enables its own models.
 _catalogues: dict[tuple[str, str], dict[str, ModelInfo]] = {}
 _failed_catalogues: set[tuple[str, str]] = set()
+# The same fetches unparsed, for readers that need card fields `ModelInfo` drops
+# (the benchmark scores the model garden ranks on, `enabled`, `metadata.region`).
+_raw_catalogues: dict[tuple[str, str], tuple[dict[str, object], ...]] = {}
 # Built lazily: a module-level asyncio.Lock() binds to the loop running at import
 # time, and the CLI and test suite both drive several asyncio.run() loops, where
 # a lock bound to a dead loop raises "attached to a different loop".
@@ -215,6 +218,7 @@ def reset_catalogue_cache() -> None:
     """
     global _lock
     _catalogues.clear()
+    _raw_catalogues.clear()
     _failed_catalogues.clear()
     _fetch_failures.clear()
     _classify_fallback_warned.clear()
@@ -401,18 +405,11 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
     return models
 
 
-async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = False) -> dict[str, ModelInfo]:
-    """Fetch the Orq model catalogue once per process, per host and credential.
+def _catalogue_source(client: AsyncOpenAI | None) -> tuple[str, str | None, Any, tuple[str, str]]:
+    """The host, API key, OAuth fetch and cache key one catalogue read would use.
 
-    The host is taken from ``client`` when it routes through the Orq router, so an
-    injected staging/on-prem client is not priced against prod; otherwise
-    ``ORQ_BASE_URL``.
-
-    Tolerant callers cache a final failure as an empty table: a run makes dozens of judge calls and
-    must not re-pay a failing HTTP round-trip on each one. Cost simply stays
-    unknown for the run, which is the honest reading — but note this also
-    disables Responses routing for the run, so it is logged at WARNING with that
-    consequence spelled out.
+    Shared by the parsed table and the raw cards, so both read the same host
+    with the same credential and cache under the same key.
     """
     host = resolve_results_base_url(client) if client is not None else orq_base_url()
     oauth_method = inspect.getattr_static(type(client), 'get_model_catalogue', None) if client is not None else None
@@ -430,7 +427,23 @@ async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = F
         if isinstance(api_key, str)
         else ''
     )
-    cache_key = (host, credential)
+    return host, api_key, oauth_fetch, (host, credential)
+
+
+async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = False) -> dict[str, ModelInfo]:
+    """Fetch the Orq model catalogue once per process, per host and credential.
+
+    The host is taken from ``client`` when it routes through the Orq router, so an
+    injected staging/on-prem client is not priced against prod; otherwise
+    ``ORQ_BASE_URL``.
+
+    Tolerant callers cache a final failure as an empty table: a run makes dozens of judge calls and
+    must not re-pay a failing HTTP round-trip on each one. Cost simply stays
+    unknown for the run, which is the honest reading — but note this also
+    disables Responses routing for the run, so it is logged at WARNING with that
+    consequence spelled out.
+    """
+    host, api_key, oauth_fetch, cache_key = _catalogue_source(client)
     cacheable = not callable(oauth_fetch)
     if cacheable:
         cached = _catalogues.get(cache_key)
@@ -493,8 +506,47 @@ async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = F
             _failed_catalogues.discard(cache_key)
         if cacheable:
             _catalogues[cache_key] = parsed
+            _raw_catalogues[cache_key] = _cards(payload)
         logger.debug('Loaded catalogue for {} models from {}', len(parsed), host)
         return parsed
+
+
+def _cards(payload: object) -> tuple[dict[str, object], ...]:
+    """The mapping entries of a ``/v2/models`` payload, read-only by convention."""
+    return tuple(entry for entry in payload if isinstance(entry, dict)) if isinstance(payload, list) else ()
+
+
+async def model_cards(client: AsyncOpenAI | None = None) -> tuple[dict[str, object], ...]:
+    """The raw ``/v2/models`` cards, for readers that need fields `ModelInfo` drops.
+
+    The model garden (`common.model_frontier`) ranks on
+    ``metadata.autorouter.v2`` benchmark scores, per reasoning effort, and on
+    ``enabled``; neither belongs on `ModelInfo`, whose job is pricing and
+    routing one call. Same host, credential and process cache as the parsed
+    table, so the two cannot describe different catalogues.
+
+    Always strict: a garden derived from an empty table would seat nothing and
+    report every preset as retired, so a missing key raises
+    `MissingLLMCredentialsError` and a failed or malformed fetch raises
+    `ModelCatalogueError`. OAuth reads are fetched every call, as elsewhere.
+    """
+    host, _api_key, oauth_fetch, cache_key = _catalogue_source(client)
+    if callable(oauth_fetch):
+        try:
+            payload = await _fetch_catalogue_payload(host=host, api_key=None, oauth_fetch=oauth_fetch)
+        except (httpx.HTTPError, ValueError, RuntimeError) as exc:
+            raise ModelCatalogueError(f'Orq model catalogue fetch failed: {exc}') from exc
+        if not isinstance(payload, list) or not payload:
+            raise ModelCatalogueError('Orq returned an unreadable or empty model catalogue.')
+        return _cards(payload)
+    cached = _raw_catalogues.get(cache_key)
+    if cached is not None and cache_key not in _failed_catalogues:
+        return cached
+    await _load_catalogue(client, strict=True)
+    cards = _raw_catalogues.get(cache_key)
+    if cards is None:
+        raise ModelCatalogueError('Orq model catalogue was not cached after a successful read.')
+    return cards
 
 
 ModelKind = Literal['chat', 'classify', 'embedding']
@@ -715,6 +767,7 @@ __all__ = [
     'clear_model_overrides',
     'get_model_info',
     'is_known_classify_model',
+    'model_cards',
     'price_usage',
     'qualified_model',
     'register_model',
