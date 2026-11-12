@@ -1700,6 +1700,7 @@ _SIM_TRANSCRIPT_CSS = """
     padding: 10px 12px; background: none; border: 0; cursor: pointer;
     font: inherit; font-weight: 600; color: var(--text-strong); text-align: left;
 }
+.sim-report th.num .sim-th-sort { justify-content: flex-end; }
 .sim-report .sim-th-sort:hover { color: var(--teal-600); }
 /* Inactive sortable columns show a faint ⇅; it strengthens on hover so the
    header reads as clickable. The active column's ▲/▼ is always full-strength. */
@@ -1971,6 +1972,16 @@ _SIM_REPORT_OVERRIDES_CSS = """
     font-family: var(--font-sans); font-size: 16px; font-weight: 400;
     text-align: center; vertical-align: middle;
 }
+/* Heatmap cell as a drawer trigger: the button takes over the cell's padding so
+   the whole tile is clickable, and keeps the cell's colour, ink and alignment. */
+.sim-report .rk-heat-cell:has(.rk-heat-trigger) { padding: 0; }
+.sim-report .rk-heat-trigger {
+    box-sizing: border-box; width: 100%; padding: 12px 16px;
+    border: 0; border-radius: 5px; background: none; color: inherit;
+    font: inherit; text-align: inherit; cursor: pointer;
+}
+.sim-report .rk-heat-trigger:hover { box-shadow: inset 0 0 0 2px var(--ink-900); }
+.sim-report .rk-heat-trigger:focus-visible { outline: 2px solid var(--teal-600); outline-offset: 2px; }
 
 /* Data tables — exclude the heatmap (.rk-heatmap has its own cell styling; the
    generic thead rule was bleeding uppercase + sunken bg onto its headers). */
@@ -1987,14 +1998,15 @@ _SIM_REPORT_OVERRIDES_CSS = """
     padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--border-subtle);
 }
 .sim-report table:not(.rk-heatmap) tbody td {
-    font-size: 13px; padding: 12px 16px; border-bottom: none;
+    font-size: 13px; padding: 12px 16px; border-bottom: none; text-align: left;
 }
 .sim-report table:not(.rk-heatmap) tbody tr,
 .sim-report table:not(.rk-heatmap) tbody tr:nth-child(even) { background: transparent; }
-.sim-report table:not(.rk-heatmap) thead th:not(:first-child),
-.sim-report table:not(.rk-heatmap) tbody td:not(:first-child) {
+.sim-report table:not(.rk-heatmap) thead th.num,
+.sim-report table:not(.rk-heatmap) tbody td.num {
     text-align: right; font-variant-numeric: tabular-nums;
 }
+.sim-report .report-card:has(> table .fail-why) { overflow-x: auto; }
 
 /* Failures table: collapsed pass/fail dots that unfold to full criteria text.
    Height animates both ways via ::details-content + interpolate-size where
@@ -2328,6 +2340,10 @@ _SIM_REPORT_OVERRIDES_CSS = """
     font-family: var(--font-mono); min-width: 32px;
     display: inline-flex; align-items: center; gap: 6px;
 }
+.sim-report .sim-entity-position:not([hidden]) {
+    align-self: center; font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+}
 /* j/k hotkey hint on the modal prev/next buttons. */
 .sim-report .sim-entity-kbd {
     font-family: var(--font-mono); font-size: 10px; line-height: 1;
@@ -2569,6 +2585,19 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 }
 .sim-report .sim-criteria-verdict--pass { color: var(--green-600); }
 .sim-report .sim-criteria-verdict--fail { color: var(--red-600); }
+/* Goal block above the criteria: what the persona was after, then whether it got there. */
+.sim-report .sim-goal {
+    margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle);
+}
+.sim-report .sim-goal-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px;
+}
+.sim-report .sim-goal-label {
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; color: var(--text-faint);
+}
+.sim-report .sim-goal-text { margin: 0; font-size: 14px; line-height: 1.5; color: var(--text-strong); }
+.sim-report .sim-goal-text--missing { color: var(--text-faint); font-style: italic; }
 .sim-report .sim-criteria-count {
     font-family: var(--font-sans); font-size: 12px; color: var(--text-faint); white-space: nowrap;
 }

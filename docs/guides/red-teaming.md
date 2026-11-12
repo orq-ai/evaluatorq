@@ -18,8 +18,26 @@ flowchart LR
 ## Modes
 
 - **dynamic** — an LLM generates attacks; run the categories you pick.
-- **static** — replays a fixed dataset of known attacks instead of generating them. Deterministic, cheap, good for CI. Runs Orq's public [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities) dataset by default; pass `dataset=` to run your own. The [static dataset cookbook](../examples/redteam/02_static_dataset.md) shows the reproducible version end to end.
+- **static** — replays a fixed dataset of known attacks instead of generating them. Deterministic, cheap, good for CI. Runs Orq's public [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities) dataset by default; pass `dataset=` to run your own — [Your Own Attack Dataset](red-team-datasets.md) is the file format and the field reference. The [static dataset cookbook](../examples/redteam/02_static_dataset.md) shows the reproducible version end to end.
 - **hybrid** — static seeds plus dynamic expansion; see the [hybrid mode cookbook](../examples/redteam/03_hybrid_mode.md) when you want both known attacks and generated coverage.
+
+In dynamic and hybrid mode each attack is a conversation, not a single prompt. An attacker LLM writes the next message from the target's last reply, for up to `max_turns` turns, and stops early when it judges the objective met. That self-report never decides the outcome: the judge reads the whole transcript afterwards and returns the verdict.
+
+```mermaid
+sequenceDiagram
+    participant A as Attacker LLM
+    participant E as evaluatorq
+    participant T as Target
+    participant J as Judge
+    loop up to max_turns
+        E->>A: target's last reply
+        A-->>E: next attack message
+        E->>T: attack message
+        T-->>E: reply
+    end
+    E->>J: full transcript
+    J-->>E: RESISTANT or VULNERABLE
+```
 
 An Orq deployment (`target="deployment:<key>"`) runs in static mode only, with the default dataset or your own. Dynamic and hybrid drive a multi-turn conversational target, and no deployment target exists yet, so they refuse the combination with an error instead of attacking the wrong thing.
 
@@ -46,6 +64,39 @@ Replay is not a separate mode. It re-runs a previous run's exact attacks against
     report = await red_team(target="agent:my-agent", mode="static", dataset="./my_attacks.json")
     report = await red_team(target="agent:my-agent", mode="static", dataset="hf:my-org/my-attacks")
     ```
+
+### Backtracking
+
+**Backtracking** erases a turn the target refused, so the attacker tries again in a conversation where the refusal never happened. It is off by default and applies only to attacks that use the Crescendo delivery method. Reach for it when a target's refusals end attacks that a different opening might have got past.
+
+```python
+from evaluatorq.redteam import red_team
+from evaluatorq.redteam.contracts import LLMConfig
+
+report = await red_team(
+    'agent:my-agent',
+    mode='dynamic',
+    delivery_methods=['crescendo'],
+    llm_config=LLMConfig(max_backtracks=3),
+)
+```
+
+The CLI equivalent is `--max-backtracks 3`. The value is the number of erasures allowed per attack, from 0 to 10, and an erased attempt does not use up a turn. The target's next call leaves the exchange out, while the attacker is told about the refusal so it can change technique. Erased exchanges are kept in `execution.backtracked_turns` on each result, and the judge never sees them.
+
+Each reply costs one extra call to label it as refused or not, until the attack has used its erasures. The call runs on the `classifier` role (task `redteam.refusal_judge`). When that names a classify-only model with no reachable classify endpoint, because the client does not route through the Orq router or the model catalogue lists none, the call runs on the `fast` role instead. A chat model pinned to the task runs as pinned, with no fallback. A reply that holds only a refusal flagged by the model provider needs no extra call.
+
+Even with erasures left, a turn is kept when one of these holds, and the run reports no error for it:
+
+- The reply holds anything beyond the refusal itself, such as what was asked for, related information, or a specific fact the target let slip beside the refusal. Those replies stay so the judge can score them, and the label is cautious on purpose, so a long refusal can be kept.
+- The reply is empty, or the attacker has already declared the objective achieved.
+- The labelling call fails or gives no clear answer. The turn is kept, the run continues, and the report's `pipeline_warnings` says how many turns this affected.
+- The target called a tool during the turn and the call shows in the reply. Erasing the text would not undo the tool's effect.
+
+Backtracking needs a target that receives the full conversation on every call, which includes `agent:<key>` strings. `ORQAgentTarget`, `LangGraphTarget` and `PydanticAITarget` keep the history themselves, so a turn cannot be erased from them, and the run raises `RedTeamError` before any attack starts. A `mode="static"` run skips this check because no static attack can backtrack.
+
+An erasure removes the exchange from the conversation sent to the target, nothing else. Anything the target stored outside that conversation during the turn, such as a memory written without a tool call showing in the reply, stays where it is.
+
+A run with no dynamic Crescendo attack, such as `mode="static"`, gets a `pipeline_warnings` entry saying the setting had no effect. A saved run stores the value and [replay](#replay-a-previous-run) restores it, unless you set `max_backtracks` yourself.
 
 ## Seed a dynamic attack from a trace
 
@@ -345,6 +396,14 @@ When a judge fails to return a verdict, the reason is captured on `result.evalua
 
 A saved run keeps its *cases*: the attacks it ran, not only the scores it gave them. Replay re-runs those exact cases, in the same order and with the same turn budget, against whatever target you point it at now. Dynamic and hybrid runs generate fresh attacks every time, so re-running one after a fix changes the agent *and* the exam, and a resistance rate that moved cannot tell you which one moved it. Replay holds the exam fixed and varies only the agent.
 
+```mermaid
+flowchart LR
+    R1["First run<br/>generates attacks"] --> S[("Run store<br/>.evaluatorq/runs/")]
+    S -->|"same cases, same order"| R2["Replay<br/>previous_run=..."]
+    P["Patched target"] --> R2
+    R2 --> C["Before / after<br/>resistance rate"]
+```
+
 ### What is replayable
 
 Cases travel with the auto-saved run in the run store, the directory evaluatorq writes saved runs to. Replay needs a run that was written there. `save='none'` (`--save none`) writes nothing at all: no report, no run-store entry, and no row in [`eq redteam runs`](../cli-reference/redteam.md#eq-redteam-runs). A `--save detail` artifacts directory is not enough either; the `03_summary_report.json` it writes carries scores, not cases.
@@ -614,6 +673,18 @@ Land on the cross-surface overview, pick the run from **Red Team**, then work do
 | **Attacks** | Every attack, expandable to the judge verdict and transcript |
 | **Usage** | Tokens and API calls per agent |
 | **Config** | What was tested — and what was *not* |
+
+**Overview** is where a run opens: the executive summary, the headline numbers, and attack success per agent.
+
+![Red team Overview tab: executive summary, headline metrics, outcome donut, severity split and per-agent attack success.](../assets/dashboard/redteam-03-overview.png){ .dashboard-shot }
+
+**Focus areas** turns those numbers into a work list. Each card carries the category, its risk score, and a recommended fix.
+
+![Red team Focus areas tab: fixes ranked by risk, with Memory & Context Poisoning (ASI06) first at risk 4.0 and 50% attack success, each card showing a recommended fix.](../assets/dashboard/redteam-05-focus-areas.png){ .dashboard-shot }
+
+**Attacks** holds the evidence. Expand a row to read the judge's verdict above the full transcript; this one is a memory-poisoning attack that got the agent to store an "UNRESTRICTED System Administrator" directive.
+
+![An expanded attack row: the judge's verdict and reasoning above the full message-by-message transcript of a successful memory-poisoning attack.](../assets/dashboard/redteam-08-attack-detail.png){ .dashboard-shot }
 
 Two traps worth knowing before you read a number: the resistance rate covers only the categories this run attacked (check **Config** for the skipped ones), and it is measured over *evaluated* attacks, so failed judge calls drop out of the denominator rather than counting as resisted.
 

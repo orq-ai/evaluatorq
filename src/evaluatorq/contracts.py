@@ -942,6 +942,11 @@ class JuryRepetition(BaseModel):
         default=None,
         description='Validated structured judge output for this pass; None when the judge exposes no structured detail.',
     )
+    verdict_coerced: bool = Field(
+        default=False,
+        description='True when the judge sent abstain=True with a value on this pass, which common/judge.py coerced '
+        'to an abstention. Tells a coerced verdict from a clean abstention.',
+    )
 
 
 class JuryVote(BaseModel):
@@ -988,6 +993,12 @@ class JuryVote(BaseModel):
         'non-abstained pass (RES-1251). A clean abstention is not counted. Independent of the aggregate '
         'success/abstained.',
     )
+    repetitions_coerced: int = Field(
+        default=0,
+        ge=0,
+        description='Count of repetitions flagged verdict_coerced. Also stamped on the orq.judge span as '
+        'judge.repetitions_coerced. No report renders it yet.',
+    )
 
     @model_validator(mode='after')
     def _check_vote_consistency(self) -> JuryVote:
@@ -1004,6 +1015,8 @@ class JuryVote(BaseModel):
             raise ValueError('failed JuryVote must have a null value')
         if not self.success and self.abstained:
             raise ValueError('failed JuryVote cannot also be abstained')
+        if self.repetitions and self.repetitions_coerced != sum(r.verdict_coerced for r in self.repetitions):
+            raise ValueError('repetitions_coerced must equal the repetitions flagged verdict_coerced')
         return self
 
 

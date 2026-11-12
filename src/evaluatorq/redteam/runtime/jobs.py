@@ -10,12 +10,16 @@ from loguru import logger
 
 from evaluatorq import DataPoint, Job, job
 from evaluatorq.common.env_config import env_raw
-from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
+from evaluatorq.common.thread_context import (
+    build_static_thread_id,
+    conversation_thread,
+    pipeline_metadata_param,
+    thread_body_param,
+)
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
     record_llm_response,
@@ -28,7 +32,7 @@ from evaluatorq.redteam.exceptions import CredentialError
 from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
 
 def _sanitize_job_name(value: str) -> str:
@@ -57,7 +61,7 @@ async def static_target_spans(
     run_id: str | None,
     row: int,
     target_input: str,
-) -> AsyncIterator[tuple[Any, str]]:
+) -> AsyncGenerator[tuple[Any, str], None]:
     """Open the attack and target_call spans plus the conversation thread for one static row.
 
     Every static job, deployment or agent target, wraps its target call in this
@@ -142,9 +146,8 @@ def create_deployment_job(
                 'key': deployment_key,
                 'messages': messages,
             }
-            # This leg bypasses the shared chat-completion helper, so run
-            # metadata is applied explicitly.
-            apply_pipeline_metadata(invoke_kwargs)
+            # An Orq SDK invoke, not an OpenAI client: always Orq-routed.
+            invoke_kwargs.update(pipeline_metadata_param())
             invoke_kwargs.update(thread_body_param())
             # Propagate W3C trace context so the deployment's server-side
             # execution nests under this span. Captured inside the span so

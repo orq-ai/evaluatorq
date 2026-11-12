@@ -17,10 +17,12 @@ from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replace
 from evaluatorq.common.jury import (
     Prediction,
     VerdictKind,
-    _panel_composition_messages,
     append_jury_summary,
     attach_jury_raw_output,
+    non_binary_verdict_message,
+    panel_composition_messages,
     run_jury,
+    single_verdict_error_payload,
 )
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
@@ -29,6 +31,7 @@ from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, TokenUsage
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
+    RED_TEAM_TIE_OUTCOME,
     DeliveryMethod,
     EvaluatorConfig,
     EvaluatorqEvaluatorConfig,
@@ -245,11 +248,19 @@ async def _owasp_judge_fn(
             # parsed — dropping them here undercounts the run's cost.
             token_usage=outcome.token_usage,
         )
+    if outcome.payload.value is not None and not isinstance(outcome.payload.value, bool):
+        # A number or string cannot be a pass/fail vote: a failed repetition, not a silent None.
+        return Prediction(
+            error=non_binary_verdict_message(outcome.payload.value),
+            explanation=outcome.payload.explanation,
+            token_usage=outcome.token_usage,
+        )
     return Prediction(
         value=outcome.payload.value,
         explanation=outcome.payload.explanation,
         token_usage=outcome.token_usage,
         abstained=outcome.payload.abstain,
+        verdict_coerced=outcome.verdict_coerced,
     )
 
 
@@ -265,8 +276,14 @@ def create_owasp_evaluator(
     target_models: list[str] | None = None,
     *,
     strict_panel: bool = False,
+    log_panel_warnings: bool = True,
 ) -> EvaluatorqEvaluatorConfig:
-    """Create an evaluatorq scorer that routes by OWASP category."""
+    """Create an evaluatorq scorer that routes by OWASP category.
+
+    ``log_panel_warnings=False`` silences the panel-composition warnings but not the
+    ``strict_panel`` errors. Hybrid mode builds a dynamic evaluator on the same panel
+    first, which already logged them.
+    """
     # Build the client + merged cfg ONCE here (not per datapoint). Creating them
     # inside scorer() would spin up a fresh AsyncOpenAI connection pool for every
     # datapoint in a batch, none explicitly closed. Mirrors OWASPEvaluator.__init__.
@@ -293,10 +310,14 @@ def create_owasp_evaluator(
             f'min_successful_judges ({min_success}) exceeds the effective panel size ({len(panel)}) '
             f'after de-duplication; panel={panel}'
         )
-    for issue in _panel_composition_messages(panel, target_models or [], strict=strict_panel):
+    configured_panel = [evaluator_model, *(judges or [])]
+    for issue in panel_composition_messages(
+        configured_panel, target_models or [], strict=strict_panel, tie_outcome=RED_TEAM_TIE_OUTCOME
+    ):
         if strict_panel:
             raise ValueError(issue)
-        logger.warning(issue)
+        if log_panel_warnings:
+            logger.warning(issue)
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         data = params['data']
@@ -354,6 +375,14 @@ def create_owasp_evaluator(
                     )
 
                 passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
+                # This path builds no JuryVote, so the coerced flag travels here, as on the adaptive path.
+                raw_output: dict[str, Any] = {
+                    'raw_content': outcome.raw_content,
+                    'verdict_coerced': outcome.verdict_coerced,
+                }
+                verdict_error = single_verdict_error_payload(outcome, category)
+                if verdict_error is not None:
+                    raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = verdict_error
                 set_span_attrs(
                     evaluation_span,
                     {'orq.redteam.passed': _span_pass_state(passed), 'output': outcome.payload.explanation},
@@ -363,7 +392,7 @@ def create_owasp_evaluator(
                     'explanation': outcome.payload.explanation,
                     'pass': passed,
                     'token_usage': outcome.token_usage,
-                    'raw_output': {'raw_content': outcome.raw_content},
+                    'raw_output': raw_output,
                 })
 
             # Kept so the panel can name a cause, not just "quorum not met".

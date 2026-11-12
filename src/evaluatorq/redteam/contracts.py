@@ -14,6 +14,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
 
+from loguru import logger
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -24,6 +25,7 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, TypedDict
 
+from evaluatorq.common.jury import duplicate_judges_message
 from evaluatorq.common.messages import EMPTY_ASSISTANT_TEXT
 from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.redact import scrub_known_secrets
@@ -636,7 +638,7 @@ class EvaluatorConfig(LLMCallConfig):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra='forbid')
 
-    model: str | None = Field(
+    model: str | None = Field(  # ty: ignore[invalid-attribute-override] -- deliberate, see docstring
         default=None,
         exclude=True,
         description='Primary judge model shorthand; normalized to judges[0].',
@@ -688,6 +690,13 @@ class EvaluatorConfig(LLMCallConfig):
             model = payload.get('model')
             if model is not None:
                 judges = list(payload.get('judges') or [])
+                # The rewrite below drops repeats of `model`, so the after-validator
+                # never sees them; report those here. Other repeats survive the
+                # rewrite and are reported once, by the after-validator.
+                if (duplicates := duplicate_judges_message([j for j in judges if j == model])) is not None:
+                    if payload.get('strict_panel'):
+                        raise ValueError(duplicates)
+                    logger.warning(duplicates)
                 payload['judges'] = [model, *[j for j in judges if j != model]]
             return payload
         return data
@@ -709,6 +718,11 @@ class EvaluatorConfig(LLMCallConfig):
 
     @model_validator(mode='after')
     def _check_min_successful_judges(self) -> 'EvaluatorConfig':
+        # The repeats are dropped below, so this is the last place they can be seen.
+        if (duplicates := duplicate_judges_message(self.judges)) is not None:
+            if self.strict_panel:
+                raise ValueError(duplicates)
+            logger.warning(duplicates)
         panel: list[str] = []
         for j in self.judges:
             if j and j not in panel:
@@ -962,6 +976,10 @@ class LLMConfig(BaseModel):
     max_objectives_per_llm_call: int = Field(default=8, ge=1)
     # Probe turns for blackbox capability inference. Each is a live target call.
     max_probe_turns: int = Field(default=8, ge=1)
+    # Refused turns a Crescendo attack may erase from the target's view, per attack.
+    # Each is an extra target call on top of max_turns, plus one judge call per turn
+    # while budget remains. 0 turns it off. Needs caller-owned target history.
+    max_backtracks: int = Field(default=0, ge=0, le=10)
 
     # --- Cleanup timeout ------------------------------------------------------
     cleanup_timeout_ms: int = 60_000
@@ -993,11 +1011,9 @@ class LLMConfig(BaseModel):
         OpenAI client just because ``ORQ_API_KEY`` is in the environment for
         tracing/result-upload.
 
-        Run-attribution ``metadata`` is NOT merged here: calls that route through
-        execute_chat_completion/parse get it natively
-        (llm_call.apply_pipeline_metadata); native Chat/Responses call sites use
-        top-level metadata, while Orq-agent SDK calls use pipeline_metadata_param()
-        as a top-level request kwarg.
+        Run-attribution ``metadata`` is NOT merged here: OpenAI-client call sites get it
+        from ``llm_call.apply_pipeline_metadata``, and Orq SDK calls use
+        ``pipeline_metadata_param()``.
         """
         from evaluatorq.common.llm_client import client_routes_through_orq
 
@@ -1014,6 +1030,9 @@ class LLMConfig(BaseModel):
 # Module-level default for the non-model knobs (timeouts, retries). Its model fields are
 # import-time snapshots and must not be read; build `LLMConfig()` to resolve them by role.
 PIPELINE_CONFIG = LLMConfig()
+
+# A split red-team panel fails closed: a tie marks the attack VULNERABLE.
+RED_TEAM_TIE_OUTCOME = 'fail-closed to VULNERABLE'
 
 
 def evaluator_model_for(model: str | None, cfg: LLMCallConfig | EvaluatorConfig | None) -> str:
@@ -1339,6 +1358,14 @@ class OrchestratorResult(BaseModel):
     truncated_turns: list[int] = Field(
         default_factory=list, description='Turn numbers where adversarial LLM hit max_tokens'
     )
+    backtracked_turns: list[Turn] = Field(
+        default_factory=list,
+        description='Refused exchanges erased from the target conversation; never part of the judged transcript',
+    )
+    refusal_judge_failures: int = Field(
+        default=0,
+        description='Turns the refusal judge could not label; they were kept without knowing whether they were refused',
+    )
 
     @model_validator(mode='after')
     def _validate_max_turns(self) -> 'OrchestratorResult':
@@ -1602,6 +1629,8 @@ class JobOutputPayload(BaseModel):
     error_details: dict[str, Any] | None = None
     error_turn: int | None = None
     truncated_turns: list[int] = Field(default_factory=list)
+    backtracked_turns: list[Turn] = Field(default_factory=list)
+    refusal_judge_failures: int = 0
     finish_reason: str | None = None
     thread_id: str | None = None
     response_traces: list[ResponseTrace] = Field(default_factory=list)
@@ -1635,6 +1664,14 @@ class ExecutionDetails(BaseModel):
     token_usage: TokenUsage | None = None
     token_usage_bootstrap: TokenUsage | None = None
     seed_context: list[Message] = Field(default_factory=list)
+    backtracked_turns: list[Turn] = Field(
+        default_factory=list,
+        description='Refused exchanges erased from the target conversation; never part of the judged transcript',
+    )
+    refusal_judge_failures: int = Field(
+        default=0,
+        description='Turns the refusal judge could not label; they were kept without knowing whether they were refused',
+    )
 
 
 class AgentInfo(BaseModel):

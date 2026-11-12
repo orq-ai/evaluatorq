@@ -467,12 +467,12 @@ def test_no_hand_written_json_schema_properties_dicts() -> None:
     """A JSON-schema `'properties': {...}` dict literal is a schema written by hand.
 
     RES-1308 happened because a hand-written tool schema and the parser reading
-    it drifted apart. `judge.py`'s two tool schemas are generated from pydantic
-    models via `_wire_schema` / `model_json_schema()` for exactly this reason;
+    it drifted apart. `judge.py`'s response schema is generated from the
+    `JudgeDecision` pydantic model for exactly this reason;
     this measured 3 hits in `simulation/` before that refactor and 0 after — and
     0 across the whole package, which is why the scope is package-wide. A hit
     here means a schema is being hand-rolled again — define a `pydantic.BaseModel`
-    and generate its schema instead (see `judge.py`'s `_wire_schema`).
+    and generate its schema instead (see `judge.py`'s `JudgeDecision`).
 
     The scope is all of `src/evaluatorq/`; see `_HAND_WRITTEN_PROPERTIES_ROOT`.
     """
@@ -481,7 +481,7 @@ def test_no_hand_written_json_schema_properties_dicts() -> None:
         "Hand-written JSON-schema 'properties' dict literal: "
         + ', '.join(hits)
         + '. Define a pydantic BaseModel and generate the schema via model_json_schema() '
-        '/ _wire_schema (see simulation/agents/judge.py) instead of hand-writing it. '
+        '(see JudgeDecision in simulation/agents/judge.py) instead of hand-writing it. '
         'Escape hatch: a schema this package hands to a provider verbatim and never '
         'parses back (an HTTP/json_schema evaluator definition) — add that one path to '
         'an explicit exemption here, with the reason, rather than narrowing the scope.'

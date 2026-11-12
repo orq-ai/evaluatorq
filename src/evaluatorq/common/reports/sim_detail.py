@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc
+from evaluatorq.common.reports.html_helpers import entry_outcome, status_badge
 from evaluatorq.common.reports.messages import render_message_list
 
 if TYPE_CHECKING:
@@ -65,24 +66,26 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
 
     # Goal outcome and criteria-met count are two different facts: an agent can
     # miss the goal while still satisfying every criterion (and vice versa), so
-    # "FAIL · 4/4 met" reads as a contradiction. Show them as separate spans —
-    # the coloured goal verdict, then a neutral criteria tally.
-    verdict_html = ''
+    # the criteria header carries only the neutral tally.
+    verdict_html = status_badge(*entry_outcome(entry))
+    goal_text = (
+        f'<p class="sim-goal-text">{esc(entry.goal)}</p>'
+        if entry.goal
+        else '<p class="sim-goal-text sim-goal-text--missing">The goal text was not saved with this run.</p>'
+    )
+    goal_html = (
+        f'<div class="sim-goal">'
+        f'<div class="sim-goal-head"><span class="sim-goal-label">GOAL</span>{verdict_html}</div>'
+        f'{goal_text}'
+        f'</div>'
+    )
+
+    count_html = ''
     if criteria:
         met = sum(1 for c in criteria if c.state == 'pass')
         unknown = sum(1 for c in criteria if c.state == 'unknown')
-        passed = entry.goal_achieved
-        verdict_class = 'sim-criteria-verdict--pass' if passed else 'sim-criteria-verdict--fail'
-        verdict_word = 'Goal met' if passed else 'Goal missed'
-        if entry.error or entry.terminated_by == 'error':
-            verdict_word = 'Execution error'
-            verdict_class = 'sim-criteria-verdict--error'
         unknown_html = f'<span class="sim-criteria-unknown">{unknown} not audited</span>' if unknown else ''
-        verdict_html = (
-            f'<span class="sim-criteria-verdict {verdict_class}">{verdict_word}</span>'
-            f'<span class="sim-criteria-count">{met}/{len(criteria)} criteria met</span>'
-            f'{unknown_html}'
-        )
+        count_html = f'<span class="sim-criteria-count">{met}/{len(criteria)} criteria met</span>{unknown_html}'
 
     # Run-level: no audit arrived at all, so every row above is a default and
     # `criteria_met` scored this run 0.0. Say it here rather than let the tally
@@ -117,8 +120,9 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
 
     return (
         f'<div class="sim-criteria">'
+        f'{goal_html}'
         f'<div class="sim-criteria-head">'
-        f'<span class="sim-criteria-header">CRITERIA</span>{verdict_html}'
+        f'<span class="sim-criteria-header">CRITERIA</span>{count_html}'
         f'</div>'
         f'{unverified_html}'
         f'{list_html}'

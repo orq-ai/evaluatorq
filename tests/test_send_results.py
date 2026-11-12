@@ -9,7 +9,7 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from evaluatorq.send_results import SendResultsError, send_results_to_orq
+from evaluatorq.send_results import RESULTS_RECEIVE_PATH, OrqResponse, SendResultsError, send_results_to_orq
 from evaluatorq.types import (
     DataPoint,
     DataPointResult,
@@ -346,7 +346,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             return httpx.Response(
                 401,
                 request=request,
@@ -374,7 +374,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             raise httpx.RequestError("connection failed", request=request)
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -398,7 +398,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             return httpx.Response(503, request=request, json={"error": "service unavailable"})
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -429,7 +429,7 @@ class TestSendResultsUploadFailures:
 
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
             captured["json"] = kwargs["json"]
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             return httpx.Response(
                 200,
                 request=request,
@@ -544,7 +544,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             raise httpx.RequestError("connection failed", request=request)
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -598,7 +598,7 @@ class TestSendResultsBaseUrl:
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
             base_url="https://my.staging.orq.ai",
         )
-        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
     @pytest.mark.asyncio
     async def test_base_url_trailing_slash_normalized(
@@ -619,7 +619,7 @@ class TestSendResultsBaseUrl:
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
             base_url="https://my.staging.orq.ai/",
         )
-        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_env_when_base_url_not_supplied(
@@ -640,7 +640,7 @@ class TestSendResultsBaseUrl:
             start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
         )
-        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+        assert captured["url"] == "https://my.staging.orq.ai/v3/experiments/evaluations/receive"
 
 
 class TestUploadDiagnostics:
@@ -649,7 +649,7 @@ class TestUploadDiagnostics:
     @staticmethod
     def _fake_post(rows_created: int, url: str | None = "https://my.orq.ai/e/abc"):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", f"https://my.orq.ai{RESULTS_RECEIVE_PATH}")
             body = {
                 "sheet_id": "s1",
                 "manifest_id": "m1",
@@ -800,3 +800,145 @@ class TestUploadDiagnostics:
         gap_warnings = [ln for ln in lines if "registered 0 of 1 uploaded" in ln]
         assert len(gap_warnings) == 1
         assert "<no url returned>" in gap_warnings[0]
+
+
+class TestSendResultsTimeoutAndRetry:
+    """BACK-2363: 120 s upload timeout, retries only where no run can exist yet."""
+
+    @staticmethod
+    def _upload(build_results: Callable[..., list[DataPointResult]], **kwargs: Any):
+        return send_results_to_orq(
+            api_key="key",
+            evaluation_name="eval",
+            evaluation_description=None,
+            dataset_id=None,
+            results=build_results(0.5),
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            **kwargs,
+        )
+
+    @staticmethod
+    def _scripted_post(monkeypatch: pytest.MonkeyPatch, outcomes: list[Any], seen: list[httpx.AsyncClient]):
+        """Each call pops the next outcome: an int status, or an exception class to raise."""
+
+        async def no_sleep(_: float) -> None:
+            return None
+
+        async def fake_post(self: httpx.AsyncClient, url: str, *args: Any, **kwargs: Any) -> httpx.Response:
+            seen.append(self)
+            request = httpx.Request("POST", url)
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, type):
+                raise outcome("boom", request=request)
+            body = {"sheet_id": "s1", "manifest_id": "m1", "experiment_name": "eval", "rows_created": 1}
+            return httpx.Response(outcome, request=request, json=body if outcome == 200 else {"error": "x"})
+
+        monkeypatch.setattr("evaluatorq.common.retry.asyncio.sleep", no_sleep)
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    @pytest.mark.asyncio
+    async def test_timeout_is_120s(self, monkeypatch: pytest.MonkeyPatch, build_results):
+        seen: list[httpx.AsyncClient] = []
+        self._scripted_post(monkeypatch, [200], seen)
+
+        assert await self._upload(build_results) is not None
+        assert seen[0].timeout.read == 120.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("first", [httpx.ConnectError, httpx.ConnectTimeout, 429])
+    async def test_retries_failures_that_never_reached_the_handler(
+        self, monkeypatch: pytest.MonkeyPatch, build_results, first: Any
+    ):
+        seen: list[httpx.AsyncClient] = []
+        self._scripted_post(monkeypatch, [first, 200], seen)
+
+        result = await self._upload(build_results)
+        assert result is not None and result.manifest_id == "m1"
+        assert len(seen) == 2
+
+    @pytest.mark.asyncio
+    async def test_exhausted_429_reaches_the_non_success_branch(self, monkeypatch: pytest.MonkeyPatch, build_results):
+        seen: list[httpx.AsyncClient] = []
+        self._scripted_post(monkeypatch, [429, 429, 429], seen)
+
+        with pytest.raises(SendResultsError, match="429"):
+            await self._upload(build_results, raise_on_error=True)
+        assert len(seen) == 3
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [400, 500, 503, 504])
+    async def test_4xx_and_5xx_are_not_retried(self, monkeypatch: pytest.MonkeyPatch, build_results, status: int):
+        # A 5xx may arrive after the server created the run; retrying it would duplicate the run.
+        seen: list[httpx.AsyncClient] = []
+        self._scripted_post(monkeypatch, [status, 200], seen)
+
+        assert await self._upload(build_results) is None
+        assert len(seen) == 1
+
+    @pytest.mark.asyncio
+    async def test_read_timeout_is_not_retried_and_warns(self, monkeypatch: pytest.MonkeyPatch, build_results):
+        seen: list[httpx.AsyncClient] = []
+        self._scripted_post(monkeypatch, [httpx.ReadTimeout, 200], seen)
+        warnings: list[str] = []
+        monkeypatch.setattr("evaluatorq.send_results.logger.warning", lambda msg, *a: warnings.append(msg))
+
+        assert await self._upload(build_results) is None
+        assert len(seen) == 1
+        assert "timed out after 120s" in warnings[0] and "may still finish" in warnings[0]
+
+    @pytest.mark.asyncio
+    async def test_read_timeout_raises_with_raise_on_error(self, monkeypatch: pytest.MonkeyPatch, build_results):
+        seen: list[httpx.AsyncClient] = []
+        self._scripted_post(monkeypatch, [httpx.ReadTimeout, 200], seen)
+
+        with pytest.raises(SendResultsError, match="timed out"):
+            await self._upload(build_results, raise_on_error=True)
+        assert len(seen) == 1
+
+
+class TestSendResultsExperimentsApiResponse:
+    @pytest.mark.asyncio
+    async def test_parses_the_experiments_api_response(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        """Body as answered by optimization-api on 2026-10-30 for a local upload: the
+        field names are the ones the spreadsheets-api route used, so OrqResponse
+        validates it unchanged."""
+        experiments_api_body = {
+            "sheet_id": "01KN274AXD09TPG3S5G24RQX26",
+            "manifest_id": "01M66QQ3W19DXFFEYJGKHZ21CE",
+            "experiment_name": "llm-eval-with-results",
+            "rows_created": 3,
+            "workspace_key": "orquesta-local",
+            "experiment_url": (
+                "http://localhost:4200/orquesta-local/experiments/01KN274AXD09TPG3S5G24RQX26"
+                "?runId=01M66QQ3W19DXFFEYJGKHZ21CE"
+            ),
+        }
+        captured: dict[str, Any] = {}
+
+        async def fake_post(self: httpx.AsyncClient, url: str, *args: Any, **kwargs: Any) -> httpx.Response:
+            captured["url"] = url
+            return httpx.Response(200, request=httpx.Request("POST", url), json=experiments_api_body)
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+        result = await send_results_to_orq(
+            api_key="key",
+            evaluation_name="llm-eval-with-results",
+            evaluation_description=None,
+            dataset_id=None,
+            results=build_results(0.5),
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            base_url="http://localhost:4200",
+        )
+
+        assert captured["url"] == "http://localhost:4200/v3/experiments/evaluations/receive"
+        assert result == OrqResponse.model_validate(experiments_api_body)
+        assert result is not None
+        assert result.experiment_url is not None
+        assert result.experiment_url.endswith(f"/experiments/{result.sheet_id}?runId={result.manifest_id}")

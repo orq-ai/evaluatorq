@@ -1115,3 +1115,35 @@ class TestOrqResponsesTargetAgentContext:
         assert [t.name for t in ctx.tools] == ["refund", "lookup", "web_search"]
         assert ctx.tools[0].parameters == {"x": 1}
         assert ctx.tools[1].description == "Find order"
+
+
+class TestOrqResponsesTargetRunMetadata:
+    @pytest.mark.asyncio
+    async def test_direct_client_keeps_metadata_by_default(self):
+        from evaluatorq.common.thread_context import evaluatorq_pipeline
+
+        client = _make_direct_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
+
+        with evaluatorq_pipeline("agent_simulation"):
+            await target.respond(_make_messages())
+
+        assert client.responses.create.call_args.kwargs["metadata"] == {
+            "evaluatorq_pipeline": "agent_simulation"
+        }
+
+    @pytest.mark.asyncio
+    async def test_direct_client_omits_metadata_when_store_is_off(self):
+        from evaluatorq.common.thread_context import evaluatorq_pipeline
+
+        client = _make_direct_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o", extra_kwargs={"store": False}), client=client
+        )
+
+        with evaluatorq_pipeline("agent_simulation"):
+            await target.respond(_make_messages())
+
+        assert "metadata" not in client.responses.create.call_args.kwargs

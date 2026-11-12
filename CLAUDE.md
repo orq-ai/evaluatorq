@@ -124,6 +124,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 |---|---|---|
 | Any chat completion | `common.llm_call.execute_chat_completion` / `execute_chat_parse` | `client.chat.completions.create(...)` at a new call site |
 | Structured / schema output | `common.structured_output` (parse + `json_object` fallback) | hand-rolled `response_format` + `json.loads` |
+| A schema-shaped reply from an in-loop simulation agent (the judge) | `BaseAgent._call_llm(response_format=...)` on the Responses API: it keeps the prompt-cache breakpoints, unpaired-tool-call replay, retries and usage accounting that `common.structured_output` does not have | `generate_structured` inside the simulation loop, or a hand-built `text.format` |
 | Parsing JSON out of model text | `common.extract_json.extract_json_from_response` | bespoke fence-stripping regex |
 | Building call params | `LLMCallConfig.request_params(...)` (`contracts.py`) | hand-built `extra_kwargs` dict — it skips the reserved-key guard |
 | Resolving an LLM client | `common.llm_client.resolve_llm_client` | `AsyncOpenAI(...)` anywhere but that module |

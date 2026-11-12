@@ -44,7 +44,7 @@ from evaluatorq.contracts import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Generator, Iterator
 
 MANIFESTS_DIR_NAME = '.manifests'
 # Stage artifacts (save='detail') sit beside reports but are not runs.
@@ -56,7 +56,7 @@ def _manifests_dir(runs_dir: Path) -> Path:
 
 
 @contextlib.contextmanager
-def _manifest_lock(path: Path) -> Iterator[None]:
+def _manifest_lock(path: Path) -> Generator[None, None, None]:
     """Hold a cross-process advisory lock on ``<path>.lock`` for one read-modify-write.
 
     Several processes can write one run's manifest (the run itself, the dashboard launcher,

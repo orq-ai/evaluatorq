@@ -23,6 +23,8 @@ from loguru import logger
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from evaluatorq.simulation.contracts import SimulationEntry
+
 from evaluatorq.common.reports.palette import COLORS
 
 # ---------------------------------------------------------------------------
@@ -135,12 +137,26 @@ def truncate(text: str, max_chars: int = 800) -> str:
     return text[:max_chars] + '\n\n[truncated — full text in report JSON]'
 
 
-def html_table(headers: list[str], rows: list[list[str]], row_attrs: list[str] | None = None) -> str:
-    """Render an HTML table. Cell strings may contain inline HTML (e.g. badges)."""
+def html_table(
+    headers: list[str],
+    rows: list[list[str]],
+    row_attrs: list[str] | None = None,
+    col_classes: list[str] | None = None,
+) -> str:
+    """Render an HTML table. Cell strings may contain inline HTML (e.g. badges).
+
+    ``col_classes`` gives one class string per column, applied to its ``th`` and every ``td``.
+    """
     if row_attrs is not None and len(row_attrs) != len(rows):
         raise ValueError('row_attrs length must match rows')
+    if col_classes is not None and len(col_classes) != len(headers):
+        raise ValueError('col_classes length must match headers')
+
+    def cls(i: int) -> str:
+        return f' class="{esc(col_classes[i])}"' if col_classes and col_classes[i] else ''
+
     parts = ['<table>', '<thead><tr>']
-    parts.extend(f'<th>{esc(h)}</th>' for h in headers)
+    parts.extend(f'<th{cls(i)}>{esc(h)}</th>' for i, h in enumerate(headers))
     parts.append('</tr></thead><tbody>')
     for index, row in enumerate(rows):
         attrs = f' {row_attrs[index]}' if row_attrs and row_attrs[index] else ''
@@ -148,7 +164,7 @@ def html_table(headers: list[str], rows: list[list[str]], row_attrs: list[str] |
         # data-label carries the column name so the mobile card layout
         # (td::before { content: attr(data-label) }) stays labeled.
         parts.extend(
-            f'<td data-label="{esc(headers[i])}">{cell}</td>' if i < len(headers) else f'<td>{cell}</td>'
+            f'<td{cls(i)} data-label="{esc(headers[i])}">{cell}</td>' if i < len(headers) else f'<td>{cell}</td>'
             for i, cell in enumerate(row)
         )
         parts.append('</tr>')
@@ -440,6 +456,13 @@ def status_badge(text: str, status: str) -> str:
     """Semantic pill. ``status`` in {pass, fail, warn, neutral}."""
     safe_status = status if status in {'pass', 'fail', 'warn', 'neutral'} else 'neutral'
     return f'<span class="status-badge status-badge--{safe_status}">{esc(text)}</span>'
+
+
+def entry_outcome(entry: SimulationEntry) -> tuple[str, str]:
+    """``(label, status)`` for a simulation conversation's outcome pill, for ``status_badge``."""
+    if entry.error or entry.terminated_by == 'error':
+        return 'Error', 'warn'
+    return ('Goal met', 'pass') if entry.goal_achieved else ('Goal missed', 'fail')
 
 
 def kpi_cards(cards: list[dict[str, str]], modifier: str = '') -> str:

@@ -10,14 +10,17 @@ from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replace
 from evaluatorq.common.jury import (
     Prediction,
     VerdictKind,
-    _panel_composition_messages,
+    non_binary_verdict_message,
+    panel_composition_messages,
     run_jury,
+    single_verdict_error_payload,
 )
 from evaluatorq.common.jury import provider_family as provider_family
 from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
+    RED_TEAM_TIE_OUTCOME,
     AttackEvaluationResult,
     EvaluatorConfig,
     LLMCallConfig,
@@ -114,7 +117,10 @@ class OWASPEvaluator:
         # Composition warnings (judge diversity + self-judge / family bias). These
         # are advisory by default so existing configs keep running; strict_panel
         # turns them into hard errors for callers who want fail-closed composition.
-        for issue in _panel_composition_messages(self.panel, target_models or [], strict=strict_panel):
+        configured_panel = [evaluator_model, *(judges or [])]
+        for issue in panel_composition_messages(
+            configured_panel, target_models or [], strict=strict_panel, tie_outcome=RED_TEAM_TIE_OUTCOME
+        ):
             if strict_panel:
                 raise ValueError(issue)
             logger.warning(issue)
@@ -257,11 +263,19 @@ class OWASPEvaluator:
                     error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
                     token_usage=outcome.token_usage,
                 )
+            if outcome.payload.value is not None and not isinstance(outcome.payload.value, bool):
+                # A number or string cannot be a pass/fail vote: a failed repetition, not a silent None.
+                return Prediction(
+                    error=non_binary_verdict_message(outcome.payload.value),
+                    explanation=outcome.payload.explanation,
+                    token_usage=outcome.token_usage,
+                )
             return Prediction(
                 value=outcome.payload.value,
                 explanation=outcome.payload.explanation,
                 token_usage=outcome.token_usage,
                 abstained=outcome.payload.abstain,
+                verdict_coerced=outcome.verdict_coerced,
             )
 
         deliberation = await run_jury(
@@ -272,7 +286,7 @@ class OWASPEvaluator:
             min_successful_judges=self.min_successful_judges,
             verdict_kind=VerdictKind.CATEGORICAL,
             tie_break=lambda _values: False,
-            tie_break_label='fail-closed to VULNERABLE',
+            tie_break_label=RED_TEAM_TIE_OUTCOME,
             propagate_errors=False,
         )
         final_passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
@@ -331,15 +345,26 @@ class OWASPEvaluator:
             )
 
         passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
+        no_verdict: dict[str, Any] = {}
+        # A bare non-verdict or a non-bool value is not a pass/fail verdict, as on a panel,
+        # where JuryVote.error names it. Without this the error rollup misses it whenever
+        # only one judge runs.
+        verdict_error = single_verdict_error_payload(outcome, evaluator_id)
+        if verdict_error is not None:
+            no_verdict[EVAL_ERROR_RAW_OUTPUT_KEY] = verdict_error
         return AttackEvaluationResult(
             passed=passed,
             explanation=outcome.payload.explanation,
             evaluator_id=evaluator_id,
             token_usage=outcome.token_usage,
             raw_output={
+                **no_verdict,
                 'value': outcome.payload.value,
                 'explanation': outcome.payload.explanation,
                 'raw_content': outcome.raw_content,
+                # This path builds no JuryVote, so the flag has to travel here for a coerced
+                # verdict to read the same with one judge as on a panel.
+                'verdict_coerced': outcome.verdict_coerced,
                 # Which endpoint actually served this verdict. Recorded here rather
                 # than as a first-class field because it is a diagnostic: when a
                 # judge reports no cost, this is what separates "the model is not in

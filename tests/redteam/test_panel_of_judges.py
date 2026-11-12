@@ -18,20 +18,23 @@ Covers:
 from __future__ import annotations
 
 import contextlib
+import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
 from evaluatorq.common.jury import (
     _agreement_rate,
     _jury_stats,
-    _panel_composition_messages,
+    panel_composition_messages,
     _plurality_vote,
     provider_family,
 )
 from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _owasp_judge_fn
 
 
 def _majority_vote(votes: list[bool | None]) -> tuple[bool | float | str | None, bool]:
@@ -621,7 +624,7 @@ class TestPanelComposition:
         assert provider_family('deepseek/deepseek-r1-distill-llama-70b') == provider_family(
             'deepseek-r1-distill-qwen-32b'
         )
-        msgs = _panel_composition_messages(
+        msgs = panel_composition_messages(
             ['deepseek/deepseek-r1-distill-llama-70b', 'meta/llama-4-maverick'], [], strict=False
         )
         assert not any('single provider family' in m for m in msgs)
@@ -642,33 +645,127 @@ class TestPanelComposition:
         assert provider_family('yi-large') == 'unknown'
         # A genuine same-family pair under strict_panel must still abort — proving
         # the anchoring didn't over-tighten into missing real matches.
-        msgs = _panel_composition_messages(['o3-mini'], ['gpt-4o'], strict=True)
+        msgs = panel_composition_messages(['o3-mini'], ['gpt-4o'], strict=True)
         assert any('share the target' in m for m in msgs)
 
     def test_single_provider_panel_flagged(self):
-        msgs = _panel_composition_messages(['gpt-4o', 'o3-mini'], [])
+        msgs = panel_composition_messages(['gpt-4o', 'o3-mini'], [])
         assert any('single provider family' in m for m in msgs)
 
     def test_mixed_provider_panel_not_flagged(self):
-        msgs = _panel_composition_messages(['gpt-4o', 'claude-sonnet-4-6'], [])
+        msgs = panel_composition_messages(['gpt-4o', 'claude-sonnet-4-6'], [])
         assert not any('single provider family' in m for m in msgs)
 
     def test_unknown_family_panel_not_flagged(self):
-        # Cannot prove same-family for unknown IDs, so stay silent.
-        assert _panel_composition_messages(['mystery-a', 'mystery-b'], []) == []
+        # Cannot prove same-family for unknown IDs, so stay silent. Three judges, so the
+        # even-panel advisory does not fire either.
+        assert panel_composition_messages(['mystery-a', 'mystery-b', 'mystery-c'], []) == []
+
+    @pytest.mark.parametrize(('size', 'warns'), [(1, False), (2, True), (3, False), (4, True)])
+    def test_even_panels_warn_and_odd_panels_do_not(self, size: int, warns: bool):
+        panel = [f'mystery-{i}' for i in range(size)]
+        msgs = panel_composition_messages(panel, [])
+        assert any(f'even number of judges ({size})' in m for m in msgs) is warns
+        if not warns:
+            assert msgs == []
+
+    def test_even_panel_counts_the_judges_that_vote(self):
+        # [a, a, b] votes as two judges, so it is an even panel as well as a repeat.
+        msgs = panel_composition_messages(['mystery-a', 'mystery-a', 'mystery-b'], [])
+        assert any('even number of judges (2)' in m for m in msgs)
+
+    def test_a_repeated_judge_is_named(self):
+        msgs = panel_composition_messages(['mystery-a', 'mystery-a', 'mystery-b', 'mystery-c'], [])
+        repeated = [m for m in msgs if 'more than once' in m]
+        assert len(repeated) == 1
+        assert "['mystery-a']" in repeated[0]
+        assert 'mystery-b' not in repeated[0].split(' appear')[0]
+
+    def test_evaluator_config_warns_on_a_repeated_judge_and_raises_under_strict_panel(self, monkeypatch):
+        from evaluatorq.redteam import contracts as contracts_mod
+
+        warnings: list[str] = []
+        monkeypatch.setattr(contracts_mod.logger, 'warning', lambda msg, *a, **k: warnings.append(msg))
+        cfg = EvaluatorConfig(judges=['mystery-a', 'mystery-a', 'mystery-b'])
+        assert cfg.judges == ['mystery-a', 'mystery-b']
+        assert any("['mystery-a']" in w and 'more than once' in w for w in warnings)
+
+        with pytest.raises(ValueError, match='more than once'):
+            EvaluatorConfig(judges=['mystery-a', 'mystery-a', 'mystery-b'], strict_panel=True)
+
+    def test_an_even_config_panel_fails_when_the_runner_builds_its_evaluator(self):
+        # Through the runner's own builder, so a change to how it splits the
+        # config's judges cannot leave this promise untested.
+        from evaluatorq.redteam.contracts import LLMConfig
+        from evaluatorq.redteam.runner import _build_static_evaluator, _StaticEvaluatorInputs
+
+        cfg = LLMConfig(evaluator=EvaluatorConfig(judges=['mystery-a', 'mystery-b'], strict_panel=True))
+        inputs = _StaticEvaluatorInputs(
+            evaluator_model=cfg.evaluator.primary_model,
+            llm_client=AsyncMock(),
+            pipeline_config=cfg,
+            agent_contexts={},
+            targets=[],
+            resolved_agent_targets=[],
+            agent_target_labels={},
+        )
+        with pytest.raises(ValueError, match='even number of judges.*fail-closed to VULNERABLE'):
+            _build_static_evaluator(inputs=inputs)
+
+    def test_model_sugar_still_reports_a_repeated_judge(self, monkeypatch):
+        from evaluatorq.redteam import contracts as contracts_mod
+
+        warnings: list[str] = []
+        monkeypatch.setattr(contracts_mod.logger, 'warning', lambda msg, *a, **k: warnings.append(msg))
+        EvaluatorConfig(model='mystery-a', judges=['mystery-a', 'mystery-a', 'mystery-b'])
+        assert any('more than once' in w for w in warnings)
+
+        # Any repeat is reported once, whichever validator sees it.
+        for judges in (['mystery-a', 'mystery-a', 'mystery-b'], ['mystery-x', 'mystery-x', 'mystery-b']):
+            warnings.clear()
+            EvaluatorConfig(model='mystery-a', judges=judges)
+            assert sum('more than once' in w for w in warnings) == 1, (judges, warnings)
+
+        with pytest.raises(ValueError, match='more than once'):
+            EvaluatorConfig(model='mystery-a', judges=['mystery-a', 'mystery-a', 'mystery-b'], strict_panel=True)
+
+    def test_owasp_bridge_warns_on_a_repeated_judge(self, monkeypatch):
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge as bridge_mod
+
+        warnings: list[str] = []
+        monkeypatch.setattr(bridge_mod.logger, 'warning', lambda msg, *a, **k: warnings.append(msg))
+        bridge_mod.create_owasp_evaluator(
+            evaluator_model='mystery-a',
+            llm_client=AsyncMock(),
+            judges=['mystery-b', 'mystery-b', 'mystery-c'],
+        )
+        assert any("['mystery-b']" in w and 'more than once' in w for w in warnings)
+
+    def test_owasp_evaluator_warns_on_a_repeated_judge(self, monkeypatch):
+        from evaluatorq.redteam.adaptive import evaluator as evaluator_mod
+
+        warnings: list[str] = []
+        monkeypatch.setattr(evaluator_mod.logger, 'warning', lambda msg, *a, **k: warnings.append(msg))
+        ev = OWASPEvaluator(
+            evaluator_model='mystery-a',
+            judges=['mystery-b', 'mystery-b', 'mystery-c'],
+            llm_client=_model_client({}),
+        )
+        assert ev.panel == ['mystery-a', 'mystery-b', 'mystery-c']
+        assert any("['mystery-b']" in w and 'more than once' in w for w in warnings)
 
     def test_self_judge_family_flagged(self):
         # A lone judge sharing the target family is advisory-only noise on a
         # default run (no panel decision to act on), so it stays silent...
-        assert _panel_composition_messages(['gpt-4o'], ['gpt-4o-mini']) == []
+        assert panel_composition_messages(['gpt-4o'], ['gpt-4o-mini']) == []
         # ...but is surfaced under strict_panel (a configuration error there)...
-        assert any('share the target' in m for m in _panel_composition_messages(['gpt-4o'], ['gpt-4o-mini'], strict=True))
+        assert any('share the target' in m for m in panel_composition_messages(['gpt-4o'], ['gpt-4o-mini'], strict=True))
         # ...and whenever the user is actively composing a multi-judge panel.
-        multi = _panel_composition_messages(['gpt-4o', 'claude-sonnet-4-6'], ['gpt-4o-mini'])
+        multi = panel_composition_messages(['gpt-4o', 'claude-sonnet-4-6'], ['gpt-4o-mini'])
         assert any('share the target' in m for m in multi)
 
     def test_cross_family_judge_not_flagged(self):
-        assert _panel_composition_messages(['claude-sonnet-4-6'], ['gpt-4o']) == []
+        assert panel_composition_messages(['claude-sonnet-4-6'], ['gpt-4o']) == []
 
     def test_strict_panel_raises_on_self_judge(self):
         with pytest.raises(ValueError, match='share the target'):
@@ -1097,3 +1194,142 @@ class TestExtractEvaluationError:
 
         assert _extract_evaluation_error({'value': True}) is None
         assert _extract_evaluation_error(None) is None
+
+
+COERCED_VERDICT = '{"explanation": "contradiction", "abstain": true, "value": true}'
+CLEAN_ABSTENTION = '{"explanation": "declined", "abstain": true, "value": null}'
+
+
+class TestCoercedVerdictReachesTheVote:
+    @pytest.mark.asyncio
+    async def test_adaptive_judge_fn(self):
+        client = _model_client({'judge-a': [COERCED_VERDICT], 'judge-b': [CLEAN_ABSTENTION]})
+        evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=client, judges=['judge-b'])
+
+        result = await _evaluate(evaluator)
+
+        assert result.jury is not None
+        votes = {v.model: v for v in result.jury.votes}
+        assert votes['judge-a'].repetitions_coerced == 1
+        assert votes['judge-a'].repetitions[0].verdict_coerced is True
+        assert votes['judge-b'].repetitions_coerced == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(('content', 'coerced'), [(COERCED_VERDICT, True), (CLEAN_ABSTENTION, False)])
+    async def test_owasp_bridge_judge_fn(self, content: str, coerced: bool):
+        outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+        with patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.run_judge', AsyncMock(return_value=outcome)):
+            prediction = await _owasp_judge_fn(
+                'judge-a', client=AsyncMock(), cfg=MagicMock(), prompt_template='', replacements={}, last_error={}
+            )
+        assert prediction.abstained is True
+        assert prediction.verdict_coerced is coerced
+
+
+@pytest.mark.parametrize(('content', 'coerced'), [(COERCED_VERDICT, True), (CLEAN_ABSTENTION, False)])
+def test_single_judge_result_carries_the_coerced_flag(content: str, coerced: bool):
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.raw_output is not None
+    assert result.raw_output['verdict_coerced'] is coerced
+
+
+@pytest.mark.parametrize(
+    ('content', 'cause'),
+    [
+        ('{"value": null, "explanation": "transcript is empty", "abstain": false}', 'judge returned no verdict: transcript is empty'),
+        ('{"value": null, "explanation": "", "abstain": false}', 'judge returned no verdict'),
+    ],
+)
+def test_single_judge_names_a_bare_non_verdict(content: str, cause: str):
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.passed is None
+    assert result.raw_output is not None
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['message'] == cause
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['code'] == 'no_verdict'
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['error_type'] == 'no_verdict'
+
+
+@pytest.mark.parametrize(
+    ('content', 'cause'),
+    [
+        ('{"value": 0.5, "explanation": "half", "abstain": false}', 'judge returned a non-pass/fail verdict: 0.5'),
+        ('{"value": "maybe", "explanation": "unsure", "abstain": false}', "judge returned a non-pass/fail verdict: 'maybe'"),
+    ],
+)
+def test_single_judge_names_a_non_binary_verdict(content: str, cause: str):
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.passed is None
+    assert result.raw_output is not None
+    assert result.raw_output['value'] == json.loads(content)['value']
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['message'] == cause
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['code'] == 'non_binary_verdict'
+    assert result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]['error_type'] == 'non_binary_verdict'
+
+
+NON_BINARY_VERDICT = '{"explanation": "unsure", "abstain": false, "value": "maybe"}'
+
+
+class TestNonBinaryVerdictIsAFailedRepetition:
+    @pytest.mark.asyncio
+    async def test_adaptive_judge_fn(self):
+        client = _model_client({'judge-a': [NON_BINARY_VERDICT], 'judge-b': [CLEAN_ABSTENTION]})
+        evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=client, judges=['judge-b'])
+
+        result = await _evaluate(evaluator)
+
+        assert result.jury is not None
+        vote = {v.model: v for v in result.jury.votes}['judge-a']
+        assert vote.repetitions_failed == 1
+        assert vote.error is not None
+        assert 'non-pass/fail verdict' in vote.error
+
+    @pytest.mark.asyncio
+    async def test_owasp_bridge_judge_fn(self):
+        outcome = JudgeOutcome(
+            payload=EvaluatorResponsePayload.model_validate_json(NON_BINARY_VERDICT), raw_content=NON_BINARY_VERDICT
+        )
+        last_error: dict[str, Any] = {}
+        with patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.run_judge', AsyncMock(return_value=outcome)):
+            prediction = await _owasp_judge_fn(
+                'judge-a', client=AsyncMock(), cfg=MagicMock(), prompt_template='', replacements={}, last_error=last_error
+            )
+        assert prediction.error == "judge returned a non-pass/fail verdict: 'maybe'"
+        assert prediction.value is None
+        assert prediction.decisive is False
+        assert last_error == {}
+
+
+def test_single_judge_clean_abstention_is_not_an_error():
+    content = '{"value": null, "explanation": "cannot judge", "abstain": true}'
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload.model_validate_json(content), raw_content=content)
+    evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=AsyncMock())
+    result = evaluator._single_outcome_to_result(outcome, 'ev')
+    assert result.raw_output is not None
+    assert EVAL_ERROR_RAW_OUTPUT_KEY not in result.raw_output
+
+
+class TestPanelWarningsAreNotRepeated:
+    def test_model_sugar_reports_each_repeated_judge_once(self, monkeypatch):
+        from evaluatorq.redteam import contracts as contracts_mod
+
+        warnings: list[str] = []
+        monkeypatch.setattr(contracts_mod.logger, 'warning', lambda msg, *a, **k: warnings.append(msg))
+        EvaluatorConfig(model='mystery-a', judges=['mystery-b', 'mystery-b', 'mystery-c'])
+        assert sum('more than once' in w for w in warnings) == 1
+
+    def test_owasp_bridge_can_skip_logging_but_still_raises_under_strict(self, monkeypatch):
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge as bridge_mod
+
+        warnings: list[str] = []
+        monkeypatch.setattr(bridge_mod.logger, 'warning', lambda msg, *a, **k: warnings.append(msg))
+        kwargs: dict[str, Any] = {'evaluator_model': 'mystery-a', 'llm_client': AsyncMock(), 'judges': ['mystery-b']}
+        bridge_mod.create_owasp_evaluator(**kwargs, log_panel_warnings=False)
+        assert not warnings
+        with pytest.raises(ValueError, match='even number of judges'):
+            bridge_mod.create_owasp_evaluator(**kwargs, strict_panel=True, log_panel_warnings=False)

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any, cast
+from typing import Any
 
 from loguru import logger
 
@@ -470,7 +470,7 @@ class ORQAgentTarget(AgentTarget):
                 # here would double-count against them. `accumulated_usage` still rides
                 # on the returned AgentResponse, which is what the reports read.
                 usage = accumulated_usage if accumulated_usage.calls > 0 else None
-                output: list[OutputMessage] = cast('list[OutputMessage]', list(all_tool_calls))
+                output: list[OutputMessage] = list(all_tool_calls)
                 output.append(TextOutputItem(text=result_text, annotations=[]))
                 return AgentResponse(
                     output=output,

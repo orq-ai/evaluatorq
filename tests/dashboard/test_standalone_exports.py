@@ -131,7 +131,7 @@ def test_sim_export_keeps_partial_transcript_on_error():
     assert 'Synthetic target timeout' in document
     cohort = document.split('Conversation 1 ·', 1)[1].split('</summary>', 1)[0]
     assert '>Error<' in cohort
-    assert '>Failed<' not in cohort
+    assert '>Goal missed<' not in cohort
 
 
 def test_attack_export_keeps_full_text_and_unknown_outcome(rt_report_multi):

@@ -119,7 +119,7 @@ def test_call_config_guard_rejects_a_silently_redeclared_default():
     """
 
     class _StaleDefault(LLMCallConfig):
-        temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+        temperature: float = Field(default=0.0, ge=0.0, le=2.0)  # ty: ignore[invalid-mutable-override] -- the override under test
 
     with pytest.raises(RuntimeError, match='temperature: _StaleDefault overrides'):
         _assert_call_config_fields_agree(_StaleDefault, divergences={})
@@ -145,7 +145,7 @@ def test_call_config_guard_rejects_an_exclude_only_override():
     """
 
     class _Excluded(LLMCallConfig):
-        temperature: float = Field(default=1.0, ge=0.0, le=2.0, exclude=True)
+        temperature: float = Field(default=1.0, ge=0.0, le=2.0, exclude=True)  # ty: ignore[invalid-mutable-override] -- the override under test
 
     with pytest.raises(RuntimeError, match='temperature: _Excluded overrides'):
         _assert_call_config_fields_agree(_Excluded, divergences={})

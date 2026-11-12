@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, create_model
 
 from evaluatorq.common.judge import ClassifyQuestion, JudgeOutcome, build_eval_replacements, run_judge
 from evaluatorq.common.jury import (
+    TIE_LOSES_VERDICT,
     AggregatorSpec,
     JuryDeliberation,
     Prediction,
@@ -17,6 +18,8 @@ from evaluatorq.common.jury import (
     VerdictKind,
     append_jury_summary,
     attach_jury_raw_output,
+    even_panel_tie_outcome,
+    panel_composition_messages,
     run_jury,
     validate_aggregator,
 )
@@ -399,11 +402,16 @@ def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
     payload = outcome.payload
     if payload is None:
         return Prediction(error='judge returned no payload', token_usage=outcome.token_usage)
-    if payload.abstain or payload.value is None:
+    # Only an explicit abstain is a clean abstention. A bare value=None with
+    # abstain=False is a non-usable verdict, so it falls through to a non-decisive,
+    # non-abstained Prediction that _compute_judge_vote counts as a failed
+    # repetition, the same reading the redteam bridges use.
+    if payload.abstain:
         return Prediction(
             abstained=True,
             explanation=payload.explanation,
             token_usage=outcome.token_usage,
+            verdict_coerced=outcome.verdict_coerced,
         )
     return Prediction(
         value=payload.value,
@@ -618,7 +626,11 @@ def _resolve_panel(judges: list[str] | None, model: str | None) -> list[str]:
 
 
 def _resolve_and_validate_panel(
-    *, judges: list[str] | None, model: str | None, min_successful_judges: int
+    *,
+    judges: list[str] | None,
+    model: str | None,
+    min_successful_judges: int,
+    tie_outcome: str | None = TIE_LOSES_VERDICT,
 ) -> tuple[list[str], list[str]]:
     """Resolve the judge panel and validate ``min_successful_judges`` against it.
 
@@ -634,6 +646,10 @@ def _resolve_and_validate_panel(
             f'min_successful_judges ({min_successful_judges}) must be between 1 and '
             f'the deduplicated panel size ({len(deduped)}).'
         )
+    # The same composition advice the red-team paths give. There is no target here,
+    # so the self-judging check has nothing to compare against and stays silent.
+    for issue in panel_composition_messages(panel, [], tie_outcome=tie_outcome):
+        logger.warning(issue)
     return panel, deduped
 
 
@@ -1125,7 +1141,14 @@ def llm_jury(
         VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL,
     )
     panel, deduped = _resolve_and_validate_panel(
-        judges=judges, model=model, min_successful_judges=min_successful_judges
+        judges=judges,
+        model=model,
+        min_successful_judges=min_successful_judges,
+        tie_outcome=even_panel_tie_outcome(
+            aggregator,
+            VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL,
+            tie_break,
+        ),
     )
     _validate_assignment(assignment, min_successful_judges=min_successful_judges)
     # A construction-time hint only: `run_judge` asks the catalogue per call and is

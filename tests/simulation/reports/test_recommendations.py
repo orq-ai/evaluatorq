@@ -237,6 +237,7 @@ async def test_broken_rule_produces_targeted_recommendation():
 @pytest.mark.asyncio
 async def test_recommendation_call_inherits_run_metadata():
     client = _mock_client(['Fix it'])
+    client.base_url = 'https://my.orq.ai/v3/router'
     result = _make_result(goal_achieved=False, rules_broken=['leaked data'])
 
     with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('sim-run-1'):

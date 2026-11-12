@@ -42,6 +42,7 @@ ROLE_ENV: dict[Role, str] = {
 TASKS: dict[str, Role] = {
     'redteam.attacker': 'smart',
     'redteam.evaluator': 'smart',
+    'redteam.refusal_judge': 'classifier',
     'sim.user': 'fast',
     'sim.judge': 'smart',
     'sim.generator': 'fast',
