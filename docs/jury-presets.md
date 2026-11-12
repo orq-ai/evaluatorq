@@ -78,13 +78,15 @@ Two more limits worth knowing before you quote a number:
 
 Seats are chosen in this package. `evaluatorq.common.model_frontier` reads the live `/v2/models` catalog, where every autorouter-eligible card carries Artificial Analysis intelligence scores per reasoning effort beside its rates, and ranks each model at its default effort on a 3:1 blended price. Compare seats within each lineage, because lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
 
-Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh; the exceptions are the seats the catalog does not list, which are priced from the dated `MANUAL_MODEL_CARDS` register. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog; a failure leaves that run red in Actions. Each failure names the seat and the register to update:
+Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh; the exceptions are the seats the catalog does not list, which are priced from the dated `MANUAL_MODEL_CARDS` register. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog; a failure leaves that run red in Actions and opens a pull request (see below). Each failure names the seat and the register to update:
 
 - a seat the catalog no longer serves
 - a repricing that moves a published figure in the table above
 - a newer model in a seated lineage that nobody has reviewed (`REVIEWED_SUCCESSORS`)
 - a same-lineage model that beats a seat on both intelligence and price
 - a seat older than 180 days whose lineage has stopped shipping, unless it has a written waiver in `STALE_SEAT_WAIVERS`
+
+When the check fails, the workflow runs `python -m evaluatorq.preset_drift`, which lists what moved and the options the arithmetic allows: the reserve that can replace a retired seat, the same-lineage models that beat a seat, the newer models nobody has reviewed. A Pi agent, launched through the orq CLI with the workspace key, then proposes the register changes. It must confirm on the vendor's own pages that a candidate really is newer or superseded, because the catalog knows listing dates and not release notes, and it records each source beside the change. The workflow re-runs the live check on the result and always opens a real pull request: a fix when the check passes again, otherwise one labelled `needs-human-attention` that carries the report and the agent's summary. Nothing merges automatically. The pull request is opened with the repository's default token, so CI does not start on it until a person pushes to the branch or closes and reopens it.
 
 Read the catalog with a workspace-scoped key. A project-scoped key lists only what that project has enabled, so the checks would run on a truncated catalog; the suite fails on purpose when it sees one. Routes the router serves but the catalog omits are recorded in `MANUAL_MODEL_CARDS`, each with its source and date.
 

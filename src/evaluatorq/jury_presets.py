@@ -465,6 +465,21 @@ _ALIBABA_RESERVE = (
     'cheaper reserve. Public catalogue 2026-11-10.'
 )
 
+DOMINANCE_EXEMPTIONS: dict[str, str] = {
+    'openai/gpt-6.1-sol': (
+        'openai/gpt-6.1-terra ranks on a 51.0 headline that is AA v5.0.1 max, '
+        'not the v4.3 index every other card carries, so its "upgrade" over '
+        'Sol (v4.3 medium 47.8) compares two scales. Drop once Terra has a '
+        'v4.3 score or the garden moves to v5. 2026-11-10.'
+    ),
+}
+"""Seats knowingly kept despite a computed in-family upgrade.
+
+Same disposition-register contract as REVIEWED_SUCCESSORS: seat it or write down
+why not. An empty register means the arithmetic and the shipped presets agree.
+"""
+
+
 REVIEWED_SUCCESSORS: dict[str, str] = {
     'qwen3.7-flash': (
         'alibaba/qwen3.7-flash is europe-pinned and unscored in the live catalogue (2026-10-26); the Portable reserve cannot take a region-pinned or unscored seat.'

@@ -38,13 +38,20 @@ from evaluatorq.common.model_frontier import (
     with_manual_cards,
 )
 from evaluatorq.jury_presets import (
-    STALE_SEAT_WAIVERS,
+    DOMINANCE_EXEMPTIONS,
     MAX_SEAT_AGE_DAYS,
+    STALE_SEAT_WAIVERS,
     PRESETS,
     REVIEWED_SUCCESSORS,
     all_router_ids,
     judge_family,
     model_identity,
+)
+from evaluatorq.preset_drift import (
+    earliest_listing as _earliest_listing,
+    first_listed as _first_listed,
+    seat_holders,
+    unreviewed_successors as _unreviewed_successors,
 )
 from evaluatorq.router_pools import get_pools
 
@@ -182,69 +189,6 @@ def test_every_judge_and_reserve_is_seatable(garden):
     _assert_every_judge_and_reserve_is_seatable(garden)
 
 
-def _earliest_listing(listed: Mapping[str, int | None]) -> dict[str, int]:
-    """Earliest listing per model identity, in epoch milliseconds, across every host of it.
-
-    A second host relisting the same weights carries its own `created` stamp,
-    which is younger than the model: the EU Bedrock haiku listing is 125 days
-    newer than the Anthropic one for a model that shipped once, and Bedrock
-    relisting GPT-5.4 in 2026-10 does not make GPT-5.4 newer than GPT-6.
-    """
-    earliest: dict[str, int] = {}
-    for router_id, stamp in listed.items():
-        if stamp is None:
-            continue
-        # Some cards stamp milliseconds, some seconds.
-        ms = stamp if stamp > 1e11 else stamp * 1000
-        identity = model_identity(router_id)
-        earliest[identity] = min(earliest.get(identity, ms), ms)
-    return earliest
-
-
-def _unreviewed_successors(listed: Mapping[str, int | None]) -> dict[str, str]:
-    """Garden models newer than everything a preset seats from their own lineage.
-
-    Compared against the newest seat per lineage rather than per judge: a panel
-    that already seats GPT-5.6 does not need to answer for GPT-5.1 carrying a
-    later catalog timestamp than gpt-oss-20b. Identity-normalised and dated by
-    the identity's first listing, so the same weights on a second host are
-    neither a second decision nor a newer model.
-    """
-    seated_identities = {model_identity(r) for r in all_router_ids()}
-    earliest = _earliest_listing(listed)
-
-    newest_seated: dict[str, int] = {}
-    for router_id in all_router_ids():
-        if router_id not in listed:
-            continue
-        # A card with no `created` stamp cannot date its lineage.
-        if (stamp := earliest.get(model_identity(router_id))) is None:
-            continue
-        family = judge_family(router_id)
-        newest_seated[family] = max(newest_seated.get(family, 0), stamp)
-
-    candidates: dict[str, str] = {}
-    for model_id in sorted(listed):
-        # Research-workspace endpoints are not generally served, and image
-        # models are not judges.
-        if model_id.startswith('orq-research@') or 'image' in model_id:
-            continue
-        identity = model_identity(model_id)
-        if identity in seated_identities or identity in candidates:
-            continue
-        try:
-            family = judge_family(model_id)
-        except ValueError:
-            continue  # unclassifiable lineage cannot be a successor to ours
-        listed_at = earliest.get(identity)
-        if listed_at is None:
-            continue  # undated: cannot be shown newer than a seat
-        if family in newest_seated and listed_at > newest_seated[family]:
-            candidates[identity] = model_id
-
-    return candidates
-
-
 class TestSuccessorDating:
     """Offline: a relisting is not a release."""
 
@@ -326,21 +270,6 @@ def test_reviewed_successors_are_dropped_once_they_stop_being_successors(listed)
     )
 
 
-DOMINANCE_EXEMPTIONS: dict[str, str] = {
-    'openai/gpt-6.1-sol': (
-        'openai/gpt-6.1-terra ranks on a 51.0 headline that is AA v5.0.1 max, '
-        'not the v4.3 index every other card carries, so its "upgrade" over '
-        'Sol (v4.3 medium 47.8) compares two scales. Drop once Terra has a '
-        'v4.3 score or the garden moves to v5. 2026-11-10.'
-    ),
-}
-"""Seats knowingly kept despite a computed in-family upgrade.
-
-Same disposition-register contract as REVIEWED_SUCCESSORS: seat it or write down
-why not. An empty register means the arithmetic and the shipped presets agree.
-"""
-
-
 @live
 class TestFrontier:
     """The upgrade rule, as arithmetic rather than taste (RES-1347)."""
@@ -396,23 +325,6 @@ class TestFrontier:
         )
 
 
-def _first_listed(listed: dict[str, int | None]) -> dict[str, datetime]:
-    """`_earliest_listing` as datetimes, for the age check."""
-    return {identity: datetime.fromtimestamp(ms / 1000, UTC) for identity, ms in _earliest_listing(listed).items()}
-
-
-def _all_seats() -> dict[str, list[str]]:
-    """Every seat in the library, jury and pool alike, with where it sits."""
-    seats: dict[str, list[str]] = {}
-    for preset in PRESETS.values():
-        for judge in preset.judges:
-            seats.setdefault(judge, []).append(f'jury {preset.name}')
-    for pool in get_pools().values():
-        for member in pool.models:
-            seats.setdefault(member, []).append(f'pool {pool.name}')
-    return seats
-
-
 @live
 def test_no_seat_ages_out_unargued(listed):
     """A lineage that stops shipping is the blind spot in every check above.
@@ -425,7 +337,7 @@ def test_no_seat_ages_out_unargued(listed):
     now = datetime.now(UTC)
 
     aged = {}
-    for router_id, held in _all_seats().items():
+    for router_id, held in seat_holders({name: pool.models for name, pool in get_pools().items()}).items():
         first = earliest.get(model_identity(router_id))
         if first is None:
             continue
@@ -445,7 +357,7 @@ def test_stale_seat_waivers_are_dropped_once_the_seat_is_young_again(listed):
     """A vendor shipping again should retire the excuse, not leave it standing."""
     earliest = _first_listed(listed)
     now = datetime.now(UTC)
-    seated = {model_identity(r) for r in _all_seats()}
+    seated = {model_identity(r) for r in seat_holders({name: pool.models for name, pool in get_pools().items()})}
 
     pointless = sorted(
         identity
