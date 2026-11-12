@@ -333,7 +333,7 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 }
 
 .app-sidebar {
-    width: 232px;
+    width: var(--sidebar-w, 232px);
     flex-shrink: 0;
     background: var(--app-gray-100);
     border-right: 1px solid var(--border-subtle);
@@ -368,6 +368,12 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     border-radius: 5px; padding: 2px 7px; line-height: 1.5;
 }
 html.sidebar-collapsed .app-sidebar { width: 60px; padding: 16px 8px; }
+/* Resize handle on the sidebar's right edge; the width lives in --sidebar-w on <html>, saved by shell.py. */
+.sidebar-resizer { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; touch-action: none; }
+.sidebar-resizer:hover, .sidebar-resizer:focus-visible, html.sidebar-resizing .sidebar-resizer { background: var(--border-default); outline: none; }
+html.sidebar-resizing, html.sidebar-resizing * { cursor: col-resize; user-select: none; }
+html.sidebar-resizing .app-sidebar { transition: none; }
+html.sidebar-collapsed .sidebar-resizer { display: none; }
 html.sidebar-collapsed .app-brand { justify-content: center; padding: 4px 0 18px; }
 html.sidebar-collapsed .app-brand .brand-name { display: none; }
 html.sidebar-collapsed .nav-item { justify-content: center; padding: 8px; }
@@ -3929,6 +3935,7 @@ _INSIGHTS_CSS = """
 @media (max-width:550px) { .insights-overview-columns,.insights-overview-row { grid-template-columns:minmax(120px,1fr) 90px 20px; gap:8px; padding-left:9px; padding-right:9px; }.insights-overview-columns span:nth-child(2) { display:none; }.insights-overview-row { grid-template-areas:'name status arrow' 'stages stages stages'; }.insights-overview-name { grid-area:name; }.insights-overview-stage-wrap,.insights-overview-no-stages { grid-area:stages; margin:3px 0 2px; }.insights-overview-stage-wrap > span:first-child { display:inline; }.insights-overview-status { grid-area:status; }.insights-overview-arrow { grid-area:arrow; }.insights-overview-head { align-items:start; }.insights-header h2 { font-size:19px; }.insights-group-label { min-width:100%; }.insights-models { margin-left:0; } }
 @media (max-width:600px) {
   body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-shell { flex-direction:column; }
+  body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .sidebar-resizer { display:none; }
   body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-sidebar,html.sidebar-collapsed body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-sidebar { position:static; width:auto; height:auto; padding:8px 12px 0; overflow:visible; }
   body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-brand,html.sidebar-collapsed body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-brand { justify-content:flex-start; padding:4px 6px 8px; }
   html.sidebar-collapsed body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-brand .brand-name { display:inline; }

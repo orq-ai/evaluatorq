@@ -248,3 +248,12 @@ def test_cancelled_manifest_detail_renders_without_error_or_stage(tmp_path: Path
     assert resp.status_code == 200
     assert 'declined-run' in resp.text
     assert 'cancelled' in resp.text.lower()
+
+
+def test_sidebar_has_a_resize_handle_that_restores_its_saved_width():
+    html = page('T', '<p>x</p>')
+    assert 'class="sidebar-resizer" role="separator"' in html
+    assert 'onpointerdown="eqSidebarDrag(event)"' in html and 'ondblclick="eqSidebarWidth(232)"' in html
+    # the saved width is applied before the sidebar paints, and clamped when set
+    assert html.index("localStorage.getItem('eq-sidebar-width')") < html.index('class="app-sidebar"')
+    assert 'Math.max(180,Math.min(400' in html
