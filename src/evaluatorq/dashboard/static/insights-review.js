@@ -464,14 +464,14 @@ const CANDIDATES = [
     const all = stats(new Set(T.map(t => t.id)));
     if (!all.unfixedN) return null;
     const c = DIMS.length ? bases(PD).map(c => ({c, s: stats(c.members)})).filter(d => d.s.n >= MIN_N && d.s.unfixedShare != null).sort((a, b) => b.s.unfixedShare - a.s.unfixedShare)[0] : null;
-    return {number: `${all.unfixedN} ${all.unfixedN === 1 ? 'trace' : 'traces'}`, finding: 'Unfixed errors need review', why: c ? `Most common in ${esc(c.c.name)} (${Math.round(c.s.unfixedShare * 100)}% of that theme)` : 'Based on tool evidence', action: 'Review traces →', f: {t: 'l', name: 'unfixed_error', v: 'yes'}};
+    return {number: `${all.unfixedN} <span class="rk-head-unit">${all.unfixedN === 1 ? 'trace' : 'traces'}</span>`, finding: 'Unfixed errors need review', why: c ? `Most common in ${esc(c.c.name)} (${Math.round(c.s.unfixedShare * 100)}% of that theme)` : 'Based on tool evidence', action: 'Review traces →', f: {t: 'l', name: 'unfixed_error', v: 'yes'}};
   }},
   {k: 'Frustration', needs: () => !!FRUSL, make() {
     const all = stats(new Set(T.map(t => t.id)));
     if (!all.frusN) return null;
     // theme = highest share of its own traces frustrated (themes of 5+ traces only)
     const c = DIMS.length ? bases(PD).map(c => ({c, s: stats(c.members)})).filter(d => d.s.n >= MIN_N && d.s.frusShare != null).sort((a, b) => b.s.frusShare - a.s.frusShare || b.s.frusN - a.s.frusN)[0] : null;
-    return {number: `${all.frusN} ${all.frusN === 1 ? 'trace' : 'traces'}`, finding: 'High user frustration was recorded', why: c ? `Most often in ${esc(c.c.name)} (${c.s.frusN} of ${c.s.n} traces)` : 'Frustration level 4 or 5', action: 'Review traces →', f: {t: 'x', k: 'frustrated'}};
+    return {number: `${all.frusN} <span class="rk-head-unit">${all.frusN === 1 ? 'trace' : 'traces'}</span>`, finding: 'High user frustration was recorded', why: c ? `Most often in ${esc(c.c.name)} (${c.s.frusN} of ${c.s.n} traces)` : 'Frustration level 4 or 5', action: 'Review traces →', f: {t: 'x', k: 'frustrated'}};
   }},
   {k: 'Done rate', needs: () => !!OUTL, make() {
     const all = stats(new Set(T.map(t => t.id)));

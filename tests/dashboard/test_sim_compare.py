@@ -214,7 +214,7 @@ def test_scorer_with_every_result_dropped_renders_as_failed():
         r.metadata['evaluator_errors'] = {'safety': 'boom'}
     rows = {r.label: r for r in score_rows(build_comparison('ra', 'rb', run_a, run_b, {}))}
     assert rows['safety'].b is None and rows['safety'].dropped_b == 3
-    html = _scores_panel(list(rows.values()))
+    html = _scores_panel(list(rows.values())) or ''
     assert 'failed' in html
     assert 'scorer failed on 3 conversations' in html
 
@@ -223,9 +223,9 @@ def test_scores_panel_draws_tracks_only_within_unit_range():
     from evaluatorq.dashboard.sim_compare.model import ScoreRow
     from evaluatorq.dashboard.sim_compare.panels import _scores_panel
 
-    inside = _scores_panel([ScoreRow('ok', 0.2, 0.4)])
+    inside = _scores_panel([ScoreRow('ok', 0.2, 0.4)]) or ''
     assert 'cmp-track-fill' in inside and 'Mean per conversation, 0 to 1' in inside
-    outside = _scores_panel([ScoreRow('big', 3.0, 5.0)])
+    outside = _scores_panel([ScoreRow('big', 3.0, 5.0)]) or ''
     assert 'cmp-track-fill' not in outside
     assert '0 to 1' not in outside
 
@@ -517,15 +517,32 @@ def test_outcome_filter_makes_goal_rate_not_comparable():
     assert tiles.count('cmp-tile-ab') == 3
     # the goal scorer row and the heatmap's goal-rate change hide too
     rows = [ScoreRow('goal_achieved', 0.5, 0.75), ScoreRow('helpfulness', 0.6, 0.7)]
-    scores = _scores_panel(rows, cmp.outcome_filter)
+    scores = _scores_panel(rows, cmp.outcome_filter) or ''
     assert 'Hidden: goal_achieved, because you filtered by goal outcome' in scores
     assert 'cmp-score-label">goal_achieved' not in scores and 'cmp-score-label">helpfulness' in scores
-    assert 'Hidden: goal_achieved' not in _scores_panel(rows)
+    assert 'Hidden: goal_achieved' not in (_scores_panel(rows) or '')
     assert ' pts<' not in where_panel(cmp)
     assert 'pair' in where_panel(cmp)
     assert _cmp({'max_goal_score': ['0.5']}).outcome_filter == 'goal score'
     # a persona filter selects on something else, so the rate stays comparable
     assert not _cmp({'persona': ['alice']}).outcome_filter
+
+
+def test_headline_count_unit_and_flat_tiles_stay_quiet():
+    from evaluatorq.dashboard.sim_compare.panels import _outcomes_and_scores, _tiles, render_headlines
+    from evaluatorq.dashboard.sim_compare.state import TableState
+
+    cmp = _cmp()
+    heads = render_headlines(cmp, 'all')
+    # the count is the big number; the unit word is set small beside it
+    assert '<span class="rk-head-number">1 <span class="rk-head-unit">conversation</span></span>' in heads
+    assert '<span class="rk-head-unit">pts</span>' in heads
+    # an unchanged tile reads "x → x" without a "no change" pill on top
+    assert 'no change' not in _tiles(cmp)
+    # no scorer rows: Outcomes takes the row and a note replaces the empty Scores card
+    body = _outcomes_and_scores(cmp, TableState())
+    assert 'Scores' not in body.split('cmp-scores-note')[0]
+    assert 'cmp-scores-note">Neither run recorded scorer' in body
 
 
 def test_biggest_score_move_skips_the_goal_scorer():

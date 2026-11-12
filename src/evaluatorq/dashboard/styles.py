@@ -3099,7 +3099,7 @@ _SIM_COMPARE_CSS = """
 .cmp-chip--warn { background: var(--amber-100); color: var(--amber-ink); font-weight: 600; cursor: help; }
 
 /* "What changed" rows and the filter bar share static/review-kit.css (rk-*) with the Insights page; only the comparison extras live here. */
-.cmp-heads { --rk-head-cols: 200px minmax(0, 1fr) auto; }
+.cmp-heads { --rk-head-cols: 132px minmax(0, 1fr) auto; }
 .rk-head:has(.cmp-head-btn:focus-visible) { box-shadow: inset 0 0 0 2px var(--teal-600); }
 /* The action button stretches over the whole row; the scenario link sits above it. */
 .cmp-head-btn { border: 0; background: none; padding: 0; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-align: right; }
@@ -3133,10 +3133,10 @@ _SIM_COMPARE_CSS = """
 .cmp-tile-ab { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
 .cmp-tile-note { font-size: 12px; color: var(--text-muted); line-height: 1.35; }
 
+.cmp-scores-note { margin: -4px 0 16px; }
 .cmp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 16px; margin: 0 0 16px; }
 .cmp-report .cmp-grid > .rk-panel { margin: 0; }
-.cmp-subhead { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--text-faint); margin: 14px 0 8px; }
+.cmp-subhead { font-size: 12px; font-weight: 600; color: var(--text-muted); margin: 14px 0 8px; }
 .cmp-subhead:first-child { margin-top: 2px; }
 
 /* Stacked 100% bars, one per run (Insights "at a glance") */
@@ -3154,7 +3154,9 @@ _SIM_COMPARE_CSS = """
   .cmp-report .cmp-heat-scroll .rk-heat-row { max-width: 120px; white-space: normal; }
 }
 .cmp-report .rk-heat-row { position: sticky; left: 0; background: var(--surface-card); }
-.cmp-report .rk-heat-col { min-width: 88px; max-width: 140px; overflow-wrap: anywhere; }
+.cmp-report .rk-heat-col { min-width: 88px; overflow-wrap: anywhere; }
+/* Outranks .report-aligned's right-aligned numeric columns: heatmap names and empty cells centre like the filled ones. */
+.cmp-report .rk-heatmap thead th.rk-heat-col, .cmp-report .rk-heatmap tbody td.rk-heat-empty { text-align: center; }
 .cmp-report .cmp-heat-cell { padding: 0; font-size: 13px; font-weight: 600; }
 .cmp-heat-link { display: flex; align-items: center; justify-content: center; height: 100%; min-height: 34px; color: inherit; text-decoration: none; border-radius: 5px; font-variant-numeric: tabular-nums; }
 .cmp-heat-link:hover, .cmp-heat-link:visited { color: inherit; }
@@ -3215,7 +3217,7 @@ _SIM_COMPARE_CSS = """
 .cmp-outcome { white-space: nowrap; }
 .cmp-arrow { color: var(--text-faint); margin: 0 6px; }
 .cmp-unmatched { margin-top: 12px; font-size: 12px; color: var(--text-muted); }
-.cmp-unmatched summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.cmp-unmatched summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--text-muted); }
 .cmp-unmatched ul { margin: 6px 0 0; padding-left: 22px; columns: 2; }
 
 /* Filter rail footer note */
