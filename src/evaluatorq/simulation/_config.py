@@ -234,13 +234,16 @@ def require_sim_models_served(
     user_simulator: Any = None,
     judge: Any = None,
     simulating: bool = True,
+    generating: bool = True,
 ) -> None:
     """Stop a run before any work when the environment picked Anthropic and a simulation model is not a Claude id.
 
     Checks only the call sites whose client the environment resolves: an injected ``generation_client`` covers
     generation, an injected agent covers its own role, and ``llm_config.client`` covers all of them. The programmatic
     entry points call this so they fail at the start, as the ``sim`` CLI does, instead of at the first LLM call.
-    ``simulating=False`` checks generation only, for an entry point that never runs a conversation.
+    ``simulating=False`` checks generation only, for an entry point that never runs a conversation;
+    ``generating=False`` skips the generator, for a run that is handed its datapoints and writes no summary or
+    recommendations.
 
     Raises:
         ModelClientMismatchError: Anthropic is the provider and a model the run will call is not served by it.
@@ -251,7 +254,8 @@ def require_sim_models_served(
     if config.client is not None:
         return
     injected = {'sim.generator': generation_client, 'sim.user': user_simulator, 'sim.judge': judge}
-    tasks = tuple(task for task in SIM_TASKS if injected[task] is None and (simulating or task == 'sim.generator'))
+    wanted = {'sim.generator': generating, 'sim.user': simulating, 'sim.judge': simulating}
+    tasks = tuple(task for task in SIM_TASKS if injected[task] is None and wanted[task])
     if tasks:
         require_models_served_by_provider(sim_models(config, tasks))
 
