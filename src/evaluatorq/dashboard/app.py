@@ -60,7 +60,13 @@ from evaluatorq.dashboard.pairwise_compare import register_pairwise_compare_rout
 from evaluatorq.dashboard.pairwise_views import register_pairwise_view_routes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import CSRF_FIELD, request_rejected
-from evaluatorq.dashboard.shell import current_sidebar_html, dashboard_css, dashboard_css_version, page
+from evaluatorq.dashboard.shell import (
+    WORKSPACE_PENDING_ROUTE,
+    current_sidebar_html,
+    dashboard_css,
+    dashboard_css_version,
+    page,
+)
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
@@ -233,6 +239,17 @@ def _dashboard_css(v: str = '') -> Response:
     # `v` would otherwise pin today's sheet under a URL that a later version must be able to change.
     cache = 'public, max-age=31536000, immutable' if v == dashboard_css_version() else 'no-cache'
     return Response(dashboard_css(), media_type='text/css', headers={'Cache-Control': cache})
+
+
+def _workspace_pending() -> Response:
+    """204 while the lookup runs; then reload the page if it found a workspace, else stop polling (286)."""
+    from evaluatorq.dashboard.orq_workspace import resolve_slug, slug_lookup_pending
+
+    if slug_lookup_pending():
+        return Response(status_code=204)
+    if resolve_slug() is not None:
+        return Response('', headers={'HX-Refresh': 'true'})
+    return Response('', status_code=286)
 
 
 async def _auth_status(req: Request) -> JSONResponse:
@@ -902,35 +919,33 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
 
     # Tabbed body for the known surfaces; the interactive panels live inside
     # their tabs, so they are no longer appended separately.
-    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-    with cli_slug_render_scope():
-        if surface == 'sim':
-            from evaluatorq.dashboard.view import run_compare_control
+    if surface == 'sim':
+        from evaluatorq.dashboard.view import run_compare_control
 
-            # Same choice list as the overview picker (sim only, no error runs,
-            # capped); the control itself drops the current run from the options.
-            choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-            body_html = report_tabs.sim_report_tabs(
-                rid, report_obj, compare_html=run_compare_control(rid, choices, '/compare/sim')
-            )
-        elif surface == 'redteam':
-            body_html = report_tabs.redteam_report_tabs(rid, report_obj)
-        elif surface == 'pairwise':
-            from evaluatorq.dashboard import pairwise_tabs
+        # Same choice list as the overview picker (sim only, no error runs,
+        # capped); the control itself drops the current run from the options.
+        choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
+        body_html = report_tabs.sim_report_tabs(
+            rid, report_obj, compare_html=run_compare_control(rid, choices, '/compare/sim')
+        )
+    elif surface == 'redteam':
+        body_html = report_tabs.redteam_report_tabs(rid, report_obj)
+    elif surface == 'pairwise':
+        from evaluatorq.dashboard import pairwise_tabs
 
-            try:
-                focus: int | None = int(req.query_params.get('cmp', ''))
-            except ValueError:
-                focus = None
-            body_html = pairwise_tabs.pairwise_report_tabs(
-                rid,
-                report_obj,
-                hero_actions_html=_pairwise_hero_actions(rid, roots),
-                focus=focus,
-            )
-        else:
-            body_html = adapter.body(report_obj)
+        try:
+            focus: int | None = int(req.query_params.get('cmp', ''))
+        except ValueError:
+            focus = None
+        body_html = pairwise_tabs.pairwise_report_tabs(
+            rid,
+            report_obj,
+            hero_actions_html=_pairwise_hero_actions(rid, roots),
+            focus=focus,
+        )
+    else:
+        body_html = adapter.body(report_obj)
 
     opts = filter_def.options(report_obj)
     total_results = len(filter_def.results(report_obj))
@@ -1002,28 +1017,26 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
 
     # Render the tabbed body from the filtered results so the static tab
     # content (tables, charts) tracks the filter, not just the HTMX panels.
-    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-    with cli_slug_render_scope():
-        if surface == 'sim':
-            body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered)
-        elif surface == 'redteam':
-            from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+    if surface == 'sim':
+        body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered)
+    elif surface == 'redteam':
+        from evaluatorq.redteam.reports.converters import rebuild_filtered_report
 
-            filtered_report = rebuild_filtered_report(report_obj, filtered)
-            body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
-        elif surface == 'pairwise':
-            from evaluatorq.dashboard import pairwise_tabs
+        filtered_report = rebuild_filtered_report(report_obj, filtered)
+        body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
+    elif surface == 'pairwise':
+        from evaluatorq.dashboard import pairwise_tabs
 
-            body_html = await asyncio.to_thread(
-                pairwise_tabs.pairwise_report_tabs,
-                rid,
-                report_obj,
-                filtered,
-                hero_actions_html=_pairwise_hero_actions(rid, roots),
-            )
-        else:
-            body_html = adapter.body_from_results(report_obj, filtered)
+        body_html = await asyncio.to_thread(
+            pairwise_tabs.pairwise_report_tabs,
+            rid,
+            report_obj,
+            filtered,
+            hero_actions_html=_pairwise_hero_actions(rid, roots),
+        )
+    else:
+        body_html = adapter.body_from_results(report_obj, filtered)
 
     form_html = render_filter_form(
         rid, surface or '', new_opts, selections, shown=len(filtered), total=len(filter_def.results(report_obj))
@@ -1252,6 +1265,9 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     """
 
     async def lifespan(runtime: FastHTML) -> AsyncIterator[None]:
+        from evaluatorq.dashboard.orq_workspace import resolve_slug
+
+        resolve_slug()
         try:
             yield
         finally:
@@ -1278,6 +1294,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     initialize_finder_settings(app)
     app.add_middleware(TraceSessionMiddleware, app_state=app.state)
     app.get('/auth/status')(_auth_status)
+    app.get(WORKSPACE_PENDING_ROUTE)(_workspace_pending)
     app.get('/static/dashboard.css')(_dashboard_css)
     # NOTE: static_route_exts is registered AFTER all custom routes so that
     # its catch-all /{fname:path}.{ext:static} does not steal requests for

@@ -150,7 +150,7 @@ Red teaming and simulation do not seat classify judges. `EvaluatorConfig` panels
 
 | Argument | Default | What it does |
 | --- | --- | --- |
-| `preset` | `None` | Name of a ready-made panel from [Jury Presets](jury-presets.md), such as `"Balanced Trio"`. Seats the judges, the aggregation rule and a majority quorum (two of three, three of five). Mutually exclusive with `judges` and `model`. |
+| `preset` | `None` | Name of a ready-made panel from [Jury Presets](jury-presets.md), such as `"balanced-trio"`. Seats the judges, the aggregation rule and a majority quorum (two of three, three of five). Mutually exclusive with `judges` and `model`. |
 | `judges` | — | Judge model IDs. Two or more makes it a jury. Mutually exclusive with `model`. |
 | `model` | — | Single-judge shorthand for `judges=[model]`. With none of `preset`, `judges` or `model`, the panel is one judge on the `smart` role (`openai/gpt-6-sol` by default; see [Configuration › Models](configuration.md#models)). |
 | `criteria` / `prompt` | — | What the judges go on. Pass at least one; both together is allowed. An LLM judge reads the rendered `prompt` and can pull the rubric in with a `{{criteria}}` placeholder; a [classify judge](#jev-as-a-judge) is handed `criteria` as its question and never sees the prompt. Setting both on a panel that seats no classify judge and whose prompt never renders `{{criteria}}` logs one warning, because nothing then reads the rubric. |
