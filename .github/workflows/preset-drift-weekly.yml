@@ -11,9 +11,9 @@ name: Jury preset drift (weekly)
 # pull request: a fix when the live suite passes again, otherwise a PR labelled
 # `needs-human-attention`. Nothing is merged automatically.
 #
-# The PR is opened with the default GITHUB_TOKEN, so GitHub does not start CI on
-# it: a person has to push to the branch or close and reopen the PR to run the
-# required checks. Switch the push and `gh pr create` steps to a PAT or a GitHub
+# The PR is opened with the default GITHUB_TOKEN. GitHub does not treat that as a
+# person: in a rehearsal its CI runs sat as `action_required` until a maintainer
+# approved them, so the required checks need a click, or a push to the branch. Switch the push and `gh pr create` steps to a PAT or a GitHub
 # App token if the PR must arrive with checks already running.
 #
 # Needs repo secret ORQ_WORKSPACE_API_KEY: a workspace-scoped orq key that reads
@@ -169,7 +169,7 @@ jobs:
               title="chore(jury): preset drift needs human attention"
             fi
             echo
-            echo "This PR is agent output. Review the diff and the sources before merging. CI does not start on a PR opened with the default token: push to the branch or close and reopen the PR to run the required checks."
+            echo "This PR is agent output. Review the diff and the sources before merging. It was opened with the default token, so its CI runs may be waiting for a maintainer to approve them (\`action_required\`), or you can push to the branch."
             echo
             if [ -f "$DRIFT_SUMMARY" ]; then
               cat "$DRIFT_SUMMARY"
