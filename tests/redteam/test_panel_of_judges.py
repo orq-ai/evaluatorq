@@ -613,6 +613,8 @@ class TestPanelComposition:
         assert provider_family('openai/gpt-4o') == 'openai'
         assert provider_family('anthropic/claude-3.5') == 'anthropic'
         assert provider_family('command-r-plus') == 'cohere'
+        assert provider_family('munito/google/gemma-4-12b@eu') == 'google'
+        assert provider_family('mistral/magistral-medium-2509') == 'mistral'
         assert provider_family('some-unknown-model') == 'unknown'
         assert provider_family('') == 'unknown'
 
