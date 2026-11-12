@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filters import FILTERS
-from evaluatorq.dashboard.sim_compare.model import Comparison, narrowing_selections
+
+if TYPE_CHECKING:
+    from evaluatorq.dashboard.sim_compare.model import Comparison
 
 
 def _qs(cmp: Comparison, **params: Any) -> str:
@@ -77,14 +79,14 @@ class TableState:
         )
 
 
-def canonical_url(cmp: Comparison, selections: dict[str, list[str]], state: TableState) -> str:
+def canonical_url(cmp: Comparison, state: TableState) -> str:
     """The GET ``/compare/sim`` URL that reproduces this slice and table state.
 
     Selections use the repeated ``dimension=value`` form ``parse_selections``
     reads, limited to filters that drop a conversation; table params equal to
     their defaults are left out.
     """
-    return _compare_url(cmp, narrowing_selections(cmp.a.run, cmp.b.run, selections), state)
+    return _compare_url(cmp, cmp.narrowing, state)
 
 
 def _compare_url(cmp: Comparison, narrowing: dict[str, list[str]], state: TableState) -> str:

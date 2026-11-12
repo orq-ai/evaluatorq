@@ -538,10 +538,12 @@ def test_compare_control_on_sim_report(roots: list[Path]):
 
 
 def test_outcome_filter_makes_goal_rate_not_comparable():
-    from evaluatorq.dashboard.sim_compare.panels import _headlines, _tiles
+    from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
+    from evaluatorq.dashboard.sim_compare.model import ScoreRow
+    from evaluatorq.dashboard.sim_compare.panels import _headlines, _scores_panel, _tiles
 
     cmp = _cmp({'goal_outcome': ['Achieved']})
-    assert cmp.outcome_filtered
+    assert cmp.outcome_filter == 'goal outcome'
     heads = _headlines(cmp, 'all')
     assert 'Goal rate hidden' in heads
     assert 'Goal rate held steady' not in heads and 'Goal rate rose' not in heads
@@ -549,8 +551,17 @@ def test_outcome_filter_makes_goal_rate_not_comparable():
     assert tiles.count('Hidden: you filtered by goal outcome') == 2
     # the hidden tiles drop their A -> B values; the other three keep them
     assert tiles.count('cmp-tile-ab') == 3
+    # the goal scorer row and the heatmap's goal-rate change hide too
+    rows = [ScoreRow('goal_achieved', 0.5, 0.75), ScoreRow('helpfulness', 0.6, 0.7)]
+    scores = _scores_panel(rows, cmp.outcome_filter)
+    assert 'Hidden: goal_achieved, because you filtered by goal outcome' in scores
+    assert 'cmp-score-label">goal_achieved' not in scores and 'cmp-score-label">helpfulness' in scores
+    assert 'Hidden: goal_achieved' not in _scores_panel(rows)
+    assert ' pts<' not in _where_panel(cmp)
+    assert 'pair' in _where_panel(cmp)
+    assert _cmp({'max_goal_score': ['0.5']}).outcome_filter == 'goal score'
     # a persona filter selects on something else, so the rate stays comparable
-    assert not _cmp({'persona': ['alice']}).outcome_filtered
+    assert not _cmp({'persona': ['alice']}).outcome_filter
 
 
 def test_biggest_score_move_skips_the_goal_scorer():

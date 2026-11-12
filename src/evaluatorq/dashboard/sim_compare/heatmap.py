@@ -16,8 +16,9 @@ if TYPE_CHECKING:
 _MAX_AXIS = 12
 
 # Diverging fill over a goal-rate change of -100 to +100 pts: red worse, neutral flat, green better.
-# Both ends stay light enough for dark ink.
-_DIVERGING = ((0.0, '#e58f89'), (0.5, '#eceff1'), (1.0, '#7fc8a5'))
+# Both ends stay light enough for dark ink. The legend is drawn from the same stops.
+_WORSE, _FLAT_FILL, _BETTER = '#e58f89', '#eceff1', '#7fc8a5'
+_DIVERGING = ((0.0, _WORSE), (0.5, _FLAT_FILL), (1.0, _BETTER))
 
 _MINUS = '\N{MINUS SIGN}'
 
@@ -41,12 +42,18 @@ def _cell_value(cmp: Comparison, pairs: list[tuple[MatchedPair, str]]) -> tuple[
     errored = sum(1 for _, change in pairs if change == 'error')
     if errored:
         title += f', {errored} with an error'
+    if cmp.outcome_filter:
+        return (
+            f'{n} pair{"" if n == 1 else "s"}',
+            '',
+            title + f'. Goal rate hidden: you filtered by {cmp.outcome_filter}.',
+        )
     if not scored:
         return 'err', '', title + '. No pair where both runs finished, so no goal rate.'
     delta = (sum(b for _, b in scored) - sum(a for a, _ in scored)) / len(scored)
     pts = round(delta * 100)
     text = '0 pts' if pts == 0 else f'{pts:+d} pts'.replace('-', _MINUS)
-    fill = '#eceff1' if pts == 0 else _interp_color((delta + 1) / 2, stops=_DIVERGING)
+    fill = _FLAT_FILL if pts == 0 else _interp_color((delta + 1) / 2, stops=_DIVERGING)
     return text, fill, title
 
 
@@ -102,9 +109,11 @@ def _where_panel(cmp: Comparison, state: TableState | None = None) -> str:
     notes = ' · '.join(n for n in (more_rows, more_cols) if n)
     foot = f'<p class="cmp-note">{esc(notes)}</p>' if notes else ''
     legend = (
-        '<div class="cmp-legend"><span><i style="background:#e58f89"></i>Worse in B</span>'
-        '<span><i style="background:#eceff1;box-shadow:inset 0 0 0 1px var(--border-subtle,#d6dade)"></i>No change</span>'
-        '<span><i style="background:#7fc8a5"></i>Better in B</span></div>'
+        f'<p class="cmp-note">Pairs per cell. Goal rate hidden: you filtered by {esc(cmp.outcome_filter)}</p>'
+        if cmp.outcome_filter
+        else f'<div class="cmp-legend"><span><i style="background:{_WORSE}"></i>Worse in B</span>'
+        f'<span><i style="background:{_FLAT_FILL};box-shadow:inset 0 0 0 1px var(--border-subtle)"></i>No change</span>'
+        f'<span><i style="background:{_BETTER}"></i>Better in B</span></div>'
     )
     table = (
         f'<div class="cmp-heat-scroll"><table class="rk-heatmap"><thead><tr><th></th>{header}</tr></thead>'

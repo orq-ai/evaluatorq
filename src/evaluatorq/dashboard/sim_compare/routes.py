@@ -136,7 +136,7 @@ def _filter_response(roots: list[Path] | None, rid_a: str, rid_b: str, items: li
         return _fragment_error(str(message), int(status))
     selections, state = parse_compare_params(items)
     cmp = _comparison(rid_a, rid_b, loaded, selections)
-    return _push(Response(_swap(cmp, selections, state), media_type='text/html'), canonical_url(cmp, selections, state))
+    return _push(Response(_swap(cmp, selections, state), media_type='text/html'), canonical_url(cmp, state))
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
         oob = _headlines(cmp, resolve_view(cmp, state), state, oob=True) + _filter_strip(cmp, state, oob=True)
         return _push(
             Response(render_conversations(cmp, state) + oob, media_type='text/html'),
-            canonical_url(cmp, selections, state),
+            canonical_url(cmp, state),
         )
 
     @app.get('/compare/sim/transcript')

@@ -118,10 +118,11 @@ class Comparison:
         return len(self.matching.matched) + len(self.matching.a_only) + len(self.matching.b_only)
 
     @property
-    def outcome_filtered(self) -> bool:
-        """A filter picks conversations by the outcome being compared, so the
-        goal rate and goal score can no longer be compared between runs."""
-        return bool(_OUTCOME_DIMS & self.narrowing.keys())
+    def outcome_filter(self) -> str:
+        """The filter that picks conversations by the outcome being compared, as
+        the page names it, or ``''``. While one is on, the goal rate and goal
+        score can no longer be compared between runs."""
+        return ' and '.join(name for dim, name in _OUTCOME_DIMS.items() if dim in self.narrowing)
 
     @cached_property
     def aggregates(self) -> tuple[Aggregates, Aggregates]:
@@ -137,7 +138,7 @@ class Comparison:
 
 
 # Filters that select on the goal outcome itself (directly or through the score).
-_OUTCOME_DIMS = frozenset({'goal_outcome', 'max_goal_score'})
+_OUTCOME_DIMS = {'goal_outcome': 'goal outcome', 'max_goal_score': 'goal score'}
 
 
 def narrowing_selections(

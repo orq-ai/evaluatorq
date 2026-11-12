@@ -6,11 +6,11 @@ from collections import Counter
 from itertools import cycle
 from typing import Any
 
-from evaluatorq.common.reports import esc, kpi_cards
+from evaluatorq.common.reports import esc, kpi_cards, pct
 from evaluatorq.dashboard.filters import _sim_options_from_results
 from evaluatorq.dashboard.report_kit import panel
 from evaluatorq.dashboard.report_tabs import sim_entity_dialog
-from evaluatorq.dashboard.sim_compare.fmt import _delta_pill, _fmt_num, _fmt_rate, _run_key
+from evaluatorq.dashboard.sim_compare.fmt import _delta_pill, _fmt_num, _run_key
 from evaluatorq.dashboard.sim_compare.heatmap import _where_panel
 from evaluatorq.dashboard.sim_compare.model import _FLAT, Comparison, MatchedPair, ScoreRow, Side
 from evaluatorq.dashboard.sim_compare.state import TableState, _base_state, _qs, _swap_link, _toggled
@@ -165,12 +165,12 @@ def _headlines(cmp: Comparison, view: str, state: TableState | None = None, *, o
             )
         )
     agg_a, agg_b = cmp.aggregates
-    if cmp.outcome_filtered:
+    if cmp.outcome_filter:
         rows.append(
             row(
                 '—',
                 'Goal rate hidden',
-                'You filtered by goal outcome, so the rate would only reflect the filter',
+                f'You filtered by {cmp.outcome_filter}, so the rate would only reflect the filter',
                 target='all',
                 go='All conversations',
             )
@@ -263,7 +263,9 @@ def _filter_strip(cmp: Comparison, state: TableState, *, oob: bool = False) -> s
         rest = f'{chips}<a class="rk-fbar-clear" {_swap_link(cmp, {}, base)}>Clear all</a>'
     else:
         rest = '<span class="rk-fbar-hint">Use the filters to narrow both runs to the same conversations.</span>'
-    copy = '<button type="button" class="cmp-fbar-copy" data-copy-link>Copy link to this view</button>'
+    copy = (
+        '<button type="button" class="cmp-fbar-copy" data-copy-link aria-live="polite">Copy link to this view</button>'
+    )
     rule = (
         '<span class="cmp-fbar-rule">A pair stays when either run\'s conversation matches.</span>'
         if cmp.narrowing
@@ -288,11 +290,11 @@ def _tiles(cmp: Comparison) -> str:
         higher: bool | None,
         outcome: bool = False,
     ) -> dict:
-        if outcome and cmp.outcome_filtered:
+        if outcome and cmp.outcome_filter:
             return {
                 'label': label,
                 'value': '—',
-                'sub_html': '<span class="cmp-tile-note">Hidden: you filtered by goal outcome</span>',
+                'sub_html': f'<span class="cmp-tile-note">Hidden: you filtered by {cmp.outcome_filter}</span>',
             }
         d = None if va is None or vb is None else vb - va
         pill = _delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
@@ -316,7 +318,7 @@ def _tiles(cmp: Comparison) -> str:
                 'Goal rate',
                 a.goal_rate,
                 b.goal_rate,
-                _fmt_rate,
+                pct,
                 lambda d: f'{d * 100:+.0f} pts',
                 higher=True,
                 outcome=True,
@@ -455,11 +457,21 @@ def _outcomes_panel(cmp: Comparison, state: TableState | None = None) -> str:
     return panel('Outcomes', body, sub='Filtered conversations per run')
 
 
-def _scores_panel(rows: list[ScoreRow]) -> str:
+def _scores_panel(rows: list[ScoreRow], outcome_filter: str = '') -> str:
     """Scorer and turn-quality means: A and B as numbers, on a shared 0..1 track
-    where the row fits it, plus the delta."""
+    where the row fits it, plus the delta. Under an outcome filter the goal
+    scorer rows are left out, like the goal tiles."""
+    hidden = [r.label for r in rows if r.label in _GOAL_SCORERS] if outcome_filter else []
+    rows = [r for r in rows if r.label not in hidden]
+    hidden_note = (
+        f'<p class="cmp-note">Hidden: {esc(", ".join(hidden))}, because you filtered by {esc(outcome_filter)}</p>'
+        if hidden
+        else ''
+    )
     if not rows:
-        return panel('Scores', '<p class="sim-empty">Neither run recorded scorer or turn-quality data.</p>')
+        return panel(
+            'Scores', hidden_note or '<p class="sim-empty">Neither run recorded scorer or turn-quality data.</p>'
+        )
 
     def failed(v: float | None, dropped: int) -> bool:
         return v is None and dropped > 0
@@ -512,7 +524,7 @@ def _scores_panel(rows: list[ScoreRow]) -> str:
     note = f'<p class="cmp-note">Measured by one run only: {esc(", ".join(one_sided))}</p>' if one_sided else ''
     legend = f'<div class="cmp-legend"><span>{_run_key("A")}</span><span>{_run_key("B")}</span></div>'
     sub = 'Mean per conversation, 0 to 1' if all(r.in_unit_range for r in rows) else 'Mean per conversation'
-    return panel('Scores', f'{legend}<div class="cmp-scores">{body}</div>{note}', sub=sub)
+    return panel('Scores', f'{legend}<div class="cmp-scores">{body}</div>{note}{hidden_note}', sub=sub)
 
 
 def render_compare_body(cmp: Comparison, state: TableState) -> str:
@@ -522,7 +534,7 @@ def render_compare_body(cmp: Comparison, state: TableState) -> str:
         f'{_filter_strip(cmp, state)}'
         f'{_headlines(cmp, resolve_view(cmp, state), state)}'
         f'{_tiles(cmp)}'
-        f'<div class="cmp-grid">{_outcomes_panel(cmp, state)}{_scores_panel(cmp.scores)}</div>'
+        f'<div class="cmp-grid">{_outcomes_panel(cmp, state)}{_scores_panel(cmp.scores, cmp.outcome_filter)}</div>'
         f'{_where_panel(cmp, state)}'
         f'{render_conversations(cmp, state)}'
     )
@@ -531,12 +543,11 @@ def render_compare_body(cmp: Comparison, state: TableState) -> str:
 def render_filter_rail(cmp: Comparison, selections: dict[str, list[str]]) -> str:
     """The sim filter rail, posting to the compare filter route; options cover both runs."""
     opts = _sim_options_from_results([*cmp.a.run.results, *cmp.b.run.results])
-    m = cmp.matching
     return _render_sim_filter_rail(
         cmp.a.rid,
         opts,
         selections,
-        shown=len(m.matched) + len(m.a_only) + len(m.b_only),
+        shown=cmp.shown_rows,
         total=cmp.total_rows,
         post_url=f'/compare/sim/filter?{_qs(cmp)}',
         include='#cmp-table-state',

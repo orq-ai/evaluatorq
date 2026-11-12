@@ -53,9 +53,5 @@ def _tone(delta: float) -> str:
     return 'flat' if abs(delta) < _FLAT else 'good' if delta > 0 else 'bad'
 
 
-def _fmt_rate(v: float | None) -> str:
-    return 'n/a' if v is None else f'{v:.0%}'
-
-
 def _fmt_num(v: float | None, digits: int = 2) -> str:
     return 'n/a' if v is None else f'{v:.{digits}f}'
