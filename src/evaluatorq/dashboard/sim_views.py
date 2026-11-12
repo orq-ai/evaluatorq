@@ -367,10 +367,7 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
             page = 1
         page_size = _coerce_page_size(req.query_params.get('size'))
 
-        from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
-
-        with cli_slug_render_scope():
-            html = render_sim_row_list(rid, entries, sort=sort, direction=direction, page=page, page_size=page_size)
+        html = render_sim_row_list(rid, entries, sort=sort, direction=direction, page=page, page_size=page_size)
         # Return wrapped in the same container div that sim_interactive_panels
         # renders so the outerHTML swap replaces the correct element.
         return Response(_sim_rowlist_wrapper(rid, html), media_type='text/html')
@@ -414,8 +411,6 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
             )
 
         persona_id, scenario_id = _entity_dom_ids(run, idx)
-        from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-        with cli_slug_render_scope():
-            fragment = render_transcript_fragment(entries[idx], persona_id, scenario_id)
+        fragment = render_transcript_fragment(entries[idx], persona_id, scenario_id)
         return Response(fragment, media_type='text/html')

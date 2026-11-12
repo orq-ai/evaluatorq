@@ -56,7 +56,7 @@ The dashboard opens in your browser when the server starts; pass `--no-browser` 
 
 ### Orq trace links
 
-Set `ORQ_WORKSPACE` when launching the dashboard to show **View Traces** links for conversations and runs that have no experiment URL. Its value is the workspace slug in the Orq UI URL; for example, `https://my.orq.ai/orq-research/traces` uses `orq-research`. A workspace selected under **CLI OAuth** in Settings takes precedence for those fallback links. When neither is available, trace-link buttons are hidden for runs without their own experiment URL.
+Set `ORQ_WORKSPACE` when launching the dashboard to show **View Traces** links for conversations and runs that have no experiment URL. Its value is the workspace slug in the Orq UI URL; for example, `https://my.orq.ai/orq-research/traces` uses `orq-research`. A workspace selected under **CLI OAuth** in Settings takes precedence for those fallback links. When neither is available and the `orq` CLI is installed and signed in, the dashboard asks it for the credential's workspace in the background. A report page opened before that lookup finishes shows no trace links at first and reloads once when the lookup lands. Switching the Settings profile or the `orq` CLI account starts a new lookup on the next page load. When no workspace can be found, trace-link buttons are hidden for runs without their own experiment URL.
 
 `ORQ_WORKSPACE_SLUG` remains supported as an alias. For an Orq UI on a host different from the API host used by the selected credential, set `ORQ_UI_BASE_URL`. Otherwise the dashboard uses the selected credential host when available, then `ORQ_BASE_URL`, then `https://my.orq.ai`.
 

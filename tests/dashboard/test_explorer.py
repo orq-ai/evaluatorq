@@ -25,6 +25,7 @@ from evaluatorq.dashboard.trace_finder import routes as finder_routes
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.trace_finder.explorer import ExplorerStore
 from tests.dashboard.test_finder import FakeStore, csrf_data
+from tests.dashboard.conftest import settle_workspace_lookup
 
 
 def test_parse_range_applies_browser_offset() -> None:
@@ -3089,7 +3090,7 @@ def test_span_tree_preserves_duplicate_ids_and_marks_the_error_node() -> None:
 
 
 
-def test_span_tree_discovers_cli_workspace_once_per_render(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_span_tree_discovers_cli_workspace_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from evaluatorq.dashboard import orq_workspace
     from evaluatorq.dashboard.orq_scope import OrqScope
     from evaluatorq.dashboard.trace_finder.views import span_tree
@@ -3110,13 +3111,13 @@ def test_span_tree_discovers_cli_workspace_once_per_render(monkeypatch: pytest.M
     monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
     spans = [{'span_id': f'span-{index}', 'name': f'span-{index}'} for index in range(100)]
 
-    first = span_tree('trace', spans)
-    assert first.count('href="https://my.orq.ai/first-workspace/traces/') == 100
+    span_tree('trace', spans)
+    settle_workspace_lookup()
     assert calls == 1
 
-    second = span_tree('trace', spans)
-    assert second.count('href="https://my.orq.ai/second-workspace/traces/') == 100
-    assert calls == 2
+    rendered = span_tree('trace', spans)
+    assert rendered.count('href="https://my.orq.ai/first-workspace/traces/') == 100
+    assert calls == 1
 
 
 def test_results_self_poll_answers_out_of_band_and_marks_the_render(explorer_client) -> None:

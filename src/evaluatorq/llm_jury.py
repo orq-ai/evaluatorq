@@ -453,7 +453,7 @@ async def _run_single_judge(
     classify: ClassifyQuestion | None = None,
     classify_state_paths: list[str] | None = None,
     classify_empty_warned: list[bool] | None = None,
-    on_classify: typing.Callable[[str], None] | None = None,
+    on_classify: typing.Callable[[str], bool] | None = None,
 ) -> Prediction:
     """Run one judge call and map its outcome to a `Prediction`.
 
@@ -465,7 +465,9 @@ async def _run_single_judge(
     ``classify`` is a candidate question built whenever the panel fields can express
     one. The fetched catalogue is the runtime authority: `run_judge` reads the question
     only for a model that serves the router's ``/decisions`` endpoint and ignores it for
-    every prompted judge.
+    every prompted judge. ``on_classify`` has the last word for a model the catalogue
+    reveals at runtime: it returns ``False`` to prompt the model instead, which the
+    pointwise jury does for a panel with no ``criteria`` (#247).
 
     A judge that will be served by ``/decisions`` gets a config carrying only the two
     fields that leg reads. Passing the prompted judges' sampling settings would mark
@@ -477,9 +479,9 @@ async def _run_single_judge(
     call for a model discovered through the fetched catalogue.
     """
     runtime_classify = client_routes_through_orq(client) and await supports_classify(model, client)
+    if runtime_classify and on_classify is not None:
+        runtime_classify = on_classify(model)
     if runtime_classify:
-        if on_classify is not None:
-            on_classify(model)
         if (
             classify is not None
             and not classify.state
@@ -764,7 +766,7 @@ async def _llm_jury_judge_fn(
     classify: ClassifyQuestion | None,
     classify_state_paths: list[str],
     classify_empty_warned: list[bool],
-    on_classify: typing.Callable[[str], None],
+    on_classify: typing.Callable[[str], bool],
 ) -> Prediction:
     """Adapt `run_jury`'s positional ``judge_fn(model)`` call onto `_run_single_judge`.
 
@@ -827,7 +829,7 @@ async def _llm_jury_scorer(
     levels: list[str] | None,
     classify_state_paths: list[str],
     classify_empty_warned: list[bool],
-    on_classify: typing.Callable[[str], None],
+    on_classify: typing.Callable[[str], bool],
 ) -> EvaluationResult:
     """Score one datapoint with the configured panel.
 
@@ -973,7 +975,7 @@ def llm_jury(
     Presets
     -------
     ``preset`` seats a named panel from ``evaluatorq.jury_presets`` instead of
-    listing judges by hand — ``llm_jury(name='helpfulness', preset='Balanced Trio')``.
+    listing judges by hand — ``llm_jury(name='helpfulness', preset='balanced-trio')``.
     The seats are derived from the committed model-garden snapshot and carry a
     published $/1k that a test recomputes, so a preset cannot quietly become a
     different or a differently-priced panel.
@@ -1263,9 +1265,11 @@ def llm_jury(
     classify_empty_warned = [False]
     runtime_classify_warned = set(classify_judges)
 
-    def _warn_runtime_classify(model: str) -> None:
-        if model in runtime_classify_warned:
-            return
+    def _admit_runtime_classify(model: str) -> bool:
+        # `supports_classify` is additive: most catalogue classify models also serve chat,
+        # so a prompt-only panel prompts them. Known classify-only ids were rejected above.
+        if not criteria or model in runtime_classify_warned:
+            return bool(criteria)
         _validate_classify_configuration(
             criteria=criteria,
             verdict_kind=verdict_kind,
@@ -1288,6 +1292,7 @@ def llm_jury(
             extra_kwargs=extra_kwargs,
             extra_body=extra_body,
         )
+        return True
 
     sys_prompt = (
         system_prompt
@@ -1334,7 +1339,7 @@ def llm_jury(
         levels=levels,
         classify_state_paths=classify_state_paths,
         classify_empty_warned=classify_empty_warned,
-        on_classify=_warn_runtime_classify,
+        on_classify=_admit_runtime_classify,
     )
     return {'name': name, 'scorer': scorer}
 
@@ -1450,12 +1455,12 @@ class PairwiseComparator:
         if direct_construction:
             for judge in panel + (replacement_judges or []):
                 if is_known_classify_model(judge):
-                    self._warn_runtime_classify(judge)
+                    self._admit_runtime_classify(judge)
 
-    def _warn_runtime_classify(self, model: str) -> None:
-        """Warn once when the authoritative catalogue reveals a classify seat."""
+    def _admit_runtime_classify(self, model: str) -> bool:
+        """Seat a catalogue-revealed classify judge, warning once about the settings it ignores."""
         if model in self._classify_warned:
-            return
+            return True
         self._classify_warned.add(model)
         _warn_classify_repetitions(self._repetitions, pairwise=True)
         _warn_classify_ignored_settings(
@@ -1470,6 +1475,7 @@ class PairwiseComparator:
             extra_kwargs=self._extra_kwargs,
             extra_body=self._extra_body,
         )
+        return True
 
     async def compare(self, *, question: str, response_a: Output, response_b: Output) -> PairwiseComparison:
         """Run the panel over one A-vs-B comparison and return the reconciled verdict.
@@ -1516,7 +1522,7 @@ class PairwiseComparator:
                 classify=classify_question,
                 classify_state_paths=self._classify_state_paths,
                 classify_empty_warned=self._classify_empty_warned,
-                on_classify=self._warn_runtime_classify,
+                on_classify=self._admit_runtime_classify,
             )
 
         # CyclicJudge: one judge per comparison, cycling through the panel.

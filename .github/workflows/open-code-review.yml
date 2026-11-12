@@ -2,7 +2,7 @@
 # Claude PR reviewer.
 # Requires repo secret ORQ_REVIEW_API_KEY: an orq gateway key with router access,
 # scoped to the evaluatorq-cicd project. It is this workflow's alone — ORQ_API_KEY
-# is a separate key for examples-weekly.yml and jury-rates-monthly.yml, so a
+# is a separate key for examples-weekly.yml and preset-drift-weekly.yml, so a
 # rotation on either side cannot take the other down.
 
 name: OpenCodeReview
