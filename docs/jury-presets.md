@@ -1,6 +1,6 @@
 # Jury Presets
 
-A jury is only as good as its panel, and assembling one by hand means picking judges, checking they do not share a training lineage, keeping an odd number of them, and re-checking all of it every time a provider ships something new. A preset is that decision made once and kept current: `preset="Balanced Trio"` seats three judges from three families, sets the aggregation rule, and requires a majority of them to return a verdict.
+A jury is only as good as its panel, and assembling one by hand means picking judges, checking they do not share a training lineage, keeping an odd number of them, and re-checking all of it every time a provider ships something new. A preset is that decision made once and kept current: `preset="balanced-trio"` seats three judges from three families, sets the aggregation rule, and requires a majority of them to return a verdict.
 
 ```python
 from evaluatorq import evaluatorq, llm_jury
@@ -8,7 +8,7 @@ from evaluatorq import evaluatorq, llm_jury
 correctness = llm_jury(
     name="correctness",
     criteria="The answer is factually correct and directly answers the question.",
-    preset="Balanced Trio",
+    preset="balanced-trio",
 )
 ```
 
@@ -18,28 +18,28 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, un
 
 | Preset | Judges | Aggregation | $ / 1k | Reserve |
 | --- | --- | --- | --- | --- |
-| **Balanced Trio** (default) | `baseten/deepseek-v4.1-flash`<br>`openai/gpt-6-luna`<br>`google-ai/gemini-3.8-flash` | majority | 4.45 | `deepseek/deepseek-flash` |
-| **Strong Jury** | `anthropic/claude-opus-5-5`<br>`openai/gpt-6.1-sol`<br>`google-ai/gemini-3.8-flash` | majority | 27.00 | `baseten/deepseek-v4.1-flash` |
-| **Cheap Aggregate** | `zai/glm-5.3-flash`<br>`google-ai/gemini-3.8-flash`<br>`baseten/deepseek-v4.1-flash` | majority | 4.29 | `mistral/mistral-large-4` |
-| **Open-Weight / Portable** | `baseten/deepseek-v4.1-flash`<br>`baseten/kimi-k3`<br>`zai/glm-5.3-flash` | majority | 13.29 | `greenpt/qwen3.6-35b-a3b` |
-| **EU Region** | `aws/eu.anthropic.claude-haiku-5-5`<br>`google/eu.gemini-3.7-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 4.64 | `google/eu.claude-sonnet-5` |
-| **Single-Provider Trio** | `openai/gpt-6.1-sol`<br>`openai/gpt-6.1-terra`<br>`openai/gpt-6-luna` | majority | 12.40 | `openai/gpt-6-sol` |
+| **`balanced-trio`** (default) | `baseten/deepseek-v4.1-flash`<br>`openai/gpt-6-luna`<br>`google-ai/gemini-3.8-flash` | majority | 4.45 | `deepseek/deepseek-flash` |
+| **`strong-jury`** | `anthropic/claude-opus-5-5`<br>`openai/gpt-6.1-sol`<br>`google-ai/gemini-3.8-flash` | majority | 27.00 | `baseten/deepseek-v4.1-flash` |
+| **`cheap-aggregate`** | `zai/glm-5.3-flash`<br>`google-ai/gemini-3.8-flash`<br>`baseten/deepseek-v4.1-flash` | majority | 4.29 | `mistral/mistral-large-4` |
+| **`open-weight-portable`** | `baseten/deepseek-v4.1-flash`<br>`baseten/kimi-k3`<br>`zai/glm-5.3-flash` | majority | 13.29 | `greenpt/qwen3.6-35b-a3b` |
+| **`eu-region`** | `aws/eu.anthropic.claude-haiku-5-5`<br>`google/eu.gemini-3.7-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 4.64 | `google/eu.claude-sonnet-5` |
+| **`single-provider-trio`** | `openai/gpt-6.1-sol`<br>`openai/gpt-6.1-terra`<br>`openai/gpt-6-luna` | majority | 12.40 | `openai/gpt-6-sol` |
 
-Balanced Trio and Single-Provider Trio use GPT-6 Luna at its `medium` default. On the same Artificial Analysis Intelligence Index v4.3.2, [GPT-6 Luna (Medium)](https://artificialanalysis.ai/models/gpt-6-luna-medium) scores 29.93 against [GPT-5.6 Luna (Medium)](https://artificialanalysis.ai/models/gpt-5-6-luna-medium)'s 25.04, while Orq's captured rates fall from $0.20/$1.20 to $0.10/$0.50 per million input/output tokens. Do not compare these scores with the older index values still present on some catalogue cards. The EU preset keeps its EU-hosted GPT-5.6 Luna seat; the US-hosted successor is not a residency-compatible replacement.
+`balanced-trio` and `single-provider-trio` use GPT-6 Luna at its `medium` default. On the same Artificial Analysis Intelligence Index v4.3.2, [GPT-6 Luna (Medium)](https://artificialanalysis.ai/models/gpt-6-luna-medium) scores 29.93 against [GPT-5.6 Luna (Medium)](https://artificialanalysis.ai/models/gpt-5-6-luna-medium)'s 25.04, while Orq's captured rates fall from $0.20/$1.20 to $0.10/$0.50 per million input/output tokens. Do not compare these scores with the older index values still present on some catalogue cards. The EU preset keeps its EU-hosted GPT-5.6 Luna seat; the US-hosted successor is not a residency-compatible replacement.
 
 ## Which one to pick
 
-**Balanced Trio** is the default and the right answer for most subjective evaluation. Three lineages means three different ways of being wrong, which is the whole reason to run a panel instead of one judge three times.
+**`balanced-trio`** is the default and the right answer for most subjective evaluation. Three lineages means three different ways of being wrong, which is the whole reason to run a panel instead of one judge three times.
 
-**Strong Jury** costs about six times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
+**`strong-jury`** costs about six times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
 
-**Cheap Aggregate** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it shares two seats with Balanced Trio and costs about the same; the difference is the third lineage (Zhipu instead of OpenAI). The `zai/glm-5.3-flash` seat is costed on its catalog card rate ($0.075/$0.25 per million); usage on the judge endpoint has been billed at twice that, which would put the panel at $4.53 rather than $4.29, and Portable at $13.53 rather than $13.29.
+**`cheap-aggregate`** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it shares two seats with `balanced-trio` and costs about the same; the difference is the third lineage (Zhipu instead of OpenAI). The `zai/glm-5.3-flash` seat is costed on its catalog card rate ($0.075/$0.25 per million); usage on the judge endpoint has been billed at twice that, which would put the panel at $4.53 rather than $4.29, and Portable at $13.53 rather than $13.29.
 
-**Open-Weight / Portable** buys independence from any closed frontier vendor, and a migration path if you later want to serve the judges yourself. It is not the cheap option: it costs about three times the default trio, almost all of it the Kimi K3 seat.
+**`open-weight-portable`** buys independence from any closed frontier vendor, and a migration path if you later want to serve the judges yourself. It is not the cheap option: it costs about three times the default trio, almost all of it the Kimi K3 seat.
 
-**EU Region** seats every judge on an EU endpoint, at about the price of Balanced Trio. It is not Balanced Trio relocated: the DeepSeek seat has no EU endpoint newer than v3.1, so the panel is Anthropic, Google and OpenAI, which is what the EU catalog can field at the current generation.
+**`eu-region`** seats every judge on an EU endpoint, at about the price of `balanced-trio`. It is not `balanced-trio` relocated: the DeepSeek seat has no EU endpoint newer than v3.1, so the panel is Anthropic, Google and OpenAI, which is what the EU catalog can field at the current generation.
 
-**Single-Provider Trio** exists for workspaces locked to one provider contract. It seats the three tiers of the newest OpenAI generation, with GPT-6 Luna standing in because no GPT-6.1 Luna is listed. It is the honest version of that constraint rather than a recommendation: three OpenAI tiers correlate, and an OpenAI-generated output faces a self-preference risk the panel cannot vote away.
+**`single-provider-trio`** exists for workspaces locked to one provider contract. It seats the three tiers of the newest OpenAI generation, with GPT-6 Luna standing in because no GPT-6.1 Luna is listed. It is the honest version of that constraint rather than a recommendation: three OpenAI tiers correlate, and an OpenAI-generated output faces a self-preference risk the panel cannot vote away.
 
 ## What a preset fills in
 
@@ -61,7 +61,7 @@ A preset sends no reasoning effort, so each seat runs at its provider's default.
 ```python
 from evaluatorq import get_preset
 
-get_preset("Strong Jury").seated_efforts()
+get_preset("strong-jury").seated_efforts()
 # {'anthropic/claude-opus-5-5': 'medium', 'openai/gpt-6.1-sol': 'medium', 'google-ai/gemini-3.8-flash': 'medium'}
 ```
 
@@ -90,7 +90,7 @@ Read the catalog with a workspace-scoped key. A project-scoped key lists only wh
 
 A preset that is not in `PRESETS` still owes you a reason. `DROPPED_PRESETS` records one that shipped and was then retired, `WITHHELD_PRESETS` one that is derived and costed but not seated because a seat cannot do the job yet, and asking for either by name raises an error carrying that reason rather than a bare "unknown preset".
 
-Value Trio is the one entry in `DROPPED_PRESETS`. It was a budget panel whose measured cost ran far above its published figure, because two of its judges wrote long prose verdicts. Asking for it by name raises an error carrying that reason rather than a bare "unknown preset".
+`value-trio` is the one entry in `DROPPED_PRESETS`. It was a budget panel whose measured cost ran far above its published figure, because two of its judges wrote long prose verdicts. Asking for it by name raises an error carrying that reason rather than a bare "unknown preset".
 
 ## Router pools
 

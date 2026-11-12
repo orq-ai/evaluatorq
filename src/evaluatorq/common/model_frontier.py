@@ -259,8 +259,8 @@ def model_identity(router_id: str) -> str:
     Two IDs sharing an identity are the same weights served twice, so seating one
     means the other needs no separate review. Bedrock is the awkward case:
     `aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0` and
-    `anthropic/claude-haiku-4-5-20251001` are one model, and EU Region seats the
-    first while Balanced Trio used to seat the second.
+    `anthropic/claude-haiku-4-5-20251001` are one model, and eu-region seats the
+    first while balanced-trio used to seat the second.
     In-region Bedrock routes (`aws/us-east-1.openai.gpt-5.4`) and host region
     tags (`@eu`) are stripped the same way.
     """
@@ -645,7 +645,7 @@ def rank_cheapest_top(
     family_of: Callable[[str], str],
     max_blend: float = MAX_BLEND,
 ) -> list[ScoredModel]:
-    """The best cheap model of each family, strongest first: the Cheap Aggregate derivation.
+    """The best cheap model of each family, strongest first: the cheap-aggregate derivation.
 
     Eligible: comparable (not free), seatable (not
     NEVER_SEAT, UNROUTABLE, SUPERSEDED or under the floor), enabled, not
@@ -714,7 +714,7 @@ def region_compatible(candidate: ScoredModel, incumbent: ScoredModel) -> bool:
 
     Without this guard the arithmetic gives bad advice. `azure/eu.gpt-5.6-luna`
     beats `openai/gpt-5.4-mini` on both axes, so raw dominance says swap, but
-    Balanced Trio is general-purpose and the swap would silently pin it to the
+    balanced-trio is general-purpose and the swap would silently pin it to the
     EU. A region-pinned model may only replace another region-pinned one.
     """
     pinned = {'europe'}
@@ -738,7 +738,7 @@ The margin is deliberately asymmetric: a swap must clear it, keeping an
 incumbent never does. A swap carries churn a retained seat does not - a new
 knowledge cutoff, new failure modes, re-probing, a diff a customer sees - so
 the burden of proof sits on the change. Defending an incumbent against the
-arithmetic still requires a written reason at the call site (the Strong Jury
+arithmetic still requires a written reason at the call site (the strong-jury
 OpenAI seat is the example), it just does not require an index margin.
 """
 

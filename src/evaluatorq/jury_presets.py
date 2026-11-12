@@ -203,7 +203,7 @@ class JuryPreset(BaseModel):
         """Lineages seated more than once, whose errors correlate.
 
         Not an error. A panel may repeat a lineage deliberately, as
-        Single-Provider Trio does with three OpenAI judges, but the diversity
+        single-provider-trio does with three OpenAI judges, but the diversity
         claim weakens and the reviewer should see it rather than count IDs by
         hand.
         """
@@ -247,7 +247,7 @@ class JuryPreset(BaseModel):
 
 
 BALANCED_TRIO = JuryPreset(
-    name='Balanced Trio',
+    name='balanced-trio',
     judges=(
         # Held by claude-haiku-4-5 until the age check went in (2026-08-25) and
         # named what the frontier checks structurally cannot see: Anthropic has
@@ -279,23 +279,23 @@ BALANCED_TRIO = JuryPreset(
 )
 
 STRONG_JURY = JuryPreset(
-    name='Strong Jury',
+    name='strong-jury',
     judges=(
         'anthropic/claude-opus-5-5',
         # Reseated 2026-11-10 from gpt-5.6-sol (medium 39.2, $8.00 blend):
         # GPT-6.1 Sol is 47.8 at medium for $4.00, clear of the 2-point gate.
         'openai/gpt-6.1-sol',
-        # Reseated 2026-11-10 from gemini-3.6-flash, as on Balanced Trio.
+        # Reseated 2026-11-10 from gemini-3.6-flash, as on balanced-trio.
         'google-ai/gemini-3.8-flash',
     ),
-    # Reseated 2026-11-10 from deepseek-v4-pro, as on Balanced Trio.
+    # Reseated 2026-11-10 from deepseek-v4-pro, as on balanced-trio.
     reserve_judges=('baseten/deepseek-v4.1-flash',),
     use_when='Customer-facing benchmarks, preference data, anything that compounds.',
     estimated_cost_per_1k=27.00,
 )
 
 CHEAP_AGGREGATE = JuryPreset(
-    name='Cheap Aggregate',
+    name='cheap-aggregate',
     # Derived, not hand-picked: the best default-effort index of each model
     # family whose 3:1 blend is under MAX_BLEND, from the live catalogue plus
     # the reviewed MANUAL_MODEL_CARDS and AA_FILLS registers, minus anything
@@ -325,11 +325,11 @@ CHEAP_AGGREGATE = JuryPreset(
 )
 
 OPEN_WEIGHT_PORTABLE = JuryPreset(
-    name='Open-Weight / Portable',
+    name='open-weight-portable',
     judges=(
         # Held by gpt-oss-120b until the family entered NEVER_SEAT (PR #330
         # review, 2026-08-24), then deepseek-v4-pro; reseated 2026-11-10 to
-        # v4.1 Flash, as on Balanced Trio.
+        # v4.1 Flash, as on balanced-trio.
         'baseten/deepseek-v4.1-flash',
         # Back on Baseten at its max default (measured 43.6) from 2026-11-10.
         # The 2026-10-05 move to Wafer at an unbenchmarked `none` default was
@@ -338,7 +338,7 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
         'baseten/kimi-k3',
         # Reseated 2026-11-10 from glm-5.2 (33.7, $2.15 blend), which
         # SUPERSEDED already retired: 41.8 at max on the card rate. Same
-        # billing hold as Cheap Aggregate's seat.
+        # billing hold as cheap-aggregate's seat.
         'zai/glm-5.3-flash',
     ),
     reserve_judges=('greenpt/qwen3.6-35b-a3b',),
@@ -347,7 +347,7 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
 )
 
 EU_REGION = JuryPreset(
-    name='EU Region',
+    name='eu-region',
     judges=(
         # Reseated 2026-11-10 by the in-family frontier check: Haiku 5.5 medium
         # 34.5 at $0.11/$0.55 against Haiku 4.5 15.4 at $1.10/$5.50, and
@@ -361,13 +361,13 @@ EU_REGION = JuryPreset(
     ),
     reserve_judges=('google/eu.claude-sonnet-5',),
     use_when=(
-        'Data residency: every judge serves from an EU region. Anthropic, Google and OpenAI, which is what the EU catalog can field at the current generation: the DeepSeek seat carrying Balanced Trio has no EU endpoint newer than v3.1, so this is not that panel relocated.'
+        'Data residency: every judge serves from an EU region. Anthropic, Google and OpenAI, which is what the EU catalog can field at the current generation: the DeepSeek seat carrying balanced-trio has no EU endpoint newer than v3.1, so this is not that panel relocated.'
     ),
     estimated_cost_per_1k=4.64,
 )
 
 SINGLE_PROVIDER_TRIO = JuryPreset(
-    name='Single-Provider Trio',
+    name='single-provider-trio',
     # The three tiers of the newest OpenAI generation (user decision
     # 2026-11-10): 6.1 Sol and 6.1 Terra, and GPT-6 Luna since no 6.1 Luna is
     # listed. 6.1 Sol medium 47.8 at $2/$10 (EU sibling ladder); 6.1 Terra has
@@ -513,8 +513,8 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'glm-4-32b-0414-128k': _OLDER_GENERATION,
     'glm-4.5-airx': _OLDER_GENERATION,
     'glm-4.5-x': _OLDER_GENERATION,
-    'claude-fable-5-2': '$8/$40 per 1M on every host, no AA index on the public card and no card in /v2/models (2026-11-10). Five times the Opus 5.5 rate it would compete with; review for Strong Jury once scored.',
-    'claude-mythos-5-2': 'Same as claude-fable-5-2: $8/$40 per 1M, unscored (2026-11-10). Review for Strong Jury once scored.',
+    'claude-fable-5-2': '$8/$40 per 1M on every host, no AA index on the public card and no card in /v2/models (2026-11-10). Five times the Opus 5.5 rate it would compete with; review for strong-jury once scored.',
+    'claude-mythos-5-2': 'Same as claude-fable-5-2: $8/$40 per 1M, unscored (2026-11-10). Review for strong-jury once scored.',
     'deepseek-v4.1-flash-1017': _UNSCORED,
     'kimi-k2.8-preview': _UNSCORED,
     'kimi-k3.1-pro-highspeed': 'A faster K3.1 Pro at $4/$20 per 1M, unscored (2026-11-10). If K3.1 Pro is seated, this is its premium variant, not a separate decision.',
@@ -526,7 +526,7 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'glm-5.3-flashx': 'Same 41.8 public index as the seated glm-5.3-flash at $0.37/$1.25 against $0.075/$0.25: same score, five times the price. 2026-11-10.',
     'deepseek-v4.1-flash-fast': 'Baseten fast variant at $0.60/$2.40 per 1M, public AA index 39.5; twice deepseek-v4.1-flash and six times the deepseek-flash reserve ($0.14/$0.28) at a 3:1 blend. 2026-11-10.',
     'kimi-k3-fast': 'The same K3 weights on Fireworks at $4.50/$22.50 per 1M against Baseten $3/$15: same score, pricier. 2026-11-10.',
-    'gemini-4-argon': "Public AA index 52.6 at $2/$10 per 1M, against Strong Jury's gemini-3.8-flash at a $1.50 3:1 blend. No card in the project-scoped /v2/models, so no default-effort rung to rank on (2026-11-10). The strongest unreviewed candidate in the catalogue: rank it for Strong Jury once the drift suite has a workspace key.",
+    'gemini-4-argon': "Public AA index 52.6 at $2/$10 per 1M, against strong-jury's gemini-3.8-flash at a $1.50 3:1 blend. No card in the project-scoped /v2/models, so no default-effort rung to rank on (2026-11-10). The strongest unreviewed candidate in the catalogue: rank it for strong-jury once the drift suite has a workspace key.",
 }
 
 
@@ -534,10 +534,10 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
 # record. A shape that disappears silently leaves its users guessing, so removal
 # costs a written line here and `get_preset` hands it back by name.
 DROPPED_PRESETS: dict[str, str] = {
-    'Value Trio': (
+    'value-trio': (
         'Retired. A budget panel whose measured cost ran far above its published '
         'figure, because two of its judges wrote long prose verdicts. Use '
-        'Balanced Trio for a default panel, or Open-Weight / Portable for vendor '
+        'balanced-trio for a default panel, or open-weight-portable for vendor '
         'independence.'
     ),
 }
@@ -550,9 +550,35 @@ def all_router_ids() -> set[str]:
     }
 
 
+# The display names presets carried before they were renamed to slugs. They still
+# resolve, with a DeprecationWarning, so a caller written against the old name keeps
+# working; new code uses the slug.
+LEGACY_PRESET_NAMES: MappingProxyType[str, str] = MappingProxyType({
+    'Balanced Trio': 'balanced-trio',
+    'Strong Jury': 'strong-jury',
+    'Cheap Aggregate': 'cheap-aggregate',
+    'Open-Weight / Portable': 'open-weight-portable',
+    'EU Region': 'eu-region',
+    'Single-Provider Trio': 'single-provider-trio',
+    'Value Trio': 'value-trio',
+})
+
+
 def get_preset(name: str) -> JuryPreset:
-    """Look a preset up by name, listing the alternatives when there is no match."""
+    """Look a preset up by name, listing the alternatives when there is no match.
+
+    A pre-rename display name such as ``'Balanced Trio'`` resolves to its slug
+    (``'balanced-trio'``) with a ``DeprecationWarning``.
+    """
     name = name.strip()
+    renamed = LEGACY_PRESET_NAMES.get(name)
+    if renamed is not None:
+        warnings.warn(
+            f'jury preset {name!r} was renamed to {renamed!r}; the old name will stop working in a future release.',
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        name = renamed
     try:
         return PRESETS[name]
     except KeyError:

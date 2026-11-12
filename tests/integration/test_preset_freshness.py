@@ -95,7 +95,7 @@ def test_published_cost_matches_the_live_card_rates(garden, preset):
 
     Card rates are not always what the router bills (zai/glm-5.3-flash has been
     billed at $0.15/$0.50 against a $0.075/$0.25 card); the card leads, and the
-    gap is disclosed beside Cheap Aggregate in docs/jury-presets.md.
+    gap is disclosed beside cheap-aggregate in docs/jury-presets.md.
     """
     assert preset.cost_per_1k(garden) == preset.estimated_cost_per_1k, (
         f'{preset.name} publishes ${preset.estimated_cost_per_1k} per 1k but the live cards price it at '
@@ -314,7 +314,7 @@ def test_reviewed_successors_are_not_carried_after_they_are_seated():
 def test_reviewed_successors_are_dropped_once_they_stop_being_successors(listed):
     """A dismissal survives the seat it was written about, and then reads as fact.
 
-    Reseating Cheap Aggregate off qwen left three entries explaining why various
+    Reseating cheap-aggregate off qwen left three entries explaining why various
     qwen models were not worth taking `the seated 35b-a3b`'s place, when no qwen
     held a seat at all. Every word was still true and none of it was about anything.
     """
@@ -460,19 +460,19 @@ def test_stale_seat_waivers_are_dropped_once_the_seat_is_young_again(listed):
 
 @live
 def test_cheap_aggregate_matches_the_live_derivation(garden):
-    """Cheap Aggregate is the live top three families under MAX_BLEND, reserve the fourth.
+    """cheap-aggregate is the live top three families under MAX_BLEND, reserve the fourth.
 
     Fails with both lists when the ranking moves, so a reseat is a deliberate,
     reviewed edit to the preset and never a silent drift.
     """
     ranked = rank_cheapest_top(with_aa_fills(with_manual_cards(garden)), judge_family)
     derived = [m.router_id for m in ranked]
-    preset = PRESETS['Cheap Aggregate']
+    preset = PRESETS['cheap-aggregate']
 
     table = '\n'.join(f'  {m.router_id}  index {m.default_index}  blend {m.price:.3f}' for m in ranked[:6])
     assert (derived[:3], derived[3:4]) == (list(preset.judges), list(preset.reserve_judges)), (
         f'live ranking moved.\nderived seats {derived[:3]} reserve {derived[3:4]}\n'
         f'preset seats {list(preset.judges)} reserve {list(preset.reserve_judges)}\n'
         f'top of the ranking:\n{table}\n'
-        'Reseat Cheap Aggregate deliberately: update judges, reserve, estimate and docs/jury-presets.md.'
+        'Reseat cheap-aggregate deliberately: update judges, reserve, estimate and docs/jury-presets.md.'
     )

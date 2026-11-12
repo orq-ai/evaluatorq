@@ -416,13 +416,13 @@ class TestConstraintsHoldAcrossPresetKinds:
     """A preset constraint binds the jury as well as the pool built on it.
 
     A jury's judges are hand-picked, so they can violate the predicate, and
-    they did: the Open-Weight / Portable jury named `minimax/MiniMax-M2.7` as
+    they did: the open-weight-portable jury named `minimax/MiniMax-M2.7` as
     its reserve while `_OPEN_WEIGHT_FAMILIES` did not list minimax. Reserves
     count here because a reserve is a seat the moment a judge retires.
     """
 
     def test_every_open_weight_judge_and_reserve_is_open_weight(self):
-        jury = jury_presets.PRESETS['Open-Weight / Portable']
+        jury = jury_presets.PRESETS['open-weight-portable']
         garden = load_garden_sync()
 
         closed = [
@@ -432,13 +432,13 @@ class TestConstraintsHoldAcrossPresetKinds:
         ]
 
         assert not closed, (
-            f'{closed} sit on the Open-Weight / Portable panel but do not pass the '
+            f'{closed} sit on the open-weight-portable panel but do not pass the '
             f'open-weight predicate. Either the lineage belongs in '
             f'_OPEN_WEIGHT_FAMILIES or the seat does not belong here.'
         )
 
     def test_every_eu_judge_and_reserve_is_eu_regioned(self):
-        jury = jury_presets.PRESETS['EU Region']
+        jury = jury_presets.PRESETS['eu-region']
         garden = load_garden_sync()
 
         elsewhere = [
@@ -448,7 +448,7 @@ class TestConstraintsHoldAcrossPresetKinds:
         ]
 
         assert not elsewhere, (
-            f'{elsewhere} sit on the EU Region panel without an EU region on the card. '
+            f'{elsewhere} sit on the eu-region panel without an EU region on the card. '
             f'A data-residency preset that seats a model outside the region is the one '
             f'failure it cannot recover from.'
         )

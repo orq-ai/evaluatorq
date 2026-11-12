@@ -937,7 +937,7 @@ def llm_jury(
     Presets
     -------
     ``preset`` seats a named panel from ``evaluatorq.jury_presets`` instead of
-    listing judges by hand — ``llm_jury(name='helpfulness', preset='Balanced Trio')``.
+    listing judges by hand — ``llm_jury(name='helpfulness', preset='balanced-trio')``.
     The seats are derived from the committed model-garden snapshot and carry a
     published $/1k that a test recomputes, so a preset cannot quietly become a
     different or a differently-priced panel.

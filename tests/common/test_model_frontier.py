@@ -266,7 +266,7 @@ class TestSeatable:
 
 
 class TestRankCheapestTop:
-    """The Cheap Aggregate derivation: best model per family under a blend ceiling."""
+    """The cheap-aggregate derivation: best model per family under a blend ceiling."""
 
     @staticmethod
     def rank(garden: dict[str, ScoredModel], max_blend: float = 1.0) -> list[str]:
