@@ -210,6 +210,23 @@ def sim_role_config(llm_config: LLMCallConfig | None, task: str) -> LLMCallConfi
     return config.model_copy(update={'model': role_model(TASKS[task], task=task)})
 
 
+SIM_TASKS: tuple[str, ...] = ('sim.user', 'sim.judge', 'sim.generator')
+
+
+def sim_models(llm_config: LLMCallConfig | None, tasks: tuple[str, ...] = SIM_TASKS) -> dict[str, str]:
+    """The models the simulation call sites for ``tasks`` will send, keyed by the setting that supplied each.
+
+    Resolves through `sim_role_config`, the resolver the call sites use, so a pre-flight check sees the same models
+    the run calls. An explicit ``llm_config.model`` supplies every task and appears once.
+    """
+    from evaluatorq.common.model_roles import TASKS, model_source
+
+    config = sim_llm_config(llm_config)
+    if 'model' in config.model_fields_set:
+        return {'--sim-model / llm_config.model': config.model}
+    return {model_source(TASKS[task], task)[1]: sim_role_config(config, task).model for task in tasks}
+
+
 def resolve_sim_llm_config(*, model: str | None, llm_config: LLMCallConfig | None, caller: str) -> LLMCallConfig:
     """Fold a ``model`` shorthand and a full ``llm_config`` into one config.
 

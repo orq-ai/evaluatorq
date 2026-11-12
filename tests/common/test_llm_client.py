@@ -88,13 +88,15 @@ def _only_env(monkeypatch: pytest.MonkeyPatch, **keep: str) -> None:
         monkeypatch.setenv(name, value)
 
 
-def test_anthropic_only_env_resolves_an_owned_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize('retries', [5, 0])
+def test_anthropic_only_env_resolves_an_owned_adapter(monkeypatch: pytest.MonkeyPatch, retries: int) -> None:
+    """``max_retries=0`` is how a retry-owning caller turns the SDK layer off, so it must not read as unset."""
     from evaluatorq.anthropic import AnthropicLLMClient
 
     _only_env(monkeypatch, ANTHROPIC_API_KEY='sk-ant-test')
-    resolved = resolve_llm_client(max_retries=5)
+    resolved = resolve_llm_client(max_retries=retries)
     assert isinstance(resolved.client, AnthropicLLMClient)
-    assert resolved.client.max_retries == 5
+    assert resolved.client.max_retries == retries
     assert resolved.owned is True
     assert resolved.routes_through_orq is False
 
@@ -145,6 +147,19 @@ def test_anthropic_key_without_the_extra_raises_the_install_hint(monkeypatch: py
     assert isinstance(info.value.__cause__, ImportError)
 
 
+def test_an_anthropic_package_that_fails_to_import_is_not_reported_as_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An installed but too-old ``anthropic`` lacks names the adapter imports; the error says to upgrade, not install."""
+    import types
+
+    _only_env(monkeypatch, ANTHROPIC_API_KEY='sk-ant-test')
+    monkeypatch.setitem(sys.modules, 'anthropic', types.ModuleType('anthropic'))
+    with pytest.raises(ImportError, match='failed to import') as info:
+        resolve_llm_client()
+    assert not isinstance(info.value, MissingLLMCredentialsError)
+    assert 'not installed' not in str(info.value)
+    assert 'Upgrade it' in str(info.value)
+
+
 @pytest.mark.parametrize(
     ('keys', 'expected'),
     [
@@ -172,7 +187,10 @@ def test_configured_llm_provider_honours_require_orq_and_an_explicit_orq_key(mon
 
 
 def test_credential_keys_are_listed_in_precedence_order() -> None:
+    from evaluatorq.common.llm_client import LLM_CREDENTIAL_PROVIDERS
+
     assert LLM_CREDENTIAL_KEYS == ('ORQ_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY')
+    assert dict(LLM_CREDENTIAL_PROVIDERS) == {'ORQ_API_KEY': 'orq', 'OPENAI_API_KEY': 'openai', 'ANTHROPIC_API_KEY': 'anthropic'}
 
 
 def test_models_the_anthropic_client_cannot_serve_stop_the_run_naming_each(monkeypatch: pytest.MonkeyPatch) -> None:

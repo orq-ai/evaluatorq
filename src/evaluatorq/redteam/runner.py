@@ -29,9 +29,10 @@ from evaluatorq.common.llm_client import (
 from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import validate_reasoning_effort
-from evaluatorq.common.model_roles import role_model
+from evaluatorq.common.model_roles import model_source
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
+from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.run_store_dir import get_store_dir
@@ -48,6 +49,7 @@ from evaluatorq.redteam.adaptive.orchestrator import (
     ProgressDisplay,
     _get_active_progress,
     ensure_target_can_backtrack,
+    planned_refusal_judge_model,
     target_history_mode,
 )
 from evaluatorq.redteam.adaptive.pipeline import (
@@ -770,6 +772,38 @@ def _split_and_dedupe_targets(
     return deduped_str, agent_targets
 
 
+def redteam_models(config: LLMConfig, *, mode: Pipeline, on_router: bool) -> dict[str, dict[str, str]]:
+    """The models a red-team run will call, per client role, each keyed by the setting that supplied it.
+
+    ``attacker`` lists what runs on the attacker client: the attack model on a dynamic or hybrid run, and the refusal judge
+    when ``max_backtracks`` lets it run. ``evaluator`` lists what runs on the evaluator client: every judge and
+    replacement judge, which also covers the recommendations and the executive summary on the primary judge. Reads the
+    same config fields and the same refusal-judge rule the run does, so the pre-flight checks what the run calls.
+    """
+    attacker: dict[str, str] = {}
+    if mode is not Pipeline.STATIC:
+        default_model, default_label = model_source('smart', 'redteam.attacker')
+        attack_model = config.attacker.model
+        label = default_label if attack_model == default_model else 'LLMConfig.attacker.model (--attack-model)'
+        attacker[label] = attack_model
+        if config.max_backtracks:
+            refusal_model, refusal_label = planned_refusal_judge_model(on_router=on_router)
+            attacker[refusal_label] = refusal_model
+    default_judge, default_judge_label = model_source('smart', 'redteam.evaluator')
+    evaluator: dict[str, str] = {}
+    for i, judge in enumerate(config.evaluator.judges):
+        if i == 0:
+            label = (
+                default_judge_label if judge == default_judge else 'LLMConfig.evaluator.judges[0] (--evaluator-model)'
+            )
+        else:
+            label = f'LLMConfig.evaluator.judges[{i}]'
+        evaluator[label] = judge
+    for i, judge in enumerate(config.evaluator.replacement_judges):
+        evaluator[f'LLMConfig.evaluator.replacement_judges[{i}]'] = judge
+    return {'attacker': attacker, 'evaluator': evaluator}
+
+
 def _validate_credentials_and_deps(
     *,
     config: LLMConfig,
@@ -778,22 +812,24 @@ def _validate_credentials_and_deps(
     resolved_mode: Pipeline,
     dataset: Path | str | None,
 ) -> None:
-    # Early credential validation — fail fast with a clear message.
-    # Also check per-role clients: if either role has a pre-configured client,
-    # we don't need global credentials.
-    has_role_client = config.attacker.client is not None or config.evaluator.client is not None
-    if llm_client is None and not has_role_client:
-        if configured_llm_provider() is None:
-            raise CredentialError(
-                'Missing LLM credentials for attack/evaluation models. '
-                'Set OPENAI_API_KEY for direct OpenAI access, ORQ_API_KEY to use the ORQ router, '
-                'or ANTHROPIC_API_KEY to use Claude directly.'
-            )
-        require_models_served_by_provider({
-            'EVALUATORQ_SMART_MODEL (attacker)': config.attacker.model,
-            **{f'EVALUATORQ_SMART_MODEL (judge {i})': judge for i, judge in enumerate(config.evaluator.judges, 1)},
-            'EVALUATORQ_CLASSIFIER_MODEL': role_model('classifier', task='redteam.refusal_judge'),
-        })
+    # Early credential validation, before any work. A role with its own client, or a run with an injected client,
+    # needs nothing from the environment; every other role resolves its client from it.
+    if llm_client is None:
+        provider = configured_llm_provider()
+        planned = redteam_models(config, mode=resolved_mode, on_router=provider == 'orq')
+        from_env: dict[str, str] = {}
+        for role, models in planned.items():
+            role_config: LLMCallConfig = getattr(config, role)
+            if role_config.client is None:
+                from_env.update(models)
+        if from_env:
+            if provider is None:
+                raise CredentialError(
+                    'Missing LLM credentials for attack/evaluation models. '
+                    'Set OPENAI_API_KEY for direct OpenAI access, ORQ_API_KEY to use the ORQ router, '
+                    'or ANTHROPIC_API_KEY to use Claude directly.'
+                )
+            require_models_served_by_provider(from_env)
 
     # Fail fast: static/hybrid runs that pull static datapoints from HuggingFace
     # need huggingface-hub. Check now rather than deep in the static leg — in
@@ -1188,7 +1224,7 @@ async def _generate_recommendations(
     except Exception as exc:
         logger.warning('Failed to generate focus area recommendations', exc_info=True)
         report.pipeline_warnings.append(
-            f'Failed to generate focus area recommendations ({exc}). Check LLM credentials and model configuration.'
+            f'Failed to generate focus area recommendations ({scrub_known_secrets(str(exc))}). Check LLM credentials and model configuration.'
         )
     return _PostProcessingOutcome(recorded=recorded, usage=usage)
 
@@ -1233,7 +1269,7 @@ async def _generate_executive_summary_section(
     except Exception as exc:
         logger.warning('Failed to generate executive summary', exc_info=True)
         report.pipeline_warnings.append(
-            f'Failed to generate executive summary ({exc}). Check LLM credentials and model configuration.'
+            f'Failed to generate executive summary ({scrub_known_secrets(str(exc))}). Check LLM credentials and model configuration.'
         )
     return _PostProcessingOutcome(recorded=recorded, usage=usage)
 

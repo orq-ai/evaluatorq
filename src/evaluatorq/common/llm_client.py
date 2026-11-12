@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import contextlib
 import weakref
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast, overload
 
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
@@ -45,10 +46,17 @@ else:
 ORQ_DEFAULT_HOST = DEFAULT_ORQ_BASE_URL
 ORQ_ROUTER_SUFFIX = '/v3/router'
 
-LLM_CREDENTIAL_KEYS: tuple[str, ...] = ('ORQ_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY')
-"""The environment variables that can supply an LLM client, in the order `resolve_llm_client` tries them."""
-
 LLMProvider = Literal['orq', 'openai', 'anthropic']
+
+LLM_CREDENTIAL_PROVIDERS: Mapping[str, LLMProvider] = MappingProxyType({
+    'ORQ_API_KEY': 'orq',
+    'OPENAI_API_KEY': 'openai',
+    'ANTHROPIC_API_KEY': 'anthropic',
+})
+"""Each environment variable that can supply an LLM client and the provider it picks, in the order `resolve_llm_client` tries them."""
+
+LLM_CREDENTIAL_KEYS: tuple[str, ...] = tuple(LLM_CREDENTIAL_PROVIDERS)
+"""The environment variables that can supply an LLM client, in the order `resolve_llm_client` tries them."""
 
 
 def orq_base_url() -> str:
@@ -209,23 +217,24 @@ def resolve_orq_credential(client: AsyncOpenAI | None = None) -> str | None:
 def configured_llm_provider(*, extra_api_key: str | None = None, require_orq: bool = False) -> LLMProvider | None:
     """The provider `resolve_llm_client` picks from the environment, or ``None`` when no key is set.
 
-    The one place the precedence lives: ``ORQ_API_KEY`` (or an explicit ``extra_api_key``), then ``OPENAI_API_KEY``, then ``ANTHROPIC_API_KEY``, in the order of `LLM_CREDENTIAL_KEYS`. With ``require_orq`` only the Orq key counts. An injected client is the caller's business and is not considered here.
+    The one place the precedence lives: an explicit ``extra_api_key`` picks Orq, and otherwise the first key of `LLM_CREDENTIAL_PROVIDERS` that is set (``ORQ_API_KEY``, then ``OPENAI_API_KEY``, then ``ANTHROPIC_API_KEY``). With ``require_orq`` only the Orq key counts. An injected client is the caller's business and is not considered here.
     """
-    if extra_api_key or env_raw('ORQ_API_KEY'):
+    if extra_api_key:
         return 'orq'
-    if require_orq:
-        return None
-    if env_raw('OPENAI_API_KEY'):
-        return 'openai'
-    if env_raw('ANTHROPIC_API_KEY'):
-        return 'anthropic'
+    for key, provider in LLM_CREDENTIAL_PROVIDERS.items():
+        if require_orq and provider != 'orq':
+            break
+        if env_raw(key):
+            return provider
     return None
 
 
 def require_models_served_by_provider(models: Mapping[str, str]) -> None:
-    """Stop a run before any work when the environment picked Anthropic and a model it will use is not a Claude id.
+    """Stop a run before any work when the environment picked Anthropic and a model it will use names another provider.
 
     A leftover ``ANTHROPIC_API_KEY`` with no Orq or OpenAI key makes Anthropic the provider, while the built-in role defaults are ``openai/`` ids it refuses. Without this check the run starts and dies at the first call. Does nothing for any other provider.
+
+    The check is ``normalize_model``'s and no wider: it rejects a ``provider/`` prefix other than ``anthropic/``. A bare id such as ``gpt-6-sol`` passes and fails at the API instead, because Bedrock and Vertex ids do not follow one Claude naming pattern a positive rule could match.
 
     Args:
         models: Each model a command will use, keyed by where it is set (a role variable such as ``EVALUATORQ_SMART_MODEL`` or a flag), so the error can name what to change. The model rule itself stays in the adapter's ``normalize_model``.
@@ -258,13 +267,23 @@ def _resolve_anthropic_client(max_retries: int | None) -> ResolvedClient:
     """
     try:
         from anthropic import DEFAULT_MAX_RETRIES, AsyncAnthropic
-    except ImportError as exc:
+
+        from evaluatorq.anthropic.client import wrap_anthropic_client
+    except ModuleNotFoundError as exc:
+        if exc.name != 'anthropic':
+            raise
         raise MissingLLMCredentialsError(
             'ANTHROPIC_API_KEY is the only LLM key set, but the anthropic package is not installed. '
             'Install it with: uv add "evaluatorq[anthropic]" (or: python -m pip install "evaluatorq[anthropic]"), '
             'or set ORQ_API_KEY or OPENAI_API_KEY.'
         ) from exc
-    from evaluatorq.anthropic.client import wrap_anthropic_client
+    except ImportError as exc:
+        # Installed but unusable, typically older than the extra's floor: reinstalling the extra is the fix, and
+        # "not installed" would send the reader looking for a package that is there.
+        raise ImportError(
+            f'ANTHROPIC_API_KEY is the only LLM key set, but the installed anthropic package failed to import ({exc}). '
+            'Upgrade it with: uv add "evaluatorq[anthropic]" (or: python -m pip install -U "evaluatorq[anthropic]").'
+        ) from exc
 
     retries = max_retries if max_retries is not None else DEFAULT_MAX_RETRIES
     # The adapter is duck-typed as an `AsyncOpenAI` everywhere downstream.

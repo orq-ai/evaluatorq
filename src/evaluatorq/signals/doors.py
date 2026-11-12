@@ -21,7 +21,7 @@ from evaluatorq.common.judge import ClassifyQuestion, run_judge
 from evaluatorq.common.llm_client import LLMConfigurationError, as_llm_client, resolve_llm_client
 from evaluatorq.common.redact import normalize_placeholders, scrub_known_secrets
 from evaluatorq.contracts import LLMCallConfig
-from evaluatorq.signals.config import SignalsConfig
+from evaluatorq.signals.config import SignalsConfig, require_classifier_served
 from evaluatorq.signals.models import Evidence, SignalResult, result
 from evaluatorq.signals.preconditions import source_tool_coverage
 from evaluatorq.signals.walk import CallRecord, SignalContext, call_tool_schemas, raw_tool_arguments
@@ -191,6 +191,8 @@ async def classify_tool_doors(
 
     verdicts: dict[int, tuple[str, Door]] = {}
     if records:
+        if client is None:
+            require_classifier_served(resolved_config)
         verdicts = await _classify_calls(trajectory, records, resolved_config, as_llm_client(client))
 
     out: dict[str, SignalResult] = {}

@@ -8,7 +8,13 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel, Field, create_model
 
-from evaluatorq.common.judge import ClassifyQuestion, JudgeOutcome, build_eval_replacements, run_judge
+from evaluatorq.common.judge import (
+    ClassifyQuestion,
+    JudgeOutcome,
+    build_eval_replacements,
+    models_called_off_router,
+    run_judge,
+)
 from evaluatorq.common.jury import (
     TIE_LOSES_VERDICT,
     AggregatorSpec,
@@ -23,9 +29,14 @@ from evaluatorq.common.jury import (
     run_jury,
     validate_aggregator,
 )
-from evaluatorq.common.llm_client import as_llm_client, client_routes_through_orq, resolve_llm_client
+from evaluatorq.common.llm_client import (
+    as_llm_client,
+    client_routes_through_orq,
+    require_models_served_by_provider,
+    resolve_llm_client,
+)
 from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
-from evaluatorq.common.model_roles import role_model
+from evaluatorq.common.model_roles import model_source, role_model
 from evaluatorq.common.output_adapters import (
     inputs_to_messages,
     output_error_text,
@@ -656,6 +667,28 @@ def _resolve_and_validate_panel(
     return panel, deduped
 
 
+def _require_panel_served(
+    *, client: Any, judges: list[str] | None, model: str | None, panel: list[str], replacement_judges: list[str] | None
+) -> None:
+    """Stop at declaration, before any target call is billed, when the env-resolved client cannot serve the panel.
+
+    Only a panel left to the environment is checked, and only when ``ANTHROPIC_API_KEY`` is the one LLM key set
+    (`require_models_served_by_provider`); declaring a jury still needs no credentials.
+    """
+    if client is not None:
+        return
+    if judges is not None:
+        named = {f'judges[{i}]': judge for i, judge in enumerate(panel)}
+    elif model is not None:
+        named = {'model': model}
+    else:
+        default_model, default_label = model_source('smart')
+        named = {default_label: default_model}
+    for i, judge in enumerate(replacement_judges or []):
+        named[f'replacement_judges[{i}]'] = judge
+    require_models_served_by_provider(models_called_off_router(named))
+
+
 def _apply_preset(
     preset: str | None,
     *,
@@ -1207,6 +1240,9 @@ def llm_jury(
     # single-element list, not a plain local: the scorer is a module-level
     # function bound by partial and so cannot rebind this frame's names.
     client_state = [as_llm_client(client)]
+    _require_panel_served(
+        client=client_state[0], judges=judges, model=model, panel=panel, replacement_judges=replacement_judges
+    )
     verdict_model = _build_verdict_model(
         verdict_kind=verdict_kind,
         labels=label_names,
@@ -1600,6 +1636,9 @@ def llm_jury_pairwise(
             extra_body=extra_body,
         )
     _warn_unread_criteria(prompt=prompt, criteria=criteria, classify_seated=bool(classify_judges))
+    _require_panel_served(
+        client=client, judges=judges, model=model, panel=deduped, replacement_judges=replacement_judges
+    )
     return PairwiseComparator(
         # Pass the deduped panel so the comparator's no-redundancy check
         # (`len(panel) == 1`) matches the panel run_jury actually runs, keeping

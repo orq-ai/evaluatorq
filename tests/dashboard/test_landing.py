@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 
 import pytest
@@ -535,10 +536,15 @@ class TestLandingScreen:
         assert 'API key' in r.text
         assert '<a class="nav-item active" href="/settings"' in r.text
 
-    def test_settings_shows_the_anthropic_key_row_unset_by_default(self, client: TestClient) -> None:
+    def test_settings_shows_the_anthropic_key_row_unset_by_default(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+        monkeypatch.setenv('ORQ_API_KEY', 'orq-test-key-1234')
+        monkeypatch.setenv('OPENAI_API_KEY', 'sk-openai-test-key-5678')
         r = client.get('/settings')
-        assert 'Anthropic API key' in r.text
-        assert 'not set' in r.text
+        # The other two keys are set, so 'not set' can only come from the Anthropic row.
+        assert re.search(r'Anthropic API key</span><span class="config-val">(<[^>]+>)*not set<', r.text)
 
     def test_settings_never_prints_a_set_anthropic_key(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-secret-value-1234')

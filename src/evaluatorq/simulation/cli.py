@@ -701,12 +701,14 @@ def _forwarded_kwargs(cfg: BaseModel) -> dict[str, Any]:
     return {name: value for name, value in model_kwargs(cfg).items() if name not in _CLI_OWNED_FIELDS}
 
 
-def _sim_model(cfg: BaseModel) -> str:
-    """The model every simulation-side LLM call uses, for display."""
-    llm_config: LLMCallConfig | None = getattr(cfg, 'llm_config', None)
-    if llm_config is not None and 'model' in llm_config.model_fields_set:
-        return llm_config.model
-    return role_model('fast', task='sim.user')
+def _require_sim_models_served(cfg: SimulateCliConfig | GenerateAndSimulateCliConfig, openai_model: str | None) -> None:
+    """Check every model a simulation run will call, the ``--openai-model`` target included, before any work."""
+    from evaluatorq.simulation._config import sim_models
+
+    models = sim_models(cfg.llm_config)
+    if openai_model is not None:
+        models['--openai-model'] = openai_model
+    _require_models_served(models)
 
 
 @app.command()
@@ -735,8 +737,15 @@ def schema(
     echo_schema(SimulateCliConfig if command == 'simulate' else GenerateAndSimulateCliConfig, output=False)
 
 
-def _setup_run_output(*, verbose: int, quiet: bool, yes: bool, executive_summary: bool, sim_model: str) -> Any:
-    """Configure logging, build the run hooks (``None`` under ``--quiet``) and echo the simulation model.
+def _setup_run_output(
+    *,
+    verbose: int,
+    quiet: bool,
+    yes: bool,
+    cfg: SimulateCliConfig | GenerateAndSimulateCliConfig,
+    openai_model: str | None,
+) -> Any:
+    """Configure logging, build the run hooks (``None`` under ``--quiet``), check the models and echo the simulation model.
 
     Runs before the input-source validation so a validation error is rendered by the same console
     the run would have used.
@@ -755,15 +764,14 @@ def _setup_run_output(*, verbose: int, quiet: bool, yes: bool, executive_summary
         hooks = RichHooks(
             console=log_console,
             skip_confirm=should_skip_confirm(yes),
-            defer_summary=executive_summary,
+            defer_summary=cfg.executive_summary,
             verbose=verbose,
         )
     _configure_logging(verbose, console=log_console)
-    _require_models_served({
-        'the simulation model (EVALUATORQ_FAST_MODEL or --sim-model)': sim_model,
-        'EVALUATORQ_SMART_MODEL (judge)': role_model('smart', task='sim.judge'),
-    })
-    _echo_using(sim_model)
+    _require_sim_models_served(cfg, openai_model)
+    from evaluatorq.simulation._config import sim_role_config
+
+    _echo_using(sim_role_config(cfg.llm_config, 'sim.user').model)
     return hooks
 
 
@@ -1067,9 +1075,7 @@ def simulate(
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
     cfg = _resolve_cli_config(ctx, SimulateCliConfig, _SIMULATE_FLAGS, cli_args, config_source)
-    hooks = _setup_run_output(
-        verbose=verbose, quiet=quiet, yes=yes, executive_summary=cfg.executive_summary, sim_model=_sim_model(cfg)
-    )
+    hooks = _setup_run_output(verbose=verbose, quiet=quiet, yes=yes, cfg=cfg, openai_model=openai_model)
     _validate_input_sources(ctx, cfg)
 
     try:
@@ -1358,9 +1364,7 @@ def run(
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
     cfg = _resolve_cli_config(ctx, GenerateAndSimulateCliConfig, _RUN_FLAGS, cli_args, config_source)
-    hooks = _setup_run_output(
-        verbose=verbose, quiet=quiet, yes=yes, executive_summary=cfg.executive_summary, sim_model=_sim_model(cfg)
-    )
+    hooks = _setup_run_output(verbose=verbose, quiet=quiet, yes=yes, cfg=cfg, openai_model=openai_model)
 
     try:
         resolved_agent_description = asyncio.run(
@@ -1562,9 +1566,9 @@ def generate(
         log_console = Console(stderr=True)
         hooks = RichHooks(console=log_console, verbose=verbose)
     _configure_logging(verbose, console=log_console)
-    _require_models_served({
-        'the generation model (EVALUATORQ_FAST_MODEL or --sim-model)': _generation_model(sim_model)
-    })
+    from evaluatorq.simulation._config import sim_models
+
+    _require_models_served(sim_models(_sim_llm_config(sim_model), ('sim.generator',)))
     if not quiet:
         # Plan box (beats 1+2: input + what will happen). Subsumes the plain
         # "Using: <provider>" line — provider·model is a row here.

@@ -9,7 +9,7 @@ from loguru import logger
 from evaluatorq.common.judge import ClassifyQuestion, run_judge
 from evaluatorq.common.llm_client import LLMConfigurationError, as_llm_client, resolve_llm_client
 from evaluatorq.contracts import LLMCallConfig
-from evaluatorq.signals.config import SignalsConfig, ToolRole
+from evaluatorq.signals.config import SignalsConfig, ToolRole, require_classifier_served
 from evaluatorq.signals.walk import calls, walk
 
 if TYPE_CHECKING:
@@ -52,6 +52,8 @@ async def classify_tool_roles(
                 seen.add(name)
     if not names:
         return resolved_config
+    if client is None:
+        require_classifier_served(resolved_config)
 
     resolved_client = None
     active_client = client

@@ -19,6 +19,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -2166,6 +2167,17 @@ class RedTeamReport(BaseModel):
         if isinstance(value, str):
             return normalize_framework(value)
         return value
+
+    @field_validator('pipeline_warnings')
+    @classmethod
+    def _scrub_pipeline_warnings(cls, warnings: list[str]) -> list[str]:
+        """A warning can quote a provider exception, which can quote a credential; scrub it like a judge failure reason."""
+        return [scrub_known_secrets(warning) for warning in warnings]
+
+    @field_serializer('pipeline_warnings')
+    def _scrub_pipeline_warnings_on_save(self, warnings: list[str]) -> list[str]:
+        """The run appends warnings after the report is built, past the validator, so scrub them again on the way out."""
+        return [scrub_known_secrets(warning) for warning in warnings]
 
 
 # ---------------------------------------------------------------------------

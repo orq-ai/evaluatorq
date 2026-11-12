@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tests.redteam.reports.test_rebuild_filtered import _make_report, _make_result
 
 from evaluatorq.redteam.reports.export_html import render_report_body
@@ -48,3 +50,45 @@ def test_dashboard_shows_run_warnings() -> None:
     html = redteam_report_tabs('rid', _report([_WARNING]))
     assert 'id="section-pipeline_warnings"' in html
     assert 'strategy generation failed (HTTP 429)' in html
+
+
+_LEAKY = 'Failed to generate executive summary (Error code: 401 - Incorrect API key provided: sk-proj-AbCdEf1234567890AbCdEf1234567890).'
+
+
+def test_a_credential_in_a_warning_is_scrubbed_on_validation_and_on_save() -> None:
+    import json
+
+    from evaluatorq.redteam.contracts import RedTeamReport
+
+    built = RedTeamReport.model_validate({**_report([]).model_dump(mode='json'), 'pipeline_warnings': [_LEAKY]})
+    assert built.pipeline_warnings == [_LEAKY.replace('sk-proj-AbCdEf1234567890AbCdEf1234567890', '<API_KEY>')]
+
+    # The run appends warnings after the report is built, which skips the validator; the saved JSON is still clean.
+    appended = _report([])
+    appended.pipeline_warnings.append(_LEAKY)
+    saved = json.loads(appended.model_dump_json())
+    assert 'sk-proj-' not in json.dumps(saved['pipeline_warnings'])
+    assert '<API_KEY>' in saved['pipeline_warnings'][0]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_executive_summary_records_a_scrubbed_warning(monkeypatch) -> None:
+    from openai import AsyncOpenAI
+
+    from evaluatorq.redteam import runner
+    from evaluatorq.redteam.contracts import LLMConfig
+
+    async def leaky(*_args, **_kwargs):
+        raise RuntimeError('Incorrect API key provided: sk-proj-AbCdEf1234567890AbCdEf1234567890')
+
+    monkeypatch.setattr('evaluatorq.common.reports.executive_summary.generate_executive_summary', leaky)
+    report = _report([])
+    await runner._generate_executive_summary_section(
+        report=report,
+        llm_client=AsyncOpenAI(api_key='sk-test', max_retries=0),
+        config=LLMConfig(),
+        evaluator_model='openai/gpt-6-sol',
+    )
+    assert len(report.pipeline_warnings) == 1
+    assert 'sk-proj-' not in report.pipeline_warnings[0]
+    assert '<API_KEY>' in report.pipeline_warnings[0]
