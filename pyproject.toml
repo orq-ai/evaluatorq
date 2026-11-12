@@ -162,7 +162,6 @@ src = [ "src" ]
     "src/evaluatorq/dashboard/library.py" = ["BLE001"]
     "src/evaluatorq/dashboard/redteam_views.py" = ["BLE001"]
     "src/evaluatorq/dashboard/report_tabs.py" = ["BLE001"]
-    "src/evaluatorq/dashboard/sim_compare.py" = ["BLE001"]
     "src/evaluatorq/dashboard/sim_views.py" = ["BLE001"]
     "src/evaluatorq/fetch_data.py" = ["BLE001"]
     "src/evaluatorq/integrations/callable_integration/target.py" = ["BLE001"]
@@ -351,6 +350,7 @@ dev = [
   "pytest>=8.0.0",
   "pytest-asyncio>=1.2.0",
   "pytest-timeout>=2.3.0",
+  "pytest-xdist>=3.6.0",
   "tomli>=2.0.0; python_version < '3.11'",
   "ty==0.0.90",
   "ruff>=0.14.3",
