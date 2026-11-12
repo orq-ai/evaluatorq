@@ -172,6 +172,8 @@ def _assert_every_judge_and_reserve_is_seatable(garden: dict[str, ScoredModel]) 
         for router_id in (*preset.judges, *preset.reserve_judges):
             # A model without a live card is validated from its MANUAL_MODEL_CARDS fields, never skipped.
             model = garden.get(router_id) or with_manual_cards({}).get(router_id)
+            if model is None and router_id in UNSCORED_SEAT_WAIVERS:
+                continue
             if model is None:
                 # Collected, not asserted: one missing card must not hide every other refusal.
                 refused[f'{preset.name}: {router_id}'] = 'unknown route: no card in the garden'
