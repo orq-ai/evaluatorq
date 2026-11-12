@@ -91,6 +91,7 @@ def render_headlines(cmp: Comparison, view: str, state: TableState | None = None
         finding: str,
         why: str,
         *,
+        unit: str = '',
         why_html: str = '',
         tone: str = '',
         target: str | None = None,
@@ -102,7 +103,8 @@ def render_headlines(cmp: Comparison, view: str, state: TableState | None = None
             f'<span><span class="rk-head-finding">{esc(finding)}</span>'
             f'<span class="rk-head-why">{esc(why)}{why_html}</span></span>'
         )
-        lead = f'<span class="rk-head-number">{esc(number)}</span>{text}'
+        unit_html = f' <span class="rk-head-unit">{esc(unit)}</span>' if unit else ''
+        lead = f'<span class="rk-head-number">{esc(number)}{unit_html}</span>{text}'
         if target is None:
             return f'<div class="rk-head{tone_cls}">{lead}<span></span></div>'
         go_text = 'Showing these &#x2713;' if on else f'{esc(go)} &rarr;'
@@ -125,15 +127,16 @@ def render_headlines(cmp: Comparison, view: str, state: TableState | None = None
         )
         return f' · most in {link} ({count} of {len(pairs)})'
 
-    def plural(n: int) -> str:
-        return f'{n} conversation{"" if n == 1 else "s"}'
+    def unit(n: int) -> str:
+        return 'conversation' if n == 1 else 'conversations'
 
     if regressed:
         rows.append(
             row(
-                plural(len(regressed)),
+                str(len(regressed)),
                 'Regressed in B',
                 'Goal met in A, missed in B',
+                unit=unit(len(regressed)),
                 why_html=where(regressed),
                 tone='bad',
                 target='regressed',
@@ -143,9 +146,10 @@ def render_headlines(cmp: Comparison, view: str, state: TableState | None = None
     if improved:
         rows.append(
             row(
-                plural(len(improved)),
+                str(len(improved)),
                 'Improved in B',
                 'Goal missed in A, met in B',
+                unit=unit(len(improved)),
                 why_html=where(improved),
                 tone='good',
                 target='improved',
@@ -155,9 +159,10 @@ def render_headlines(cmp: Comparison, view: str, state: TableState | None = None
     if errored:
         rows.append(
             row(
-                plural(len(errored)),
+                str(len(errored)),
                 'Error changes',
                 'A conversation errored in one run and not the other',
+                unit=unit(len(errored)),
                 why_html=where(errored),
                 tone='warn',
                 target='error',
@@ -180,9 +185,10 @@ def render_headlines(cmp: Comparison, view: str, state: TableState | None = None
         verb = 'held steady' if abs(pts) < 0.5 else ('rose' if pts > 0 else 'fell')
         rows.append(
             row(
-                f'{pts:+.0f} pts',
+                f'{pts:+.0f}',
                 f'Goal rate {verb}',
                 f'{agg_a.goal_rate:.0%} in A, {agg_b.goal_rate:.0%} in B',
+                unit='pts',
                 target='all',
                 go='All conversations',
             )
@@ -297,7 +303,9 @@ def _tiles(cmp: Comparison) -> str:
                 'sub_html': f'<span class="cmp-tile-note">Hidden: you filtered by {cmp.outcome_filter}</span>',
             }
         d = None if va is None or vb is None else vb - va
-        pill = delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
+        # An unchanged value already reads as "x → x"; a "no change" pill on top is noise.
+        flat = d is not None and abs(d) < FLAT_DELTA
+        pill = '' if flat else delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
         return {
             'label': label,
             'value': fmt(vb),
@@ -457,21 +465,21 @@ def _outcomes_panel(cmp: Comparison, state: TableState | None = None) -> str:
     return panel('Outcomes', body, sub='Filtered conversations per run')
 
 
-def _scores_panel(rows: list[ScoreRow], outcome_filter: str = '') -> str:
+def _hidden_scores_note(rows: list[ScoreRow], outcome_filter: str) -> str:
+    hidden = [r.label for r in rows if r.label in _GOAL_SCORERS] if outcome_filter else []
+    return f'Hidden: {", ".join(hidden)}, because you filtered by {outcome_filter}' if hidden else ''
+
+
+def _scores_panel(rows: list[ScoreRow], outcome_filter: str = '') -> str | None:
     """Scorer and turn-quality means: A and B as numbers, on a shared 0..1 track
     where the row fits it, plus the delta. Under an outcome filter the goal
-    scorer rows are left out, like the goal tiles."""
-    hidden = [r.label for r in rows if r.label in _GOAL_SCORERS] if outcome_filter else []
-    rows = [r for r in rows if r.label not in hidden]
-    hidden_note = (
-        f'<p class="cmp-note">Hidden: {esc(", ".join(hidden))}, because you filtered by {esc(outcome_filter)}</p>'
-        if hidden
-        else ''
-    )
+    scorer rows are left out, like the goal tiles. ``None`` when no row is
+    left to show."""
+    hidden_note = _hidden_scores_note(rows, outcome_filter)
+    rows = [r for r in rows if not (outcome_filter and r.label in _GOAL_SCORERS)]
+    hidden_note = f'<p class="cmp-note">{esc(hidden_note)}</p>' if hidden_note else ''
     if not rows:
-        return panel(
-            'Scores', hidden_note or '<p class="sim-empty">Neither run recorded scorer or turn-quality data.</p>'
-        )
+        return None
 
     def failed(v: float | None, dropped: int) -> bool:
         return v is None and dropped > 0
@@ -527,6 +535,18 @@ def _scores_panel(rows: list[ScoreRow], outcome_filter: str = '') -> str:
     return panel('Scores', f'{legend}<div class="cmp-scores">{body}</div>{note}{hidden_note}', sub=sub)
 
 
+def _outcomes_and_scores(cmp: Comparison, state: TableState) -> str:
+    """Outcomes and Scores side by side. With no score row to show, Outcomes
+    takes the row and a one-line note says why, instead of a near-empty card."""
+    scores = _scores_panel(cmp.scores, cmp.outcome_filter)
+    if scores is not None:
+        return f'<div class="cmp-grid">{_outcomes_panel(cmp, state)}{scores}</div>'
+    note = _hidden_scores_note(cmp.scores, cmp.outcome_filter) or 'Neither run recorded scorer or turn-quality data.'
+    return (
+        f'<div class="cmp-grid">{_outcomes_panel(cmp, state)}</div><p class="cmp-note cmp-scores-note">{esc(note)}</p>'
+    )
+
+
 def render_compare_body(cmp: Comparison, state: TableState) -> str:
     """Everything left of the filter rail."""
     return (
@@ -534,7 +554,7 @@ def render_compare_body(cmp: Comparison, state: TableState) -> str:
         f'{filter_strip(cmp, state)}'
         f'{render_headlines(cmp, resolve_view(cmp, state), state)}'
         f'{_tiles(cmp)}'
-        f'<div class="cmp-grid">{_outcomes_panel(cmp, state)}{_scores_panel(cmp.scores, cmp.outcome_filter)}</div>'
+        f'{_outcomes_and_scores(cmp, state)}'
         f'{where_panel(cmp, state)}'
         f'{render_conversations(cmp, state)}'
     )
