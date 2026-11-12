@@ -10,6 +10,7 @@ from loguru import logger
 
 from evaluatorq.anthropic.convert import build_messages_request, to_chat_completion, to_parsed_chat_completion
 from evaluatorq.anthropic.responses import build_responses_request, to_parsed_response, to_response
+from evaluatorq.common.llm_client import LLMConfigurationError
 
 FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 _PLATFORMS_WITHOUT_FALLBACKS = ('Bedrock', 'Vertex')
@@ -34,7 +35,7 @@ class _Sender:
         if 'fallbacks' in request.get('extra_body', {}):
             platform = type(self._client).__name__
             if any(name in platform for name in _PLATFORMS_WITHOUT_FALLBACKS):
-                raise ValueError(
+                raise LLMConfigurationError(
                     f'Server-side fallbacks are available on the Claude API only, not on {platform} '
                     '(Amazon Bedrock and Google Vertex AI). Remove extra_kwargs={"fallbacks": ...} from the LLMCallConfig.'
                 )

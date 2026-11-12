@@ -94,3 +94,26 @@ async def test_the_trace_finder_run_store_wraps_a_raw_anthropic_client(monkeypat
     await planner('refunds', PopulationRequest(), within_results=False)
     assert len(seen) == 1
     assert isinstance(seen[0], AnthropicLLMClient)
+
+
+def test_the_merge_call_of_apply_recommendations_takes_a_raw_anthropic_client() -> None:
+    # apply_recommendations never wraps its llm_client; the executor in common.llm_call does.
+    from evaluatorq.common.apply import _merge_call
+
+    fake = scripted([text('{"instructions": "Be kind."}')])
+    reply = asyncio.run(
+        _merge_call(fake, 'claude-sonnet-5-5', 'system', 'user', max_tokens=100, cfg=None, temperature=None)
+    )
+    assert reply == '{"instructions": "Be kind."}'
+    assert fake.messages.calls, 'the Anthropic client was never reached'
+    assert fake.messages.calls[0]['messages'] == [{'role': 'user', 'content': [{'type': 'text', 'text': 'user'}]}]
+
+
+def test_the_same_raw_client_always_gets_the_same_adapter() -> None:
+    from evaluatorq.common.llm_client import as_llm_client, is_anthropic_client
+
+    raw = _real_client()
+    assert is_anthropic_client(raw)
+    wrapped = as_llm_client(raw)
+    assert as_llm_client(raw) is wrapped
+    assert as_llm_client(_real_client()) is not wrapped

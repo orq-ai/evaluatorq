@@ -152,13 +152,25 @@ def test_reasoning_effort_none_sends_no_output_config() -> None:
 
 
 def test_fallbacks_go_to_the_beta_endpoint_with_the_beta_header_and_the_body_field() -> None:
-    wire = Wire()
+    # The reply says another model served the turn and carries a block type the adapter does not read; only the text is kept.
+    served_by_fallback = {
+        **_REPLY,
+        'model': 'claude-sonnet-5',
+        'content': [
+            {'type': 'fallback', 'from': {'model': 'claude-sonnet-5-5'}, 'to': {'model': 'claude-sonnet-5'}},
+            {'type': 'text', 'text': 'rescued'},
+        ],
+    }
+    wire = Wire(served_by_fallback)
     _, client = _client(wire)
-    asyncio.run(
+    completion = asyncio.run(
         client.chat.completions.create(
             model='claude-sonnet-5-5', messages=[{'role': 'user', 'content': 'hi'}], fallbacks='default'
         )
     )
+    assert completion.model == 'anthropic/claude-sonnet-5'
+    assert completion.choices[0].message.content == 'rescued'
+    assert completion.choices[0].finish_reason == 'stop'
     request = wire.sent
     assert request.url.path == '/v1/messages'
     assert request.url.params.get('beta') == 'true'
@@ -342,11 +354,10 @@ def test_a_tool_result_part_that_is_not_text_raises() -> None:
     assert wire.requests == []
 
 
-@pytest.mark.parametrize('tool_choice', ['required', {'type': 'function', 'function': {'name': 'lookup'}}])
-def test_a_forced_tool_choice_without_tools_raises(tool_choice: Any) -> None:
+def test_an_untranslatable_tool_choice_without_tools_raises() -> None:
     wire = Wire()
-    with pytest.raises(ValueError, match='cannot send tool_choice'):
-        _chat(wire, messages=[{'role': 'user', 'content': 'x'}], tool_choice=tool_choice)
+    with pytest.raises(ValueError, match='cannot translate tool_choice'):
+        _chat(wire, messages=[{'role': 'user', 'content': 'x'}], tool_choice={'type': 'allowed_tools'})
     assert wire.requests == []
 
 

@@ -954,9 +954,11 @@ async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question
     )
 
     assert len(calls) == 2
-    assert all('Judge the supplied state' in call['prompt_template'] for call in calls)
-    texts = [call['replacements']['classify_question'] for call in calls]
-    assert {t for t in texts if 'tone?' in t} and {t for t in texts if 'risk?' in t}
+    # No prompt is sent: run_judge turns the classify question (with the state) into the prompt itself.
+    assert all(call['prompt_template'] == '' for call in calls)
+    assert {call['classify'].instructions for call in calls} == {'tone?', 'risk?'}
+    assert all(call['classify'].state == 'reply' for call in calls)
+    texts = [judge_mod._classify_question_prompt(call['classify']) for call in calls]
     assert all('<state>"reply"</state>' in t for t in texts), 'the state is delimited as data'
     client.post.assert_not_called()
     assert outcomes['tone'].payload is not None

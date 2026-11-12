@@ -14,7 +14,7 @@ The extra installs `anthropic>=0.75.0`. Nothing else in evaluatorq imports it, s
 
 ## Pass the client
 
-Every entry point that takes an injected client accepts an Anthropic client directly. You do not wrap it yourself.
+Every entry point that takes an injected client accepts an Anthropic client directly. You do not wrap it yourself: the entry points below wrap it, and so does the shared code that makes every chat and Responses call, so a client that reaches a call some other way, such as `apply_recommendations(llm_client=...)`, is wrapped there.
 
 | Surface | Where the client goes |
 |---|---|
@@ -27,7 +27,7 @@ Every entry point that takes an injected client accepts an Anthropic client dire
 
 ## Set a Claude model for every role
 
-An Anthropic client cannot serve evaluatorq's default models. The defaults are `openai/gpt-6-sol` for the `smart` role, `openai/gpt-6-luna` for `fast` and `typesafe/jev-latest` for `classifier`, and the adapter refuses any `provider/` prefix other than `anthropic/`. It raises `ModelClientMismatchError` (a `ValueError`) before the request, with a message that names the role variable resolving to the bad model. The error stops the run: judges, classify calls and the signal classifiers re-raise it instead of recording a failed outcome for every item.
+An Anthropic client cannot serve evaluatorq's default models. The defaults are `openai/gpt-6-sol` for the `smart` role, `openai/gpt-6-luna` for `fast` and `typesafe/jev-latest` for `classifier`, and the adapter refuses any `provider/` prefix other than `anthropic/`. It raises `ModelClientMismatchError` before the request, with a message that names the role variable resolving to the bad model. It is a subclass of `LLMConfigurationError`, which is a `ValueError`. Judges, classify calls and the signal classifiers re-raise it instead of turning it into a judge error. The run does not stop yet, though: inside `red_team()` and `simulate()` each attack or row that hits it records it as that row's error and the batch carries on, so you see the same error on every row. Stopping the run on the first one is tracked as RES-1879.
 
 ```pytb
 ModelClientMismatchError: An Anthropic client needs a Claude model id, got 'openai/gpt-6-sol'. Set the model explicitly, for example through the EVALUATORQ_SMART_MODEL role variable, to a name such as "claude-sonnet-5-5" or "anthropic/claude-sonnet-5-5".
@@ -105,10 +105,12 @@ The adapter translates only what Anthropic's Messages API can express, and it ra
 | You send | What happens |
 |---|---|
 | An embeddings call (`client.embeddings.create`) | `NotImplementedError`: Anthropic has no embeddings API. Pass an OpenAI-compatible `embedding_client` |
-| `tool_choice` other than `auto` or `none` | `ValueError`: a forced or named tool choice returns HTTP 400 on Claude Opus 5.5 and Sonnet 5.5, so use `auto` and name the tool in the prompt instead. The structured-output ladder skips its forced-tool rung on an Anthropic client |
+| A `tool_choice` it cannot translate | `ValueError`. `auto` and `none` keep their names, `required` becomes `{'type': 'any'}` and a named function becomes `{'type': 'tool', 'name': ...}`. Claude Opus 5.5 and Sonnet 5.5 answer a forced choice (`any` or `tool`) with HTTP 400, so on those models use `auto` and name the tool in the prompt. The structured-output ladder skips its forced-tool rung on an Anthropic client for that reason |
 | An image content part, or any content part that is not text | `ValueError` naming the part type |
-| A parameter the adapter does not translate, such as an unknown `chat.completions.create` or `responses.create` keyword | `TypeError` listing the keywords |
+| A parameter the adapter does not translate, such as an unknown `chat.completions.create` or `responses.create` keyword | `UnsupportedParameterError` listing the keywords. It is a `TypeError` and an `LLMConfigurationError`, so a judge re-raises it instead of recording one error per item |
 | A non-function tool | `ValueError` |
+
+A conversation whose first turn is an assistant turn gets a short user turn, `(The conversation starts here.)`, in front of it, because the Messages API needs the first message to be a user turn. The simulated user meets this from its second turn on: its request is the transcript with the roles swapped, so it opens with its own first line.
 
 Sampling settings are sent only when you set them: `temperature` and `top_p` are omitted otherwise, and `max_tokens` defaults to 16000 when you pass none of `max_tokens`, `max_completion_tokens` or `max_output_tokens`. A `reasoning_effort` becomes Anthropic's `output_config.effort`.
 
@@ -134,7 +136,7 @@ llm_config = LLMConfig(
 )
 ```
 
-evaluatorq sends the request to the beta Messages endpoint with the header `server-side-fallback-2026-07-01`. The adapter sends fallbacks only for `AsyncAnthropic`. It rejects Bedrock and Vertex clients with a `ValueError` before sending, and it cannot tell an Anthropic-managed Google Cloud deployment from one you manage yourself, so every `AsyncAnthropicVertex` client is rejected. Use `AsyncAnthropic` to reach the Claude API when you want fallbacks. Haiku 5.5 has no fallback model, so do not set `fallbacks` on a role that runs it.
+evaluatorq sends the request to the beta Messages endpoint with the header `server-side-fallback-2026-07-01`. evaluatorq's tests check the request it sends and how a reply is read, not a fallback on the live API. Fallbacks run on the Claude API itself: through the Orq router the field is ignored, see [Through the Orq router](#through-the-orq-router). The adapter sends fallbacks only for `AsyncAnthropic`. It rejects Bedrock and Vertex clients with a `ValueError` before sending, and it cannot tell an Anthropic-managed Google Cloud deployment from one you manage yourself, so every `AsyncAnthropicVertex` client is rejected. Use `AsyncAnthropic` to reach the Claude API when you want fallbacks. Haiku 5.5 has no fallback model, so do not set `fallbacks` on a role that runs it.
 
 ## Through the Orq router
 
@@ -157,7 +159,8 @@ async def main() -> None:
     client = AsyncAnthropic(api_key=os.environ['ORQ_API_KEY'], base_url='https://my.orq.ai/v3/anthropic')
     target = OpenAIModelTarget(model='claude-haiku-5-5', client=client, system_prompt='You are a helpful assistant.')
     report = await red_team(target=target, mode='dynamic', llm_client=client, categories=['LLM07'], max_turns=1, max_dynamic_datapoints=1, generate_strategies=False)
-    print(f'Resistance rate: {report.summary.resistance_rate:.0%}')
+    rate = report.summary.resistance_rate
+    print('Resistance rate: n/a' if rate is None else f'Resistance rate: {rate:.0%}')
 
 
 asyncio.run(main())

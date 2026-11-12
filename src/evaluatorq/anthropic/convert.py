@@ -22,7 +22,7 @@ from openai.types.chat import (
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message_function_tool_call import Function
 
-from evaluatorq.common.llm_client import ModelClientMismatchError
+from evaluatorq.common.llm_client import LLMConfigurationError, ModelClientMismatchError
 
 if TYPE_CHECKING:
     from anthropic.types import Message
@@ -37,6 +37,14 @@ ORQ_ONLY_PARAMS = frozenset({'metadata'})
 """Top-level call parameters only the Orq router reads (run metadata); accepted and dropped, with a debug line."""
 
 REFUSAL_FALLBACK_TEXT = 'The model declined to answer this request.'
+
+LEADING_USER_TEXT = '(The conversation starts here.)'
+"""Text of the user turn put in front of a conversation that starts with an assistant turn; the Messages API needs a user turn first."""
+
+
+class UnsupportedParameterError(LLMConfigurationError, TypeError):
+    """A request parameter the adapter does not translate. A `TypeError` too, as an unknown keyword argument would be."""
+
 
 _FINISH_REASONS: dict[str, str] = {
     'end_turn': 'stop',
@@ -195,6 +203,20 @@ def normalize_model(model: str) -> str:
     return model
 
 
+def _part_dict(part: Any) -> dict[str, Any]:
+    """A content part as a dict: a dict as is, a Pydantic part (such as ``openai.types``) through ``model_dump``, any other object through its attributes."""
+    if isinstance(part, dict):
+        return part
+    dump = getattr(part, 'model_dump', None)
+    if callable(dump):
+        return cast('dict[str, Any]', dump(exclude_none=True))
+    return {
+        key: getattr(part, key)
+        for key in ('type', 'text', 'refusal', 'cache_control')
+        if getattr(part, key, None) is not None
+    }
+
+
 def _text_part(part: dict[str, Any]) -> dict[str, Any]:
     block: dict[str, Any] = {'type': 'text', 'text': part.get('text', '')}
     if part.get('cache_control') is not None:
@@ -214,8 +236,9 @@ def content_blocks(
     if isinstance(content, str):
         return [{'type': 'text', 'text': content}] if content else []
     blocks: list[dict[str, Any]] = []
-    for part in content:
-        part_type = part.get('type') if isinstance(part, dict) else getattr(part, 'type', None)
+    for raw_part in content:
+        part = _part_dict(raw_part)
+        part_type = part.get('type')
         if part_type in text_types:
             block = _text_part(part)
             if block['text']:
@@ -254,6 +277,17 @@ def merge_same_role(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
             merged[-1] = {'role': turn['role'], 'content': [*merged[-1]['content'], *turn['content']]}
         else:
             merged.append(turn)
+    return merged
+
+
+def order_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge adjacent same-role turns, then put a short user turn in front when the conversation starts with an assistant turn.
+
+    The Messages API needs the first message to be a user turn. A conversation can legitimately start with an assistant turn: from its second turn on, the simulated user's request is the transcript with roles swapped, so its first message is the simulator's own opening line.
+    """
+    merged = merge_same_role(turns)
+    if merged and merged[0]['role'] == 'assistant':
+        merged.insert(0, {'role': 'user', 'content': [{'type': 'text', 'text': LEADING_USER_TEXT}]})
     return merged
 
 
@@ -305,8 +339,7 @@ def convert_messages(messages: list[dict[str, Any]]) -> tuple[str | list[dict[st
         else:
             raise ValueError(f'The Anthropic adapter cannot convert a message with role {role!r}.')
     flush_results()
-    out = merge_same_role(out)
-    return build_system(system_blocks), out
+    return build_system(system_blocks), order_turns(out)
 
 
 def build_system(system_blocks: list[dict[str, Any]]) -> str | list[dict[str, Any]] | None:
@@ -339,26 +372,34 @@ def convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def convert_tool_choice(tool_choice: Any) -> dict[str, str] | None:
-    """Map ``'auto'`` and ``'none'``; refuse a forced choice, which current Claude models reject."""
+    """Map an OpenAI ``tool_choice`` to Anthropic's.
+
+    ``'auto'`` and ``'none'`` keep their names (Anthropic has both), ``'required'`` becomes ``{'type': 'any'}``, and a named function becomes ``{'type': 'tool', 'name': ...}``. The named form is accepted in the Chat Completions shape (``{'type': 'function', 'function': {'name': ...}}``) and the Responses shape (``{'type': 'function', 'name': ...}``). Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 and later answer a forced choice (``any`` or ``tool``) with HTTP 400; other Claude models accept it, so the adapter translates it and leaves the decision to the API.
+    """
     if tool_choice is None:
         return None
     if tool_choice in ('auto', 'none'):
         return {'type': tool_choice}
-    raise ValueError(
-        f'The Anthropic adapter cannot send tool_choice={tool_choice!r}: a forced or named tool choice returns '
-        'HTTP 400 on Claude Opus 5.5 and Sonnet 5.5. Use "auto" and name the tool in the prompt instead.'
-    )
+    if tool_choice == 'required':
+        return {'type': 'any'}
+    if isinstance(tool_choice, dict) and tool_choice.get('type') == 'function':
+        function = tool_choice.get('function')
+        name = function.get('name') if isinstance(function, dict) else tool_choice.get('name')
+        if isinstance(name, str) and name:
+            return {'type': 'tool', 'name': name}
+    raise ValueError(f'The Anthropic adapter cannot translate tool_choice={tool_choice!r}.')
 
 
 def apply_tools(request: dict[str, Any], tools: list[dict[str, Any]] | None, tool_choice: Any) -> None:
-    """Set ``tools`` and ``tool_choice`` on an Anthropic request from Chat-shaped ``tools``; refuse a forced choice even without tools."""
+    """Set ``tools`` and ``tool_choice`` on an Anthropic request from Chat- or Responses-shaped ``tools``.
+
+    A ``tool_choice`` without tools is not sent (Anthropic has nothing to choose from), but it is still checked, so an untranslatable value fails the same way with or without tools.
+    """
+    choice = convert_tool_choice(tool_choice)
     if tools:
         request['tools'] = convert_tools(tools)
-        choice = convert_tool_choice(tool_choice)
         if choice is not None:
             request['tool_choice'] = choice
-    elif tool_choice not in (None, 'auto', 'none'):
-        convert_tool_choice(tool_choice)
 
 
 def build_output_config(output_format: dict[str, Any] | None, effort: str | None) -> dict[str, Any]:
@@ -383,12 +424,14 @@ def build_messages_request(params: dict[str, Any]) -> dict[str, Any]:
     """Turn ``chat.completions.create`` keyword arguments into ``messages.create`` keyword arguments.
 
     Raises:
-        TypeError: for a keyword the adapter does not translate, so nothing is silently ignored.
+        UnsupportedParameterError: for a keyword the adapter does not translate, so nothing is silently ignored. It is both a `TypeError` and an `LLMConfigurationError`.
         ValueError: for content or a tool choice Anthropic cannot represent.
     """
     unknown = sorted(set(params) - _SUPPORTED_KEYS - ORQ_ONLY_PARAMS)
     if unknown:
-        raise TypeError(f'The Anthropic adapter does not support chat.completions.create parameters: {unknown}')
+        raise UnsupportedParameterError(
+            f'The Anthropic adapter does not support chat.completions.create parameters: {unknown}'
+        )
 
     system, messages = convert_messages(params['messages'])
     if not messages:

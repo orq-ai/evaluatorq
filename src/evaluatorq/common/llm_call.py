@@ -21,7 +21,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from evaluatorq.common.cli_oauth import DECISIONS_PATH
-from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.llm_client import as_llm_client, client_routes_through_orq
 from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS, error_text
 from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
@@ -237,8 +237,10 @@ async def execute_chat_completion(
     """Execute one Chat Completions call. Records input/response on ``span``.
 
     Returns the raw response and the token-usage delta (or None). Exceptions
-    propagate — the caller owns retry and error policy.
+    propagate — the caller owns retry and error policy. A raw Anthropic SDK
+    client is wrapped here (`as_llm_client`), as in the other executors.
     """
+    client = as_llm_client(client)
     params: dict[str, Any] = {'model': model, 'messages': messages}
     if temperature is not None:
         params['temperature'] = temperature
@@ -322,6 +324,7 @@ async def execute_chat_parse(
     naming the function. The SDK then fills
     ``message.tool_calls[0].function.parsed_arguments`` where it can.
     """
+    client = as_llm_client(client)
     params: dict[str, Any] = {'model': model, 'messages': messages}
     if response_model is not None:
         params['response_format'] = response_model
@@ -464,6 +467,7 @@ async def execute_response(
     there, where the wire payload's ``output_text`` parts would `str()` into a
     Python repr (see CLAUDE.md's ``content_to_text`` row).
     """
+    client = as_llm_client(client)
     params = _build_response_params(
         model=model,
         messages=messages,

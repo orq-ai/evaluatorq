@@ -29,6 +29,7 @@ from evaluatorq.anthropic.convert import (
     PROVIDER_PREFIX,
     REFUSAL_FALLBACK_TEXT,
     TRUNCATING_STOP_REASONS,
+    UnsupportedParameterError,
     adapt_schema,
     apply_shared_params,
     apply_tools,
@@ -37,8 +38,8 @@ from evaluatorq.anthropic.convert import (
     content_blocks,
     decode_arguments,
     finish_reason_for,
-    merge_same_role,
     normalize_model,
+    order_turns,
     usage_counts,
 )
 
@@ -122,7 +123,7 @@ def convert_input(
             continue
         else:
             raise ValueError(f'The Anthropic adapter cannot convert a Responses input item of type {kind!r}.')
-    return build_system(system_blocks), merge_same_role(out)
+    return build_system(system_blocks), order_turns(out)
 
 
 def _output_format(text: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -157,12 +158,14 @@ def build_responses_request(params: dict[str, Any], *, text_format: Any = None) 
     ``text_format`` is the Pydantic class of ``responses.parse``; it becomes ``text.format`` through openai's own helper, so both providers see the same schema.
 
     Raises:
-        TypeError: for a keyword the adapter does not translate, so nothing is silently ignored.
+        UnsupportedParameterError: for a keyword the adapter does not translate, so nothing is silently ignored. It is both a `TypeError` and an `LLMConfigurationError`.
         ValueError: for content or a tool choice Anthropic cannot represent.
     """
     unknown = sorted(set(params) - _SUPPORTED_KEYS - ORQ_ONLY_PARAMS)
     if unknown:
-        raise TypeError(f'The Anthropic adapter does not support responses.create parameters: {unknown}')
+        raise UnsupportedParameterError(
+            f'The Anthropic adapter does not support responses.create parameters: {unknown}'
+        )
 
     system, messages = convert_input(params['input'], params.get('instructions'))
     if not messages:

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
-from evaluatorq.common.llm_client import as_llm_client, client_routes_through_orq, is_anthropic_client
+from evaluatorq.common.llm_client import as_llm_client, client_provider, client_routes_through_orq, is_anthropic_client
 from evaluatorq.common.messages import chat_message_reply_text
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
@@ -255,7 +255,7 @@ class OpenAIModelTarget(AgentTarget):
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
         """Map an OpenAI exception to a normalized error code and message tuple."""
-        return _openai_map_error(exc, 'anthropic' if is_anthropic_client(self.client) else 'openai')
+        return _openai_map_error(exc, client_provider(self.client) or 'openai')
 
 
 class OpenAIBackend(Backend):
@@ -310,4 +310,4 @@ class OpenAIBackend(Backend):
         logger.debug('OpenAI backend has no memory store; cleanup is a no-op')
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
-        return _openai_map_error(exc, 'anthropic' if is_anthropic_client(self._client) else 'openai')
+        return _openai_map_error(exc, client_provider(self._client) or 'openai')
