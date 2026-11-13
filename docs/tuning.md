@@ -207,7 +207,7 @@ Three knobs govern cost rather than reliability, because each unit is a live cal
 
 - `LLMConfig.max_objectives_per_llm_call` (default `8`) — objectives requested per attacker call before the generator batches into multiple calls. Raising it asks for more output tokens per call; roughly 150 tokens per objective is what keeps the default from truncating.
 - `LLMConfig.max_probe_turns` (default `8`) — probe turns the black-box classifier may send before giving up on capability inference. Each turn is a live call **against the target**.
-- `LLMConfig.max_backtracks` (default `0`, off) — refused turns a Crescendo attack may erase. Each erasure is one more call **against the target** on top of the turn budget, and every reply costs one attacker-model call to label it until the erasures are used up.
+- `LLMConfig.max_backtracks` (default `0`, off) — turns a Crescendo attack may erase. Each erasure is one more call **against the target** on top of the turn budget, and every reply on a turn where an erasure is available, and that called no tool, costs one attacker-model call to decide whether to keep it, and that call resends the attack conversation so far, so it grows with the turns.
 
 ## Provider options: `extra_kwargs` vs `extra_body`
 
