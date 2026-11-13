@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.replay import ReplayError, load_run_payload
-from evaluatorq.redteam.contracts import Pipeline
+from evaluatorq.redteam.contracts import Pipeline, Vulnerability
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -71,8 +71,17 @@ def _validate_datapoint(inputs: dict[str, Any], index: int, run_name: str) -> No
 
     A dynamic case needs its ``strategy``; a static one needs its ``messages``.
     Without one of the two the run would reach the orchestrator and die per-row
-    on a KeyError, long after the confirm prompt.
+    on a KeyError, long after the confirm prompt. An unknown ``vulnerability``
+    (accepted by runs saved before RES-1868) would pass the attacks and then fail
+    report conversion, so it is rejected here too.
     """
+    vulnerability = inputs.get('vulnerability')
+    if vulnerability and vulnerability not in {v.value for v in Vulnerability}:
+        raise ReplayError(
+            f'Previous red team run {run_name}: datapoint {index} ({inputs.get("id", "unnamed")!r}) has '
+            f'unknown vulnerability {vulnerability!r}, so it cannot be replayed. '
+            f'Valid vulnerabilities: {sorted(v.value for v in Vulnerability)}.'
+        )
     if 'strategy' in inputs or inputs.get('messages'):
         return
     raise ReplayError(

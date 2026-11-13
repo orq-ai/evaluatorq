@@ -39,13 +39,14 @@ from evaluatorq.redteam.contracts import (
     LLMCallConfig,
     RedTeamInput,
     StaticDataset,
+    category_key,
     evaluator_model_for,
-    normalize_category,
 )
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.exceptions import DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
 from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs
+from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection
@@ -57,24 +58,39 @@ if TYPE_CHECKING:
 
 DEFAULT_HF_REPO = 'orq/redteam-vulnerabilities'
 DEFAULT_HF_FILENAME = 'redteam_dataset.v2.json'
+# Pinned so a later upload to the dataset repo cannot change or break a default run.
+DEFAULT_HF_REVISION = '5bea0563ac7e99407388b0fad4b6f761dd3d32ae'
 
 
 def _filter_by_categories(
     items: list[Any],
     categories: list[str],
     category_of: Callable[[Any], str],
+    id_of: Callable[[Any], str | None],
 ) -> list[Any]:
     """Filter ``items`` to the requested OWASP categories.
 
-    Logs the aggregate post-filter count, and — critically — emits a per-category
+    Logs the aggregate post-filter count, and emits a per-category
     ``WARNING`` for each requested category that has zero matching datapoints, so a
     silently-empty category (e.g. one the dataset has no entries for) is visible
-    rather than mistaken for a genuine 0% attack-success result. Shared by both the
-    file loader and the platform-datapoint path so the warning behaviour is identical.
+    rather than mistaken for a genuine 0% attack-success result. Also warns, with the
+    row ids, about rows dropped because their category is not a code that could be
+    requested for them (a typo, or a code such as ``LLM03`` whose vulnerability is
+    requested under its primary code). Shared by both the file loader and the
+    platform-datapoint path so the warning behaviour is identical.
     """
-    requested = {normalize_category(c.upper()) for c in categories}
-    present = Counter(normalize_category(category_of(it).upper()) for it in items)
-    filtered = [it for it in items if normalize_category(category_of(it).upper()) in requested]
+    requested = {category_key(c) for c in categories}
+    present = Counter(category_key(category_of(it)) for it in items)
+    filtered: list[Any] = []
+    stray: dict[str, list[str | None]] = {}
+    for it in items:
+        key = category_key(category_of(it))
+        if key in requested:
+            filtered.append(it)
+            continue
+        vuln = resolve_category_safe(key)
+        if vuln is None or get_primary_category(vuln) in requested:
+            stray.setdefault(category_of(it), []).append(id_of(it))
     logger.info(f'Filtered to categories: {sorted(requested)} ({len(filtered)} samples)')
     for cat in sorted(requested):
         if present[cat] == 0:
@@ -82,6 +98,12 @@ def _filter_by_categories(
                 f'Requested category {cat}: 0 static datapoints available in the dataset '
                 '(it will contribute no static results).'
             )
+    for cat, ids in stray.items():
+        logger.warning(
+            f'Skipped {len(ids)} static datapoint(s) with category {cat!r}, which is not a requested '
+            f'category code (ids: {", ".join(str(i) for i in ids)}). '
+            '`eq redteam validate-dataset` names the code to use.'
+        )
     return filtered
 
 
@@ -121,6 +143,7 @@ def load_owasp_agentic_dataset(
         return _fetch_from_huggingface(
             repo=DEFAULT_HF_REPO,
             filename=DEFAULT_HF_FILENAME,
+            revision=DEFAULT_HF_REVISION,
             num_samples=num_samples,
             categories=categories,
             delivery_methods=delivery_methods,
@@ -480,11 +503,12 @@ def ensure_huggingface_available() -> None:
 def _fetch_from_huggingface(
     repo: str = DEFAULT_HF_REPO,
     filename: str = DEFAULT_HF_FILENAME,
+    revision: str | None = None,
     num_samples: int | None = None,
     categories: list[str] | None = None,
     delivery_methods: Collection[DeliveryMethod | str] | None = None,
 ) -> list[DataPoint]:
-    """Fetch red team samples from a HuggingFace dataset repository."""
+    """Fetch red team samples from a HuggingFace dataset repository (``revision=None`` is the latest)."""
     try:
         from huggingface_hub import hf_hub_download
     except ImportError as e:
@@ -496,6 +520,7 @@ def _fetch_from_huggingface(
             repo_id=repo,
             filename=filename,
             repo_type='dataset',
+            revision=revision,
         )
     except Exception as e:
         # Network failure, auth/401, gated-or-missing repo, etc. Surface an
@@ -551,9 +576,9 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
             inputs = dict(dp.inputs) if dp.inputs else {}
             try:
                 _validate_platform_datapoint(inputs)
-            except (ValidationError, ValueError):
+            except (ValidationError, ValueError) as e:
                 skipped += 1
-                logger.warning(f'Skipping invalid datapoint {inputs.get("id", "unknown")}: validation failed')
+                logger.warning(f'Skipping invalid datapoint {inputs.get("id", "unknown")}: validation failed: {e}')
                 continue
             all_datapoints.append(DataPoint(inputs=inputs))
 
@@ -591,7 +616,9 @@ def _load_from_file(
     samples = dataset.samples
 
     if categories is not None:
-        samples = _filter_by_categories(samples, categories, category_of=lambda s: s.input.category)
+        samples = _filter_by_categories(
+            samples, categories, category_of=lambda s: s.input.category, id_of=lambda s: s.input.id
+        )
 
     if delivery_methods is not None:
         selected = set(delivery_methods)
@@ -630,7 +657,12 @@ def _apply_filters(
     remainder (which would yield fewer than ``num_samples`` rows).
     """
     if categories is not None:
-        datapoints = _filter_by_categories(datapoints, categories, category_of=lambda dp: dp.inputs.get('category', ''))
+        datapoints = _filter_by_categories(
+            datapoints,
+            categories,
+            category_of=lambda dp: dp.inputs.get('category', ''),
+            id_of=lambda dp: dp.inputs.get('id'),
+        )
 
     if delivery_methods is not None:
         selected = set(delivery_methods)
