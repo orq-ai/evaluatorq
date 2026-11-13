@@ -504,17 +504,27 @@ def _validate_platform_datapoint(inputs: dict[str, Any]) -> None:
         raise ValueError(msg)
 
 
+_ORQ_ERROR_BODY_LIMIT = 300
+
+
 def _orq_error_message(body: str) -> str:
-    """Return the ``message`` (or ``error``) of an ORQ JSON error body, else the raw body."""
+    """Return the ``message`` (or ``error``) of an ORQ JSON error body, else the raw body, cut to a short length.
+
+    A gateway 502 can return a full HTML page, which would otherwise be printed whole.
+    """
+    detail = body
     try:
         parsed = json.loads(body)
     except ValueError:
-        return body
+        parsed = None
     if isinstance(parsed, dict):
         for key in ('message', 'error'):
             if isinstance(parsed.get(key), str):
-                return parsed[key]
-    return body
+                detail = parsed[key]
+                break
+    if len(detail) > _ORQ_ERROR_BODY_LIMIT:
+        return detail[:_ORQ_ERROR_BODY_LIMIT] + '...'
+    return detail
 
 
 def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:

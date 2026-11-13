@@ -151,6 +151,41 @@ class TestOrqDatasetFetchError:
             self._load_with_transport(monkeypatch, _refused)
         assert isinstance(ei.value.__cause__, httpx.ConnectError)
 
+    def test_later_page_failure_names_the_page(self, monkeypatch):
+        import httpx
+
+        from evaluatorq.redteam.exceptions import DatasetError
+
+        page_one = {
+            'object': 'list',
+            'data': [{'_id': 'dp-1', 'workspace_id': 'ws', 'dataset_id': 'ds', 'inputs': {}}],
+            'has_more': True,
+        }
+
+        def _second_page_fails(request: httpx.Request) -> httpx.Response:
+            if 'starting_after' in request.url.params:
+                return httpx.Response(500, json={'message': 'internal error'})
+            return httpx.Response(200, json=page_one)
+
+        with pytest.raises(DatasetError, match=r'\(page after datapoint dp-1\): HTTP 500: internal error'):
+            self._load_with_transport(monkeypatch, _second_page_fails)
+
+
+@pytest.mark.parametrize(
+    ('body', 'expected'),
+    [
+        ('{"message": "dataset not found", "error": "other"}', 'dataset not found'),
+        ('{"error": "unauthorized"}', 'unauthorized'),
+        ('[1, 2]', '[1, 2]'),
+        ('<html>bad gateway</html>', '<html>bad gateway</html>'),
+        ('x' * 400, 'x' * 300 + '...'),
+    ],
+)
+def test_orq_error_message(body: str, expected: str):
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _orq_error_message
+
+    assert _orq_error_message(body) == expected
+
 
 class TestLoadFromFileError:
     """_load_from_file's JSON parse/validation surfaces a clean DatasetError (gripe #4)."""
