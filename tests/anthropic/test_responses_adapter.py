@@ -234,7 +234,7 @@ def test_text_response_is_a_genuine_response():
     assert response.usage.total_tokens == 21
     assert response.usage.input_tokens_details.cached_tokens == 5
     assert response.usage.output_tokens_details.reasoning_tokens == 0
-    assert response.usage.model_dump()['cache_creation_input_tokens'] == 2
+    assert response.usage.model_dump()['input_tokens_details']['cache_creation_tokens'] == 2
     assert responses_stop_reason(response) is None
     assert first_responses_refusal(response) is None
 

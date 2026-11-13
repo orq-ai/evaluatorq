@@ -200,9 +200,8 @@ def convert_response_usage(message: Message) -> ResponseUsage:
         'input_tokens': prompt,
         'output_tokens': completion,
         'total_tokens': prompt + completion,
-        'input_tokens_details': {'cached_tokens': cache_read},
+        'input_tokens_details': {'cached_tokens': cache_read, 'cache_creation_tokens': cache_write},
         'output_tokens_details': {'reasoning_tokens': 0},
-        'cache_creation_input_tokens': cache_write,
     })
 
 

@@ -6,7 +6,7 @@ import pytest
 
 from evaluatorq.common import model_catalogue as catalogue
 from evaluatorq.common.model_catalogue import ModelInfo, cost_of
-from evaluatorq.contracts import Usage
+from evaluatorq.contracts import Usage, _cache_counts
 
 ANTHROPIC = {
     'input_tokens': 10,
@@ -124,8 +124,8 @@ def test_both_shapes_present_are_not_double_counted():
 
 @pytest.mark.parametrize('face', ['chat', 'responses'])
 def test_anthropic_adapter_usage_is_not_double_counted(face):
-    """The adapter already folds cache counters into its prompt count and also emits the flat
-    ``cache_creation_input_tokens`` key; ``Usage.extract`` must not add the cache again."""
+    """The adapter folds cache counters into its prompt count and emits only OpenAI-shaped keys
+    (the cache write rides in the details object); ``Usage.extract`` must not add the cache again."""
     anthropic_types = pytest.importorskip('anthropic.types')
     from evaluatorq.anthropic.convert import convert_usage
     from evaluatorq.anthropic.responses import convert_response_usage
@@ -240,3 +240,86 @@ def test_audio_input_tokens_add_and_subtract_clamped():
     assert (a + b).audio_input_tokens == 11
     assert (b - a).audio_input_tokens == 3
     assert (a - b).audio_input_tokens == 0
+
+
+# --- _cache_counts: one row per shape convention (RES-1346) -------------------------------------
+
+
+def test_cache_counts_details_object_is_inclusive():
+    counts = _cache_counts({
+        'input_tokens_details': {'cached_tokens': 800, 'cache_creation_tokens': 100},
+    })
+    assert (counts.cached, counts.written, counts.exclusive) == (800, 100, 0)
+
+
+def test_cache_counts_langchain_details_are_inclusive():
+    counts = _cache_counts({'input_token_details': {'cache_read': 7, 'cache_creation': 3}})
+    assert (counts.cached, counts.exclusive) == (7, 0)
+
+
+def test_cache_counts_native_anthropic_flat_is_exclusive():
+    counts = _cache_counts(ANTHROPIC)
+    assert (counts.cached, counts.written, counts.written_1h, counts.written_5m) == (100, 50, 20, 30)
+    assert counts.exclusive == 150
+
+
+def test_cache_counts_anthropic_tier_object_alone_is_exclusive():
+    counts = _cache_counts({'cache_creation': {'ephemeral_1h_input_tokens': 20, 'ephemeral_5m_input_tokens': 30}})
+    assert (counts.written, counts.exclusive) == (50, 50)
+
+
+def test_cache_counts_codex_cli_flat_is_inclusive():
+    counts = _cache_counts({'cached_input_tokens': 40, 'cache_write_input_tokens': 9})
+    assert (counts.cached, counts.written, counts.exclusive) == (40, 9, 0)
+
+
+def test_cache_counts_vercel_camel_case_is_inclusive():
+    counts = _cache_counts({'inputTokens': 100, 'outputTokens': 5, 'cachedInputTokens': 30})
+    assert (counts.cached, counts.exclusive) == (30, 0)
+
+
+def test_cache_counts_bedrock_camel_case_is_exclusive():
+    counts = _cache_counts({'inputTokens': 10, 'cacheReadInputTokens': 100, 'cacheWriteInputTokens': 50})
+    assert (counts.cached, counts.written, counts.exclusive) == (100, 50, 150)
+
+
+def test_cache_counts_mixed_shapes_do_not_double_count():
+    """An inclusive source for a counter wins: that counter is never also added."""
+    counts = _cache_counts({
+        'input_tokens_details': {'cached_tokens': 800, 'cache_creation_tokens': 100},
+        'cache_read_input_tokens': 800,
+        'cache_creation_input_tokens': 100,
+    })
+    assert (counts.cached, counts.written, counts.exclusive) == (800, 100, 0)
+    # no details object, but a Codex-style inclusive read beside an Anthropic-style flat read
+    counts = _cache_counts({'cached_input_tokens': 40, 'cache_read_input_tokens': 40, 'cache_creation_input_tokens': 5})
+    assert (counts.cached, counts.exclusive) == (40, 5)
+
+
+def test_extract_bedrock_converse_folds_cache_into_input():
+    usage = _extract({
+        'inputTokens': 10,
+        'outputTokens': 5,
+        'totalTokens': 15,
+        'cacheReadInputTokens': 100,
+        'cacheWriteInputTokens': 50,
+    })
+    assert (usage.input_tokens, usage.output_tokens) == (160, 5)
+    assert (usage.cached_tokens, usage.cache_creation_tokens) == (100, 50)
+    assert usage.total_tokens == 165
+
+
+def test_extract_bedrock_total_that_already_includes_cache_is_kept():
+    usage = _extract({
+        'inputTokens': 10,
+        'outputTokens': 5,
+        'totalTokens': 165,
+        'cacheReadInputTokens': 100,
+        'cacheWriteInputTokens': 50,
+    })
+    assert (usage.input_tokens, usage.total_tokens) == (160, 165)
+
+
+def test_extract_vercel_camel_case_input_is_not_folded():
+    usage = _extract({'inputTokens': 100, 'outputTokens': 5, 'totalTokens': 105, 'cachedInputTokens': 30})
+    assert (usage.input_tokens, usage.cached_tokens, usage.total_tokens) == (100, 30, 105)

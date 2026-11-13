@@ -517,8 +517,7 @@ def convert_usage(message: Message) -> CompletionUsage:
         'prompt_tokens': prompt,
         'completion_tokens': completion,
         'total_tokens': prompt + completion,
-        'prompt_tokens_details': {'cached_tokens': cache_read},
-        'cache_creation_input_tokens': cache_write,
+        'prompt_tokens_details': {'cached_tokens': cache_read, 'cache_creation_tokens': cache_write},
     })
 
 
