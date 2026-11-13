@@ -263,6 +263,8 @@ class ResponsesConversation(BaseModel):
     def to_chat(self) -> ChatConversation:
         """Render as chat messages.
 
+        A custom tool call becomes a tool call whose arguments are `{"input": <raw text>}`.
+
         Lost: reasoning items (counted and warned once), media that is not text, image or file parts,
         `status`, annotations, and item ids that do not start with `fc_`.
         """

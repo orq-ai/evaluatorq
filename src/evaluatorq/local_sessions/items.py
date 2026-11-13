@@ -79,10 +79,19 @@ def function_call(*, call_id: str, name: str, arguments: object) -> dict[str, An
     return {'type': 'function_call', 'call_id': call_id, 'name': name, 'arguments': raw}
 
 
-def function_call_output(*, call_id: str, output: str, is_error: bool = False) -> dict[str, Any]:
+def custom_tool_call(*, call_id: str, name: str, input: object) -> dict[str, Any]:  # noqa: A002 - Responses field
+    return {
+        'type': 'custom_tool_call',
+        'call_id': call_id,
+        'name': name,
+        'input': trim(input if isinstance(input, str) else json.dumps(input, ensure_ascii=False, default=str)),
+    }
+
+
+def function_call_output(*, call_id: str, output: str, is_error: bool = False, custom: bool = False) -> dict[str, Any]:
     # `Error: ` is what the transcript's tool-status check recognizes; it goes on before trimming so it survives.
     return {
-        'type': 'function_call_output',
+        'type': 'custom_tool_call_output' if custom else 'function_call_output',
         'call_id': call_id,
         'output': trim(f'Error: {output}' if is_error else output),
     }

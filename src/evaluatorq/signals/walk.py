@@ -304,13 +304,17 @@ def has_unmapped_tool_activity(walked: list[WalkedStep]) -> list[str]:
             if not isinstance(item, dict):
                 continue
             kind = item.get('type')
-            if kind == 'function_call':
-                call_id = item.get('call_id')
-                unsupported_call = not isinstance(call_id, str) or not call_id or call_id not in represented_call_ids
+            call_id = item.get('call_id')
+            represented = isinstance(call_id, str) and call_id in represented_call_ids
+            if kind in ('function_call', 'custom_tool_call'):
+                unsupported_call = not represented
             else:
                 unsupported_call = isinstance(kind, str) and kind.endswith('_call')
             unsupported_output = (
-                isinstance(kind, str) and kind.endswith('_call_output') and kind != 'function_call_output'
+                isinstance(kind, str)
+                and kind.endswith('_call_output')
+                and kind != 'function_call_output'
+                and not (kind == 'custom_tool_call_output' and represented)
             )
             if unsupported_call or unsupported_output:
                 label = item.get('name') or item.get('server_label') or kind

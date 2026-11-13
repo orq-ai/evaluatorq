@@ -44,6 +44,15 @@ def test_source_tool_coverage_matches_function_calls_by_source_id() -> None:
     assert coverage.met is True
 
 
+def test_source_tool_coverage_matches_custom_calls_by_source_id() -> None:
+    extra = {'evaluatorq.responses_output_items': [
+        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'exec', 'input': 'ls'},
+        {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'done'},
+    ]}
+    recs = context(traj([agent(calls=[call('exec', call_id='c')], extra=extra)]))
+    assert pre.source_tool_coverage(recs).met is True
+
+
 def test_source_tool_coverage_finds_unsupported_output_without_raw_call_item() -> None:
     extra = {'evaluatorq.responses_output_items': [
         {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'done'},

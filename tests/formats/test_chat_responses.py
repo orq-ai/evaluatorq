@@ -209,3 +209,16 @@ def test_malformed_text_part_is_warned_not_repr_ed(caplog: pytest.LogCaptureFixt
     ])
     assert conv.to_chat().messages[0].content == 'hi'
     assert 'carries no text' in caplog.text
+
+
+def test_custom_tool_call_becomes_chat_tool_call_with_raw_input() -> None:
+    items = [
+        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'exec', 'input': 'ls -la'},
+        {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'README.md'},
+    ]
+    messages = ResponsesConversation(items=items).to_chat().messages
+    call = (messages[0].tool_calls or [])[0]
+    assert (call.id, call.function.name, json.loads(call.function.arguments)) == ('c', 'exec', {'input': 'ls -la'})
+    assert (messages[1].role, messages[1].tool_call_id, messages[1].name, messages[1].content) == (
+        'tool', 'c', 'exec', 'README.md'
+    )

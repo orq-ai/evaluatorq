@@ -1724,13 +1724,17 @@ def _selected_span_signal_data(span: Any, messages: Sequence[dict[str, Any]]) ->
             continue
         order = next(iter(candidates_order))
         matched_orders.add(order)
-        # Custom/MCP items carry fields ATIF cannot model; keep their source payload
-        # beside the correlated step. Standard calls are already represented natively.
-        if item_type in {'custom_tool_call', 'custom_tool_call_output', 'mcp_call'} or (
-            isinstance(item_type, str) and item_type.startswith('orq:')
-        ):
+        # MCP items carry fields ATIF cannot model; keep their source payload beside the
+        # correlated step. Function and custom calls are already represented natively.
+        if item_type == 'mcp_call' or (isinstance(item_type, str) and item_type.startswith('orq:')):
             item_sidecars.setdefault(str(order), []).append(item)
-        elif item_type in {'function_call', 'function_call_output', 'message'}:
+        elif item_type in {
+            'function_call',
+            'function_call_output',
+            'custom_tool_call',
+            'custom_tool_call_output',
+            'message',
+        }:
             item_sidecars.setdefault(str(order), []).append({
                 key: item[key]
                 for key in ('id', 'call_id', 'type', 'name', 'status', 'error_type', 'finish_reason')

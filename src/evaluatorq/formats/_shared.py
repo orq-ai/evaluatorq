@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from evaluatorq.formats.atif import AtifContentPart, AtifFinalMetrics, AtifStep
 
 RAW_ARGUMENTS_EXTRA_KEY = 'evaluatorq.raw_arguments'
+# ATIF argument that holds a Responses custom tool call's raw text input.
+CUSTOM_TOOL_INPUT_ARGUMENT = 'input'
 COMPACTION_EXTRA_KEY = 'evaluatorq.compaction'
 _FRACTION = re.compile(r'(?<=\d{2}:\d{2}:\d{2})\.(\d+)')
 

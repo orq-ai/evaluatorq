@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import typing
 from pathlib import Path
 from typing import Any
@@ -914,28 +915,7 @@ def test_custom_tool_result_round_trips_with_its_call() -> None:
     assert traj.to_responses().items[-2:] == [call, result]
 
 
-# Shape copied from a Codex rollout on a `code_mode_only` model (every shell command goes through the `exec`
-# custom tool); paths, ids and output text are replaced with synthetic values.
-_CODEX_CODE_MODE: list[dict[str, Any]] = [
-    {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'read the skill'}]},
-    {
-        'type': 'custom_tool_call', 'id': 'ctc_01', 'status': 'completed', 'call_id': 'call_exec_1', 'name': 'exec',
-        'input': 'const r = await tools.exec_command({cmd:"sed -n \'1,40p\' /workspace/skills/demo/SKILL.md"});\ntext(r)',
-    },
-    {
-        'type': 'custom_tool_call_output', 'call_id': 'call_exec_1',
-        'output': [
-            {'type': 'input_text', 'text': 'Script completed\nWall time 0.4 seconds\nOutput:\n'},
-            {'type': 'input_text', 'text': '---\nname: demo\n---'},
-        ],
-    },
-    {
-        'type': 'custom_tool_call', 'id': 'ctc_02', 'status': 'completed', 'call_id': 'call_patch_1',
-        'name': 'apply_patch', 'input': '*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n',
-    },
-    {'type': 'custom_tool_call_output', 'call_id': 'call_patch_1', 'output': 'Success. Updated: A notes.md'},
-    {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'Done.'}]},
-]
+_CODEX_CODE_MODE: list[dict[str, Any]] = json.loads((FIXTURES.parent / 'responses' / 'codex_code_mode.json').read_text())
 
 
 def test_codex_code_mode_custom_calls_become_atif_tool_calls() -> None:
@@ -973,3 +953,44 @@ def test_invalid_item_warning_does_not_leak_item_text() -> None:
     assert seen, 'an item that fails validation must warn'
     assert not any('SECRET-PROMPT-TEXT' in line for line in seen)
     assert any('ValidationError' in line for line in seen)
+
+
+def test_custom_tool_call_namespace_and_image_output_round_trip() -> None:
+    call = {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'shot', 'input': 'take', 'namespace': 'tools'}
+    image = {'type': 'input_image', 'image_url': 'https://example.com/a.png', 'detail': 'auto'}
+    result = {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': [image]}
+    traj = ResponsesConversation(items=[call, result]).to_atif()
+    observation = traj.steps[0].observation
+    assert observation is not None and isinstance(observation.results[0].content, list)
+    assert traj.to_responses().items == [call, result]
+
+
+def test_mixed_custom_and_function_calls_restore_order_and_item_ids() -> None:
+    items = [
+        {'type': 'custom_tool_call', 'id': 'ctc_1', 'call_id': 'c', 'name': 'exec', 'input': 'ls'},
+        {'type': 'function_call', 'id': 'fc_1', 'call_id': 'f', 'name': 'lookup', 'arguments': '{"q":1}'},
+        {'type': 'function_call_output', 'call_id': 'f', 'output': 'found'},
+        {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'README.md'},
+    ]
+    traj = ResponsesConversation(items=items).to_atif()
+    assert [call.tool_call_id for call in traj.steps[0].tool_calls or []] == ['c', 'f']
+    assert traj.to_responses().items == items
+
+
+def test_call_id_shared_by_custom_and_function_call_keeps_both_calls() -> None:
+    items = [
+        {'type': 'custom_tool_call', 'call_id': 'x', 'name': 'exec', 'input': 'ls'},
+        {'type': 'function_call', 'call_id': 'x', 'name': 'lookup', 'arguments': '{}'},
+        {'type': 'function_call_output', 'call_id': 'x', 'output': 'found'},
+    ]
+    assert ResponsesConversation(items=items).to_atif().to_responses().items == items
+
+
+def test_output_of_the_other_tool_kind_does_not_attach_to_a_custom_call() -> None:
+    items = [
+        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'exec', 'input': 'ls'},
+        {'type': 'function_call_output', 'call_id': 'c', 'output': 'o'},
+    ]
+    step = ResponsesConversation(items=items).to_atif().steps[0]
+    assert step.observation is not None
+    assert [(r.source_call_id, r.extra) for r in step.observation.results] == [(None, {'orphan_call_id': 'c'})]
