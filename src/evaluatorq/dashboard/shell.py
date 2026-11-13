@@ -52,7 +52,22 @@ def dashboard_css_href() -> str:
 _SIDEBAR_TOGGLE_SCRIPT = (
     '<script>'
     "(function(){try{if(localStorage.getItem('eq-sidebar-collapsed')==='1')"
-    "document.documentElement.classList.add('sidebar-collapsed');}catch(e){}})();"
+    "document.documentElement.classList.add('sidebar-collapsed');"
+    "const w=localStorage.getItem('eq-sidebar-width');"
+    "if(w)document.documentElement.style.setProperty('--sidebar-w',w+'px');}catch(e){}})();"
+    # Sidebar resize: drag the right-edge handle, arrow keys step it, double-click resets.
+    'function eqSidebarWidth(w){w=Math.max(180,Math.min(400,Math.round(w)));'
+    "document.documentElement.style.setProperty('--sidebar-w',w+'px');"
+    "try{localStorage.setItem('eq-sidebar-width',String(w));}catch(e){}}"
+    'function eqSidebarDrag(e){if(e.button!==0)return;e.preventDefault();'
+    "const root=document.documentElement,x0=document.querySelector('.app-sidebar').getBoundingClientRect().left;"
+    "root.classList.add('sidebar-resizing');"
+    'function mv(ev){eqSidebarWidth(ev.clientX-x0);}'
+    "function up(){document.removeEventListener('pointermove',mv);document.removeEventListener('pointerup',up);"
+    "root.classList.remove('sidebar-resizing');}"
+    "document.addEventListener('pointermove',mv);document.addEventListener('pointerup',up);}"
+    "function eqSidebarKey(e){const d=e.key==='ArrowLeft'?-16:e.key==='ArrowRight'?16:0;if(!d)return;"
+    "e.preventDefault();eqSidebarWidth(document.querySelector('.app-sidebar').offsetWidth+d);}"
     'function eqToggleSidebar(){'
     "const c=document.documentElement.classList.toggle('sidebar-collapsed');"
     "try{localStorage.setItem('eq-sidebar-collapsed',c?'1':'0');}catch(e){}}"
@@ -218,6 +233,9 @@ def _sidebar_html(active_nav: str, *, compression_inspector_enabled: bool) -> st
         ' stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>'
         '<span>Collapse</span>'
         '<kbd class="sidebar-toggle-kbd">⌘ B</kbd></button>'
+        '<div class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"'
+        ' title="Drag to resize, double-click to reset" tabindex="0" onpointerdown="eqSidebarDrag(event)"'
+        ' onkeydown="eqSidebarKey(event)" ondblclick="eqSidebarWidth(232)"></div>'
         '</aside>'
     )
 
@@ -233,6 +251,18 @@ def _resolve_nav(active_surface: str | None, active_nav: str | None) -> str:
     if active_surface in ('redteam', 'sim', 'pairwise'):
         return active_surface
     return 'dashboard'
+
+
+WORKSPACE_PENDING_ROUTE = '/orq-workspace/pending'
+
+
+def _workspace_slug_poller() -> str:
+    """Reload a report page once a background workspace lookup lands, so its trace links appear."""
+    from evaluatorq.dashboard.orq_workspace import resolve_slug, slug_lookup_pending
+
+    if resolve_slug() is not None or not slug_lookup_pending():
+        return ''
+    return f'<div hidden hx-get="{WORKSPACE_PENDING_ROUTE}" hx-trigger="every 2s" hx-swap="none"></div>\n'
 
 
 def page(
@@ -280,6 +310,7 @@ def page(
         else ''
     )
     body_classes = f'eq-dashboard {body_class}'.strip()
+    slug_poller = _workspace_slug_poller() if active_surface else ''
 
     return (
         '<!DOCTYPE html>\n'
@@ -296,6 +327,7 @@ def page(
         f'<body class="{body_classes}">\n'
         f'{_SIDEBAR_TOGGLE_SCRIPT}'
         f'{_AUTH_TOAST_SCRIPT}'
+        f'{slug_poller}'
         '<div class="app-shell">\n'
         f'{sidebar}\n'
         '<div class="app-main">\n'

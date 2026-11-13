@@ -714,7 +714,7 @@ async def test_a_catalogue_only_classify_model_is_seated_without_manual_registra
 
 
 @pytest.mark.asyncio
-async def test_a_catalogue_only_classify_model_without_a_question_does_not_fall_back_to_prompting(
+async def test_a_prompt_only_panel_prompts_a_catalogue_only_classify_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = 'acme/sorter'
@@ -726,14 +726,14 @@ async def test_a_catalogue_only_classify_model_without_a_question_does_not_fall_
     monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
     model_catalogue.reset_catalogue_cache()
     evaluator = llm_jury(name='x', prompt='judge {{output.response}}', judges=[model], client=MagicMock())
-    run_judge = AsyncMock(return_value=JudgeOutcome(error_message='should not run'))
-    with (
-        patch.object(llm_jury_mod, 'run_judge', run_judge),
-        pytest.raises(ValueError, match='needs `criteria`'),
-    ):
+    run_judge = AsyncMock(return_value=JudgeOutcome(error_message='prompted'))
+    with patch.object(llm_jury_mod, 'run_judge', run_judge):
         await evaluator['scorer'](_params())
 
-    run_judge.assert_not_awaited()
+    run_judge.assert_awaited_once()
+    kwargs = run_judge.call_args.kwargs
+    assert kwargs['classify'] is None
+    assert kwargs['cfg'].api == 'responses'
 
 
 @pytest.mark.asyncio

@@ -414,6 +414,34 @@
       if (finderExamplesObserver) finderExamplesObserver.observe(row);
     });
   }
+  // "Copy link to this view": the URL holds the whole view. The Clipboard API
+  // is missing on a dashboard served over plain HTTP from another host, so fall
+  // back to the deprecated execCommand copy there.
+  function legacyCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      return document.execCommand('copy') ? Promise.resolve() : Promise.reject();
+    } catch (err) {
+      return Promise.reject(err);
+    } finally {
+      ta.remove();
+    }
+  }
+  document.body.addEventListener('click', function (evt) {
+    const btn = evt.target.closest('[data-copy-link]');
+    if (!btn) return;
+    const label = btn.dataset.label || (btn.dataset.label = btn.textContent);
+    (navigator.clipboard ? navigator.clipboard.writeText(location.href) : legacyCopy(location.href))
+      .then(function () { btn.textContent = 'Link copied'; }, function () { btn.textContent = 'Copy failed: use the address bar'; })
+      .finally(function () { setTimeout(function () { btn.textContent = label; }, 2500); });
+  });
+
   document.addEventListener('DOMContentLoaded', initFinderExamples);
   document.body.addEventListener('htmx:afterSettle', function () {
     if (finderExamplesObserver) finderExamplesObserver.disconnect();

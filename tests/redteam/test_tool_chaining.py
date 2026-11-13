@@ -146,6 +146,18 @@ class TestToolChainingPlanner:
         }
 
     @pytest.mark.asyncio
+    async def test_decompose_sends_no_metadata_to_a_direct_openai_client(self) -> None:
+        parse = AsyncMock(return_value=_parsed_response(_schema()))
+        client = _mock_client(parse=parse)
+        client.base_url = "https://api.openai.com/v1"
+        planner = ToolChainingPlanner(client=client, model="gpt-4.1")
+
+        with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('tool-chain-run'):
+            await planner.decompose("exfiltrate user data", "CustomerBot", "desc", ["lookup_tool"])
+
+        assert 'metadata' not in parse.call_args.kwargs
+
+    @pytest.mark.asyncio
     async def test_decompose_prices_usage_from_catalogue(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """RES-1295: an unpriced planner completion comes back priced, with
         priced_calls == calls, once a catalogue entry exists for the model."""

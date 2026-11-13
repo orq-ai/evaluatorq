@@ -19,11 +19,17 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
-from evaluatorq.common.env_config import env_raw
-from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.llm_client import (
+    as_llm_client,
+    configured_llm_provider,
+    require_models_served_by_provider,
+    resolve_orq_credential,
+    resolve_results_base_url,
+)
 from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import validate_reasoning_effort
+from evaluatorq.common.model_roles import model_source
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
@@ -38,7 +44,12 @@ from evaluatorq.common.thread_context import (
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, ConversationHistoryMode, LLMCallConfig, Message, TokenUsage
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
-from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
+from evaluatorq.redteam.adaptive.orchestrator import (
+    ProgressDisplay,
+    _get_active_progress,
+    ensure_target_can_backtrack,
+    target_history_mode,
+)
 from evaluatorq.redteam.adaptive.pipeline import (
     cleanup_memory_entities,
     create_dynamic_evaluator,
@@ -64,6 +75,7 @@ from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     SUPPORTED_TARGET_KINDS,
     AgentContext,
+    AttackSource,
     AttackTechnique,
     DeliveryMethod,
     LLMConfig,
@@ -71,6 +83,7 @@ from evaluatorq.redteam.contracts import (
     PipelineStage,
     RedTeamRecommendationConfig,
     RedTeamReport,
+    RedTeamResult,
     SaveMode,
     TargetConfig,
     TargetKind,
@@ -110,6 +123,7 @@ from evaluatorq.tracing import tracing_session
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.types import DataPointResult
 
@@ -192,10 +206,9 @@ def _validate_trace_replay_targets(targets: list[str | AgentTarget], seed_datapo
 
     for target in targets:
         if isinstance(target, AgentTarget):
-            try:
-                history_mode = ConversationHistoryMode(target.history_mode)
-            except (TypeError, ValueError) as exc:
-                raise RedTeamError('last_assistant trace replay requires caller-owned history on the target') from exc
+            history_mode = target_history_mode(
+                target, invalid_message='last_assistant trace replay requires caller-owned history on the target'
+            )
             if history_mode is ConversationHistoryMode.TARGET:
                 raise RedTeamError(
                     'last_assistant trace replay requires caller-owned history; '
@@ -214,6 +227,43 @@ def _validate_trace_replay_targets(targets: list[str | AgentTarget], seed_datapo
             f'(history_mode CALLER, e.g. OpenAIModelTarget or a custom AgentTarget); '
             f'target {target!r} resolves to a {kind.value} target and {reason}.'
         )
+
+
+def _validate_backtracking_targets(targets: list[str | AgentTarget], *, max_backtracks: int, mode: Pipeline) -> None:
+    """Reject targets a turn cannot be erased from before any LLM call is paid for."""
+    if max_backtracks == 0 or mode is Pipeline.STATIC:
+        return
+    for target in targets:
+        if isinstance(target, AgentTarget):
+            ensure_target_can_backtrack(target)
+
+
+def _restore_replayed_backtracks(llm_config: LLMConfig | None, replay: RedTeamReplay | None) -> LLMConfig | None:
+    """Apply the stored erasure budget to a replay, unless the caller set one explicitly."""
+    if replay is None or not replay.max_backtracks:
+        return llm_config
+    if llm_config is not None and 'max_backtracks' in llm_config.model_fields_set:
+        return llm_config
+    return (llm_config or LLMConfig()).model_copy(update={'max_backtracks': replay.max_backtracks})
+
+
+def _backtracking_warnings(results: list[RedTeamResult], *, max_backtracks: int) -> list[str]:
+    """Report a backtracking setting that applied to nothing, or turns where the keep-or-erase decision failed."""
+    if max_backtracks == 0:
+        return []
+    dynamic = [r for r in results if r.attack.source in (AttackSource.TEMPLATE_DYNAMIC, AttackSource.GENERATED_DYNAMIC)]
+    warnings: list[str] = []
+    if not any(DeliveryMethod.CRESCENDO in r.attack.delivery_methods for r in dynamic):
+        warnings.append(
+            f'max_backtracks={max_backtracks} had no effect: no multi-turn attack in this run used the '
+            'Crescendo delivery method.'
+        )
+    if failures := sum(r.execution.backtrack_decision_failures for r in dynamic if r.execution is not None):
+        warnings.append(
+            f'The attacker model gave no usable keep-or-erase answer on {failures} turn(s). Those turns were '
+            'kept, so backtracking may have erased fewer turns than it could. Check the attacker model and credentials.'
+        )
+    return warnings
 
 
 def get_runs_dir() -> Path:
@@ -283,7 +333,7 @@ async def _send_cleaned_results(
     used (RES-912). Falls back to ``ORQ_BASE_URL`` / the default when it is not
     an Orq-routed client.
     """
-    api_key = env_raw('ORQ_API_KEY')
+    api_key = resolve_orq_credential(inference_client)
     if not api_key:
         logger.debug('Skipping result upload to Orq platform: ORQ_API_KEY not set')
         return
@@ -408,7 +458,7 @@ def _apply_coverage_policy(report: RedTeamReport, pipeline_config: LLMConfig | N
 
     total_attacks = summary.total_attacks
     if summary.no_verdict:
-        report.pipeline_warnings.append(
+        report.add_pipeline_warnings(
             f'NO VERDICT: 0/{total_attacks} attacks could be evaluated — the target was not tested. '
             'Check evaluator model configuration, credentials, and any gateway guardrails rejecting '
             'judge or target calls.'
@@ -416,7 +466,7 @@ def _apply_coverage_policy(report: RedTeamReport, pipeline_config: LLMConfig | N
         logger.error(f'No verdict: 0/{total_attacks} attacks could be evaluated — the target was not tested.')
     elif summary.coverage_below_minimum:
         floor = summary.min_evaluation_coverage
-        report.pipeline_warnings.append(
+        report.add_pipeline_warnings(
             f'Evaluation coverage below the configured minimum: '
             f'{summary.evaluated_attacks}/{total_attacks} attacks scored '
             f'({pct(summary.evaluation_coverage)} < {pct(floor)}). The rates below are '
@@ -720,6 +770,35 @@ def _split_and_dedupe_targets(
     return deduped_str, agent_targets
 
 
+def redteam_models(config: LLMConfig, *, mode: Pipeline) -> dict[str, dict[str, str]]:
+    """The models a red-team run will call, per client role, each keyed by the setting that supplied it.
+
+    ``attacker`` lists what runs on the attacker client: the attack model on a dynamic or hybrid run, which also covers
+    the backtrack decision. ``evaluator`` lists what runs on the evaluator client: every judge and replacement judge,
+    which also covers the recommendations and the executive summary on the primary judge. Reads the same config fields
+    the run does, so the pre-flight checks what the run calls.
+    """
+    attacker: dict[str, str] = {}
+    if mode is not Pipeline.STATIC:
+        default_model, default_label = model_source('smart', 'redteam.attacker')
+        attack_model = config.attacker.model
+        label = default_label if attack_model == default_model else 'LLMConfig.attacker.model (--attack-model)'
+        attacker[label] = attack_model
+    default_judge, default_judge_label = model_source('smart', 'redteam.evaluator')
+    evaluator: dict[str, str] = {}
+    for i, judge in enumerate(config.evaluator.judges):
+        if i == 0:
+            label = (
+                default_judge_label if judge == default_judge else 'LLMConfig.evaluator.judges[0] (--evaluator-model)'
+            )
+        else:
+            label = f'LLMConfig.evaluator.judges[{i}]'
+        evaluator[label] = judge
+    for i, judge in enumerate(config.evaluator.replacement_judges):
+        evaluator[f'LLMConfig.evaluator.replacement_judges[{i}]'] = judge
+    return {'attacker': attacker, 'evaluator': evaluator}
+
+
 def _validate_credentials_and_deps(
     *,
     config: LLMConfig,
@@ -728,15 +807,24 @@ def _validate_credentials_and_deps(
     resolved_mode: Pipeline,
     dataset: Path | str | None,
 ) -> None:
-    # Early credential validation — fail fast with a clear message.
-    # Also check per-role clients: if either role has a pre-configured client,
-    # we don't need global credentials.
-    has_role_client = config.attacker.client is not None or config.evaluator.client is not None
-    if llm_client is None and not has_role_client and not env_raw('OPENAI_API_KEY') and not env_raw('ORQ_API_KEY'):
-        raise CredentialError(
-            'Missing LLM credentials for attack/evaluation models. '
-            'Set OPENAI_API_KEY for direct OpenAI access, or ORQ_API_KEY to use the ORQ router.'
-        )
+    # Early credential validation, before any work. A role with its own client, or a run with an injected client,
+    # needs nothing from the environment; every other role resolves its client from it.
+    if llm_client is None:
+        provider = configured_llm_provider()
+        planned = redteam_models(config, mode=resolved_mode)
+        from_env: dict[str, str] = {}
+        for role, models in planned.items():
+            role_config: LLMCallConfig = getattr(config, role)
+            if role_config.client is None:
+                from_env.update(models)
+        if from_env:
+            if provider is None:
+                raise CredentialError(
+                    'Missing LLM credentials for attack/evaluation models. '
+                    'Set OPENAI_API_KEY for direct OpenAI access, ORQ_API_KEY to use the ORQ router, '
+                    'or ANTHROPIC_API_KEY to use Claude directly.'
+                )
+            require_models_served_by_provider(from_env)
 
     # Fail fast: static/hybrid runs that pull static datapoints from HuggingFace
     # need huggingface-hub. Check now rather than deep in the static leg — in
@@ -1128,10 +1216,10 @@ async def _generate_recommendations(
             recorded = True
     except (TypeError, AttributeError, ImportError, NameError, KeyError):
         raise
-    except Exception:
+    except Exception as exc:
         logger.warning('Failed to generate focus area recommendations', exc_info=True)
-        report.pipeline_warnings.append(
-            'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
+        report.add_pipeline_warnings(
+            f'Failed to generate focus area recommendations ({exc}). Check LLM credentials and model configuration.'
         )
     return _PostProcessingOutcome(recorded=recorded, usage=usage)
 
@@ -1173,10 +1261,10 @@ async def _generate_executive_summary_section(
             recorded = True
     except (TypeError, AttributeError, ImportError, NameError, KeyError):
         raise
-    except Exception:
+    except Exception as exc:
         logger.warning('Failed to generate executive summary', exc_info=True)
-        report.pipeline_warnings.append(
-            'Failed to generate executive summary. Check LLM credentials and model configuration.'
+        report.add_pipeline_warnings(
+            f'Failed to generate executive summary ({exc}). Check LLM credentials and model configuration.'
         )
     return _PostProcessingOutcome(recorded=recorded, usage=usage)
 
@@ -1220,6 +1308,7 @@ def _persist_and_index_run(
     metrics: RedTeamRunMetrics,
     resolved_max_turns: int,
     attacker_instructions: str | None,
+    max_backtracks: int,
 ) -> _PersistedRun:
     # Persist report according to the save mode. 'detail' mode already had
     # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
@@ -1243,12 +1332,13 @@ def _persist_and_index_run(
             run_config={
                 'max_turns': resolved_max_turns,
                 'attacker_instructions': attacker_instructions,
+                'max_backtracks': max_backtracks,
             },
         )
         if auto_save_path is None:
             auto_save_path = run_path
         if run_path is None:
-            report.pipeline_warnings.append(
+            report.add_pipeline_warnings(
                 'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
             )
 
@@ -1281,7 +1371,7 @@ async def red_team(
     max_dynamic_datapoints: int | None = None,
     max_static_datapoints: int | None = None,
     cleanup_memory: bool = True,
-    llm_client: AsyncOpenAI | None = None,
+    llm_client: LLMClient | None = None,
     name: str | None = None,
     description: str | None = None,
     dataset: Path | str | None = None,
@@ -1369,7 +1459,7 @@ async def red_team(
         max_dynamic_datapoints: Cap dynamic (generated) datapoints (None = no cap).
         max_static_datapoints: Cap static (dataset) datapoints (None = no cap).
         cleanup_memory: Whether to clean up memory entities after dynamic runs.
-        llm_client: Pre-configured AsyncOpenAI client for attack/strategy generation.
+        llm_client: Pre-configured AsyncOpenAI client for attack/strategy generation. An Anthropic SDK client (``AsyncAnthropic``, ``AsyncAnthropicBedrock`` or ``AsyncAnthropicVertex``) is also accepted; see the Anthropic page.
         name: Optional experiment name for the run. Used as the evaluatorq experiment
             name and for the auto-saved run filename. Defaults to ``'red-team'``.
         description: Optional description for the report.
@@ -1532,6 +1622,8 @@ async def red_team(
         raw_targets,
         trace_datapoints if trace_datapoints is not None else replay.datapoints if replay is not None else None,
     )
+    llm_config = _restore_replayed_backtracks(llm_config, replay)
+    llm_client = as_llm_client(llm_client)
 
     # Build or merge config -------------------------------------------------
     # When ``llm_config`` is provided it is the source of truth for models and
@@ -1540,6 +1632,7 @@ async def red_team(
 
     resolved_mode = Pipeline(mode)
     _reject_unsupported_targets(targets, resolved_mode)
+    _validate_backtracking_targets(raw_targets, max_backtracks=config.max_backtracks, mode=resolved_mode)
 
     attack_model = config.attacker.model
     evaluator_model = config.evaluator.model or config.evaluator.judges[0]
@@ -1687,6 +1780,8 @@ async def red_team(
 
             _fold_post_processing_usage(report=report, post_processing_usages=post_processing_usages)
 
+            report.add_pipeline_warnings(*_backtracking_warnings(report.results, max_backtracks=config.max_backtracks))
+
             persisted = _persist_and_index_run(
                 report=report,
                 save=save,
@@ -1696,6 +1791,7 @@ async def red_team(
                 metrics=metrics,
                 resolved_max_turns=resolved_max_turns,
                 attacker_instructions=attacker_instructions,
+                max_backtracks=config.max_backtracks,
             )
 
             await await_maybe(
@@ -3631,7 +3727,7 @@ async def _run_dynamic_or_hybrid(
         all_datapoints=all_datapoints,
     )
 
-    merged.pipeline_warnings.extend(_collect_filter_warnings(prepared_targets=prepared_targets))
+    merged.add_pipeline_warnings(*_collect_filter_warnings(prepared_targets=prepared_targets))
 
     _apply_coverage_policy(merged, pipeline_config)
 
@@ -3665,8 +3761,8 @@ async def _run_dynamic_or_hybrid(
     finally:
         _save_report(output_dir, '03_summary_report.json', merged)
 
-    merged.pipeline_warnings.extend(
-        await _cleanup_target_memory(
+    merged.add_pipeline_warnings(
+        *await _cleanup_target_memory(
             prepared_targets=prepared_targets,
             cleanup_memory=cleanup_memory,
             resolved_hooks=resolved_hooks,
@@ -3704,12 +3800,12 @@ def _finalize_merged_report(
         merged.summary.datapoint_breakdown = _datapoint_breakdown(all_datapoints)
 
     if len(all_datapoints) == 0:
-        merged.pipeline_warnings.append(
+        merged.add_pipeline_warnings(
             'Zero datapoints generated for requested vulnerabilities. '
             'Strategy generation may have failed — check logs for details.'
         )
     elif merged.summary.total_attacks == 0:
-        merged.pipeline_warnings.append(
+        merged.add_pipeline_warnings(
             'Zero attacks executed. The resistance rate of 100% does not reflect actual security posture — '
             'no attacks were run. Check strategy generation logs and LLM credentials.'
         )
@@ -3885,7 +3981,11 @@ def _build_redteam_evaluators(*, inputs: _RedTeamEvaluatorInputs) -> list[Any]:
             **panel_kwargs,
         )
         static_evaluator = create_owasp_evaluator(
-            evaluator_model=evaluator_model, llm_client=evaluator_client, cfg=evaluator_cfg, **panel_kwargs
+            evaluator_model=evaluator_model,
+            llm_client=evaluator_client,
+            cfg=evaluator_cfg,
+            log_panel_warnings=False,  # the dynamic evaluator above logged the same panel
+            **panel_kwargs,
         )
 
         async def hybrid_scorer(params: Any) -> EvaluationResult:

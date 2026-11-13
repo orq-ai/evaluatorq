@@ -185,7 +185,7 @@ And attackers are getting sophisticated.
 **`pip install 'evaluatorq[redteam]'`**
 
 - **19 evaluators** — one LLM-judge per vulnerability with a precise rubric
-- **819 curated attack samples** on HuggingFace
+- **654 curated attack samples** on HuggingFace
 - **35+ adaptive attack strategies** that study your agent's capabilities first
 :::
 
@@ -238,7 +238,7 @@ And attackers are getting sophisticated.
 ::: {.mode-card .mode-static}
 [01]{.mode-step}
 [STATIC]{.mode-kicker}
-[819 known attacks]{.mode-metric}
+[654 known attacks]{.mode-metric}
 [Replay curated samples.]{.mode-copy}
 :::
 ::: {.mode-card .mode-dynamic}

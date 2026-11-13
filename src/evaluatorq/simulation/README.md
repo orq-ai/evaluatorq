@@ -64,7 +64,7 @@ For `generate_and_simulate()`, pass `agent_description` for any local, deploymen
 
 `llm_config` (an `LLMCallConfig`) configures every simulation-side LLM call: the user-simulator, the judge, the persona / scenario / first-message generators, the recommendations pass and the executive summary. It never reaches the target under test. It is also the only place the simulation-side model is named — the `sim_model=` keyword it replaced is gone from every entry point, and an omitted model means each call resolves its model role: the judge runs on the smart role (`openai/gpt-6-sol` by default) and every other call on the fast role (`openai/gpt-6-luna` by default). A model set on `llm_config` applies to all of them. The CLI's `--sim-model` flag builds exactly that config.
 
-Provider resolution mirrors red teaming: an injected `generation_client` → `llm_config.client` → `ORQ_API_KEY` (Orq router) → `OPENAI_API_KEY` (with optional `OPENAI_BASE_URL`).
+Provider resolution mirrors red teaming: an injected `generation_client`, then `llm_config.client`, then the environment. See [Configuration](../../../docs/configuration.md#go-anthropic-direct) for the key precedence and for going Anthropic-direct.
 
 The default models assume the Orq router. If you target OpenAI directly (only `OPENAI_API_KEY` set), drop the prefix: `llm_config=LLMCallConfig(model="gpt-5.6-luna")`.
 

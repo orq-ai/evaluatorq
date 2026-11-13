@@ -8,8 +8,15 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel, Field, create_model
 
-from evaluatorq.common.judge import ClassifyQuestion, JudgeOutcome, build_eval_replacements, run_judge
+from evaluatorq.common.judge import (
+    ClassifyQuestion,
+    JudgeOutcome,
+    build_eval_replacements,
+    models_called_off_router,
+    run_judge,
+)
 from evaluatorq.common.jury import (
+    TIE_LOSES_VERDICT,
     AggregatorSpec,
     JuryDeliberation,
     Prediction,
@@ -17,12 +24,19 @@ from evaluatorq.common.jury import (
     VerdictKind,
     append_jury_summary,
     attach_jury_raw_output,
+    even_panel_tie_outcome,
+    panel_composition_messages,
     run_jury,
     validate_aggregator,
 )
-from evaluatorq.common.llm_client import client_routes_through_orq, resolve_llm_client
+from evaluatorq.common.llm_client import (
+    as_llm_client,
+    client_routes_through_orq,
+    require_models_served_by_provider,
+    resolve_llm_client,
+)
 from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
-from evaluatorq.common.model_roles import role_model
+from evaluatorq.common.model_roles import model_source, role_model
 from evaluatorq.common.output_adapters import (
     inputs_to_messages,
     output_error_text,
@@ -34,6 +48,9 @@ from evaluatorq.contracts import DEFAULT_SMART_MODEL, JuryResult, LLMCallConfig
 from evaluatorq.jury_presets import get_preset
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
+
+if typing.TYPE_CHECKING:
+    from evaluatorq.common.llm_client import LLMClient
 
 DEFAULT_JUDGE_MODEL = DEFAULT_SMART_MODEL
 """Built-in judge model. At runtime a call naming neither ``model=`` nor ``judges=`` uses ``role_model('smart')``, which flags, env and settings can change."""
@@ -399,11 +416,16 @@ def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
     payload = outcome.payload
     if payload is None:
         return Prediction(error='judge returned no payload', token_usage=outcome.token_usage)
-    if payload.abstain or payload.value is None:
+    # Only an explicit abstain is a clean abstention. A bare value=None with
+    # abstain=False is a non-usable verdict, so it falls through to a non-decisive,
+    # non-abstained Prediction that _compute_judge_vote counts as a failed
+    # repetition, the same reading the redteam bridges use.
+    if payload.abstain:
         return Prediction(
             abstained=True,
             explanation=payload.explanation,
             token_usage=outcome.token_usage,
+            verdict_coerced=outcome.verdict_coerced,
         )
     return Prediction(
         value=payload.value,
@@ -431,7 +453,7 @@ async def _run_single_judge(
     classify: ClassifyQuestion | None = None,
     classify_state_paths: list[str] | None = None,
     classify_empty_warned: list[bool] | None = None,
-    on_classify: typing.Callable[[str], None] | None = None,
+    on_classify: typing.Callable[[str], bool] | None = None,
 ) -> Prediction:
     """Run one judge call and map its outcome to a `Prediction`.
 
@@ -443,7 +465,9 @@ async def _run_single_judge(
     ``classify`` is a candidate question built whenever the panel fields can express
     one. The fetched catalogue is the runtime authority: `run_judge` reads the question
     only for a model that serves the router's ``/decisions`` endpoint and ignores it for
-    every prompted judge.
+    every prompted judge. ``on_classify`` has the last word for a model the catalogue
+    reveals at runtime: it returns ``False`` to prompt the model instead, which the
+    pointwise jury does for a panel with no ``criteria`` (#247).
 
     A judge that will be served by ``/decisions`` gets a config carrying only the two
     fields that leg reads. Passing the prompted judges' sampling settings would mark
@@ -455,9 +479,9 @@ async def _run_single_judge(
     call for a model discovered through the fetched catalogue.
     """
     runtime_classify = client_routes_through_orq(client) and await supports_classify(model, client)
+    if runtime_classify and on_classify is not None:
+        runtime_classify = on_classify(model)
     if runtime_classify:
-        if on_classify is not None:
-            on_classify(model)
         if (
             classify is not None
             and not classify.state
@@ -618,7 +642,11 @@ def _resolve_panel(judges: list[str] | None, model: str | None) -> list[str]:
 
 
 def _resolve_and_validate_panel(
-    *, judges: list[str] | None, model: str | None, min_successful_judges: int
+    *,
+    judges: list[str] | None,
+    model: str | None,
+    min_successful_judges: int,
+    tie_outcome: str | None = TIE_LOSES_VERDICT,
 ) -> tuple[list[str], list[str]]:
     """Resolve the judge panel and validate ``min_successful_judges`` against it.
 
@@ -634,7 +662,33 @@ def _resolve_and_validate_panel(
             f'min_successful_judges ({min_successful_judges}) must be between 1 and '
             f'the deduplicated panel size ({len(deduped)}).'
         )
+    # The same composition advice the red-team paths give. There is no target here,
+    # so the self-judging check has nothing to compare against and stays silent.
+    for issue in panel_composition_messages(panel, [], tie_outcome=tie_outcome):
+        logger.warning(issue)
     return panel, deduped
+
+
+def _require_panel_served(
+    *, client: Any, judges: list[str] | None, model: str | None, panel: list[str], replacement_judges: list[str] | None
+) -> None:
+    """Stop at declaration, before any target call is billed, when the env-resolved client cannot serve the panel.
+
+    Only a panel left to the environment is checked, and only when ``ANTHROPIC_API_KEY`` is the one LLM key set
+    (`require_models_served_by_provider`); declaring a jury still needs no credentials.
+    """
+    if client is not None:
+        return
+    if judges is not None:
+        named = {f'judges[{i}]': judge for i, judge in enumerate(panel)}
+    elif model is not None:
+        named = {'model': model}
+    else:
+        default_model, default_label = model_source('smart')
+        named = {default_label: default_model}
+    for i, judge in enumerate(replacement_judges or []):
+        named[f'replacement_judges[{i}]'] = judge
+    require_models_served_by_provider(models_called_off_router(named))
 
 
 def _apply_preset(
@@ -712,7 +766,7 @@ async def _llm_jury_judge_fn(
     classify: ClassifyQuestion | None,
     classify_state_paths: list[str],
     classify_empty_warned: list[bool],
-    on_classify: typing.Callable[[str], None],
+    on_classify: typing.Callable[[str], bool],
 ) -> Prediction:
     """Adapt `run_jury`'s positional ``judge_fn(model)`` call onto `_run_single_judge`.
 
@@ -775,7 +829,7 @@ async def _llm_jury_scorer(
     levels: list[str] | None,
     classify_state_paths: list[str],
     classify_empty_warned: list[bool],
-    on_classify: typing.Callable[[str], None],
+    on_classify: typing.Callable[[str], bool],
 ) -> EvaluationResult:
     """Score one datapoint with the configured panel.
 
@@ -914,14 +968,14 @@ def llm_jury(
     extra_kwargs: dict[str, Any] | None = None,
     extra_body: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
-    client: Any = None,
+    client: LLMClient | None = None,
 ) -> Evaluator:
     """Build a jury (or single-judge) LLM evaluator for ``evaluators=[...]``.
 
     Presets
     -------
     ``preset`` seats a named panel from ``evaluatorq.jury_presets`` instead of
-    listing judges by hand — ``llm_jury(name='helpfulness', preset='Balanced Trio')``.
+    listing judges by hand — ``llm_jury(name='helpfulness', preset='balanced-trio')``.
     The seats are derived from the committed model-garden snapshot and carry a
     published $/1k that a test recomputes, so a preset cannot quietly become a
     different or a differently-priced panel.
@@ -1125,7 +1179,14 @@ def llm_jury(
         VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL,
     )
     panel, deduped = _resolve_and_validate_panel(
-        judges=judges, model=model, min_successful_judges=min_successful_judges
+        judges=judges,
+        model=model,
+        min_successful_judges=min_successful_judges,
+        tie_outcome=even_panel_tie_outcome(
+            aggregator,
+            VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL,
+            tie_break,
+        ),
     )
     _validate_assignment(assignment, min_successful_judges=min_successful_judges)
     # A construction-time hint only: `run_judge` asks the catalogue per call and is
@@ -1180,7 +1241,10 @@ def llm_jury(
     # client= is used as-is; otherwise we resolve once on first use. A
     # single-element list, not a plain local: the scorer is a module-level
     # function bound by partial and so cannot rebind this frame's names.
-    client_state = [client]
+    client_state = [as_llm_client(client)]
+    _require_panel_served(
+        client=client_state[0], judges=judges, model=model, panel=panel, replacement_judges=replacement_judges
+    )
     verdict_model = _build_verdict_model(
         verdict_kind=verdict_kind,
         labels=label_names,
@@ -1201,9 +1265,11 @@ def llm_jury(
     classify_empty_warned = [False]
     runtime_classify_warned = set(classify_judges)
 
-    def _warn_runtime_classify(model: str) -> None:
-        if model in runtime_classify_warned:
-            return
+    def _admit_runtime_classify(model: str) -> bool:
+        # `supports_classify` is additive: most catalogue classify models also serve chat,
+        # so a prompt-only panel prompts them. Known classify-only ids were rejected above.
+        if not criteria or model in runtime_classify_warned:
+            return bool(criteria)
         _validate_classify_configuration(
             criteria=criteria,
             verdict_kind=verdict_kind,
@@ -1226,6 +1292,7 @@ def llm_jury(
             extra_kwargs=extra_kwargs,
             extra_body=extra_body,
         )
+        return True
 
     sys_prompt = (
         system_prompt
@@ -1272,7 +1339,7 @@ def llm_jury(
         levels=levels,
         classify_state_paths=classify_state_paths,
         classify_empty_warned=classify_empty_warned,
-        on_classify=_warn_runtime_classify,
+        on_classify=_admit_runtime_classify,
     )
     return {'name': name, 'scorer': scorer}
 
@@ -1339,7 +1406,7 @@ class PairwiseComparator:
         structured_output: bool,
         extra_kwargs: dict[str, Any] | None,
         extra_body: dict[str, Any] | None,
-        client: Any,
+        client: LLMClient | None,
         reasoning_effort: str | None = None,
         state_fields: list[str] | None = None,
         classify_seated: bool | None = None,
@@ -1362,7 +1429,7 @@ class PairwiseComparator:
         self._extra_kwargs = extra_kwargs
         self._extra_body = extra_body
         self._reasoning_effort = reasoning_effort
-        self._client = client
+        self._client = as_llm_client(client)
         # `classify_seated=None` means the comparator was constructed by hand.
         direct_construction = classify_seated is None
         self._verdict_model = _build_verdict_model(
@@ -1388,12 +1455,12 @@ class PairwiseComparator:
         if direct_construction:
             for judge in panel + (replacement_judges or []):
                 if is_known_classify_model(judge):
-                    self._warn_runtime_classify(judge)
+                    self._admit_runtime_classify(judge)
 
-    def _warn_runtime_classify(self, model: str) -> None:
-        """Warn once when the authoritative catalogue reveals a classify seat."""
+    def _admit_runtime_classify(self, model: str) -> bool:
+        """Seat a catalogue-revealed classify judge, warning once about the settings it ignores."""
         if model in self._classify_warned:
-            return
+            return True
         self._classify_warned.add(model)
         _warn_classify_repetitions(self._repetitions, pairwise=True)
         _warn_classify_ignored_settings(
@@ -1408,6 +1475,7 @@ class PairwiseComparator:
             extra_kwargs=self._extra_kwargs,
             extra_body=self._extra_body,
         )
+        return True
 
     async def compare(self, *, question: str, response_a: Output, response_b: Output) -> PairwiseComparison:
         """Run the panel over one A-vs-B comparison and return the reconciled verdict.
@@ -1454,7 +1522,7 @@ class PairwiseComparator:
                 classify=classify_question,
                 classify_state_paths=self._classify_state_paths,
                 classify_empty_warned=self._classify_empty_warned,
-                on_classify=self._warn_runtime_classify,
+                on_classify=self._admit_runtime_classify,
             )
 
         # CyclicJudge: one judge per comparison, cycling through the panel.
@@ -1493,7 +1561,7 @@ def llm_jury_pairwise(
     extra_kwargs: dict[str, Any] | None = None,
     extra_body: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
-    client: Any = None,
+    client: LLMClient | None = None,
     state_fields: list[str] | None = None,
 ) -> PairwiseComparator:
     """Build a pairwise (A-vs-B) LLM jury that reuses the shared panel machinery.
@@ -1574,6 +1642,9 @@ def llm_jury_pairwise(
             extra_body=extra_body,
         )
     _warn_unread_criteria(prompt=prompt, criteria=criteria, classify_seated=bool(classify_judges))
+    _require_panel_served(
+        client=client, judges=judges, model=model, panel=deduped, replacement_judges=replacement_judges
+    )
     return PairwiseComparator(
         # Pass the deduped panel so the comparator's no-redundancy check
         # (`len(panel) == 1`) matches the panel run_jury actually runs, keeping

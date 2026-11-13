@@ -2,6 +2,7 @@ import hashlib
 import logging
 import os
 import socket
+import sys
 import threading
 import traceback
 import typing
@@ -11,6 +12,7 @@ import pytest
 
 from evaluatorq.common.judge import reset_responses_rejectors
 from evaluatorq.common.llm_call import reset_reasoning_rejectors
+from evaluatorq.common.llm_client import LLM_CREDENTIAL_KEYS
 from evaluatorq.common.model_catalogue import clear_model_overrides, reset_catalogue_cache
 from evaluatorq.common.model_roles import ROLE_ENV, set_cli_models
 # CrewAI starts import-time Scarf tracking unless telemetry is disabled.
@@ -27,6 +29,105 @@ def _is_loopback(address: object) -> bool:
         return False
     host = str(address[0])
     return host in {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
+
+
+@pytest.fixture(autouse=True)
+def _restore_environ():
+    """Undo every environment change a test makes, including ones code under test makes directly.
+
+    `eq dashboard` exports its roots for the reload worker and `.env` loading sets variables
+    without a monkeypatch, so without this a variable from one test reached whichever test the
+    worker ran next.
+    """
+    saved = dict(os.environ)
+    yield
+    for name in set(os.environ) - set(saved):
+        del os.environ[name]
+    for name, value in saved.items():
+        if os.environ.get(name) != value:
+            os.environ[name] = value
+
+
+def _loguru_to_current_stderr(message) -> None:
+    sys.stderr.write(message)  # looked up per message, so capsys and capfd see it
+
+
+def _reset_loguru() -> None:
+    """Put Loguru back to one known sink: everything at DEBUG and above to whatever `sys.stderr` is now."""
+    from loguru import logger as loguru_logger
+
+    loguru_logger.remove()
+    loguru_logger.add(_loguru_to_current_stderr, level="DEBUG")
+    loguru_logger.enable("evaluatorq")
+
+
+@pytest.fixture(autouse=True)
+def _restore_logging_config():
+    """Start and end every test with the same logging setup, so a CLI test cannot change what a later test sees.
+
+    The CLIs set the `evaluatorq` stdlib logger's level and handlers, call `logger.remove()` on
+    Loguru (dropping every sink, the default one included), and the red-team progress display
+    disables `evaluatorq` in Loguru while it runs. Left in place, a `-q` CLI test silenced every
+    WARNING a later test asserted on. Loguru cannot list its sinks, so it is reset to a fixed
+    baseline rather than restored; stdlib loggers created during the test go back to defaults.
+    """
+    logging.getLogger("evaluatorq")  # the CLIs configure it; make sure it is in the snapshot even before first use
+
+    def evaluatorq_loggers() -> dict[str, logging.Logger]:
+        return {
+            name: item
+            for name, item in list(logging.Logger.manager.loggerDict.items())
+            if isinstance(item, logging.Logger) and (name == "evaluatorq" or name.startswith("evaluatorq."))
+        }
+
+    before = evaluatorq_loggers()
+    saved = [
+        (item, item.level, list(item.handlers), item.propagate, item.disabled)
+        for item in [logging.getLogger(), *before.values()]
+    ]
+    _reset_loguru()
+    yield
+    for item, level, handlers, propagate, disabled in saved:
+        item.setLevel(level)
+        item.handlers[:] = handlers
+        item.propagate = propagate
+        item.disabled = disabled
+    for name, item in evaluatorq_loggers().items():
+        if name not in before:
+            item.setLevel(logging.NOTSET)
+            item.handlers.clear()
+            item.propagate = True
+            item.disabled = False
+    _reset_loguru()
+
+
+@pytest.fixture(autouse=True)
+def _pin_umask():
+    """Run every test under umask 022, so the modes of files a test creates do not depend on the developer's shell.
+
+    Insights rejects group-writable storage, so under a umask 002 shell the tests that build their
+    own folders failed. A test of umask behaviour requests `group_writable_umask` instead.
+    """
+    if os.name == "nt":
+        yield
+        return
+    previous = os.umask(0o022)
+    try:
+        yield
+    finally:
+        os.umask(previous)
+
+
+@pytest.fixture
+def group_writable_umask():
+    """Run the test under umask 002, the default on many Linux desktops."""
+    if os.name == "nt":
+        pytest.skip("POSIX permission bits do not control access on Windows")
+    previous = os.umask(0o002)
+    try:
+        yield
+    finally:
+        os.umask(previous)
 
 
 @pytest.fixture(autouse=True)
@@ -72,7 +173,7 @@ def _hide_ambient_credentials(request, monkeypatch):
     if request.node.get_closest_marker("integration"):
         yield
         return
-    for var in ("ORQ_API_KEY", "OPENAI_API_KEY"):
+    for var in LLM_CREDENTIAL_KEYS:
         monkeypatch.delenv(var, raising=False)
     yield
 
@@ -220,8 +321,11 @@ class _LoguruPropagateHandler(logging.Handler):
 
 
 @pytest.fixture(autouse=True)
-def _propagate_loguru_to_stdlib(request):
-    """Bridge Loguru only when caplog is in the test's fixture dependency closure."""
+def _propagate_loguru_to_stdlib(request, _restore_logging_config):
+    """Bridge Loguru only when caplog is in the test's fixture dependency closure.
+
+    Requests `_restore_logging_config` so its Loguru reset runs first and does not remove this sink.
+    """
     if "caplog" not in request.fixturenames:
         yield
         return

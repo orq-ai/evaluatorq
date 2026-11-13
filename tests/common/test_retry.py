@@ -233,3 +233,24 @@ def test_raw_httpx_status_error_is_retryable():
 
 def test_raw_httpx_client_error_is_not_retryable():
     assert _is_retryable_error(_http_status_error(404)) is False
+
+
+def _anthropic_status_error(cls_name: str, status: int):
+    anthropic = pytest.importorskip('anthropic')
+    request = httpx.Request('POST', 'https://api.anthropic.com/v1/messages')
+    response = httpx.Response(status, request=request)
+    return getattr(anthropic, cls_name)('boom', response=response, body=None)
+
+
+def test_anthropic_rate_limit_error_is_retryable():
+    assert _is_retryable_error(_anthropic_status_error('RateLimitError', 429)) is True
+
+
+def test_anthropic_connection_error_is_retryable():
+    anthropic = pytest.importorskip('anthropic')
+    request = httpx.Request('POST', 'https://api.anthropic.com/v1/messages')
+    assert _is_retryable_error(anthropic.APIConnectionError(request=request)) is True
+
+
+def test_anthropic_bad_request_error_is_not_retryable():
+    assert _is_retryable_error(_anthropic_status_error('BadRequestError', 400)) is False
