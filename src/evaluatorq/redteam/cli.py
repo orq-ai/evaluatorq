@@ -884,10 +884,9 @@ def _collect_sample_errors(samples: Any) -> tuple[list[str], str]:
     from pydantic import ValidationError as _ValidationError
 
     from evaluatorq.redteam.adaptive.strategy_registry import list_available_categories
-    from evaluatorq.redteam.contracts import RedTeamSample, category_key
+    from evaluatorq.redteam.contracts import VALID_VULNERABILITIES_MARKER, RedTeamSample, category_key
     from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe
 
-    valid_list_marker = ' Valid vulnerabilities: '
     requested = set(list_available_categories())
     errors: list[str] = []
     valid_vulnerabilities = ''
@@ -900,7 +899,7 @@ def _collect_sample_errors(samples: Any) -> tuple[list[str], str]:
         except _ValidationError as e:
             for err in e.errors():
                 loc = ' -> '.join(str(loc_part) for loc_part in err['loc'])
-                msg, _, valid = err['msg'].partition(valid_list_marker)
+                msg, _, valid = err['msg'].partition(VALID_VULNERABILITIES_MARKER)
                 valid_vulnerabilities = valid_vulnerabilities or valid
                 errors.append(f'  {row}.{loc}: {msg}')
             continue

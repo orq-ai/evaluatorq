@@ -137,6 +137,36 @@ class TestDatasetDownloadError:
         with pytest.raises(DatasetError, match='Failed to download'):
             evaluatorq_bridge._fetch_from_huggingface()
 
+    def test_default_run_dataset_is_pinned(self, monkeypatch, tmp_path):
+        import huggingface_hub
+
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+        dataset = tmp_path / 'd.json'
+        row = {
+            'input': {
+                'id': 'r1',
+                'category': 'ASI01',
+                'severity': 'high',
+                'vulnerability_domain': 'agent',
+                'turn_type': 'single',
+                'source': 't',
+            },
+            'messages': [{'role': 'user', 'content': 'x'}],
+        }
+        dataset.write_text(json.dumps({'samples': [row]}), encoding='utf-8')
+        calls = []
+
+        def _record(**kwargs):
+            calls.append(kwargs)
+            return str(dataset)
+
+        monkeypatch.setattr(huggingface_hub, 'hf_hub_download', _record)
+
+        evaluatorq_bridge.load_owasp_agentic_dataset(None)
+
+        assert calls[0]['revision'] == evaluatorq_bridge.DEFAULT_HF_REVISION
+
     def test_dataset_error_is_redteam_error(self):
         from evaluatorq.redteam.exceptions import DatasetError, RedTeamError
 

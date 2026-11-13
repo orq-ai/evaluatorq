@@ -576,9 +576,9 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
             inputs = dict(dp.inputs) if dp.inputs else {}
             try:
                 _validate_platform_datapoint(inputs)
-            except (ValidationError, ValueError):
+            except (ValidationError, ValueError) as e:
                 skipped += 1
-                logger.warning(f'Skipping invalid datapoint {inputs.get("id", "unknown")}: validation failed')
+                logger.warning(f'Skipping invalid datapoint {inputs.get("id", "unknown")}: validation failed: {e}')
                 continue
             all_datapoints.append(DataPoint(inputs=inputs))
 
