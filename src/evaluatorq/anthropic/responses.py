@@ -36,6 +36,7 @@ from evaluatorq.anthropic.convert import (
     as_mapping,
     build_output_config,
     build_system,
+    cache_write_split,
     content_blocks,
     decode_arguments,
     finish_reason_for,
@@ -200,9 +201,12 @@ def convert_response_usage(message: Message) -> ResponseUsage:
         'input_tokens': prompt,
         'output_tokens': completion,
         'total_tokens': prompt + completion,
-        'input_tokens_details': {'cached_tokens': cache_read},
+        'input_tokens_details': {
+            'cached_tokens': cache_read,
+            'cache_creation_tokens': cache_write,
+            **cache_write_split(message),
+        },
         'output_tokens_details': {'reasoning_tokens': 0},
-        'cache_creation_input_tokens': cache_write,
     })
 
 

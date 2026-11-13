@@ -37,13 +37,10 @@ class Verdict(BaseModel):
 
 
 @pytest.fixture(autouse=True)
-def _isolate(monkeypatch: pytest.MonkeyPatch):
+def _isolate(fake_catalogue):
     judge_mod.reset_responses_rejectors()
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', supports_responses=True)}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+    fake_catalogue({'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', supports_responses=True)})
     yield
     judge_mod.reset_responses_rejectors()
 

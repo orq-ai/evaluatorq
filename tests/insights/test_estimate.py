@@ -13,7 +13,7 @@ from evaluatorq.common.model_input import (
     JEV_STATE_ALL_QUESTIONS_CHARS,
     effective_trace_input_chars,
 )
-from evaluatorq.common.model_catalogue import ModelInfo
+from evaluatorq.common.model_catalogue import ModelInfo, cost_of
 from evaluatorq.common.run_manifest import list_manifests, start_manifest
 from evaluatorq.contracts import ManifestStatus, StageRecord
 from evaluatorq.insights import estimate, summarize
@@ -47,7 +47,9 @@ CATALOGUE = FacetCatalogue(
 MODELS = StageModels(summary='summary-m', classifier='classifier-m', embedding='embedding-m')
 
 
-def _bound(selection: FacetSelection | None = None, *, catalogue: FacetCatalogue = CATALOGUE, limit: int = 500) -> TraceBound:
+def _bound(
+    selection: FacetSelection | None = None, *, catalogue: FacetCatalogue = CATALOGUE, limit: int = 500
+) -> TraceBound:
     return trace_bound(
         'recent',
         catalogue=catalogue,
@@ -174,6 +176,7 @@ def test_jev_classifier_estimate_observes_its_combined_request_character_ceiling
 def test_invalid_trace_input_cap_is_rejected(trace_input_chars: int) -> None:
     with pytest.raises(ValueError, match='trace_input_chars'):
         _estimate(trace_input_chars=trace_input_chars)
+
 
 def test_a_changed_cap_moves_the_estimate(monkeypatch: pytest.MonkeyPatch) -> None:
     before = _row(_estimate(), 'summary').cost_high
@@ -303,6 +306,35 @@ def test_cost_is_traces_times_tokens_times_each_stages_own_price() -> None:
     assert result.unknowns == ()
 
 
+def test_an_above_threshold_estimate_uses_the_extended_context_tier() -> None:
+    tiered = ModelInfo(
+        0.01,
+        0.03,
+        'p',
+        supports_responses=True,
+        extended_context_threshold=1,
+        extended_context_mode='all_tokens',
+        above_threshold_input_cost_per_1k=0.02,
+        above_threshold_output_cost_per_1k=0.06,
+    )
+    result = _estimate(prices=_prices() | {'summary-m': tiered})
+    summary = _row(result, 'summary')
+    assert summary.tokens_in > 1
+    expected = cost_of(tiered, summary.tokens_in, summary.tokens_out)
+    assert expected is not None
+    assert summary.cost_high == pytest.approx(100 * (expected.input + expected.output))
+    assert summary.cost_high != pytest.approx(100 * (summary.tokens_in * 0.01 + summary.tokens_out * 0.03) / 1000)
+
+
+def test_an_above_threshold_estimate_on_an_incomplete_tier_is_unpriced() -> None:
+    incomplete = ModelInfo(
+        0.01, 0.03, 'p', supports_responses=True, extended_context_threshold=1, extended_context_mode='all_tokens'
+    )
+    result = _estimate(prices=_prices() | {'summary-m': incomplete})
+    assert _row(result, 'summary').cost_high is None
+    assert result.cost_partial is True
+
+
 def test_embedding_cost_scales_with_dimension_count() -> None:
     one = _estimate(dimensions=('intent',))
     three = _estimate(dimensions=('intent', 'failure', 'sentiment'))
@@ -315,9 +347,7 @@ def test_a_coding_question_adds_one_label_call_per_trace() -> None:
     coding = _estimate(coding=True)
     extra = _row(coding, 'label_coding')
     plain_label = _row(plain, 'label')
-    assert extra.cost_high == pytest.approx(
-        100 * (plain_label.tokens_in * 0.002 + extra.tokens_out * 0.004) / 1000
-    )
+    assert extra.cost_high == pytest.approx(100 * (plain_label.tokens_in * 0.002 + extra.tokens_out * 0.004) / 1000)
     assert _f(coding.cost_high) == pytest.approx(_f(plain.cost_high) + _f(extra.cost_high))
 
 
@@ -327,9 +357,7 @@ def test_one_unpriced_model_makes_the_total_partial_and_names_its_stage() -> Non
     assert _row(result, 'summary').cost_high is None
     assert result.cost_partial is True
     assert any('summary' in unknown for unknown in result.unknowns)
-    assert result.cost_high == pytest.approx(
-        sum(row.cost_high for row in result.rows if row.cost_high is not None)
-    )
+    assert result.cost_high == pytest.approx(sum(row.cost_high for row in result.rows if row.cost_high is not None))
 
 
 def test_a_price_missing_from_the_mapping_is_unpriced() -> None:
@@ -391,4 +419,3 @@ def test_stage_seconds_is_the_median_per_trace_across_manifests(tmp_path: Path) 
 def test_stage_seconds_ignores_stages_without_a_recorded_total(tmp_path: Path) -> None:
     _manifest_with_stages(tmp_path, 'a', {'dimension:intent': (40, 0), 'summary': (10, 10)})
     assert set(stage_seconds(tmp_path)) == {'summary'}
-

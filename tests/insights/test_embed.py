@@ -12,7 +12,6 @@ import pytest
 from loguru import logger
 from openai import APITimeoutError
 
-from evaluatorq.common import model_catalogue
 from evaluatorq.common.model_catalogue import ModelInfo
 from evaluatorq.contracts import LLMCallConfig, Usage
 from evaluatorq.insights.cache import InsightsCache
@@ -217,14 +216,10 @@ async def test_embed_retry_count_bounds_attempts_and_records_unknown_usage(
 
 @pytest.mark.asyncio
 async def test_embed_texts_prices_at_the_response_served_model(
-    cache: InsightsCache, monkeypatch: pytest.MonkeyPatch
+    cache: InsightsCache, fake_catalogue
 ) -> None:
     served_model = 'openai/served-embedding-model'
-
-    async def catalogue(client: Any = None) -> dict[str, ModelInfo]:
-        return {'served-embedding-model': ModelInfo(0.005, 0.0, 'openai', supports_responses=False)}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', catalogue)
+    fake_catalogue({'served-embedding-model': ModelInfo(0.005, 0.0, 'openai', supports_responses=False)})
     ledger = UsageLedger()
 
     await embed_texts(
