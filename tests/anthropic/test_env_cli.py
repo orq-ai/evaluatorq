@@ -257,7 +257,7 @@ def test_the_red_team_pre_flight_names_the_roles_a_stray_anthropic_key_cannot_se
     assert 'ANTHROPIC_API_KEY is the only LLM key set' in str(info.value)
     assert 'EVALUATORQ_SMART_MODEL (unset, built-in default) (redteam.attacker)' in str(info.value)
     assert 'EVALUATORQ_SMART_MODEL (unset, built-in default) (redteam.evaluator)' in str(info.value)
-    # max_backtracks is 0 by default, so the refusal judge never runs and its model is not checked.
+    # Only the smart role is checked: the classifier role does not run in a default red-team run.
     assert 'CLASSIFIER' not in str(info.value)
     assert 'refusal_judge' not in str(info.value)
 
@@ -275,28 +275,12 @@ def _smart_claude(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'claude-sonnet-5-5')
 
 
-def test_the_red_team_pre_flight_checks_the_fast_model_the_refusal_judge_falls_back_to(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Off the Orq router the classify-only classifier default is replaced by the fast role, so that is the model to check."""
+def test_the_red_team_pre_flight_checks_no_extra_model_for_backtracking(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The backtrack decision runs on the attack model, so a Claude smart role is enough with backtracking on."""
     from evaluatorq.redteam.contracts import LLMConfig
 
     _smart_claude(monkeypatch)
-    with pytest.raises(ModelClientMismatchError) as info:
-        _red_team_pre_flight(LLMConfig(max_backtracks=2))
-    message = str(info.value)
-    assert 'EVALUATORQ_FAST_MODEL (unset, built-in default) (redteam.refusal_judge' in message
-    assert 'EVALUATORQ_CLASSIFIER_MODEL' not in message
-
-    monkeypatch.setenv('EVALUATORQ_FAST_MODEL', 'claude-haiku-5-5')
     _red_team_pre_flight(LLMConfig(max_backtracks=2))
-
-
-def test_the_red_team_pre_flight_skips_the_refusal_judge_on_a_static_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    from evaluatorq.redteam.contracts import LLMConfig
-
-    _smart_claude(monkeypatch)
-    _red_team_pre_flight(LLMConfig(max_backtracks=2), mode='static')
 
 
 def test_the_red_team_pre_flight_checks_replacement_judges(monkeypatch: pytest.MonkeyPatch) -> None:
