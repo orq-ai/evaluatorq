@@ -221,12 +221,54 @@ def test_negative_output_tokens_never_reduce_the_cost():
     assert cost == pytest.approx((0.00125, 0.0))
 
 
-def test_above_threshold_without_above_rates_stays_standard():
-    info = _info(extended_context_threshold=1000, extended_context_mode='all_tokens', cache_read_cost_per_1k=0.0001)
-    cost = cost_of(info, 2_000, 1_000, cached_tokens=1_000)
-    assert cost is not None
-    assert cost[0] == pytest.approx(1 * 0.00125 + 1 * 0.0001)
-    assert cost[1] == pytest.approx(0.01)
+def test_complete_tier_is_priced_above_threshold():
+    assert _tiered().extended_tier_complete
+    assert cost_of(_tiered(), 300_000, 1_000) is not None
+
+
+INCOMPLETE_TIERS = {
+    'no_above_rates': {},
+    'no_above_output': {'above_threshold_input_cost_per_1k': 0.0025},
+    'no_above_input': {'above_threshold_output_cost_per_1k': 0.015},
+    'no_above_cache_read': {
+        'above_threshold_input_cost_per_1k': 0.0025,
+        'above_threshold_output_cost_per_1k': 0.015,
+        'cache_read_cost_per_1k': 0.0001,
+    },
+}
+
+
+@pytest.mark.parametrize('fields', INCOMPLETE_TIERS.values(), ids=INCOMPLETE_TIERS.keys())
+def test_incomplete_tier_above_threshold_is_unpriced_and_warns_once(fields: dict[str, float]):
+    info = _info(extended_context_threshold=1000, extended_context_mode='all_tokens', **fields)
+    assert not info.extended_tier_complete
+    from loguru import logger
+
+    messages: list[str] = []
+    sink = logger.add(lambda m: messages.append(str(m)), level='WARNING')
+    try:
+        assert cost_of(info, 2_000, 1_000) is None
+        assert cost_of(info, 3_000, 1_000) is None
+    finally:
+        logger.remove(sink)
+    assert len([m for m in messages if 'incomplete above-threshold tier' in m]) == 1
+
+
+def test_incomplete_tier_below_and_at_threshold_is_still_priced():
+    info = _info(extended_context_threshold=1000, extended_context_mode='all_tokens')
+    assert cost_of(info, 1_000, 1_000) == pytest.approx((0.00125, 0.01))
+    assert cost_of(info, 500, 1_000) == pytest.approx((0.000625, 0.01))
+
+
+def test_tier_without_a_standard_cache_read_rate_needs_no_above_cache_read_rate():
+    info = _info(
+        extended_context_threshold=1000,
+        extended_context_mode='all_tokens',
+        above_threshold_input_cost_per_1k=0.0025,
+        above_threshold_output_cost_per_1k=0.015,
+    )
+    assert info.extended_tier_complete
+    assert cost_of(info, 2_000, 1_000) == pytest.approx((2_000 * 0.0025 / 1000, 0.015))
 
 
 def test_unknown_mode_bills_flat_and_logs():
@@ -257,16 +299,8 @@ def test_missing_mode_bills_flat():
 
 
 @pytest.fixture
-def _tiered_catalogue(monkeypatch: pytest.MonkeyPatch):
-    table = catalogue._parse_catalogue([_card(GEMINI_METADATA)])
-
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return table
-
-    monkeypatch.setattr(catalogue, '_load_catalogue', fake_load)
-    catalogue.reset_catalogue_cache()
-    yield
-    catalogue.reset_catalogue_cache()
+def _tiered_catalogue(fake_catalogue):
+    fake_catalogue(catalogue._parse_catalogue([_card(GEMINI_METADATA)]))
 
 
 @pytest.mark.asyncio
@@ -313,6 +347,50 @@ async def test_price_usage_bills_audio_input_at_the_audio_rate():
 # --- CallCost ---------------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
+async def test_register_model_keeps_tier_cache_and_audio_rates_through_price_usage():
+    registered = ModelInfo(
+        0.00125,
+        0.01,
+        'self',
+        True,  # noqa: FBT003
+        extended_context_threshold=200_000,
+        extended_context_mode='all_tokens',
+        above_threshold_input_cost_per_1k=0.0025,
+        above_threshold_output_cost_per_1k=0.015,
+        above_threshold_cache_read_cost_per_1k=0.00025,
+        audio_input_cost_per_1k=0.003,
+        cache_read_cost_per_1k=0.000125,
+        cache_write_cost_per_1k=0.0045,
+    )
+    catalogue.register_model('openai/self-tiered', registered)
+    info = await catalogue.get_model_info('self-tiered')
+    assert info == registered
+    assert info is not None
+    assert info.extended_tier_complete
+    long_call = Usage(
+        input_tokens=300_000,
+        output_tokens=1_000,
+        total_tokens=301_000,
+        cached_tokens=100_000,
+        cache_creation_tokens=50_000,
+        audio_input_tokens=10_000,
+        calls=1,
+        priced_calls=0,
+    )
+    priced = await catalogue.price_usage(long_call, 'self-tiered')
+    assert priced is not None
+    assert priced.input_cost == pytest.approx(140 * 0.0025 + 100 * 0.00025 + 50 * 0.0045 + 10 * 0.003)
+    assert priced.output_cost == pytest.approx(0.015)
+    short_call = Usage(
+        input_tokens=1_000, output_tokens=1_000, total_tokens=2_000, cached_tokens=400, calls=1, priced_calls=0
+    )
+    priced_short = await catalogue.price_usage(short_call, 'self-tiered')
+    assert priced_short is not None
+    assert priced_short.input_cost == pytest.approx(0.6 * 0.00125 + 0.4 * 0.000125)
+    assert priced_short.output_cost == pytest.approx(0.01)
+
+
 def test_cost_of_returns_a_named_pair_that_still_unpacks():
     costs = cost_of(_info(), 1_000, 500)
     assert costs is not None
@@ -333,11 +411,13 @@ def test_above_rates_are_dropped_when_the_threshold_is_not_200k(threshold: int):
     assert info.above_threshold_input_cost_per_1k is None
     assert info.above_threshold_output_cost_per_1k is None
     assert info.above_threshold_cache_read_cost_per_1k is None
-    # Everything else on the card survives, and the call bills flat.
+    # Everything else on the card survives. The tier is incomplete, so a call above it is unpriced
+    # (not billed at a wrong standard rate); a call at the threshold still bills flat.
     assert info.cache_write_cost_per_1k == pytest.approx(0.0045)
-    flat = cost_of(info, threshold + 1, 1_000)
+    assert cost_of(info, threshold + 1, 1_000) is None
+    flat = cost_of(info, threshold, 1_000)
     assert flat is not None
-    assert flat.input == pytest.approx((threshold + 1) * 0.00125 / 1000)
+    assert flat.input == pytest.approx(threshold * 0.00125 / 1000)
     assert flat.output == pytest.approx(0.01)
 
 

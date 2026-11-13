@@ -154,6 +154,20 @@ class ModelInfo(_ModelInfoFields):
             cache_write_cost_per_1k,
         )
 
+    @property
+    def extended_tier_complete(self) -> bool:
+        """Whether the extended-context tier can price a whole call.
+
+        True only with an above-threshold input AND output rate, and an above-threshold cache-read
+        rate whenever the card has a standard cache-read rate. A tier missing any of these would
+        bill part of a long call at the standard rate, so `cost_of` refuses to price it.
+        """
+        return (
+            self.above_threshold_input_cost_per_1k is not None
+            and self.above_threshold_output_cost_per_1k is not None
+            and (self.cache_read_cost_per_1k is None or self.above_threshold_cache_read_cost_per_1k is not None)
+        )
+
 
 class ModelCatalogueError(RuntimeError):
     """The catalogue request failed; ``status_code`` is set for HTTP responses."""
@@ -783,6 +797,9 @@ class CallCost(NamedTuple):
     output: float
 
 
+_warned_incomplete_tiers: set[ModelInfo] = set()
+
+
 def cost_of(
     info: ModelInfo,
     input_tokens: int,
@@ -808,8 +825,10 @@ def cost_of(
     ``extended_context_threshold`` (the usual provider rule: a prompt of exactly the
     threshold is still standard). In mode ``all_tokens`` the whole call is repriced:
     input and output at the above-threshold rates, cache reads at the above-threshold
-    cache-read rate. A rate the tier does not publish keeps its standard value, so
-    cache writes and audio are never repriced. Mode ``none`` means no tier and bills
+    cache-read rate. Cache writes and audio are never repriced. A tier is complete only when
+    `ModelInfo.extended_tier_complete`; an above-threshold call on an incomplete tier returns
+    ``None`` (and warns once per model) rather than billing part of it at the standard rate.
+    Calls at or below the threshold are unaffected. Mode ``none`` means no tier and bills
     flat; any other mode is not guessed at: it bills flat and logs at debug level.
     """
     if info.input_cost_per_1k is None or info.output_cost_per_1k is None:
@@ -822,12 +841,24 @@ def cost_of(
     if threshold is not None and input_tokens > threshold:
         mode = info.extended_context_mode
         if mode == 'all_tokens':
-            if info.above_threshold_input_cost_per_1k is not None:
-                input_rate = info.above_threshold_input_cost_per_1k
-            if info.above_threshold_output_cost_per_1k is not None:
-                output_rate = info.above_threshold_output_cost_per_1k
-            if info.above_threshold_cache_read_cost_per_1k is not None:
-                cache_read_rate = info.above_threshold_cache_read_cost_per_1k
+            if not info.extended_tier_complete:
+                # An unknown price beats a wrong one: billing a long call at the standard rate
+                # would silently under-report it.
+                if info not in _warned_incomplete_tiers:
+                    _warned_incomplete_tiers.add(info)
+                    logger.warning(
+                        'Model {} prices calls above {} input tokens on all tokens but publishes an incomplete '
+                        'above-threshold tier; such calls are left unpriced',
+                        info.provider,
+                        threshold,
+                    )
+                return None
+            above_input = info.above_threshold_input_cost_per_1k
+            above_output = info.above_threshold_output_cost_per_1k
+            input_rate = input_rate if above_input is None else above_input
+            output_rate = output_rate if above_output is None else above_output
+            above_cache = info.above_threshold_cache_read_cost_per_1k
+            cache_read_rate = cache_read_rate if above_cache is None else above_cache
         elif mode != 'none':
             logger.debug('Unknown extended_context_pricing_mode {!r}; billing the call at flat rates', mode)
     remaining = max(input_tokens, 0)
