@@ -269,8 +269,9 @@ def test_custom_and_function_results_keep_their_shared_order() -> None:
 def test_duplicate_result_order_metadata_warns_and_keeps_all_results(caplog: pytest.LogCaptureFixture) -> None:
     items = [
         {'type': 'function_call', 'call_id': 'f', 'name': 'ordinary', 'arguments': '{}'},
-        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'custom', 'input': '{}'},
-        {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'custom'},
+        {'type': 'computer_call', 'id': 'cc_1', 'call_id': 'c', 'pending_safety_checks': [], 'status': 'completed',
+         'action': {'type': 'screenshot'}},
+        {'type': 'computer_call_output', 'call_id': 'c', 'output': {'type': 'computer_screenshot'}},
         {'type': 'function_call_output', 'call_id': 'f', 'output': 'function'},
     ]
     trajectory = ResponsesConversation(items=items).to_atif()
@@ -279,8 +280,8 @@ def test_duplicate_result_order_metadata_warns_and_keeps_all_results(caplog: pyt
         {'type': 'function', 'index': 0}, {'type': 'function', 'index': 0}
     ]
     roundtrip = trajectory.to_responses()
-    results = [item for item in roundtrip.items if item['type'] in ('custom_tool_call_output', 'function_call_output')]
-    assert [item['type'] for item in results] == ['function_call_output', 'custom_tool_call_output']
+    results = [item for item in roundtrip.items if item['type'].endswith('_call_output')]
+    assert [item['type'] for item in results] == ['function_call_output', 'computer_call_output']
     assert 'Malformed Responses result order metadata' in caplog.text
 
 
@@ -706,7 +707,8 @@ def test_custom_and_mcp_calls_belong_to_response_and_agent_step() -> None:
     assert [item.type for item in conv.responses[0].output] == ['custom_tool_call', 'mcp_call']
     step = conv.to_atif().steps[1]
     assert step.source == 'agent' and step.model_name == 'gpt-x'
-    assert step.extra is not None and step.extra['evaluatorq.responses_output_items'] == [custom, mcp]
+    assert [(call.tool_call_id, call.arguments) for call in step.tool_calls or []] == [('c2', {'input': 'query'})]
+    assert step.extra is not None and step.extra['evaluatorq.responses_output_items'] == [mcp]
     back = conv.to_atif().to_responses()
     assert back.items[1:] == [custom, mcp]
 
@@ -905,8 +907,58 @@ def test_custom_tool_result_round_trips_with_its_call() -> None:
     items = [_ITEMS[0], call, result]
     traj = ResponsesConversation(items=items).to_atif()
     step = traj.steps[1]
-    assert step.extra is not None and step.extra['evaluatorq.responses_result_items'] == [result]
+    assert step.tool_calls is not None and step.tool_calls[0].function_name == 'search'
+    assert step.observation is not None
+    assert [(r.source_call_id, r.content) for r in step.observation.results] == [('c2', '/tmp/result')]
+    assert step.extra is None or 'evaluatorq.responses_result_items' not in step.extra
     assert traj.to_responses().items[-2:] == [call, result]
+
+
+# Shape copied from a Codex rollout on a `code_mode_only` model (every shell command goes through the `exec`
+# custom tool); paths, ids and output text are replaced with synthetic values.
+_CODEX_CODE_MODE: list[dict[str, Any]] = [
+    {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'read the skill'}]},
+    {
+        'type': 'custom_tool_call', 'id': 'ctc_01', 'status': 'completed', 'call_id': 'call_exec_1', 'name': 'exec',
+        'input': 'const r = await tools.exec_command({cmd:"sed -n \'1,40p\' /workspace/skills/demo/SKILL.md"});\ntext(r)',
+    },
+    {
+        'type': 'custom_tool_call_output', 'call_id': 'call_exec_1',
+        'output': [
+            {'type': 'input_text', 'text': 'Script completed\nWall time 0.4 seconds\nOutput:\n'},
+            {'type': 'input_text', 'text': '---\nname: demo\n---'},
+        ],
+    },
+    {
+        'type': 'custom_tool_call', 'id': 'ctc_02', 'status': 'completed', 'call_id': 'call_patch_1',
+        'name': 'apply_patch', 'input': '*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n',
+    },
+    {'type': 'custom_tool_call_output', 'call_id': 'call_patch_1', 'output': 'Success. Updated: A notes.md'},
+    {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'Done.'}]},
+]
+
+
+def test_codex_code_mode_custom_calls_become_atif_tool_calls() -> None:
+    from evaluatorq.signals import compute_signals
+
+    traj = ResponsesConversation(items=_CODEX_CODE_MODE).to_atif()
+    calls = [call for step in traj.steps for call in step.tool_calls or []]
+    assert [(call.tool_call_id, call.function_name) for call in calls] == [
+        ('call_exec_1', 'exec'), ('call_patch_1', 'apply_patch')
+    ]
+    assert calls[0].arguments == {'input': _CODEX_CODE_MODE[1]['input']}
+    results = [r for step in traj.steps for r in (step.observation.results if step.observation else [])]
+    assert [(r.source_call_id, r.content) for r in results] == [
+        ('call_exec_1', 'Script completed\nWall time 0.4 seconds\nOutput:\n\n---\nname: demo\n---'),
+        ('call_patch_1', 'Success. Updated: A notes.md'),
+    ]
+    signal = compute_signals(traj, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value == 2
+
+    back = traj.to_responses().items
+    assert back[1] == _CODEX_CODE_MODE[1] and back[3:] == _CODEX_CODE_MODE[3:]
+    # Text-only output parts collapse to one string, as for function_call_output.
+    assert back[2] == {'type': 'custom_tool_call_output', 'call_id': 'call_exec_1', 'output': results[0].content}
 
 
 def test_invalid_item_warning_does_not_leak_item_text() -> None:
