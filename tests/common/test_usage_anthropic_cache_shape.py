@@ -175,8 +175,8 @@ def test_cost_of_prices_an_anthropic_cache_heavy_call_on_all_tokens():
 
 
 @pytest.mark.asyncio
-async def test_price_usage_prices_anthropic_cache_tokens(monkeypatch: pytest.MonkeyPatch):
-    table = {
+async def test_price_usage_prices_anthropic_cache_tokens(fake_catalogue):
+    fake_catalogue({
         'claude-x': ModelInfo(
             0.003,
             0.015,
@@ -185,12 +185,7 @@ async def test_price_usage_prices_anthropic_cache_tokens(monkeypatch: pytest.Mon
             cache_read_cost_per_1k=0.0003,
             cache_write_cost_per_1k=0.00375,
         )
-    }
-
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return table
-
-    monkeypatch.setattr(catalogue, '_load_catalogue', fake_load)
+    })
     usage = _extract({
         'input_tokens': 10,
         'output_tokens': 1000,
