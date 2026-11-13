@@ -31,6 +31,7 @@ from evaluatorq.common.content_filter import (
 )
 from evaluatorq.common.judge import run_judge
 from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.sanitize import delimit, xml_escape
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
@@ -663,7 +664,7 @@ def _decision_history_entry(message: 'ChatCompletionMessageParam') -> str:
     them, so escaping them again would show the attacker ``&amp;lt;`` instead of ``&lt;``. The
     system and assistant messages carry raw text and are escaped here.
     """
-    content = str(message.get('content') or '')
+    content = coerce_content_text(message.get('content'))
     return f'{message["role"]}: {content if message["role"] == "user" else xml_escape(content)}'
 
 

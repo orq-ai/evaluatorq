@@ -24,6 +24,7 @@ from evaluatorq.contracts import (
 )
 from evaluatorq.redteam.adaptive.orchestrator import (
     MultiTurnOrchestrator,
+    _decision_history_entry,
     ensure_target_can_backtrack,
     erasure_allowance,
 )
@@ -41,8 +42,8 @@ from evaluatorq.redteam.contracts import (
     TurnType,
 )
 from evaluatorq.redteam.exceptions import RedTeamError
-from evaluatorq.redteam.reports.converters import _coerce_job_output_payload
 from evaluatorq.redteam.replay import RedTeamReplay
+from evaluatorq.redteam.reports.converters import _coerce_job_output_payload
 from evaluatorq.redteam.runner import (
     _backtracking_warnings,
     _persist_and_index_run,
@@ -107,9 +108,7 @@ def _completion(content: str | None) -> Any:
     return response
 
 
-def _orchestrator(
-    llm_replies: list[Any], max_backtracks: int, **config: Any
-) -> tuple[MultiTurnOrchestrator, Any]:
+def _orchestrator(llm_replies: list[Any], max_backtracks: int, **config: Any) -> tuple[MultiTurnOrchestrator, Any]:
     llm = MagicMock()
     llm.chat.completions.create = AsyncMock(
         side_effect=[reply if isinstance(reply, Exception) else _completion(reply) for reply in llm_replies]
@@ -589,7 +588,14 @@ class TestDecisionCall:
 class TestErasuresAreReleasedAcrossTurns:
     @pytest.mark.parametrize(
         ('budget', 'max_turns', 'expected'),
-        [(5, 5, [1, 2, 3, 4, 5]), (2, 5, [1, 1, 2, 2, 2]), (5, 2, [3, 5]), (1, 10, [1] * 10), (0, 3, [0, 0, 0]), (3, 8, [1, 1, 2, 2, 2, 3, 3, 3])],
+        [
+            (5, 5, [1, 2, 3, 4, 5]),
+            (2, 5, [1, 1, 2, 2, 2]),
+            (5, 2, [3, 5]),
+            (1, 10, [1] * 10),
+            (0, 3, [0, 0, 0]),
+            (3, 8, [1, 1, 2, 2, 2, 3, 3, 3]),
+        ],
     )
     def test_allowance_by_turn(self, budget: int, max_turns: int, expected: list[int]) -> None:
         assert [erasure_allowance(budget, turn, max_turns) for turn in range(max_turns)] == expected
@@ -707,3 +713,14 @@ def test_the_removed_refusal_judge_task_is_rejected_as_an_override() -> None:
     assert 'redteam.refusal_judge' not in TASKS
     with pytest.raises(ValueError):
         parse_overrides(['redteam.refusal_judge=some/model'])
+
+
+class TestDecisionHistoryEntry:
+    def test_system_and_assistant_text_is_escaped_and_user_text_is_not(self) -> None:
+        assert _decision_history_entry({'role': 'system', 'content': 'a <b>'}) == 'system: a &lt;b&gt;'
+        assert _decision_history_entry({'role': 'assistant', 'content': 'a <b>'}) == 'assistant: a &lt;b&gt;'
+        assert _decision_history_entry({'role': 'user', 'content': '&lt;b&gt;'}) == 'user: &lt;b&gt;'
+
+    def test_list_content_is_rendered_as_text_not_a_python_repr(self) -> None:
+        message = {'role': 'assistant', 'content': [{'type': 'text', 'text': 'hi'}, {'type': 'text', 'text': '<x>'}]}
+        assert _decision_history_entry(message) == 'assistant: hi\n&lt;x&gt;'
