@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 import pytest
 from loguru import logger
@@ -41,6 +42,14 @@ class TestEvaluatorCoverage:
         assert missing == [], f'vulnerabilities with no evaluator: {missing}'
 
 
+def _category(dp: Any) -> str:
+    return dp.inputs.get('category', '')
+
+
+def _id(dp: Any) -> str | None:
+    return dp.inputs.get('id')
+
+
 class TestZeroCategoryWarning:
     """A requested category with zero datapoints warns instead of silently vanishing (gripe #3)."""
 
@@ -51,7 +60,7 @@ class TestZeroCategoryWarning:
         dps = [DataPoint(inputs={'category': 'ASI01'})]
         messages, stop = _capture_logs('WARNING')
         try:
-            kept = _filter_by_categories(dps, ['ASI01', 'ASI03'], category_of=lambda dp: dp.inputs.get('category', ''))
+            kept = _filter_by_categories(dps, ['ASI01', 'ASI03'], category_of=_category, id_of=_id)
         finally:
             stop()
 
@@ -67,11 +76,47 @@ class TestZeroCategoryWarning:
         dps = [DataPoint(inputs={'category': 'ASI01'}), DataPoint(inputs={'category': 'OWASP-ASI02'})]
         messages, stop = _capture_logs('WARNING')
         try:
-            kept = _filter_by_categories(dps, ['ASI01', 'ASI02'], category_of=lambda dp: dp.inputs.get('category', ''))
+            kept = _filter_by_categories(dps, ['ASI01', 'ASI02'], category_of=_category, id_of=_id)
         finally:
             stop()
 
         assert len(kept) == 2
+        assert messages == []
+
+    @pytest.mark.parametrize('category', ['ASI1', 'LLM03'])
+    def test_warns_with_ids_for_unrequestable_category(self, category: str):
+        from evaluatorq import DataPoint
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _filter_by_categories
+
+        dps = [
+            DataPoint(inputs={'id': 'ok', 'category': 'ASI01'}),
+            DataPoint(inputs={'id': 'r1', 'category': category}),
+            DataPoint(inputs={'id': 'r2', 'category': category}),
+        ]
+        messages, stop = _capture_logs('WARNING')
+        try:
+            kept = _filter_by_categories(dps, ['ASI01', 'ASI04'], category_of=_category, id_of=_id)
+        finally:
+            stop()
+
+        assert len(kept) == 1
+        assert (
+            f'Skipped 2 static datapoint(s) with category {category!r}, which is not a requested '
+            'category code (ids: r1, r2).'
+        ) in '\n'.join(messages)
+
+    def test_no_skip_warning_for_unrequested_valid_category(self):
+        from evaluatorq import DataPoint
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _filter_by_categories
+
+        dps = [DataPoint(inputs={'id': 'a', 'category': 'ASI01'}), DataPoint(inputs={'id': 'b', 'category': 'LLM03'})]
+        messages, stop = _capture_logs('WARNING')
+        try:
+            kept = _filter_by_categories(dps, ['ASI01'], category_of=_category, id_of=_id)
+        finally:
+            stop()
+
+        assert len(kept) == 1
         assert messages == []
 
 
@@ -92,10 +137,129 @@ class TestDatasetDownloadError:
         with pytest.raises(DatasetError, match='Failed to download'):
             evaluatorq_bridge._fetch_from_huggingface()
 
+    def test_default_run_dataset_is_pinned(self, monkeypatch, tmp_path):
+        import huggingface_hub
+
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+        dataset = tmp_path / 'd.json'
+        row = {
+            'input': {
+                'id': 'r1',
+                'category': 'ASI01',
+                'severity': 'high',
+                'vulnerability_domain': 'agent',
+                'turn_type': 'single',
+                'source': 't',
+            },
+            'messages': [{'role': 'user', 'content': 'x'}],
+        }
+        dataset.write_text(json.dumps({'samples': [row]}), encoding='utf-8')
+        calls = []
+
+        def _record(**kwargs):
+            calls.append(kwargs)
+            return str(dataset)
+
+        monkeypatch.setattr(huggingface_hub, 'hf_hub_download', _record)
+
+        evaluatorq_bridge.load_owasp_agentic_dataset(None)
+
+        assert calls[0]['revision'] == evaluatorq_bridge.DEFAULT_HF_REVISION
+
     def test_dataset_error_is_redteam_error(self):
         from evaluatorq.redteam.exceptions import DatasetError, RedTeamError
 
         assert issubclass(DatasetError, RedTeamError)
+
+
+class TestOrqDatasetFetchError:
+    """A wrong orq:<dataset-id> surfaces a clean DatasetError naming the id (RES-1870)."""
+
+    @staticmethod
+    def _load_with_transport(monkeypatch, handler):
+        import httpx
+        from orq_ai_sdk import Orq
+
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+        client = Orq(
+            api_key='test-key',
+            server_url='http://orq.test',
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+        monkeypatch.setattr(evaluatorq_bridge, 'resolve_orq_client', lambda _key: client)
+        return evaluatorq_bridge.load_owasp_agentic_dataset('orq:not-a-real-id')
+
+    def test_unknown_id_raises_dataset_error_with_id_and_status(self, monkeypatch):
+        import httpx
+        from orq_ai_sdk.models import ResponseValidationError
+
+        from evaluatorq.redteam.exceptions import DatasetError
+
+        def _not_found(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, json={'code': 404, 'error': 'Dataset not found'})
+
+        with pytest.raises(DatasetError, match=r'orq:not-a-real-id.*HTTP 404: Dataset not found\.') as ei:
+            self._load_with_transport(monkeypatch, _not_found)
+        assert isinstance(ei.value.__cause__, ResponseValidationError)
+        assert 'valid string' not in str(ei.value)
+
+    def test_missing_api_key_raises_credential_error(self, monkeypatch):
+        from evaluatorq.redteam.exceptions import CredentialError
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+        monkeypatch.delenv('ORQ_API_KEY', raising=False)
+        with pytest.raises(CredentialError, match='ORQ_API_KEY'):
+            evaluatorq_bridge.load_owasp_agentic_dataset('orq:some-id')
+
+    def test_network_error_raises_dataset_error(self, monkeypatch):
+        import httpx
+
+        from evaluatorq.redteam.exceptions import DatasetError
+
+        def _refused(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError('connection refused', request=request)
+
+        with pytest.raises(DatasetError, match='orq:not-a-real-id') as ei:
+            self._load_with_transport(monkeypatch, _refused)
+        assert isinstance(ei.value.__cause__, httpx.ConnectError)
+
+    def test_later_page_failure_names_the_page(self, monkeypatch):
+        import httpx
+
+        from evaluatorq.redteam.exceptions import DatasetError
+
+        page_one = {
+            'object': 'list',
+            'data': [{'_id': 'dp-1', 'workspace_id': 'ws', 'dataset_id': 'ds', 'inputs': {}}],
+            'has_more': True,
+        }
+
+        def _second_page_fails(request: httpx.Request) -> httpx.Response:
+            if 'starting_after' in request.url.params:
+                return httpx.Response(500, json={'message': 'internal error'})
+            return httpx.Response(200, json=page_one)
+
+        with pytest.raises(DatasetError, match=r'\(page after datapoint dp-1\): HTTP 500: internal error'):
+            self._load_with_transport(monkeypatch, _second_page_fails)
+
+
+@pytest.mark.parametrize(
+    ('body', 'expected'),
+    [
+        ('{"message": "dataset not found", "error": "other"}', 'dataset not found'),
+        ('{"error": "unauthorized"}', 'unauthorized'),
+        ('[1, 2]', '[1, 2]'),
+        ('<html>bad gateway</html>', '<html>bad gateway</html>'),
+        ('x' * 400, 'x' * 300 + '...'),
+    ],
+)
+def test_orq_error_message(body: str, expected: str):
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _orq_error_message
+
+    assert _orq_error_message(body) == expected
 
 
 class TestLoadFromFileError:
@@ -133,6 +297,27 @@ class TestLoadFromFileError:
         with pytest.raises(DatasetError, match='Failed to load red team dataset') as ei:
             evaluatorq_bridge._load_from_file(wrong)
         assert isinstance(ei.value.__cause__, ValidationError)
+
+    def test_unknown_vulnerability_raises_dataset_error(self, tmp_path):
+        from evaluatorq.redteam.exceptions import DatasetError
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+        row = {
+            'input': {
+                'id': 'typo-001',
+                'vulnerability': 'goal_hijack',
+                'severity': 'low',
+                'vulnerability_domain': 'agent',
+                'turn_type': 'single',
+                'source': 'test',
+            },
+            'messages': [{'role': 'user', 'content': 'x'}],
+        }
+        path = tmp_path / 'dataset.json'
+        path.write_text(json.dumps({'samples': [row]}))
+
+        with pytest.raises(DatasetError, match="Unknown vulnerability 'goal_hijack'"):
+            evaluatorq_bridge._load_from_file(path)
 
 
 class TestMultiAgentGate:

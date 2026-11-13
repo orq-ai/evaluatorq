@@ -130,11 +130,10 @@ Red teaming generates multi-turn attacks by default (`max_turns=`) precisely so 
 
 ### What does red teaming actually test?
 
-Attacks and LLM-judge evaluators mapped to three frameworks:
+Attacks and LLM-judge evaluators mapped to two frameworks:
 
 - **OWASP LLM Top 10** — prompt injection, system-prompt leakage, and the rest.
 - **OWASP Agentic Top 10 (ASI)** — agent-specific risks: tool abuse, excessive agency, trust exploitation.
-- **Responsible AI** — fairness/bias, liability (legal, medical), content policy, harmful content.
 
 Pass the ones you care about via `categories=["LLM01", "ASI01", ...]`. The full list of codes is in the [redteam API reference](reference/evaluatorq/redteam.md).
 
