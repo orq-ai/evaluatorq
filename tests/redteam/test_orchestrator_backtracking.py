@@ -722,5 +722,8 @@ class TestDecisionHistoryEntry:
         assert _decision_history_entry({'role': 'user', 'content': '&lt;b&gt;'}) == 'user: &lt;b&gt;'
 
     def test_list_content_is_rendered_as_text_not_a_python_repr(self) -> None:
-        message = {'role': 'assistant', 'content': [{'type': 'text', 'text': 'hi'}, {'type': 'text', 'text': '<x>'}]}
-        assert _decision_history_entry(message) == 'assistant: hi\n&lt;x&gt;'
+        entry = _decision_history_entry({
+            'role': 'assistant',
+            'content': [{'type': 'text', 'text': 'hi'}, {'type': 'text', 'text': '<x>'}],
+        })
+        assert entry == 'assistant: hi\n&lt;x&gt;'
