@@ -840,7 +840,9 @@ class Usage(BaseModel):
         if usage is None:
             return None
         inp = _usage_first_int(usage, ('input_tokens', 'prompt_tokens', 'promptTokens', 'inputTokens', 'prompt'))
-        out = _usage_first_int(usage, ('output_tokens', 'completion_tokens', 'completionTokens', 'outputTokens', 'completion'))
+        out = _usage_first_int(
+            usage, ('output_tokens', 'completion_tokens', 'completionTokens', 'outputTokens', 'completion')
+        )
         reported_total = _usage_first_int(usage, ('total_tokens', 'totalTokens', 'total'))
         counts = _cache_counts(usage)
         cached = counts.cached
