@@ -2183,7 +2183,7 @@ def test_non_fast_model_failure_does_not_duplicate_the_footer_notice(
 
 
 @pytest.mark.asyncio
-async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_models_by_provider_groups_chat_and_classify_models(fake_catalogue) -> None:
     from evaluatorq.common import model_catalogue
 
     payload = [
@@ -2194,10 +2194,7 @@ async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: p
         {'model_id': 'jev-latest', 'provider': 'typesafe', 'model_type': 'classify', 'input_cost': 1, 'output_cost': 1, 'metadata': {'supports_classify': True}},
     ]
 
-    async def load(_client: object = None) -> dict[str, object]:
-        return model_catalogue._parse_catalogue(payload)
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', load)
+    fake_catalogue(model_catalogue._parse_catalogue(payload))
 
     assert await model_catalogue.models_by_provider() == {
         'azure': ['azure/gpt-5.6-luna'],
