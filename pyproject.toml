@@ -396,7 +396,7 @@ dev = [
   "pytest-timeout>=2.3.0",
   "pytest-xdist>=3.6.0",
   "tomli>=2.0.0; python_version < '3.11'",
-  "ty==0.0.90",
+  "ty==0.0.100",
   "ruff>=0.14.3",
   "orq-ai-sdk>=4.14",
   "anthropic>=0.75.0",
