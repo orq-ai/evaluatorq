@@ -1402,7 +1402,13 @@ def test_finder_export_fifo_is_rejected_without_blocking(monkeypatch: pytest.Mon
 def test_finder_insights_launch_records_source_until_run_finishes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    # Under umask 002, start_manifest creates insights-runs group-writable, as it does in production;
+    # the launch must repair that folder before it writes the lease there. The conftest umask pin
+    # restores the umask afterwards. Windows has no umask, but the launch itself still runs there.
     import json
+
+    if os.name != 'nt':
+        os.umask(0o002)
 
     import tempfile
 
@@ -1411,9 +1417,11 @@ def test_finder_insights_launch_records_source_until_run_finishes(
     monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_identity', lambda _pid: 'test:1')
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     export_dir = tmp_path / 'finder-exports'
-    export_dir.mkdir()
+    export_dir.mkdir(mode=0o700)
+    export_dir.chmod(0o700)
     export_path = export_dir / 'trace-finder-source.json'
     export_path.write_text(_run_export(['trace-1']).model_dump_json(), encoding='utf-8')
+    export_path.chmod(0o600)
     spec = InsightsLaunchSpec(source='finder', finder_export=export_path.name)
     with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
         spawn.return_value.pid = 43210
@@ -1424,6 +1432,7 @@ def test_finder_insights_launch_records_source_until_run_finishes(
     if os.name != 'nt':
         assert reference.stat().st_mode & 0o777 == 0o600
         assert reference.parent.stat().st_mode & 0o777 == 0o700
+        assert (tmp_path / 'insights-runs').stat().st_mode & 0o777 == 0o700
     assert read_private_finder_reference(reference) == {'finder_export': str(export_path)}
     assert len(list_manifests(tmp_path / 'insights-runs')) == 1
 
@@ -2595,3 +2604,4 @@ def test_chosen_models_reach_insights_and_blank_ones_keep_the_pipeline_default(
     assert seen['embedding_model'] == 'acme/embed'
     assert 'classifier_model' not in seen
     assert 'compiler_model' not in seen
+

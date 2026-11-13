@@ -25,6 +25,7 @@ from evaluatorq.common import model_catalogue
 from evaluatorq.common.judge import JudgeError, run_judge
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.redteam.contracts import EvaluatorConfig
+from tests.common.llm_error_factories import CONNECTION_FACTORIES, STATUS_FACTORIES
 
 ORQ_URL = 'https://my.orq.ai/v3/router'
 OPENAI_URL = 'https://api.openai.com/v1'
@@ -280,6 +281,34 @@ async def test_exhausted_retries_classify_as_api_status():
     assert len(client.calls) == 3
     assert outcome.error_kind is JudgeError.API_STATUS
     assert outcome.payload is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('make', STATUS_FACTORIES)
+async def test_a_5xx_from_either_sdk_classifies_as_api_status(make: Any):
+    client = _Client()
+
+    async def fails(**kwargs: Any) -> Any:
+        raise make(503)
+
+    client.responses = SimpleNamespace(create=fails)
+    outcome = await _judge(client, retry_count=0)
+
+    assert outcome.error_kind is JudgeError.API_STATUS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('make', CONNECTION_FACTORIES)
+async def test_a_connection_error_from_either_sdk_classifies_as_api_connection(make: Any):
+    client = _Client()
+
+    async def fails(**kwargs: Any) -> Any:
+        raise make()
+
+    client.responses = SimpleNamespace(create=fails)
+    outcome = await _judge(client, retry_count=0)
+
+    assert outcome.error_kind is JudgeError.API_CONNECTION
 
 
 # --- 3. Non-retryable failures consume exactly ONE attempt ---------------------

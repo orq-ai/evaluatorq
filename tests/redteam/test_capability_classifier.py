@@ -13,6 +13,10 @@ from evaluatorq.redteam.adaptive.capability_classifier import (
     classify_agent_capabilities,
 )
 from evaluatorq.redteam.contracts import AgentCapability, AgentContext, KnowledgeBaseInfo, MemoryStoreInfo, ToolInfo
+from tests.common.llm_error_factories import CONNECTION_FACTORIES, STATUS_FACTORIES
+
+_SDK_ERRORS = [*(lambda f=f: f(503) for f in STATUS_FACTORIES), *CONNECTION_FACTORIES]
+_SDK_ERROR_IDS = ['openai-status', 'anthropic-status', 'openai-connection', 'anthropic-connection']
 
 
 def _mock_resource_response(
@@ -256,3 +260,27 @@ async def test_both_classifier_calls_forward_the_attacker_reasoning_effort():
         await classify_agent_capabilities(context, MagicMock(), pipeline_config=cfg)
 
     assert seen == ['high', 'high'], f'a classifier leg dropped reasoning_effort: {seen}'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failing_model', [ResourceCapabilityInference, ToolCapabilitiesResponse], ids=['resources', 'tools'])
+@pytest.mark.parametrize('make_error', _SDK_ERRORS, ids=_SDK_ERROR_IDS)
+async def test_sdk_errors_propagate_from_each_classifier_leg(
+    failing_model: type, make_error: typing.Callable[[], BaseException]
+) -> None:
+    """A connection or status error from either SDK re-raises instead of degrading to the fallback."""
+    error = make_error()
+
+    async def _parse(**kwargs: object) -> tuple[MagicMock, None]:
+        model = kwargs.get('response_model')
+        if model is failing_model:
+            raise error
+        if model is ResourceCapabilityInference:
+            return _mock_resource_response(), None
+        return _mock_tool_response([]), None
+
+    context = AgentContext(key='agent-key', tools=[ToolInfo(name='t', description='d')])
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr('evaluatorq.redteam.adaptive.capability_classifier.execute_chat_parse', _parse)
+        with pytest.raises(type(error)):
+            await classify_agent_capabilities(context, MagicMock())

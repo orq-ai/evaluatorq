@@ -210,6 +210,56 @@ def sim_role_config(llm_config: LLMCallConfig | None, task: str) -> LLMCallConfi
     return config.model_copy(update={'model': role_model(TASKS[task], task=task)})
 
 
+SIM_TASKS: tuple[str, ...] = ('sim.user', 'sim.judge', 'sim.generator')
+
+
+def sim_models(llm_config: LLMCallConfig | None, tasks: tuple[str, ...] = SIM_TASKS) -> dict[str, str]:
+    """The models the simulation call sites for ``tasks`` will send, keyed by the setting that supplied each.
+
+    Resolves through `sim_role_config`, the resolver the call sites use, so a pre-flight check sees the same models
+    the run calls. An explicit ``llm_config.model`` supplies every task and appears once.
+    """
+    from evaluatorq.common.model_roles import TASKS, model_source
+
+    config = sim_llm_config(llm_config)
+    if 'model' in config.model_fields_set:
+        return {'--sim-model / llm_config.model': config.model}
+    return {model_source(TASKS[task], task)[1]: sim_role_config(config, task).model for task in tasks}
+
+
+def require_sim_models_served(
+    llm_config: LLMCallConfig | None,
+    *,
+    generation_client: Any,
+    user_simulator: Any = None,
+    judge: Any = None,
+    simulating: bool = True,
+    generating: bool = True,
+) -> None:
+    """Stop a run before any work when the environment picked Anthropic and a simulation model is not a Claude id.
+
+    Checks only the call sites whose client the environment resolves: an injected ``generation_client`` covers
+    generation, an injected agent covers its own role, and ``llm_config.client`` covers all of them. The programmatic
+    entry points call this so they fail at the start, as the ``sim`` CLI does, instead of at the first LLM call.
+    ``simulating=False`` checks generation only, for an entry point that never runs a conversation;
+    ``generating=False`` skips the generator, for a run that is handed its datapoints and writes no summary or
+    recommendations.
+
+    Raises:
+        ModelClientMismatchError: Anthropic is the provider and a model the run will call is not served by it.
+    """
+    from evaluatorq.common.llm_client import require_models_served_by_provider
+
+    config = sim_llm_config(llm_config)
+    if config.client is not None:
+        return
+    injected = {'sim.generator': generation_client, 'sim.user': user_simulator, 'sim.judge': judge}
+    wanted = {'sim.generator': generating, 'sim.user': simulating, 'sim.judge': simulating}
+    tasks = tuple(task for task in SIM_TASKS if injected[task] is None and wanted[task])
+    if tasks:
+        require_models_served_by_provider(sim_models(config, tasks))
+
+
 def resolve_sim_llm_config(*, model: str | None, llm_config: LLMCallConfig | None, caller: str) -> LLMCallConfig:
     """Fold a ``model`` shorthand and a full ``llm_config`` into one config.
 

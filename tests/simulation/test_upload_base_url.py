@@ -93,3 +93,29 @@ async def test_sim_forwards_base_url_from_injected_client(monkeypatch: pytest.Mo
     assert spy.await_args is not None
     # client host wins over the prod env var
     assert spy.await_args.kwargs["_base_url"] == "https://my.staging.orq.ai"
+
+
+@pytest.mark.asyncio
+async def test_sim_upload_key_comes_from_the_orq_routed_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The results go to the routed client's host, so they go with that client's key, not a prod ORQ_API_KEY."""
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    monkeypatch.setenv("ORQ_API_KEY", "prod-key")
+
+    from evaluatorq.simulation.api import simulate
+
+    client = cast("Any", SimpleNamespace(base_url="https://my.staging.orq.ai/v3/router", api_key="staging-key"))
+    spy = AsyncMock(return_value=[])
+    with patch.object(_EQ_MOD, "evaluatorq", spy):
+        await simulate(
+            target=_target,
+            datapoints=[_make_datapoint()],
+            llm_config=LLMCallConfig(model="test"),
+            max_turns=1,
+            exit_on_failure=False,
+            generation_client=client,
+        )
+
+    assert spy.await_args is not None
+    assert spy.await_args.kwargs["_orq_api_key"] == "staging-key"

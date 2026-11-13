@@ -178,8 +178,10 @@ def test_conflicting_simulation_alias_names_fail_validation(
 
 
 def _explicit_context(param: str, value: str) -> typer.Context:
-    option = typer.core.TyperOption(param_decls=[f'--{param.replace("_", "-")}'])
-    command = typer.core.TyperCommand('test', params=[option])
+    import click
+
+    option = click.Option([f'--{param.replace("_", "-")}'])
+    command = click.Command('test', params=[option])
     ctx = typer.Context(command)
     command.parse_args(ctx, [option.opts[0], value])
     return ctx

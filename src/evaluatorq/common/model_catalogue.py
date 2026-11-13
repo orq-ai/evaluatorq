@@ -41,8 +41,13 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 import httpx
 from loguru import logger
 
-from evaluatorq.common.env_config import env_float, env_raw
-from evaluatorq.common.llm_client import MissingLLMCredentialsError, orq_base_url, resolve_results_base_url
+from evaluatorq.common.env_config import env_float
+from evaluatorq.common.llm_client import (
+    MissingLLMCredentialsError,
+    orq_base_url,
+    resolve_orq_credential,
+    resolve_results_base_url,
+)
 from evaluatorq.contracts import DEFAULT_CLASSIFIER_MODEL
 
 if TYPE_CHECKING:
@@ -138,6 +143,9 @@ class ModelCatalogueError(RuntimeError):
 # workspaces on one host; each workspace enables its own models.
 _catalogues: dict[tuple[str, str], dict[str, ModelInfo]] = {}
 _failed_catalogues: set[tuple[str, str]] = set()
+# The same fetches unparsed, for readers that need card fields `ModelInfo` drops
+# (the benchmark scores the model garden ranks on, `enabled`, `metadata.region`).
+_raw_catalogues: dict[tuple[str, str], tuple[dict[str, object], ...]] = {}
 # Built lazily: a module-level asyncio.Lock() binds to the loop running at import
 # time, and the CLI and test suite both drive several asyncio.run() loops, where
 # a lock bound to a dead loop raises "attached to a different loop".
@@ -210,6 +218,7 @@ def reset_catalogue_cache() -> None:
     """
     global _lock
     _catalogues.clear()
+    _raw_catalogues.clear()
     _failed_catalogues.clear()
     _fetch_failures.clear()
     _classify_fallback_warned.clear()
@@ -396,6 +405,31 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
     return models
 
 
+def _catalogue_source(client: AsyncOpenAI | None) -> tuple[str, str | None, Any, tuple[str, str]]:
+    """The host, API key, OAuth fetch and cache key one catalogue read would use.
+
+    Shared by the parsed table and the raw cards, so both read the same host
+    with the same credential and cache under the same key.
+    """
+    host = resolve_results_base_url(client) if client is not None else orq_base_url()
+    oauth_method = inspect.getattr_static(type(client), 'get_model_catalogue', None) if client is not None else None
+    oauth_fetch = (
+        getattr(client, 'get_model_catalogue')  # noqa: B009 — capability is confirmed statically above
+        if inspect.iscoroutinefunction(oauth_method)
+        else None
+    )
+    # A non-Orq client's key is a provider key and never goes to the Orq host.
+    api_key = None if callable(oauth_fetch) else resolve_orq_credential(client)
+    credential = (
+        'cli-oauth'
+        if callable(oauth_fetch)
+        else hashlib.sha256(api_key.encode()).hexdigest()[:16]
+        if isinstance(api_key, str)
+        else ''
+    )
+    return host, api_key, oauth_fetch, (host, credential)
+
+
 async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = False) -> dict[str, ModelInfo]:
     """Fetch the Orq model catalogue once per process, per host and credential.
 
@@ -409,32 +443,7 @@ async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = F
     disables Responses routing for the run, so it is logged at WARNING with that
     consequence spelled out.
     """
-    host = resolve_results_base_url(client) if client is not None else orq_base_url()
-    # An injected client's own key matches its host; an ambient ORQ_API_KEY for a
-    # different workspace would 401 (caching {}) or price against the wrong one.
-    oauth_method = inspect.getattr_static(type(client), 'get_model_catalogue', None) if client is not None else None
-    oauth_fetch = (
-        getattr(client, 'get_model_catalogue')  # noqa: B009 — capability is confirmed statically above
-        if inspect.iscoroutinefunction(oauth_method)
-        else None
-    )
-    api_key = (
-        None
-        if callable(oauth_fetch)
-        else (
-            (getattr(client, 'api_key', None) or env_raw('ORQ_API_KEY'))
-            if client is not None
-            else env_raw('ORQ_API_KEY')
-        )
-    )
-    credential = (
-        'cli-oauth'
-        if callable(oauth_fetch)
-        else hashlib.sha256(api_key.encode()).hexdigest()[:16]
-        if isinstance(api_key, str)
-        else ''
-    )
-    cache_key = (host, credential)
+    host, api_key, oauth_fetch, cache_key = _catalogue_source(client)
     cacheable = not callable(oauth_fetch)
     if cacheable:
         cached = _catalogues.get(cache_key)
@@ -497,8 +506,47 @@ async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = F
             _failed_catalogues.discard(cache_key)
         if cacheable:
             _catalogues[cache_key] = parsed
+            _raw_catalogues[cache_key] = _cards(payload)
         logger.debug('Loaded catalogue for {} models from {}', len(parsed), host)
         return parsed
+
+
+def _cards(payload: object) -> tuple[dict[str, object], ...]:
+    """The mapping entries of a ``/v2/models`` payload, read-only by convention."""
+    return tuple(entry for entry in payload if isinstance(entry, dict)) if isinstance(payload, list) else ()
+
+
+async def model_cards(client: AsyncOpenAI | None = None) -> tuple[dict[str, object], ...]:
+    """The raw ``/v2/models`` cards, for readers that need fields `ModelInfo` drops.
+
+    The model garden (`common.model_frontier`) ranks on
+    ``metadata.autorouter.v2`` benchmark scores, per reasoning effort, and on
+    ``enabled``; neither belongs on `ModelInfo`, whose job is pricing and
+    routing one call. Same host, credential and process cache as the parsed
+    table, so the two cannot describe different catalogues.
+
+    Always strict: a garden derived from an empty table would seat nothing and
+    report every preset as retired, so a missing key raises
+    `MissingLLMCredentialsError` and a failed or malformed fetch raises
+    `ModelCatalogueError`. OAuth reads are fetched every call, as elsewhere.
+    """
+    host, _api_key, oauth_fetch, cache_key = _catalogue_source(client)
+    if callable(oauth_fetch):
+        try:
+            payload = await _fetch_catalogue_payload(host=host, api_key=None, oauth_fetch=oauth_fetch)
+        except (httpx.HTTPError, ValueError, RuntimeError) as exc:
+            raise ModelCatalogueError(f'Orq model catalogue fetch failed: {exc}') from exc
+        if not isinstance(payload, list) or not payload:
+            raise ModelCatalogueError('Orq returned an unreadable or empty model catalogue.')
+        return _cards(payload)
+    cached = _raw_catalogues.get(cache_key)
+    if cached is not None and cache_key not in _failed_catalogues:
+        return cached
+    await _load_catalogue(client, strict=True)
+    cards = _raw_catalogues.get(cache_key)
+    if cards is None:
+        raise ModelCatalogueError('Orq model catalogue was not cached after a successful read.')
+    return cards
 
 
 ModelKind = Literal['chat', 'classify', 'embedding']
@@ -719,6 +767,7 @@ __all__ = [
     'clear_model_overrides',
     'get_model_info',
     'is_known_classify_model',
+    'model_cards',
     'price_usage',
     'qualified_model',
     'register_model',

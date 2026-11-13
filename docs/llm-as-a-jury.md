@@ -150,7 +150,7 @@ Red teaming and simulation do not seat classify judges. `EvaluatorConfig` panels
 
 | Argument | Default | What it does |
 | --- | --- | --- |
-| `preset` | `None` | Name of a ready-made panel from [Jury Presets](jury-presets.md), such as `"Balanced Trio"`. Seats the judges, the aggregation rule and a majority quorum (two of three, three of five). Mutually exclusive with `judges` and `model`. |
+| `preset` | `None` | Name of a ready-made panel from [Jury Presets](jury-presets.md), such as `"balanced-trio"`. Seats the judges, the aggregation rule and a majority quorum (two of three, three of five). Mutually exclusive with `judges` and `model`. |
 | `judges` | — | Judge model IDs. Two or more makes it a jury. Mutually exclusive with `model`. |
 | `model` | — | Single-judge shorthand for `judges=[model]`. With none of `preset`, `judges` or `model`, the panel is one judge on the `smart` role (`openai/gpt-6-sol` by default; see [Configuration › Models](configuration.md#models)). |
 | `criteria` / `prompt` | — | What the judges go on. Pass at least one; both together is allowed. An LLM judge reads the rendered `prompt` and can pull the rubric in with a `{{criteria}}` placeholder; a [classify judge](#jev-as-a-judge) is handed `criteria` as its question and never sees the prompt. Setting both on a panel that seats no classify judge and whose prompt never renders `{{criteria}}` logs one warning, because nothing then reads the rubric. |
@@ -196,7 +196,7 @@ The same caution applies to a single-judge run you intend to repeat. A router pi
 3. **The panel aggregates.** Categorical verdicts are decided by plurality vote; numeric verdicts by mean or median.
 4. **Thresholds and ties apply.** If fewer than `min_successful_judges` return a usable verdict, the result is **inconclusive**.
 
-A judge can also **abstain**: it returns cleanly but declines to choose. An abstention is not a failure and does not trigger a replacement, but it is excluded from the decisive tally.
+A judge can also **abstain**: it returns cleanly but declines to choose. An abstention is not a failure and does not trigger a replacement, but it is excluded from the decisive tally. Only an explicit `abstain=true` is an abstention: a judge that returns no value without abstaining counts as a failed repetition. A judge that sends `abstain=true` together with a value is kept as an abstention with the value dropped, and `vote.repetitions_coerced` counts these.
 
 ## Reading the output
 
@@ -226,7 +226,7 @@ for vote in jury.votes:
 print(jury.raw_agreement, jury.stats)
 ```
 
-Each entry in `vote.repetitions` is a `JuryRepetition` with a `value` (`None` where the pass abstained or failed), an `explanation` (`None` where the pass produced no text), and optional `raw_output`. A successful classify pass stores its complete validated answer in `raw_output`, including provider-added fields and omitting fields the provider did not report. Prompted judges leave it `None`. Each repetition retains its own dictionary; distributions are not averaged into the final verdict. Older reports without `raw_output` still load with `None`; legacy bare verdicts also load with `explanation=None`.
+Each entry in `vote.repetitions` is a `JuryRepetition` with a `value` (`None` where the pass abstained or failed), an `explanation` (`None` where the pass produced no text), `verdict_coerced` (`True` where the pass's verdict was coerced to an abstention), and optional `raw_output`. A successful classify pass stores its complete validated answer in `raw_output`, including provider-added fields and omitting fields the provider did not report. Prompted judges leave it `None`. Each repetition retains its own dictionary; distributions are not averaged into the final verdict. Older reports without `raw_output` still load with `None`; legacy bare verdicts also load with `explanation=None`.
 
 `send_results_to_orq()` strips `raw_output` before upload, so the hosted Orq experiment view does not receive these details. They remain available in returned results and local saved result artifacts.
 

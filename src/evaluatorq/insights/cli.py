@@ -12,7 +12,6 @@ from typing import Annotated, Any, Literal, cast
 import httpx
 import typer
 from loguru import logger
-from openai import OpenAIError
 from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
@@ -21,6 +20,7 @@ from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.llm_errors import SDK_ERRORS
 from evaluatorq.common.orq_client import OrqProfile, close_orq_client, resolve_orq_client
 from evaluatorq.trace_finder.cli import _facets, resolve_cli_profile
 from evaluatorq.trace_finder.export import RunExport
@@ -665,7 +665,7 @@ def insights_cmd(
                 coding_analysis=coding,
             )
         )
-    except (ImportError, OSError, OpenAIError, RuntimeError, TimeoutError, ValueError, httpx.HTTPError) as exc:
+    except (ImportError, OSError, *SDK_ERRORS, RuntimeError, TimeoutError, ValueError, httpx.HTTPError) as exc:
         emit_error(exc)
         raise typer.Exit(code=1) from None
     if json_path is not None:

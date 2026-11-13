@@ -6,9 +6,7 @@ import asyncio
 import contextlib
 import itertools
 import json
-import os
 import secrets
-import tempfile
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,10 +25,12 @@ from evaluatorq.common.orq_client import (
     list_orq_profiles,
     resolve_orq_client,
 )
+from evaluatorq.common.private_files import ensure_private_directory, write_private_atomic
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.dashboard.auth import DashboardAuth, build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.insights_launch import (
     FINDER_EXPORT_REFERENCE_DIR,
+    get_finder_exports_dir,
     read_private_finder_reference,
     validate_private_finder_reference_dir,
 )
@@ -94,7 +94,12 @@ _FINDER_EXPORT_THREAD_LOCK = threading.Lock()
 
 @contextlib.contextmanager
 def _finder_export_lock(export_dir: Path):
-    """Serialize Finder export replacement and pruning across threads and processes."""
+    """Serialize Finder export replacement and pruning across threads and processes.
+
+    The exports folder is made owner-only first, so the lock file is never created in a folder the
+    umask left group-writable, which Insights refuses to read exports from.
+    """
+    ensure_private_directory(export_dir)
     with strict_file_lock(export_dir / '.finder-export.lock', thread_lock=_FINDER_EXPORT_THREAD_LOCK):
         yield
 
@@ -228,20 +233,7 @@ def _prune_finder_exports_locked(export_dir: Path) -> None:
 def _save_finder_export(export_dir: Path, export_name: str, payload: str) -> None:
     """Persist one completed export and prune older unreferenced files off-loop."""
     with _finder_export_lock(export_dir):
-        temporary: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode='w', encoding='utf-8', dir=export_dir, prefix='.finder-', suffix='.tmp', delete=False
-            ) as handle:
-                temporary = Path(handle.name)
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            temporary.replace(export_dir / export_name)
-        finally:
-            if temporary is not None:
-                with contextlib.suppress(OSError):
-                    temporary.unlink(missing_ok=True)
+        write_private_atomic(export_dir / export_name, payload)
         _prune_finder_exports_locked(export_dir)
 
 
@@ -818,11 +810,9 @@ async def span_tree_fragment(
     except Exception as error:  # noqa: BLE001 - raw status text is optional and must not block summaries
         logger.warning('Span status lookup failed for trace {}: {}', trace_id, type(error).__name__)
         error_message = None
-    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
     from evaluatorq.dashboard.trace_finder.views import span_tree
 
-    with cli_slug_render_scope():
-        return await asyncio.to_thread(span_tree, trace_id, spans, first_error_message=error_message)
+    return await asyncio.to_thread(span_tree, trace_id, spans, first_error_message=error_message)
 
 
 def register_finder_routes(app: Any) -> None:  # noqa: C901
@@ -1463,12 +1453,10 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             # htmx does not swap a 4xx body, so a 404 here would leave the click silently doing nothing.
             logger.warning('Find drawer requested trace {} that is not in the current run', trace_id)
             return _html(missing_trace_drawer(trace_id))
-        from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-        with cli_slug_render_scope():
-            html = await asyncio.to_thread(
-                drawer, detail, msg=msg, row=row, traces_layout=req.query_params.get('surface') == 'traces'
-            )
+        html = await asyncio.to_thread(
+            drawer, detail, msg=msg, row=row, traces_layout=req.query_params.get('surface') == 'traces'
+        )
         return _html(html)
 
     @app.get('/find/export.json')
@@ -1488,7 +1476,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 media_type='text/plain',
             )
         payload = export_json(snapshot)
-        export_dir = get_store_dir('finder-exports')
+        export_dir = get_finder_exports_dir()
         try:
             await asyncio.to_thread(_save_finder_export, export_dir, export_name, payload)
         except OSError as exc:

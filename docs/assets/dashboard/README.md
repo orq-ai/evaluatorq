@@ -35,11 +35,11 @@ Older screenshots use `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 
 | `sim-06-conversation-detail.png` | Report → Conversation detail — criteria, judge rationale, transcript |
 | `sim-07-turn-quality.png` | Report → Turn quality — per-turn trend, turn-count distribution |
 | `sim-08-config.png` | Report → Config — run metadata and the persona dials |
-| `sim-09-compare.png` | Run comparison — same agent before vs after a fix |
+| `sim-09-compare.png` | Run comparison — two runs of the same agent, what changed, tiles, outcome bars and scorer means |
 
 ## Pending re-shoot
 
-Five shots do not show the thing their caption teaches. The decision is to re-shoot the set in one purpose-built capture session rather than keep documenting around it. Until then the four that exist are **unreferenced** — their `![...]` lines were removed from [`docs/dashboard.md`](../../dashboard.md); the prose stayed. Re-add each one in the same commit that replaces the file, not before. The prose caveats standing in for them are the only thing keeping the pages honest, so **do not delete them either**.
+Four shots do not show the thing their caption teaches. The decision is to re-shoot the set in one purpose-built capture session rather than keep documenting around it. Until then the three that exist are **unreferenced** — their `![...]` lines were removed from [`docs/dashboard.md`](../../dashboard.md); the prose stayed. Re-add each one in the same commit that replaces the file, not before. The prose caveats standing in for them are the only thing keeping the pages honest, so **do not delete them either**.
 
 | Shot | What's wrong | What the capture run needs |
 |---|---|---|
@@ -47,7 +47,6 @@ Five shots do not show the thing their caption teaches. The decision is to re-sh
 | *(missing)* sim Recommendations | Tab landed after capture; no shot exists | Any sim run that generated recommendations — the tab drops out otherwise |
 | `sim-05-transcripts.png` | **TRACES** column empty | `ORQ_WORKSPACE=<slug>` set when launching `eq dashboard` |
 | `sim-07-turn-quality.png` | Judge ended most conversations after one turn, so the trend spans two points | Scenarios whose goals need several exchanges, and a higher `max_turns` |
-| `sim-09-compare.png` | Red "low overlap (0%)" banner — the two runs share no (persona, scenario) pairs | Two runs replayed from the same datapoints file, with **distinct run names** (the compare picker shows names only, no timestamps) |
 
 The screenshots that do show a report tab strip (`sim-03` … `sim-08`) are one tab short of the current dashboard, since Recommendations sits between Breakdown and Transcripts now. `sim-01`, `sim-02` and `sim-09` are outside a report and unaffected.
 

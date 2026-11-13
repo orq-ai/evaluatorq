@@ -75,7 +75,6 @@ from evaluatorq.dashboard.insights_views import (
     unreadable_page,
 )
 from evaluatorq.dashboard.model_choices import catalogue_entry, model_groups
-from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 from evaluatorq.dashboard.project_browser import list_project_directories
 from evaluatorq.dashboard.security import csrf_token, request_rejected
 from evaluatorq.dashboard.trace_finder.routes import browser_offset_zone, selected_dashboard_auth, span_tree_fragment
@@ -717,7 +716,8 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             files = await asyncio.to_thread(
                 recent_trace_files, runs_dir=get_insights_runs_dir(), finder_dir=get_finder_exports_dir()
             )
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            logger.warning('Could not list recent Insights trace files: {}', exc)
             return _html('<p class="insights-error" role="status">Recent trace files could not be loaded.</p>', 422)
         return _html(render_recent_files(files))
 
@@ -1122,8 +1122,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         if isinstance(record, str):
             body = unavailable_conversation(reason=record, spans_url=spans_url)
         else:
-            with cli_slug_render_scope():
-                body = await asyncio.to_thread(trace_conversation, record, spans_url=spans_url)
+            body = await asyncio.to_thread(trace_conversation, record, spans_url=spans_url)
         return _html(f'<div class="fd-traces insights-trace-view">{body}</div>')
 
     @app.get('/insights/{run_id}/trace-spans')

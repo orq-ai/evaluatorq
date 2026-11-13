@@ -19,9 +19,12 @@ from evaluatorq.common.jury import (
     VerdictKind,
     append_jury_summary,
     attach_jury_raw_output,
+    non_binary_verdict_message,
     panel_composition_messages,
     run_jury,
+    single_verdict_error_payload,
 )
+from evaluatorq.common.llm_client import as_llm_client
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
@@ -36,41 +39,58 @@ from evaluatorq.redteam.contracts import (
     LLMCallConfig,
     RedTeamInput,
     StaticDataset,
+    category_key,
     evaluator_model_for,
-    normalize_category,
 )
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.exceptions import CredentialError, DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
 from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs
+from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection
 
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.types import ScorerParameter
 
 DEFAULT_HF_REPO = 'orq/redteam-vulnerabilities'
 DEFAULT_HF_FILENAME = 'redteam_dataset.v2.json'
+# Pinned so a later upload to the dataset repo cannot change or break a default run.
+DEFAULT_HF_REVISION = '5bea0563ac7e99407388b0fad4b6f761dd3d32ae'
 
 
 def _filter_by_categories(
     items: list[Any],
     categories: list[str],
     category_of: Callable[[Any], str],
+    id_of: Callable[[Any], str | None],
 ) -> list[Any]:
     """Filter ``items`` to the requested OWASP categories.
 
-    Logs the aggregate post-filter count, and — critically — emits a per-category
+    Logs the aggregate post-filter count, and emits a per-category
     ``WARNING`` for each requested category that has zero matching datapoints, so a
     silently-empty category (e.g. one the dataset has no entries for) is visible
-    rather than mistaken for a genuine 0% attack-success result. Shared by both the
-    file loader and the platform-datapoint path so the warning behaviour is identical.
+    rather than mistaken for a genuine 0% attack-success result. Also warns, with the
+    row ids, about rows dropped because their category is not a code that could be
+    requested for them (a typo, or a code such as ``LLM03`` whose vulnerability is
+    requested under its primary code). Shared by both the file loader and the
+    platform-datapoint path so the warning behaviour is identical.
     """
-    requested = {normalize_category(c.upper()) for c in categories}
-    present = Counter(normalize_category(category_of(it).upper()) for it in items)
-    filtered = [it for it in items if normalize_category(category_of(it).upper()) in requested]
+    requested = {category_key(c) for c in categories}
+    present = Counter(category_key(category_of(it)) for it in items)
+    filtered: list[Any] = []
+    stray: dict[str, list[str | None]] = {}
+    for it in items:
+        key = category_key(category_of(it))
+        if key in requested:
+            filtered.append(it)
+            continue
+        vuln = resolve_category_safe(key)
+        if vuln is None or get_primary_category(vuln) in requested:
+            stray.setdefault(category_of(it), []).append(id_of(it))
     logger.info(f'Filtered to categories: {sorted(requested)} ({len(filtered)} samples)')
     for cat in sorted(requested):
         if present[cat] == 0:
@@ -78,6 +98,12 @@ def _filter_by_categories(
                 f'Requested category {cat}: 0 static datapoints available in the dataset '
                 '(it will contribute no static results).'
             )
+    for cat, ids in stray.items():
+        logger.warning(
+            f'Skipped {len(ids)} static datapoint(s) with category {cat!r}, which is not a requested '
+            f'category code (ids: {", ".join(str(i) for i in ids)}). '
+            '`eq redteam validate-dataset` names the code to use.'
+        )
     return filtered
 
 
@@ -117,6 +143,7 @@ def load_owasp_agentic_dataset(
         return _fetch_from_huggingface(
             repo=DEFAULT_HF_REPO,
             filename=DEFAULT_HF_FILENAME,
+            revision=DEFAULT_HF_REVISION,
             num_samples=num_samples,
             categories=categories,
             delivery_methods=delivery_methods,
@@ -246,17 +273,25 @@ async def _owasp_judge_fn(
             # parsed — dropping them here undercounts the run's cost.
             token_usage=outcome.token_usage,
         )
+    if outcome.payload.value is not None and not isinstance(outcome.payload.value, bool):
+        # A number or string cannot be a pass/fail vote: a failed repetition, not a silent None.
+        return Prediction(
+            error=non_binary_verdict_message(outcome.payload.value),
+            explanation=outcome.payload.explanation,
+            token_usage=outcome.token_usage,
+        )
     return Prediction(
         value=outcome.payload.value,
         explanation=outcome.payload.explanation,
         token_usage=outcome.token_usage,
         abstained=outcome.payload.abstain,
+        verdict_coerced=outcome.verdict_coerced,
     )
 
 
 def create_owasp_evaluator(
     evaluator_model: str | None = None,
-    llm_client: AsyncOpenAI | None = None,
+    llm_client: LLMClient | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     cfg: LLMCallConfig | EvaluatorConfig | None = None,
     judges: list[str] | None = None,
@@ -281,7 +316,7 @@ def create_owasp_evaluator(
     resolved_cfg = cfg or PIPELINE_CONFIG.evaluator
     # max_retries=0: run_judge owns retry via with_retry, so the SDK's own budget would
     # stack on top of it. An injected client keeps the budget its owner chose.
-    client = llm_client or resolved_cfg.client or create_async_llm_client(max_retries=0)
+    client = as_llm_client(llm_client) or resolved_cfg.client or create_async_llm_client(max_retries=0)
     merged_cfg = resolved_cfg.model_copy(
         update={
             'extra_kwargs': {**resolved_cfg.extra_kwargs, **(llm_kwargs or {})},
@@ -365,6 +400,14 @@ def create_owasp_evaluator(
                     )
 
                 passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
+                # This path builds no JuryVote, so the coerced flag travels here, as on the adaptive path.
+                raw_output: dict[str, Any] = {
+                    'raw_content': outcome.raw_content,
+                    'verdict_coerced': outcome.verdict_coerced,
+                }
+                verdict_error = single_verdict_error_payload(outcome, category)
+                if verdict_error is not None:
+                    raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = verdict_error
                 set_span_attrs(
                     evaluation_span,
                     {'orq.redteam.passed': _span_pass_state(passed), 'output': outcome.payload.explanation},
@@ -374,7 +417,7 @@ def create_owasp_evaluator(
                     'explanation': outcome.payload.explanation,
                     'pass': passed,
                     'token_usage': outcome.token_usage,
-                    'raw_output': {'raw_content': outcome.raw_content},
+                    'raw_output': raw_output,
                 })
 
             # Kept so the panel can name a cause, not just "quorum not met".
@@ -460,11 +503,12 @@ def ensure_huggingface_available() -> None:
 def _fetch_from_huggingface(
     repo: str = DEFAULT_HF_REPO,
     filename: str = DEFAULT_HF_FILENAME,
+    revision: str | None = None,
     num_samples: int | None = None,
     categories: list[str] | None = None,
     delivery_methods: Collection[DeliveryMethod | str] | None = None,
 ) -> list[DataPoint]:
-    """Fetch red team samples from a HuggingFace dataset repository."""
+    """Fetch red team samples from a HuggingFace dataset repository (``revision=None`` is the latest)."""
     try:
         from huggingface_hub import hf_hub_download
     except ImportError as e:
@@ -476,6 +520,7 @@ def _fetch_from_huggingface(
             repo_id=repo,
             filename=filename,
             repo_type='dataset',
+            revision=revision,
         )
     except Exception as e:
         # Network failure, auth/401, gated-or-missing repo, etc. Surface an
@@ -536,11 +581,11 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
             'Alternatively, pass a local file path as the dataset argument.'
         )
         raise CredentialError(msg)
-    # resolve_orq_client, not a bare Orq(...): a dataset must come from the host
-    # the run is pointed at (ORQ_BASE_URL), not always prod.
     import httpx
     from orq_ai_sdk.models import NoResponseError, OrqError
 
+    # resolve_orq_client, not a bare Orq(...): a dataset must come from the host
+    # the run is pointed at (ORQ_BASE_URL), not always prod.
     client = resolve_orq_client(orq_api_key)
     all_datapoints: list[DataPoint] = []
     skipped = 0
@@ -570,9 +615,9 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
             inputs = dict(dp.inputs) if dp.inputs else {}
             try:
                 _validate_platform_datapoint(inputs)
-            except (ValidationError, ValueError):
+            except (ValidationError, ValueError) as e:
                 skipped += 1
-                logger.warning(f'Skipping invalid datapoint {inputs.get("id", "unknown")}: validation failed')
+                logger.warning(f'Skipping invalid datapoint {inputs.get("id", "unknown")}: validation failed: {e}')
                 continue
             all_datapoints.append(DataPoint(inputs=inputs))
 
@@ -610,7 +655,9 @@ def _load_from_file(
     samples = dataset.samples
 
     if categories is not None:
-        samples = _filter_by_categories(samples, categories, category_of=lambda s: s.input.category)
+        samples = _filter_by_categories(
+            samples, categories, category_of=lambda s: s.input.category, id_of=lambda s: s.input.id
+        )
 
     if delivery_methods is not None:
         selected = set(delivery_methods)
@@ -649,7 +696,12 @@ def _apply_filters(
     remainder (which would yield fewer than ``num_samples`` rows).
     """
     if categories is not None:
-        datapoints = _filter_by_categories(datapoints, categories, category_of=lambda dp: dp.inputs.get('category', ''))
+        datapoints = _filter_by_categories(
+            datapoints,
+            categories,
+            category_of=lambda dp: dp.inputs.get('category', ''),
+            id_of=lambda dp: dp.inputs.get('id'),
+        )
 
     if delivery_methods is not None:
         selected = set(delivery_methods)
