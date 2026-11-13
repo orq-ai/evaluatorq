@@ -43,7 +43,7 @@ from evaluatorq.redteam.contracts import (
     evaluator_model_for,
 )
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
-from evaluatorq.redteam.exceptions import DatasetError
+from evaluatorq.redteam.exceptions import CredentialError, DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
 from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs
 from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe
@@ -549,6 +549,29 @@ def _validate_platform_datapoint(inputs: dict[str, Any]) -> None:
         raise ValueError(msg)
 
 
+_ORQ_ERROR_BODY_LIMIT = 300
+
+
+def _orq_error_message(body: str) -> str:
+    """Return the ``message`` (or ``error``) of an ORQ JSON error body, else the raw body, cut to a short length.
+
+    A gateway 502 can return a full HTML page, which would otherwise be printed whole.
+    """
+    detail = body
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        for key in ('message', 'error'):
+            if isinstance(parsed.get(key), str):
+                detail = parsed[key]
+                break
+    if len(detail) > _ORQ_ERROR_BODY_LIMIT:
+        return detail[:_ORQ_ERROR_BODY_LIMIT] + '...'
+    return detail
+
+
 def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
     """Fetch all datapoints from an ORQ dataset, handling pagination."""
     orq_api_key = env_raw('ORQ_API_KEY')
@@ -557,7 +580,10 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
             'Fetching datasets from the ORQ platform requires ORQ_API_KEY to be set. '
             'Alternatively, pass a local file path as the dataset argument.'
         )
-        raise ValueError(msg)
+        raise CredentialError(msg)
+    import httpx
+    from orq_ai_sdk.models import NoResponseError, OrqError
+
     # resolve_orq_client, not a bare Orq(...): a dataset must come from the host
     # the run is pointed at (ORQ_BASE_URL), not always prod.
     client = resolve_orq_client(orq_api_key)
@@ -566,11 +592,24 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
     cursor: str | None = None
 
     while True:
-        response = client.datasets.list_datapoints(
-            dataset_id=dataset_id,
-            limit=100,
-            starting_after=cursor,
-        )
+        try:
+            response = client.datasets.list_datapoints(
+                dataset_id=dataset_id,
+                limit=100,
+                starting_after=cursor,
+            )
+        except (OrqError, NoResponseError, httpx.HTTPError) as e:
+            # An unknown id's 404 body fails the SDK's own schema and surfaces as a
+            # ResponseValidationError whose text is a pydantic dump, so report the
+            # status and body instead and keep the dump on __cause__.
+            detail = f'HTTP {e.status_code}: {_orq_error_message(e.body)}' if isinstance(e, OrqError) else str(e)
+            page = f' (page after datapoint {cursor})' if cursor else ''
+            msg = (
+                f'Failed to fetch red team dataset orq:{dataset_id} from the ORQ platform{page}: {detail}. '
+                'Check that the dataset id exists in the workspace your ORQ_API_KEY belongs to, '
+                'and that ORQ_BASE_URL points at the right host.'
+            )
+            raise DatasetError(msg) from e
 
         for dp in response.data:
             inputs = dict(dp.inputs) if dp.inputs else {}

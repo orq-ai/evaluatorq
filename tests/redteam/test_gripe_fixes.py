@@ -173,6 +173,95 @@ class TestDatasetDownloadError:
         assert issubclass(DatasetError, RedTeamError)
 
 
+class TestOrqDatasetFetchError:
+    """A wrong orq:<dataset-id> surfaces a clean DatasetError naming the id (RES-1870)."""
+
+    @staticmethod
+    def _load_with_transport(monkeypatch, handler):
+        import httpx
+        from orq_ai_sdk import Orq
+
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+        client = Orq(
+            api_key='test-key',
+            server_url='http://orq.test',
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+        monkeypatch.setattr(evaluatorq_bridge, 'resolve_orq_client', lambda _key: client)
+        return evaluatorq_bridge.load_owasp_agentic_dataset('orq:not-a-real-id')
+
+    def test_unknown_id_raises_dataset_error_with_id_and_status(self, monkeypatch):
+        import httpx
+        from orq_ai_sdk.models import ResponseValidationError
+
+        from evaluatorq.redteam.exceptions import DatasetError
+
+        def _not_found(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, json={'code': 404, 'error': 'Dataset not found'})
+
+        with pytest.raises(DatasetError, match=r'orq:not-a-real-id.*HTTP 404: Dataset not found\.') as ei:
+            self._load_with_transport(monkeypatch, _not_found)
+        assert isinstance(ei.value.__cause__, ResponseValidationError)
+        assert 'valid string' not in str(ei.value)
+
+    def test_missing_api_key_raises_credential_error(self, monkeypatch):
+        from evaluatorq.redteam.exceptions import CredentialError
+        from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+        monkeypatch.delenv('ORQ_API_KEY', raising=False)
+        with pytest.raises(CredentialError, match='ORQ_API_KEY'):
+            evaluatorq_bridge.load_owasp_agentic_dataset('orq:some-id')
+
+    def test_network_error_raises_dataset_error(self, monkeypatch):
+        import httpx
+
+        from evaluatorq.redteam.exceptions import DatasetError
+
+        def _refused(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError('connection refused', request=request)
+
+        with pytest.raises(DatasetError, match='orq:not-a-real-id') as ei:
+            self._load_with_transport(monkeypatch, _refused)
+        assert isinstance(ei.value.__cause__, httpx.ConnectError)
+
+    def test_later_page_failure_names_the_page(self, monkeypatch):
+        import httpx
+
+        from evaluatorq.redteam.exceptions import DatasetError
+
+        page_one = {
+            'object': 'list',
+            'data': [{'_id': 'dp-1', 'workspace_id': 'ws', 'dataset_id': 'ds', 'inputs': {}}],
+            'has_more': True,
+        }
+
+        def _second_page_fails(request: httpx.Request) -> httpx.Response:
+            if 'starting_after' in request.url.params:
+                return httpx.Response(500, json={'message': 'internal error'})
+            return httpx.Response(200, json=page_one)
+
+        with pytest.raises(DatasetError, match=r'\(page after datapoint dp-1\): HTTP 500: internal error'):
+            self._load_with_transport(monkeypatch, _second_page_fails)
+
+
+@pytest.mark.parametrize(
+    ('body', 'expected'),
+    [
+        ('{"message": "dataset not found", "error": "other"}', 'dataset not found'),
+        ('{"error": "unauthorized"}', 'unauthorized'),
+        ('[1, 2]', '[1, 2]'),
+        ('<html>bad gateway</html>', '<html>bad gateway</html>'),
+        ('x' * 400, 'x' * 300 + '...'),
+    ],
+)
+def test_orq_error_message(body: str, expected: str):
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _orq_error_message
+
+    assert _orq_error_message(body) == expected
+
+
 class TestLoadFromFileError:
     """_load_from_file's JSON parse/validation surfaces a clean DatasetError (gripe #4)."""
 
