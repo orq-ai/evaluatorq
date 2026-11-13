@@ -510,6 +510,21 @@ def usage_counts(message: Message) -> tuple[int, int, int, int]:
     return usage.input_tokens + cache_read + cache_write, usage.output_tokens, cache_read, cache_write
 
 
+def cache_write_split(message: Message) -> dict[str, int]:
+    """The 1h/5m cache-write split under the keys ``Usage.extract`` reads from a details object (Orq v3 names).
+
+    Empty when the platform reports no ``cache_creation`` breakdown, so a payload without one carries no zero-valued tier keys.
+    """
+    tiers = getattr(message.usage, 'cache_creation', None)
+    if tiers is None:
+        return {}
+    split = {
+        'cache_creation_1h_tokens': getattr(tiers, 'ephemeral_1h_input_tokens', 0) or 0,
+        'cache_creation_5m_tokens': getattr(tiers, 'ephemeral_5m_input_tokens', 0) or 0,
+    }
+    return split if any(split.values()) else {}
+
+
 def convert_usage(message: Message) -> CompletionUsage:
     """Build OpenAI ``CompletionUsage`` from an Anthropic message's usage."""
     prompt, completion, cache_read, cache_write = usage_counts(message)
@@ -517,7 +532,11 @@ def convert_usage(message: Message) -> CompletionUsage:
         'prompt_tokens': prompt,
         'completion_tokens': completion,
         'total_tokens': prompt + completion,
-        'prompt_tokens_details': {'cached_tokens': cache_read, 'cache_creation_tokens': cache_write},
+        'prompt_tokens_details': {
+            'cached_tokens': cache_read,
+            'cache_creation_tokens': cache_write,
+            **cache_write_split(message),
+        },
     })
 
 

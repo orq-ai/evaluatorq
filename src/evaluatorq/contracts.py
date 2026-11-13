@@ -554,6 +554,23 @@ def _usage_detail_int(usage: Any, containers: tuple[str, ...], keys: tuple[str, 
 _INPUT_DETAILS = ('input_tokens_details', 'prompt_tokens_details', 'input_token_details')
 
 
+def _bedrock_cache_details(usage: Any) -> tuple[int, int]:
+    """Sum Bedrock Converse ``cacheDetails`` (``[{'ttl': '1h' | '5m', 'inputTokens': n}, ...]``) into ``(1h, 5m)``.
+
+    ``inputTokens`` here is the cache-write count at that TTL, not the request's input count. An unknown
+    TTL, a non-list value or an unusable count is skipped, never raised.
+    """
+    entries = _usage_get(usage, 'cacheDetails')
+    if not isinstance(entries, (list, tuple)):
+        return 0, 0
+    by_ttl = {'1h': 0, '5m': 0}
+    for entry in entries:
+        ttl = _usage_get(entry, 'ttl')
+        if ttl in by_ttl:
+            by_ttl[ttl] += _usage_first_int(entry, ('inputTokens',))
+    return by_ttl['1h'], by_ttl['5m']
+
+
 class _CacheCounts(NamedTuple):
     """Cache token counts of one provider usage payload, already normalised to the subset contract.
 
@@ -581,9 +598,15 @@ def _cache_counts(usage: Any) -> _CacheCounts:
         Codex CLI flat                 cached_input_tokens, cache_write_input_tokens     inclusive
         Vercel AI SDK camelCase        cachedInputTokens                                 inclusive
         native Anthropic flat          cache_read_input_tokens,                          exclusive
-        (OpenCode renames into it)     cache_creation_input_tokens, cache_creation
-                                       {ephemeral_1h/5m_input_tokens}
-        Bedrock Converse camelCase     cacheReadInputTokens, cacheWriteInputTokens       exclusive
+        (also Bedrock InvokeModel,     cache_creation_input_tokens, cache_creation
+        Vertex AI, Foundry; OpenCode   {ephemeral_1h/5m_input_tokens}
+        renames into it)
+        Bedrock Converse camelCase     cacheReadInputTokens, cacheWriteInputTokens,      exclusive
+                                       cacheDetails [{ttl: '1h' | '5m', inputTokens}]
+
+    The 1h/5m cache-write split is always a subset of the write total: a tier pair that sums past the
+    reported total is clamped (1h first), and a side the provider does not report stays 0 rather than
+    being inferred as the remainder.
 
     A payload that carries an inclusive source for a counter (any details object, or a Codex/Vercel
     key) never has that counter added again: a details object marks the whole payload as
@@ -605,6 +628,9 @@ def _cache_counts(usage: Any) -> _CacheCounts:
         usage, tier_containers, ('cache_creation_5m_tokens', 'ephemeral_5m_input_tokens')
     ) or _usage_first_int(usage, ('cache_creation_5m_tokens',))
     written_nested = _usage_detail_int(usage, _INPUT_DETAILS, ('cache_creation_tokens', 'cache_creation_input_tokens'))
+    bedrock_1h, bedrock_5m = _bedrock_cache_details(usage)
+    written_1h = written_1h or bedrock_1h
+    written_5m = written_5m or bedrock_5m
     tiers = _usage_get(usage, 'cache_creation')
     written_exclusive_flat = (
         _usage_first_int(usage, ('cache_creation_input_tokens',))
@@ -613,12 +639,15 @@ def _cache_counts(usage: Any) -> _CacheCounts:
             + _usage_first_int(tiers, ('ephemeral_5m_input_tokens',))
         )
         or _usage_first_int(usage, ('cacheWriteInputTokens',))
+        or bedrock_1h + bedrock_5m
     )
     written_inclusive_flat = _usage_first_int(usage, ('cache_write_input_tokens',))
     # Both Anthropic and Orq v3 report a pre-summed total, so the tier sum is only a last-resort
     # fallback for a payload that carries the split alone.
     written = written_nested or written_exclusive_flat or written_inclusive_flat or written_1h + written_5m
     written_exclusive = 0 if details_present or written_nested or written_inclusive_flat else written_exclusive_flat
+    written_1h = min(written_1h, written)
+    written_5m = min(written_5m, written - written_1h)
     return _CacheCounts(
         cached=cached,
         written=written,

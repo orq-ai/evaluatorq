@@ -109,7 +109,7 @@ def _creates_asynchronously(create: Any) -> bool:
 
 
 class AnthropicLLMClient:
-    """Wraps ``AsyncAnthropic``, ``AsyncAnthropicBedrock`` or ``AsyncAnthropicVertex``.
+    """Wraps ``AsyncAnthropic``, ``AsyncAnthropicBedrock``, ``AsyncAnthropicVertex`` or ``AsyncAnthropicFoundry``.
 
     Exposes the attributes evaluatorq reads from an ``AsyncOpenAI`` client: ``chat.completions.create`` and ``parse``, ``responses.create`` and ``parse``, ``base_url``, ``api_key``, ``max_retries``, ``with_options`` and ``close``.
     """
@@ -125,7 +125,7 @@ class AnthropicLLMClient:
         if not _creates_asynchronously(client.messages.create):
             raise TypeError(
                 f'AnthropicLLMClient needs an async Anthropic client, got {type(client).__name__}. '
-                'Use AsyncAnthropic, AsyncAnthropicBedrock or AsyncAnthropicVertex.'
+                'Use AsyncAnthropic, AsyncAnthropicBedrock, AsyncAnthropicVertex or AsyncAnthropicFoundry.'
             )
         self._client = client
         self._refusal_log = _refusal_log if _refusal_log is not None else _RefusalLog()
