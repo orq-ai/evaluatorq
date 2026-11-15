@@ -54,18 +54,15 @@ def _jev_entry() -> model_catalogue.ModelInfo:
 
 
 @pytest.fixture(autouse=True)
-def _isolate(monkeypatch: pytest.MonkeyPatch):
+def _isolate(monkeypatch: pytest.MonkeyPatch, fake_catalogue):
     model_catalogue.reset_catalogue_cache()
     judge_mod._classify_mismatch_warned.clear()
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {
-            JEV: _jev_entry(),
-            'jev-latest': _jev_entry(),
-            'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', supports_responses=True),
-        }
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+    fake_catalogue({
+        JEV: _jev_entry(),
+        'jev-latest': _jev_entry(),
+        'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', supports_responses=True),
+    })
     yield
     model_catalogue.reset_catalogue_cache()
 
@@ -154,16 +151,14 @@ async def test_noul_above_threshold_is_a_true_verdict():
 
 @pytest.mark.asyncio
 async def test_run_classify_answers_multiple_questions_in_one_request() -> None:
-    client = _client(
-        {
-            'answers': {
-                'tone': {'type': 'choice', 'choice': 'neutral'},
-                'risk': {'type': 'noul', 'noul': 0.2},
-            },
-            'usage': _usage(),
-            'model': 'jev-latest',
-        }
-    )
+    client = _client({
+        'answers': {
+            'tone': {'type': 'choice', 'choice': 'neutral'},
+            'risk': {'type': 'noul', 'noul': 0.2},
+        },
+        'usage': _usage(),
+        'model': 'jev-latest',
+    })
     request = ClassifyRequest(
         state={'reply': 'hello'},
         questions={
@@ -222,17 +217,17 @@ async def test_run_classify_disables_an_injected_clients_sdk_retries() -> None:
 
 @pytest.mark.asyncio
 async def test_run_classify_preserves_partial_answers_and_usage() -> None:
-    client = _client(
-        {
-            'answers': {'tone': {'type': 'choice', 'choice': 'neutral'}},
-            'usage': _usage(),
-            'model': 'jev-latest',
-        }
-    )
+    client = _client({
+        'answers': {'tone': {'type': 'choice', 'choice': 'neutral'}},
+        'usage': _usage(),
+        'model': 'jev-latest',
+    })
     request = ClassifyRequest(
         state='reply',
         questions={
-            'tone': ClassifyQuestion(kind='choice', instructions='Classify it.', criteria={'neutral': 'plain'}, state='x'),
+            'tone': ClassifyQuestion(
+                kind='choice', instructions='Classify it.', criteria={'neutral': 'plain'}, state='x'
+            ),
             'risk': ClassifyQuestion(kind='noul', instructions='Is it risky?', state='x'),
         },
     )
@@ -491,12 +486,10 @@ async def test_classify_model_without_a_question_errors_before_any_call():
 @pytest.mark.asyncio
 async def test_empty_catalogue_still_routes_a_known_classify_model(
     monkeypatch: pytest.MonkeyPatch,
+    fake_catalogue,
     caplog: pytest.LogCaptureFixture,
 ):
-    async def empty_catalogue(client=None):  # noqa: ANN001, ARG001
-        return {}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', empty_catalogue)
+    fake_catalogue({})
     client = _client(_reply({'type': 'noul', 'noul': 0.9}))
 
     handler_id = logger.add(caplog.handler, format='{message}', level='WARNING')
@@ -921,7 +914,9 @@ async def test_run_classify_judges_abstains_on_a_refused_question_and_keeps_the_
 async def test_run_classify_judges_empty_questions_returns_immediately() -> None:
     client = _client()
 
-    outcomes = await run_classify_judges(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state='x', questions={})
+    outcomes = await run_classify_judges(
+        client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state='x', questions={}
+    )
 
     assert outcomes == {}
     client.post.assert_not_called()
@@ -992,13 +987,11 @@ async def test_run_classify_judges_maps_an_api_error_to_every_question_key(make_
 
 @pytest.mark.asyncio
 async def test_run_classify_judges_keeps_partial_reply_and_returns_missing_key_error() -> None:
-    client = _client(
-        {
-            'answers': {'tone': {'type': 'noul', 'noul': 0.9}},
-            'usage': _usage(),
-            'model': 'jev-latest',
-        }
-    )
+    client = _client({
+        'answers': {'tone': {'type': 'noul', 'noul': 0.9}},
+        'usage': _usage(),
+        'model': 'jev-latest',
+    })
     questions = {
         'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
         'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
@@ -1017,6 +1010,7 @@ async def test_run_classify_judges_keeps_partial_reply_and_returns_missing_key_e
     assert missing.raw_content is not None
     assert 'tone' in missing.raw_content
 
+
 # ---------------------------------------------------------------------------
 # Capability is additive: the caller's question picks the endpoint (#245)
 # ---------------------------------------------------------------------------
@@ -1032,6 +1026,7 @@ def _chat_reply() -> Any:
 @pytest.mark.asyncio
 async def test_a_chat_model_that_gains_classify_stays_on_the_prompt_path(
     monkeypatch: pytest.MonkeyPatch,
+    fake_catalogue,
     caplog: pytest.LogCaptureFixture,
 ):
     """The router grants classify to models that also serve chat.
@@ -1041,11 +1036,7 @@ async def test_a_chat_model_that_gains_classify_stays_on_the_prompt_path(
     the flag up, and it fails on the pre-fix gate.
     """
 
-    async def catalogue(client=None):  # noqa: ANN001, ARG001
-        return {'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_classify=True)}  # noqa: FBT003
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', catalogue)
-    model_catalogue.reset_catalogue_cache()
+    fake_catalogue({'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_classify=True)})  # noqa: FBT003
     client = _client()
     client.chat.completions.create = AsyncMock(return_value=_chat_reply())
 
@@ -1121,14 +1112,10 @@ def _captured_warnings():
 
 
 @pytest.mark.asyncio
-async def test_the_prompt_path_degrade_warns_once_per_model(monkeypatch: pytest.MonkeyPatch):
+async def test_the_prompt_path_degrade_warns_once_per_model(monkeypatch: pytest.MonkeyPatch, fake_catalogue):
     """`DEFAULT_PIPELINE_MODEL` is classify-capable, so a per-call line would be one per attack."""
 
-    async def catalogue(client=None):  # noqa: ANN001, ARG001
-        return {'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_classify=True)}  # noqa: FBT003
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', catalogue)
-    model_catalogue.reset_catalogue_cache()
+    fake_catalogue({'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_classify=True)})  # noqa: FBT003
     client = _client()
     client.chat.completions.create = AsyncMock(return_value=_chat_reply())
 
@@ -1161,17 +1148,14 @@ async def test_the_dropped_question_degrade_warns_once_per_model():
 @pytest.mark.asyncio
 async def test_a_classify_only_model_the_router_catalogue_denies_is_judged_on_the_fast_role(
     monkeypatch: pytest.MonkeyPatch,
+    fake_catalogue,
 ) -> None:
     """The router case of `classify_fallback_model`: the classify-only id cannot be prompted, so the fast role answers."""
     from evaluatorq.common.model_roles import role_model
 
     denied = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=False)
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {JEV: denied, 'jev-latest': denied}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
-    model_catalogue.reset_catalogue_cache()
+    fake_catalogue({JEV: denied, 'jev-latest': denied})
     client = _client()
     client.chat.completions.create = AsyncMock(
         return_value=SimpleNamespace(

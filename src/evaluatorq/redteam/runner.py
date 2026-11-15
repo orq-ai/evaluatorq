@@ -48,7 +48,6 @@ from evaluatorq.redteam.adaptive.orchestrator import (
     ProgressDisplay,
     _get_active_progress,
     ensure_target_can_backtrack,
-    planned_refusal_judge_model,
     target_history_mode,
 )
 from evaluatorq.redteam.adaptive.pipeline import (
@@ -249,7 +248,7 @@ def _restore_replayed_backtracks(llm_config: LLMConfig | None, replay: RedTeamRe
 
 
 def _backtracking_warnings(results: list[RedTeamResult], *, max_backtracks: int) -> list[str]:
-    """Report a backtracking setting that applied to nothing, or a judge that could not do its job."""
+    """Report a backtracking setting that applied to nothing, or turns where the keep-or-erase decision failed."""
     if max_backtracks == 0:
         return []
     dynamic = [r for r in results if r.attack.source in (AttackSource.TEMPLATE_DYNAMIC, AttackSource.GENERATED_DYNAMIC)]
@@ -259,10 +258,10 @@ def _backtracking_warnings(results: list[RedTeamResult], *, max_backtracks: int)
             f'max_backtracks={max_backtracks} had no effect: no multi-turn attack in this run used the '
             'Crescendo delivery method.'
         )
-    if failures := sum(r.execution.refusal_judge_failures for r in dynamic if r.execution is not None):
+    if failures := sum(r.execution.backtrack_decision_failures for r in dynamic if r.execution is not None):
         warnings.append(
-            f'The refusal judge gave no usable verdict on {failures} turn(s). Those turns were kept, so '
-            'backtracking may have erased fewer refusals than it could. Check the model behind task redteam.refusal_judge (classifier role, or fast role on fallback) and credentials.'
+            f'The attacker model gave no usable keep-or-erase answer on {failures} turn(s). Those turns were '
+            'kept, so backtracking may have erased fewer turns than it could. Check the attacker model and credentials.'
         )
     return warnings
 
@@ -771,13 +770,13 @@ def _split_and_dedupe_targets(
     return deduped_str, agent_targets
 
 
-def redteam_models(config: LLMConfig, *, mode: Pipeline, on_router: bool) -> dict[str, dict[str, str]]:
+def redteam_models(config: LLMConfig, *, mode: Pipeline) -> dict[str, dict[str, str]]:
     """The models a red-team run will call, per client role, each keyed by the setting that supplied it.
 
-    ``attacker`` lists what runs on the attacker client: the attack model on a dynamic or hybrid run, and the refusal judge
-    when ``max_backtracks`` lets it run. ``evaluator`` lists what runs on the evaluator client: every judge and
-    replacement judge, which also covers the recommendations and the executive summary on the primary judge. Reads the
-    same config fields and the same refusal-judge rule the run does, so the pre-flight checks what the run calls.
+    ``attacker`` lists what runs on the attacker client: the attack model on a dynamic or hybrid run, which also covers
+    the backtrack decision. ``evaluator`` lists what runs on the evaluator client: every judge and replacement judge,
+    which also covers the recommendations and the executive summary on the primary judge. Reads the same config fields
+    the run does, so the pre-flight checks what the run calls.
     """
     attacker: dict[str, str] = {}
     if mode is not Pipeline.STATIC:
@@ -785,9 +784,6 @@ def redteam_models(config: LLMConfig, *, mode: Pipeline, on_router: bool) -> dic
         attack_model = config.attacker.model
         label = default_label if attack_model == default_model else 'LLMConfig.attacker.model (--attack-model)'
         attacker[label] = attack_model
-        if config.max_backtracks:
-            refusal_model, refusal_label = planned_refusal_judge_model(on_router=on_router)
-            attacker[refusal_label] = refusal_model
     default_judge, default_judge_label = model_source('smart', 'redteam.evaluator')
     evaluator: dict[str, str] = {}
     for i, judge in enumerate(config.evaluator.judges):
@@ -815,7 +811,7 @@ def _validate_credentials_and_deps(
     # needs nothing from the environment; every other role resolves its client from it.
     if llm_client is None:
         provider = configured_llm_provider()
-        planned = redteam_models(config, mode=resolved_mode, on_router=provider == 'orq')
+        planned = redteam_models(config, mode=resolved_mode)
         from_env: dict[str, str] = {}
         for role, models in planned.items():
             role_config: LLMCallConfig = getattr(config, role)

@@ -246,20 +246,16 @@ _ORQ_URL = 'https://my.orq.ai/v3/router'
 
 
 @pytest.fixture
-def jev_router(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[float]]:
+def jev_router(monkeypatch: pytest.MonkeyPatch, fake_catalogue) -> Iterator[list[float]]:
     """Route the classifier model to /decisions and record backoff waits instead of sleeping."""
-    model_catalogue.reset_catalogue_cache()
     entry = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=True)
-
-    async def fake_load(client: Any = None) -> dict[str, Any]:  # noqa: ARG001
-        return {'typesafe/jev-latest': entry, 'jev-latest': entry}
+    fake_catalogue({'typesafe/jev-latest': entry, 'jev-latest': entry})
 
     waits: list[float] = []
 
     async def no_sleep(seconds: float) -> None:
         waits.append(seconds)
 
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
     monkeypatch.setattr('evaluatorq.common.retry.asyncio.sleep', no_sleep)
     monkeypatch.delenv('EVALUATORQ_CLASSIFIER_MODEL', raising=False)
     yield waits

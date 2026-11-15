@@ -22,7 +22,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--strategy` / `-s` | `str` (repeatable) | Restrict to named attack strategies. Repeatable and/or comma-separated. Unknown registry names are rejected. |
 | `--delivery-method` / `-d` | `str` (repeatable) | Restrict to one or more delivery methods. Repeatable and/or comma-separated. |
 | `--max-turns` | `int` / `5` | Maximum conversation turns for multi-turn attacks. |
-| `--max-backtracks` | `int` (0 to 10) / `0` | Refused turns to erase per Crescendo attack, and retry without using up a turn. See [Backtracking](../guides/red-teaming.md#backtracking). |
+| `--max-backtracks` | `int` (0 to 10) / `0` | Turns a Crescendo attack may erase and retry without using up a turn, released across the attack. See [Backtracking](../guides/red-teaming.md#backtracking). |
 | `--max-per-category` | `int \| None` / `None` | Cap strategies per category. |
 | `--attack-model` | `str \| None` / `None` | Model for adversarial prompt generation. Unset resolves the `smart` role (`openai/gpt-6-sol` by default); see [Configuration › Models](../configuration.md#models). |
 | `--attacker-instructions` | `str \| None` / `None` | Domain-specific context to steer attack generation. |

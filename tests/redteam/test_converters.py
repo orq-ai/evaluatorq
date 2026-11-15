@@ -818,7 +818,7 @@ class TestDynamicConverterValuePropagation:
         }
         mock_result = _make_dynamic_mock_result(conversation=[{'role': 'user', 'content': 'q2'}], turns=1)
         mock_result.job_results[0].output['backtracked_turns'] = [erased]
-        mock_result.job_results[0].output['refusal_judge_failures'] = 2
+        mock_result.job_results[0].output['backtrack_decision_failures'] = 2
 
         report = dynamic_evaluatorq_results_to_report(
             agent_context=_make_agent_context(),
@@ -829,7 +829,7 @@ class TestDynamicConverterValuePropagation:
         result = report.results[0]
         assert result.execution is not None
         assert [t.target.text for t in result.execution.backtracked_turns] == ['no']
-        assert result.execution.refusal_judge_failures == 2
+        assert result.execution.backtrack_decision_failures == 2
         assert [m.content for m in result.messages] == ['q2']
 
     def test_value_field_propagated_to_evaluation(self):

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from evaluatorq.common import model_catalogue as _model_catalogue
 from evaluatorq.common.judge import reset_responses_rejectors
 from evaluatorq.common.llm_call import reset_reasoning_rejectors
 from evaluatorq.common.llm_client import LLM_CREDENTIAL_KEYS
@@ -273,6 +274,27 @@ def _offline_model_catalogue(request, monkeypatch):
     yield
     reset_catalogue_cache()
     clear_model_overrides()
+
+
+@pytest.fixture
+def fake_catalogue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> typing.Callable[[typing.Mapping[str, _model_catalogue.ModelInfo]], None]:
+    """Factory: ``fake_catalogue({'gpt-5-mini': ModelInfo(...)})`` serves that table as the live catalogue.
+
+    Replaces ``_load_catalogue`` for the test and clears the catalogue cache before it (and, via the
+    suite-wide autouse fixture, after it), so a table installed mid-test is never shadowed by a
+    cached one. Call it again to swap the table.
+    """
+
+    def install(table: typing.Mapping[str, _model_catalogue.ModelInfo]) -> None:
+        async def fake_load(client: object = None) -> typing.Mapping[str, _model_catalogue.ModelInfo]:  # noqa: ARG001
+            return table
+
+        monkeypatch.setattr(_model_catalogue, '_load_catalogue', fake_load)
+        reset_catalogue_cache()
+
+    return install
 
 
 def _run_store_path(base: Path, nodeid: str) -> Path:

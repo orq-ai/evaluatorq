@@ -18,7 +18,6 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.common import model_catalogue
 from evaluatorq.common.model_catalogue import ModelInfo
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, Message
 from evaluatorq.redteam import red_team
@@ -52,15 +51,14 @@ class _Target(AgentTarget):
 
 
 @pytest.fixture(autouse=True)
-def _catalogue(monkeypatch: pytest.MonkeyPatch):
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {
+def _catalogue(monkeypatch: pytest.MonkeyPatch, fake_catalogue):
+    fake_catalogue(
+        {
             "thinky": ModelInfo(
                 0.1, 0.2, "openai", supports_responses=True, reasoning_efforts=frozenset({"low", "high"})
             )
         }
-
-    monkeypatch.setattr(model_catalogue, "_load_catalogue", fake_load)
+    )
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
 

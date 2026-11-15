@@ -539,7 +539,7 @@ def run(
             '--max-backtracks',
             min=0,
             max=10,
-            help='Refused turns a Crescendo attack may erase from the target and retry, per attack. '
+            help='Turns a Crescendo attack may erase from the target and retry, per attack. '
             'Each adds a target call on top of --max-turns. Fails on targets that keep their own history. '
             f'Defaults to {LLMConfig.model_fields["max_backtracks"].default} (off).',
         ),

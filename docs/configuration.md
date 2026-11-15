@@ -67,7 +67,7 @@ A **model role** names a kind of work, and each role has one configured model. e
 |---|---|---|
 | `fast` | `openai/gpt-6-luna` | The simulated user, simulation generators (persona, scenario, first message, datapoints, from-traces), the simulation recommendations pass and executive summary, and the trace-finder query compiler. |
 | `smart` | `openai/gpt-6-sol` | Red-team attack generation (attacker, objective and attack generators, the adaptive orchestrator, capability and blackbox classifiers) and the red-team executive summary, every judge and evaluator (red-team and OWASP evaluators, the simulation judge, the default `llm_jury()` panel), apply-recommendations, and Insights summaries. |
-| `classifier` | `typesafe/jev-latest` | Ask AI and trace-finder classification, Insights labels, signal tool-role classification, and the red-team refusal check for backtracking. |
+| `classifier` | `typesafe/jev-latest` | Ask AI and trace-finder classification, Insights labels, and signal tool-role classification. |
 | `embedding` | `openai/text-embedding-3-small` | Insights embeddings. |
 
 The smart default is a larger model than the fast one, so red-team, simulation-judge and apply runs cost more than they did before roles existed. To keep the old model everywhere, set both `EVALUATORQ_FAST_MODEL` and `EVALUATORQ_SMART_MODEL` to `openai/gpt-5.6-luna`.
@@ -78,9 +78,8 @@ A **task** is one named use of a role. A task override pins that single use to a
 
 | Task | Role | What it covers |
 |---|---|---|
-| `redteam.attacker` | `smart` | Attack generation, including the adaptive orchestrator. |
+| `redteam.attacker` | `smart` | Attack generation, including the adaptive orchestrator and the backtracking keep-or-erase decision. |
 | `redteam.evaluator` | `smart` | Red-team and OWASP evaluators. |
-| `redteam.refusal_judge` | `classifier` | The refusal check that decides whether backtracking erases a turn. It falls back to the `fast` role only when it names a classify-only model, such as the default jev, with no reachable classify endpoint: off the Orq router or when the catalogue lists none. A chat model pinned to this task runs as pinned, with no fallback. |
 | `sim.user` | `fast` | The simulated user. |
 | `sim.judge` | `smart` | The simulation judge. |
 | `sim.generator` | `fast` | Persona, scenario, first-message and datapoint generation, simulation recommendations and executive summary. |
@@ -163,7 +162,7 @@ With only `ANTHROPIC_API_KEY` set, evaluatorq builds an `AsyncAnthropic` client 
 
 A stray `ANTHROPIC_API_KEY` with the built-in role defaults stops the run before any work, with one error that says Anthropic was chosen because it is the only LLM key set and names each setting to change.
 
-That check covers the models the run will call, and each one must be a Claude id, because the built-in defaults are `openai/` ids that an Anthropic client refuses. Which roles that is depends on the command. `eq sim run` calls the user simulator, the judge and the generator, all on `--sim-model` when you pass it, and the `--openai-model` target. A red-team run calls the smart role for the attacker and the judges, plus every `replacement_judges` entry. The classifier role only matters where a classify-only model would run: off the Orq router its built-in default is replaced by the fast role, so the red-team refusal judge (with `max_backtracks` above 0), a jury judge set to a classify-only model, and the signal classifiers check `EVALUATORQ_FAST_MODEL` instead. A model passed directly, such as `--sim-model` or `LLMConfig(attacker=...)`, is checked in place of the role it replaces. The check rejects an id with another provider's prefix, such as `openai/`; a bare id such as `gpt-6-sol` passes it and fails at the first request instead. Setting all three roles covers every command:
+That check covers the models the run will call, and each one must be a Claude id, because the built-in defaults are `openai/` ids that an Anthropic client refuses. Which roles that is depends on the command. `eq sim run` calls the user simulator, the judge and the generator, all on `--sim-model` when you pass it, and the `--openai-model` target. A red-team run calls the smart role for the attacker and the judges, plus every `replacement_judges` entry. The classifier role only matters where a classify-only model would run: off the Orq router its built-in default is replaced by the fast role, so a jury judge set to a classify-only model and the signal classifiers check `EVALUATORQ_FAST_MODEL` instead. A model passed directly, such as `--sim-model` or `LLMConfig(attacker=...)`, is checked in place of the role it replaces. The check rejects an id with another provider's prefix, such as `openai/`; a bare id such as `gpt-6-sol` passes it and fails at the first request instead. Setting all three roles covers every command:
 
 ```bash
 export ANTHROPIC_API_KEY=...
@@ -194,9 +193,9 @@ See [Models](#models) for what each role runs and the order they are resolved in
 
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
-| `EVALUATORQ_FAST_MODEL` | No | `openai/gpt-6-luna` | Model for the `fast` role: the simulated user, simulation generators, the trace-finder compiler, and the refusal check for backtracking when the client does not route through the Orq router. |
+| `EVALUATORQ_FAST_MODEL` | No | `openai/gpt-6-luna` | Model for the `fast` role: the simulated user, simulation generators, and the trace-finder compiler. |
 | `EVALUATORQ_SMART_MODEL` | No | `openai/gpt-6-sol` | Model for the `smart` role: red-team attacks, every judge and evaluator, apply-recommendations, and Insights summaries. Set it to `openai/gpt-5.6-luna` to restore the previous default. |
-| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Model for the `classifier` role: Ask AI and trace-finder classification, Insights labels, signal tool-role classification, and the red-team refusal check for backtracking. See [Trace finder](trace-finder.md) and [Signals](signals.md). |
+| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Model for the `classifier` role: Ask AI and trace-finder classification, Insights labels and signal tool-role classification. See [Trace finder](trace-finder.md) and [Signals](signals.md). |
 | `EVALUATORQ_EMBEDDING_MODEL` | No | `openai/text-embedding-3-small` | Model for the `embedding` role: Insights embeddings. |
 | `EVALUATORQ_COMPILER_MODEL` | No | unset | **Deprecated.** Pins the `finder.compiler` task. Logs one warning per process. Use `--model-override finder.compiler=MODEL`, `model_overrides` in the settings file, or `EVALUATORQ_FAST_MODEL`. |
 | `EVALUATORQ_APPLY_MODEL` | No | unset | **Deprecated.** Pins the `apply` task. Logs one warning per process. Use `--model-override apply=MODEL`, `model_overrides` in the settings file, or `EVALUATORQ_SMART_MODEL`. |

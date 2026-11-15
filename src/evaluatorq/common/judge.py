@@ -1487,7 +1487,7 @@ async def run_judge(
     serves_classify = on_router and await supports_classify(model, client)
     if wants_classify and not serves_classify and is_known_classify_model(model):
         # No `/decisions` endpoint for this model (off the router, or a catalogue that lists none for it), so a
-        # classify-only model cannot answer: ask the fast role instead, as the red-team refusal judge does.
+        # classify-only model cannot answer: ask the fast role instead.
         model = classify_fallback_model(model, on_router=on_router, client=client)
     if not wants_classify and is_known_classify_model(model):
         # A model this package ships as classify-*only*. Prompting it buys a provider
