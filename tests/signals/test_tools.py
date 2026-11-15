@@ -122,8 +122,9 @@ def test_unmapped_responses_tool_activity_invalidates_only_tool_dependent_signal
     from evaluatorq.formats.responses import ResponsesConversation
 
     trajectory = ResponsesConversation(items=[
-        {'type': 'custom_tool_call', 'call_id': 'custom-1', 'name': 'lookup', 'input': 'query'},
-        {'type': 'custom_tool_call_output', 'call_id': 'custom-1', 'output': 'answer'},
+        {'type': 'computer_call', 'id': 'cc_1', 'call_id': 'computer-1', 'pending_safety_checks': [],
+         'status': 'completed', 'action': {'type': 'screenshot'}},
+        {'type': 'computer_call_output', 'call_id': 'computer-1', 'output': {'type': 'computer_screenshot'}},
         {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'finished'}]},
     ]).to_atif()
     values = _values(

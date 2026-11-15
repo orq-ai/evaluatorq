@@ -1,0 +1,57 @@
+[
+  {
+    "type": "message",
+    "role": "user",
+    "content": [
+      {
+        "type": "input_text",
+        "text": "read the skill"
+      }
+    ]
+  },
+  {
+    "type": "custom_tool_call",
+    "id": "ctc_01",
+    "status": "completed",
+    "call_id": "call_exec_1",
+    "name": "exec",
+    "input": "const r = await tools.exec_command({cmd:\"sed -n '1,40p' /workspace/skills/demo/SKILL.md\"});\ntext(r)"
+  },
+  {
+    "type": "custom_tool_call_output",
+    "call_id": "call_exec_1",
+    "output": [
+      {
+        "type": "input_text",
+        "text": "Script completed\nWall time 0.4 seconds\nOutput:\n"
+      },
+      {
+        "type": "input_text",
+        "text": "---\nname: demo\n---"
+      }
+    ]
+  },
+  {
+    "type": "custom_tool_call",
+    "id": "ctc_02",
+    "status": "completed",
+    "call_id": "call_patch_1",
+    "name": "apply_patch",
+    "input": "*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n"
+  },
+  {
+    "type": "custom_tool_call_output",
+    "call_id": "call_patch_1",
+    "output": "Success. Updated: A notes.md"
+  },
+  {
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "output_text",
+        "text": "Done."
+      }
+    ]
+  }
+]

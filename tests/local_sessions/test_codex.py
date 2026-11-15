@@ -200,6 +200,11 @@ def test_custom_tool_call_becomes_tool_call_with_observation(codex_home: Path) -
     calls = [call for step in document.trajectory.steps for call in step.tool_calls or []]
     assert [call.function_name for call in calls] == ['apply_patch', 'shell']
     assert calls[0].arguments == {'input': '*** Begin Patch'}
+    assert document.metadata.tool_names == ('apply_patch', 'shell')
+    assert document.trajectory.to_responses().items[1:3] == [
+        {'type': 'custom_tool_call', 'call_id': 'c1', 'name': 'apply_patch', 'input': '*** Begin Patch'},
+        {'type': 'custom_tool_call_output', 'call_id': 'c1', 'output': 'Success'},
+    ]
     observations = [
         result.content for step in document.trajectory.steps if step.observation for result in step.observation.results
     ]
