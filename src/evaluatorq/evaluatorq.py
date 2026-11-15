@@ -53,6 +53,14 @@ class _StreamingEvaluationError(RuntimeError):
         super().__init__(f'Streaming evaluation failed with {len(errors)} errors: {details}')
 
 
+class _AbortEvaluation(Exception):  # noqa: N818 - a control-flow signal, not an error type
+    """Raised by an internal callback whose failure must stop the run; the real error is ``__cause__``.
+
+    Only the in-memory runner stops promptly on it. The streaming runner (``DatasetIdInput``)
+    surfaces it after the fetch drains, so do not raise it from a streaming callback.
+    """
+
+
 async def _notify_datapoint_complete(
     callback: DataPointComplete | None,
     results: list[DataPointResult],
@@ -60,9 +68,16 @@ async def _notify_datapoint_complete(
     if callback is None:
         return
     for result in results:
-        returned = callback(result)
-        if inspect.isawaitable(returned):
-            await returned
+        # A progress hook must not destroy the run it reports on: log its failure and keep going.
+        # Exception only, so cancellation still propagates.
+        try:
+            returned = callback(result)
+            if inspect.isawaitable(returned):
+                await returned
+        except _AbortEvaluation:  # noqa: PERF203 - one try per row is the isolation boundary
+            raise
+        except Exception:  # noqa: BLE001 - a user callback's failure must not fail the run
+            logger.opt(exception=True).error('on_datapoint_complete raised; the run continues')
 
 
 def check_pass_failures(results: EvaluatorqResult, *, treat_errors_as_failure: bool = False) -> bool:
@@ -724,7 +739,7 @@ async def _run_in_memory_evaluation(
         results_nested = await asyncio.gather(*tasks)
     except BaseException:
         # Keep this run's work inside its tracing/client contexts even
-        # when a callback fails or the caller cancels the evaluation.
+        # when an internal callback aborts or the caller cancels the evaluation.
         for task in tasks:
             if not task.done():
                 task.cancel()
@@ -814,7 +829,8 @@ async def evaluatorq(
               evaluation is a single trace. Defaults to False, which leaves each row's
               ``orq.job`` as its own root — an N-row run is then N separate traces.
         on_datapoint_complete: Optional sync or async callback invoked exactly once after each
-              DataPointResult reaches a terminal state. Exceptions propagate and abort the run.
+              DataPointResult reaches a terminal state. An exception it raises is logged at ERROR
+              and the run continues.
 
     Returns:
         List of DataPointResult objects
