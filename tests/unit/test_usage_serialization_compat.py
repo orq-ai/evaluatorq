@@ -95,6 +95,7 @@ class TestUsageCostUsdSerialization:
             'cache_creation_tokens',
             'cache_creation_1h_tokens',
             'cache_creation_5m_tokens',
+            'audio_input_tokens',
             'reasoning_tokens',
             'input_cost',
             'output_cost',

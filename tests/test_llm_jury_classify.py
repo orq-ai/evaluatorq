@@ -41,16 +41,12 @@ JEV = 'typesafe/jev-latest'
 
 
 @pytest.fixture(autouse=True)
-def _catalogue_for_jury_tests(monkeypatch: pytest.MonkeyPatch):
+def _catalogue_for_jury_tests(monkeypatch: pytest.MonkeyPatch, fake_catalogue):
     """Exercise jury routing as it runs through the Orq router, without network access."""
-    model_catalogue.reset_catalogue_cache()
     jev = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', False, supports_classify=True)  # noqa: FBT003
     chat = model_catalogue.ModelInfo(0.0, 0.0, 'openai', True)
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {JEV: jev, 'jev-latest': jev, 'gpt-5-mini': chat}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+    fake_catalogue({JEV: jev, 'jev-latest': jev, 'gpt-5-mini': chat})
     monkeypatch.setattr(llm_jury_mod, 'client_routes_through_orq', lambda client: True)
     yield
     model_catalogue.reset_catalogue_cache()
@@ -615,16 +611,13 @@ async def test_labels_as_a_list_and_as_a_dict_build_the_same_verdict_literal() -
 
 @pytest.mark.asyncio
 async def test_a_vanilla_classify_panel_warns_about_no_unread_config_field(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_catalogue,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A caller who set nothing must not be told their settings were ignored — on every datapoint."""
     jev = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', False, supports_classify=True)  # noqa: FBT003
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {JEV: jev, 'jev-latest': jev}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+    fake_catalogue({JEV: jev, 'jev-latest': jev})
 
     structured_output._WARNED_UNREAD.clear()
     client = MagicMock()
@@ -683,16 +676,12 @@ async def test_classify_detail_survives_in_the_serialized_jury_result() -> None:
 
 @pytest.mark.asyncio
 async def test_a_catalogue_only_classify_model_is_seated_without_manual_registration(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_catalogue,
 ) -> None:
     model = 'acme/sorter'
     info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {model: info, 'sorter': info}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
-    model_catalogue.reset_catalogue_cache()
+    fake_catalogue({model: info, 'sorter': info})
     client = MagicMock()
     client.base_url = 'https://my.orq.ai/v3/router'
     client.post = AsyncMock(
@@ -715,16 +704,12 @@ async def test_a_catalogue_only_classify_model_is_seated_without_manual_registra
 
 @pytest.mark.asyncio
 async def test_a_prompt_only_panel_prompts_a_catalogue_only_classify_model(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_catalogue,
 ) -> None:
     model = 'acme/sorter'
     info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {model: info, 'sorter': info}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
-    model_catalogue.reset_catalogue_cache()
+    fake_catalogue({model: info, 'sorter': info})
     evaluator = llm_jury(name='x', prompt='judge {{output.response}}', judges=[model], client=MagicMock())
     run_judge = AsyncMock(return_value=JudgeOutcome(error_message='prompted'))
     with patch.object(llm_jury_mod, 'run_judge', run_judge):
@@ -738,16 +723,12 @@ async def test_a_prompt_only_panel_prompts_a_catalogue_only_classify_model(
 
 @pytest.mark.asyncio
 async def test_a_catalogue_only_numeric_classify_model_rejects_a_custom_score_range_at_runtime(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_catalogue,
 ) -> None:
     model = 'acme/sorter'
     info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {model: info, 'sorter': info}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
-    model_catalogue.reset_catalogue_cache()
+    fake_catalogue({model: info, 'sorter': info})
     evaluator = llm_jury(
         name='x',
         criteria='score it',
@@ -768,16 +749,12 @@ async def test_a_catalogue_only_numeric_classify_model_rejects_a_custom_score_ra
 
 @pytest.mark.asyncio
 async def test_a_catalogue_only_boolean_classify_model_rejects_an_invalid_threshold_at_runtime(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_catalogue,
 ) -> None:
     model = 'acme/sorter'
     info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {model: info, 'sorter': info}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
-    model_catalogue.reset_catalogue_cache()
+    fake_catalogue({model: info, 'sorter': info})
     evaluator = llm_jury(name='x', criteria='classify it', judges=[model], threshold=5, client=MagicMock())
     run_judge = AsyncMock(return_value=JudgeOutcome(error_message='should not run'))
     with (
@@ -791,16 +768,12 @@ async def test_a_catalogue_only_boolean_classify_model_rejects_an_invalid_thresh
 
 @pytest.mark.asyncio
 async def test_a_catalogue_only_classify_model_is_validated_once(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_catalogue,
 ) -> None:
     model = 'acme/sorter'
     info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {model: info, 'sorter': info}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
-    model_catalogue.reset_catalogue_cache()
+    fake_catalogue({model: info, 'sorter': info})
     evaluator = llm_jury(name='x', criteria='classify it', judges=[model], client=MagicMock())
     validation = MagicMock(wraps=llm_jury_mod._validate_classify_configuration)
     outcome = JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
@@ -817,15 +790,11 @@ async def test_a_catalogue_only_classify_model_is_validated_once(
 
 @pytest.mark.asyncio
 async def test_catalogue_false_overrides_the_built_in_hint_and_keeps_the_prompted_config(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_catalogue,
 ) -> None:
     info = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', True, supports_classify=False)  # noqa: FBT003
 
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {JEV: info, 'jev-latest': info}
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
-    model_catalogue.reset_catalogue_cache()
+    fake_catalogue({JEV: info, 'jev-latest': info})
     sink: dict[str, Any] = {}
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
