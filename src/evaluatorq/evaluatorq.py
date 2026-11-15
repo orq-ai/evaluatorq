@@ -54,7 +54,11 @@ class _StreamingEvaluationError(RuntimeError):
 
 
 class _AbortEvaluation(Exception):  # noqa: N818 - a control-flow signal, not an error type
-    """Raised by an internal callback whose failure must stop the run; the real error is ``__cause__``."""
+    """Raised by an internal callback whose failure must stop the run; the real error is ``__cause__``.
+
+    Only the in-memory runner stops promptly on it. The streaming runner (``DatasetIdInput``)
+    surfaces it after the fetch drains, so do not raise it from a streaming callback.
+    """
 
 
 async def _notify_datapoint_complete(

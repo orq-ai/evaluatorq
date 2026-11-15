@@ -393,13 +393,13 @@ async def run_classifier(
     )
 
     async def complete(result: DataPointResult) -> None:
-        classification = parse_datapoint_result(result, dimensions)
+        # evaluatorq() logs and skips a failing callback; a lost classification must fail the run instead.
         try:
+            classification = parse_datapoint_result(result, dimensions)
             await on_complete(classification)
+            classifications.append(classification)
         except Exception as error:
-            # The run store has marked the run failed; stop spending judge calls on it.
             raise _AbortEvaluation from error
-        classifications.append(classification)
 
     try:
         await evaluatorq(
