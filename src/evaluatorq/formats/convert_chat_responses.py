@@ -18,7 +18,7 @@ from evaluatorq.contracts import (
     StrategyToolCall,
     tool_result_to_text,
 )
-from evaluatorq.formats._shared import join_text, json_arguments_text, part_text
+from evaluatorq.formats._shared import CUSTOM_TOOL_INPUT_ARGUMENT, join_text, json_arguments_text, part_text
 from evaluatorq.formats.chat import ChatConversation
 from evaluatorq.formats.responses import ResponsesConversation, walk_items
 from evaluatorq.openresponses.input_items import messages_to_responses_input, responses_function_call_item_id
@@ -54,6 +54,10 @@ def responses_to_chat(conv: ResponsesConversation) -> ChatConversation:
         'message': lambda _, item: _message_item(item, state),
         'function_call': lambda _, item: _call_item(item, state),
         'function_call_output': lambda _, item: _output_item(item, state),
+        'custom_tool_call': lambda _, item: _call_item(
+            {**item, 'arguments': {CUSTOM_TOOL_INPUT_ARGUMENT: item.get('input')}}, state
+        ),
+        'custom_tool_call_output': lambda _, item: _output_item(item, state),
         'reasoning': reasoning,
     }
     walk_items(conv.items, handlers, 'chat')

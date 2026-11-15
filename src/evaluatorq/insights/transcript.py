@@ -43,6 +43,7 @@ from evaluatorq.common.model_input import (
 from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.trace_document import TraceDocument, to_chat_messages
 from evaluatorq.contracts import tool_result_to_text
+from evaluatorq.formats._shared import CUSTOM_TOOL_INPUT_ARGUMENT
 from evaluatorq.insights.readable_style import (
     MIN_REFERENCED_RESULT_CHARS,
     ReadableStyle,
@@ -1297,18 +1298,28 @@ def _call_arguments(call: dict[str, Any]) -> dict[str, Any]:
     try:
         parsed = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
-        unescape = {'n': '\n', 't': '\t'}
-        return {
-            key: re.sub(r'\\(.)', lambda escape: unescape.get(escape[1], escape[1]), value)
-            for key, value in _STRING_FIELD.findall(raw)
-        }
+        return _string_fields(raw)
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _string_fields(raw: str) -> dict[str, str]:
+    unescape = {'n': '\n', 't': '\t'}
+    return {
+        key: re.sub(r'\\(.)', lambda escape: unescape.get(escape[1], escape[1]), value)
+        for key, value in _STRING_FIELD.findall(raw)
+    }
 
 
 def _shell_command(arguments: dict[str, Any]) -> str:
     """The shell line a call runs, scrubbed of credentials so no view derived from it can carry one."""
-    for key in ('command', 'cmd', 'script'):
+    for key in ('command', 'cmd', 'script', CUSTOM_TOOL_INPUT_ARGUMENT):
         value = arguments.get(key)
+        if (
+            key == CUSTOM_TOOL_INPUT_ARGUMENT
+            and isinstance(value, str)
+            and (inner := _shell_command(_string_fields(value)))
+        ):
+            return inner  # a Codex exec script: the shell line is its `cmd` field
         if isinstance(value, str):
             return scrub_known_secrets(value)
         if isinstance(value, list):

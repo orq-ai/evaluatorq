@@ -19,7 +19,7 @@ def session_document(parsed: ParsedSession) -> TraceDocument:
         agent_version=summary.agent_version or 'unknown',
         session_id=summary.session_id,
     )
-    tool_names = tuple(sorted({item['name'] for item in parsed.items if item.get('type') == 'function_call'}))
+    tool_names = tuple(sorted({call.function_name for step in trajectory.steps for call in step.tool_calls or []}))
     duration = summary.updated_at - summary.started_at
     return TraceDocument(
         metadata=TraceMetadata(
