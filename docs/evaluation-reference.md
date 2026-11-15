@@ -19,6 +19,8 @@ async def evaluatorq(
     description: str | None = None,
     path: str | None = None,
     inference: bool = True,
+    single_trace: bool = False,
+    on_datapoint_complete: DataPointComplete | None = None,
 ) -> EvaluatorqResult
 ```
 
@@ -33,6 +35,7 @@ async def evaluatorq(
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
 | `inference` | `bool` | `True` | Run the jobs; set `False` to score data that already has outputs |
+| `single_trace` | `bool` | `False` | Open one span for the whole run so every row shares a trace — see [One trace per run](tracing.md#one-trace-per-run-single_tracetrue) |
 | `on_datapoint_complete` | `DataPointComplete` \| `None` | `None` | Callback run once per data point as it finishes — see [Reacting to each row as it finishes](#reacting-to-each-row-as-it-finishes) |
 
 Parameters can also be passed positionally as an `EvaluatorParams` model or a plain dict — the three forms below are equivalent:
@@ -49,7 +52,7 @@ Full type signatures live in the [API Reference](reference/evaluatorq.md).
 
 ### The `@job()` decorator
 
-`@job()` names a job. The name shows up in the results table, in traces, and — crucially — in error messages:
+`@job()` names a job. The name shows up in the results table, in traces, and as `JobResult.job_name`, which is how you tell which job failed:
 
 ```python
 from evaluatorq import job
@@ -58,8 +61,8 @@ from evaluatorq import job
 async def risky_operation(data: DataPoint, row: int):
     return await potentially_failing_operation(data)
 
-# Error output: "Job 'risky-job' failed: <error details>"
-# Without @job:  "<error details>"
+# A raise is recorded as job_name="risky-job", error="<error details>".
+# Without @job the error text is the same, but job_name is the generic "job".
 ```
 
 It also wraps plain callables, which is handy for one-liners:
@@ -119,7 +122,7 @@ async def resilient_job(data: DataPoint, row: int) -> dict:
     return {"name": "my-agent", "output": answer, "error": None}
 ```
 
-Emit `error` on every path, `None` on success: an omitted key and a clean run are indistinguishable, so a job that forgets the key on one branch reports a dead target as a passing one. A row with a non-empty `error` is counted in the summary table's `Failed Jobs` and keeps its output for diagnosis, but its evaluators are **skipped** — scoring a transcript you already know is dead buys nothing and costs an LLM judge call per row. `check_pass_failures(results, treat_errors_as_failure=True)` is what turns it into a CI failure; the default (`False`) gates on evaluator `pass_` alone.
+Emit `error` on every path, `None` on success: an omitted key and a clean run are indistinguishable, so a job that forgets the key on one branch reports a dead target as a passing one. A row with a non-empty `error` keeps its output for diagnosis, but its evaluators are **skipped** — scoring a transcript you already know is dead buys nothing and costs an LLM judge call per row. [Where a failure lives](#where-a-failure-lives) covers how it is counted and how to gate CI on it.
 
 This is the raw-dict job contract. `@job()` wraps a function's return value into `{"name", "output"}`, so an `error` key returned from a decorated function lands *inside* `output`, where a judge reads it as the target's failure rather than the runner reading it as the row's. A decorated job reports a row failure by raising.
 
@@ -293,6 +296,18 @@ await evaluatorq(
 )
 ```
 
+## Where a failure lives
+
+`evaluatorq()` returns one `DataPointResult` per row. Each holds a `job_results` list of `JobResult`, one per job, and each of those holds an `evaluator_scores` list of `EvaluatorScore`, one per evaluator. A failure is recorded in the `error` field at the level where it happened, and the levels above it stay `None`. Anything that reads results — a CI gate, a per-row callback, your own report — has to check all three levels, or it reports a broken row as healthy.
+
+| Field | Set when | What is left | Summary table row |
+|---|---|---|---|
+| `DataPointResult.error` | the row never reached its jobs — an awaitable datapoint that raised | `job_results` is `None`, and if the awaitable never resolved, `data_point.inputs` is a `{"row_index": N}` placeholder instead of your own keys | `Failed Data Points` |
+| `JobResult.error` | the job raised, or [reported its own failure](#reporting-a-failure-the-job-handled) | its evaluators are skipped, so `evaluator_scores` is empty; `output` is `None` if the job raised and kept if it reported the failure | `Failed Jobs` |
+| `EvaluatorScore.error` | the job succeeded but an evaluator could not produce a verdict | the job's `output` is intact; that score's `value` is empty and its `pass_` is `None` | none — it is listed under `Errors` in the printed report and left out of that evaluator's average |
+
+The last one is the quiet one: a dead judge leaves the row and the job both reporting success, and no summary count includes it. `check_pass_failures(results, treat_errors_as_failure=True)` reads all three fields — see [Pass/fail and CI](#passfail-and-ci).
+
 ## Pass/fail and CI
 
 An evaluator that returns `pass_` turns the run into a gate:
@@ -317,7 +332,7 @@ if check_pass_failures(results, treat_errors_as_failure=True):
     raise SystemExit(1)
 ```
 
-`treat_errors_as_failure=True` also gates on rows that errored — a job that raised, a job that reported its own failure, and an evaluator whose every call failed. It defaults to `False`, which gates on evaluator `pass_` alone, so a run whose target was dead throughout can pass a gate that leaves it off.
+`treat_errors_as_failure=True` also gates on rows that errored, at any of the three levels in [Where a failure lives](#where-a-failure-lives). It defaults to `False`, which gates on evaluator `pass_` alone, so a run whose target was dead throughout can pass a gate that leaves it off.
 
 The results table gains a pass rate row — `Pass Rate | 75% (3/4)`.
 
@@ -439,19 +454,11 @@ A plain `def` and an `async def` are both accepted, and the choice matters as so
 
 Rows run concurrently under `datapoint_parallelism`, which is 10 unless you set it, so the callback fires in completion order, which is not row order unless that budget is 1 — the example above reports its four rows in whichever order they finish. Read `result.data_point` to tell which row arrived. The returned list stays in row order.
 
-**Three separate `error` fields decide whether a row failed, and a callback that reads fewer than all three reports a broken row as healthy.** They sit at the three levels of the result, and a failure at one leaves the other two `None`:
+A callback that checks only `result.error` misses most failures. A row's failure can sit at any of three levels, and a dead judge leaves both the row and the job reporting success; [Where a failure lives](#where-a-failure-lives) lists the three fields. The example's `row_finished` reads all of them.
 
-| Field | Set when | What is left |
-|---|---|---|
-| `DataPointResult.error` | the row never reached its jobs — an awaitable datapoint that raised | `job_results` is `None`, and if the awaitable never resolved, `data_point.inputs` is a `{"row_index": N}` placeholder instead of your own keys |
-| `JobResult.error` | the job raised, or reported its own failure | that job's `output` is `None` and its evaluators are skipped, so `evaluator_scores` is empty |
-| `EvaluatorScore.error` | the job succeeded but an evaluator could not produce a verdict | the job's `output` is intact; that score's `value` is empty and its `pass_` is `None` |
+In the example, `unavailable_row()` sets the row-level `error`, the `Where is my order?` ticket sets the job-level one, and the two matched tickets come through with their `exact-match` score.
 
-The last one is the quiet one: a dead judge leaves the row and the job both reporting success, so a callback that stops at `JobResult.error` sees a healthy row. [Reporting a failure the job handled](#reporting-a-failure-the-job-handled) covers the job level in more detail.
-
-In the example, `unavailable_row()` drives the first row, the `Where is my order?` ticket drives the second, and the two matched tickets come through with their `exact-match` score.
-
-**An exception from the callback aborts the whole run.** It propagates out of `evaluatorq()`, which raises instead of returning, so every row already scored is lost — including the ones the callback had accepted — and nothing is uploaded. That much holds for every data source. What differs is how the rest of the run winds down. Rows held in memory that are still in flight are cancelled and drained first. An Orq dataset streams its rows instead, and those are not cancelled: the remaining batches are still fetched, every remaining row runs and reports, and only then does the exception surface — on its own if one callback failed, or, if several did, wrapped in an internal `RuntimeError` subclass whose message lists each of them, so catch `RuntimeError` rather than matching on the class. In both cases the fix is the same: catch your own failures inside the callback and let the run finish.
+**An exception from the callback does not stop the run.** evaluatorq logs it at `ERROR` level with its traceback, as `on_datapoint_complete raised; the run continues`, and moves on to the next row. Every row still runs, is returned and is uploaded, whatever the data source. The cost is that a callback failure shows up only in that log line: if the callback's work must not be lost, such as a sink that has to receive every row, catch and record the failure inside the callback yourself.
 
 Only an Orq dataset (`DatasetIdInput`) streams. Its rows arrive in batches, and the callback still fires per row, when that row finishes rather than when its batch does. Every other source — inline rows, `ExperimentInput`, `TraceInput` — is resolved up front and runs from memory. Watching the batched path for yourself takes a live Orq dataset, because nothing local stands in for it.
 

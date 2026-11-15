@@ -27,8 +27,7 @@ Successfully installed evaluatorq
 
     ---
 
-    Run jobs over inline data or Orq datasets in parallel; score with custom or
-    built-in evaluators; gate CI on pass/fail.
+    Run jobs over inline data or Orq datasets in parallel; score with custom or built-in evaluators; gate CI on pass/fail; [react to each row as it finishes](evaluation-reference.md#reacting-to-each-row-as-it-finishes).
 
     [:octicons-arrow-right-24: Getting Started](guides/getting-started.md)
 
@@ -36,8 +35,7 @@ Successfully installed evaluatorq
 
     ---
 
-    A user-simulator LLM drives your agent across multi-turn conversations while
-    a judge LLM scores whether it met its goals.
+    A user-simulator LLM drives your agent across multi-turn conversations while a judge LLM scores whether it met its goals.
 
     [:octicons-arrow-right-24: Agent simulation](guides/agent-simulation.md)
 
@@ -45,8 +43,7 @@ Successfully installed evaluatorq
 
     ---
 
-    Adaptive adversarial attacks mapped to the OWASP LLM Top 10 and Agentic
-    Security Initiative, with auto-discovered tool and memory attack surfaces.
+    Adaptive adversarial attacks mapped to the OWASP LLM Top 10 and Agentic Security Initiative, with auto-discovered tool and memory attack surfaces.
 
     [:octicons-arrow-right-24: Red teaming](guides/red-teaming.md)
 
@@ -54,8 +51,7 @@ Successfully installed evaluatorq
 
     ---
 
-    Score a single response with a panel of judge LLMs; odd, mixed-provider
-    panels make verdicts more reliable than any one judge.
+    Score a single response with a panel of judge LLMs; odd, mixed-provider panels make verdicts more reliable than any one judge.
 
     [:octicons-arrow-right-24: LLM as a Jury](llm-as-a-jury.md)
 
