@@ -15,7 +15,7 @@ from evaluatorq.common.jury import no_verdict_message
 from evaluatorq.common.llm_call import classify_request_body
 from evaluatorq.common.model_input import effective_trace_input_chars, fit_classifier_input
 from evaluatorq.contracts import JuryRepetition, JuryResult, JuryVote, LLMCallConfig, TokenUsage
-from evaluatorq.evaluatorq import evaluatorq
+from evaluatorq.evaluatorq import _AbortEvaluation, evaluatorq
 from evaluatorq.types import DataPoint, DataPointResult, EvaluationResult, Evaluator, ScorerParameter
 
 from .debug import enabled as debug_enabled
@@ -394,20 +394,27 @@ async def run_classifier(
 
     async def complete(result: DataPointResult) -> None:
         classification = parse_datapoint_result(result, dimensions)
-        await on_complete(classification)
+        try:
+            await on_complete(classification)
+        except Exception as error:
+            # The run store has marked the run failed; stop spending judge calls on it.
+            raise _AbortEvaluation from error
         classifications.append(classification)
 
-    await evaluatorq(
-        'classifier-trace-finder',
-        data=[build_datapoint(trace, projections[trace.trace_id]) for trace in traces],
-        evaluators=[evaluator],
-        inference=False,
-        datapoint_parallelism=parallelism,
-        llm_parallelism=parallelism,
-        on_datapoint_complete=complete,
-        print_results=False,
-        _send_results=False,
-    )
+    try:
+        await evaluatorq(
+            'classifier-trace-finder',
+            data=[build_datapoint(trace, projections[trace.trace_id]) for trace in traces],
+            evaluators=[evaluator],
+            inference=False,
+            datapoint_parallelism=parallelism,
+            llm_parallelism=parallelism,
+            on_datapoint_complete=complete,
+            print_results=False,
+            _send_results=False,
+        )
+    except _AbortEvaluation as aborted:
+        raise (aborted.__cause__ or aborted) from None
     return classifications
 
 
