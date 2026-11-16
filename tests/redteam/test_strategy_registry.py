@@ -252,3 +252,19 @@ class TestStrategyRegistry:
             assert len(single_turn) > 0, f'{category} should have single-turn strategies'
             # Multi-turn is optional but should exist for main categories
             # (This is a softer check since not all categories need multi-turn)
+
+
+def test_red_teaming_guide_lists_every_curated_strategy():
+    """The strategy table in docs/guides/red-teaming.md matches the registry, row for row."""
+    import re
+    from pathlib import Path
+
+    guide = Path(__file__).parents[2] / 'docs' / 'guides' / 'red-teaming.md'
+    documented = set(re.findall(r'^\| `([A-Z]+\d+)` \| `(\w+)` \|', guide.read_text(), re.MULTILINE))
+    registered = {
+        (category, strategy.name)
+        for category, strategies in STRATEGY_REGISTRY.items()
+        if not category.startswith('OWASP-')
+        for strategy in strategies
+    }
+    assert documented == registered
