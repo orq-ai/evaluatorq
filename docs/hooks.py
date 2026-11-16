@@ -17,9 +17,10 @@ pages missed the whole `examples/` tree, where an example whose own docstring fe
 snippet closed the generator's outer fence and rendered its body as prose — caught the
 moment the scope widened.
 
-Strategy table: the curated attack strategy table in the red teaming guide is rendered
-here from `STRATEGY_REGISTRY` in place of a marker, so it cannot drift from the code. A
-hand-written copy needed a test re-implementing the row format to stay in sync.
+Generated tables: the coverage table, the curated attack strategy table and the full-sweep
+attack count in the red teaming guide are rendered here from the registries in place of
+markers, so they cannot drift from the code. A hand-written copy needed a test
+re-implementing the row format to stay in sync.
 """
 
 from __future__ import annotations
@@ -102,46 +103,111 @@ _DIAGRAM = re.compile(
 _HIGHLIGHT_EXEMPT = ('index.md', 'tracing.md')
 
 
-_STRATEGY_PAGE = 'guides/red-teaming.md'
-_STRATEGY_MARKER = '<!-- curated-strategies -->'
+_GENERATED_PAGE = 'guides/red-teaming.md'
+
+
+def _codes(values) -> str:
+    return ', '.join(f'`{v.value}`' for v in values)
+
+
+def _curated_by_category() -> dict:
+    from evaluatorq.redteam.adaptive.strategy_registry import STRATEGY_REGISTRY
+
+    # The registry also carries every category under an `OWASP-` alias.
+    return {c: group for c, group in STRATEGY_REGISTRY.items() if group and not c.startswith('OWASP-')}
+
+
+def _framework_categories() -> dict:
+    from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
+
+    return {c: v for c, v in sorted(CATEGORY_TO_VULNERABILITY.items()) if not c.startswith('OWASP-')}
+
+
+def _coverage_table() -> str:
+    from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES
+    from evaluatorq.redteam.frameworks.owasp.evaluators import VULNERABILITY_EVALUATOR_REGISTRY
+
+    categories = _framework_categories()
+    curated = _curated_by_category()
+    rows = ['| Category | Vulnerability | Curated strategies | Judge |', '|---|---|---|---|']
+    for code, vulnerability in categories.items():
+        count = len(curated.get(code, []))
+        judge = '✅' if vulnerability in VULNERABILITY_EVALUATOR_REGISTRY else '❌'
+        rows.append(
+            f'| `{code}` | {OWASP_CATEGORY_NAMES.get(code, code)} (`{vulnerability.value}`) '
+            f'| {count or "generated"} | {judge} |'
+        )
+    summary = f'{len(categories)} framework categories map onto {len(set(categories.values()))} vulnerabilities.'
+    return summary + '\n\n' + '\n'.join(rows)
 
 
 def _strategy_table() -> str:
-    from evaluatorq.redteam.adaptive.strategy_registry import STRATEGY_REGISTRY
     from evaluatorq.redteam.contracts import DeliveryMethod
 
-    def codes(values) -> str:
-        return ', '.join(f'`{v.value}`' for v in values)
-
-    # The registry also carries every category under an `OWASP-` alias.
-    by_category = {c: group for c, group in STRATEGY_REGISTRY.items() if group and not c.startswith('OWASP-')}
-    strategies = [s for group in by_category.values() for s in group]
+    categories = _framework_categories()
+    strategies = [s for group in _curated_by_category().values() for s in group]
     used = {d for s in strategies for d in s.delivery_methods}
     rows = [
-        '| Category | Strategy | What it attempts | Turns | Needs | Technique | Delivery methods |',
-        '|---|---|---|---|---|---|---|',
+        '| Category | Vulnerability | Strategy | What it attempts | Turns | Needs | Technique | Delivery methods |',
+        '|---|---|---|---|---|---|---|---|',
     ]
     for s in strategies:
         capabilities = ' or '.join(f'`{c.value}`' for c in s.required_capabilities)
         needs = ' + '.join(part for part in ('tools' if s.requires_tools else '', capabilities) if part)
         description = s.description.replace('|', r'\|')
         rows.append(
-            f'| `{s.category}` | `{s.name}` | {description} | {s.turn_type.value} '
-            f'| {needs or "—"} | `{s.attack_technique.value}` | {codes(s.delivery_methods)} |'
+            f'| `{s.category}` | `{categories[s.category].value}` | `{s.name}` | {description} | {s.turn_type.value} '
+            f'| {needs or "—"} | `{s.attack_technique.value}` | {_codes(s.delivery_methods)} |'
         )
     summary = (
-        f'{len(strategies)} curated strategies across {len(by_category)} categories, '
+        f'{len(strategies)} curated strategies across {len(_curated_by_category())} categories, '
         f'using {len(used)} of the {len(DeliveryMethod)} delivery methods.'
     )
     return summary + '\n\n' + '\n'.join(rows)
 
 
+def _full_sweep() -> tuple[int, int, int]:
+    """Curated strategies, generated strategies per vulnerability (the default), vulnerabilities."""
+    import inspect
+
+    from evaluatorq.redteam.runner import red_team
+
+    per_vulnerability = inspect.signature(red_team).parameters['generated_strategy_count'].default
+    curated = sum(len(group) for group in _curated_by_category().values())
+    return curated, per_vulnerability, len(set(_framework_categories().values()))
+
+
+def _full_sweep_total() -> str:
+    curated, per_vulnerability, vulnerabilities = _full_sweep()
+    return str(curated + per_vulnerability * vulnerabilities)
+
+
+def _full_sweep_ceiling() -> str:
+    curated, per_vulnerability, vulnerabilities = _full_sweep()
+    return (
+        f'**{_full_sweep_total()}**: {curated} curated strategies, plus {per_vulnerability} generated for each of '
+        f'the {vulnerabilities} vulnerabilities'
+    )
+
+
+# Marker -> renderer. Each marker must appear in the page, so deleting one fails the build
+# instead of silently dropping its content.
+_GENERATED = {
+    '<!-- coverage-table -->': _coverage_table,
+    '<!-- curated-strategies -->': _strategy_table,
+    '<!-- full-sweep-ceiling -->': _full_sweep_ceiling,
+    '<!-- full-sweep-total -->': _full_sweep_total,
+}
+
+
 def on_page_markdown(markdown: str, page: Page, config: MkDocsConfig, files: Files) -> str:
-    if page.file.src_uri != _STRATEGY_PAGE:
+    if page.file.src_uri != _GENERATED_PAGE:
         return markdown
-    if _STRATEGY_MARKER not in markdown:
-        raise PluginError(f'{_STRATEGY_PAGE}: the {_STRATEGY_MARKER} marker the strategy table renders into is gone')
-    return markdown.replace(_STRATEGY_MARKER, _strategy_table())
+    for marker, render in _GENERATED.items():
+        if marker not in markdown:
+            raise PluginError(f'{_GENERATED_PAGE}: the {marker} marker its generated content renders into is gone')
+        markdown = markdown.replace(marker, render())
+    return markdown
 
 
 def on_post_page(output: str, page: Page, config: MkDocsConfig) -> str:
