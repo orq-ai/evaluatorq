@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
+from evaluatorq.common.model_input import JEV_STATE_ALL_QUESTIONS_CHARS, JEV_STATE_CHARS, JEV_STATE_QUESTION_CHARS
 from evaluatorq.common.trace_document import TraceDocument
 from evaluatorq.dashboard import compression_inspector
 from evaluatorq.dashboard.compression_inspector import TRACE_ID_MAX_LENGTH, SESSION_REF_MAX_LENGTH
@@ -98,8 +99,8 @@ def test_get_offers_orq_and_local_sources_with_limits_and_no_question_notice(cli
     assert 'Local sessions' in response.text
     assert 'most recent 7 days' in response.text
     assert '500,000' in response.text
-    assert '112,000' in response.text
-    assert '128,000' in response.text and '256,000' in response.text
+    assert f'{JEV_STATE_CHARS:,}' in response.text
+    assert f'{JEV_STATE_QUESTION_CHARS:,}' in response.text and f'{JEV_STATE_ALL_QUESTIONS_CHARS:,}' in response.text
     assert 'includes no question' in response.text.lower()
 
 

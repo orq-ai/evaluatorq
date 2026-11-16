@@ -16,9 +16,13 @@ from evaluatorq.common.messages import MediaContent, iter_content_parts, match_t
 from evaluatorq.common.redact import scrub_known_secrets
 
 CHARS_PER_ESTIMATED_TOKEN = 4
-JEV_STATE_CHARS = 28_000 * CHARS_PER_ESTIMATED_TOKEN
-JEV_STATE_QUESTION_CHARS = 32_000 * CHARS_PER_ESTIMATED_TOKEN
-JEV_STATE_ALL_QUESTIONS_CHARS = 64_000 * CHARS_PER_ESTIMATED_TOKEN
+# Jev states are JSON with tool output, which tokenizes denser than prose. On 98 Claude Code
+# sessions the decider-4b (Qwen3.5) tokenizer measured 3.1 characters per token pooled, 3.0
+# median near the state cap and 2.75 at the lowest (RES-1882).
+JEV_CHARS_PER_TOKEN = 3
+JEV_STATE_CHARS = 28_000 * JEV_CHARS_PER_TOKEN
+JEV_STATE_QUESTION_CHARS = 32_000 * JEV_CHARS_PER_TOKEN
+JEV_STATE_ALL_QUESTIONS_CHARS = 64_000 * JEV_CHARS_PER_TOKEN
 _REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.DOTALL)
 _REASONING = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 
@@ -577,7 +581,7 @@ def jev_state_char_limit(
     longest = max((serialized_chars(question) for question in values), default=0)
     all_question_chars = serialized_chars(question_payloads) if values else 0
     if all_question_chars > JEV_STATE_ALL_QUESTIONS_CHARS:
-        raise ValueError('classification questions alone exceed the 256000-character limit')
+        raise ValueError(f'classification questions alone exceed the {JEV_STATE_ALL_QUESTIONS_CHARS}-character limit')
     limit = min(
         JEV_STATE_CHARS,
         global_char_cap - all_question_chars,

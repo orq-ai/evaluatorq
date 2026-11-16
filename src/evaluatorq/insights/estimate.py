@@ -17,6 +17,7 @@ from loguru import logger
 from evaluatorq.common.model_catalogue import cost_of
 from evaluatorq.common.model_input import (
     CHARS_PER_ESTIMATED_TOKEN,
+    JEV_CHARS_PER_TOKEN,
     JEV_STATE_ALL_QUESTIONS_CHARS,
     effective_trace_input_chars,
     is_jev_model,
@@ -226,10 +227,9 @@ def estimate_run(
     high = n or 0
     later_low = 0 if query else high
 
-    label_chars = (
-        min(trace_input_chars, JEV_STATE_ALL_QUESTIONS_CHARS) if is_jev_model(models.classifier) else trace_input_chars
-    )
-    label_in = label_chars // CHARS_PER_TOKEN
+    jev = is_jev_model(models.classifier)
+    label_chars = min(trace_input_chars, JEV_STATE_ALL_QUESTIONS_CHARS) if jev else trace_input_chars
+    label_in = label_chars // (JEV_CHARS_PER_TOKEN if jev else CHARS_PER_TOKEN)
     label_answer = LABEL_ANSWER_TOKENS
     summary_in = trace_input_chars // CHARS_PER_TOKEN
     summary_out = SUMMARY_OUTPUT_TOKENS

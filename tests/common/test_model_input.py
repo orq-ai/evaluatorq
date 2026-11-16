@@ -205,9 +205,9 @@ def test_long_question_reserves_state_capacity() -> None:
         ]
     }
 
-    bounded = fit_jev_state(state, [{'instructions': 'q' * 100_000}])
+    bounded = fit_jev_state(state, [{'instructions': 'q' * 60_000}])
 
-    assert serialized_chars(bounded) <= 28_000 * 4 - 100_000
+    assert serialized_chars(bounded) <= JEV_STATE_CHARS - 60_000
 
 
 @pytest.mark.parametrize(

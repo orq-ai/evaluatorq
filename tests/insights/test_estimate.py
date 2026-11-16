@@ -10,6 +10,7 @@ import pytest
 
 from evaluatorq.common.model_input import (
     CHARS_PER_ESTIMATED_TOKEN,
+    JEV_CHARS_PER_TOKEN,
     JEV_STATE_ALL_QUESTIONS_CHARS,
     effective_trace_input_chars,
 )
@@ -166,7 +167,7 @@ def test_jev_classifier_estimate_observes_its_combined_request_character_ceiling
         trace_input_chars=500_000,
     )
 
-    assert _row(result, 'label').tokens_in == JEV_STATE_ALL_QUESTIONS_CHARS // estimate.CHARS_PER_TOKEN
+    assert _row(result, 'label').tokens_in == JEV_STATE_ALL_QUESTIONS_CHARS // JEV_CHARS_PER_TOKEN == 64_000
 
 
 @pytest.mark.parametrize(
