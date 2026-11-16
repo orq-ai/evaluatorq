@@ -135,7 +135,7 @@ eq redteam validate-dataset [DATASET]
 
 ## `eq redteam strategies`
 
-List the curated attack strategies with their category, vulnerability, what each attempts, turn type and what the target needs. The names are the values `--strategy` accepts; the [red teaming guide](../guides/red-teaming.md#curated-strategies-by-category) explains each column.
+List the curated attack strategies, grouped by category and vulnerability, with what each attempts, its turn type and what the target needs, then the categories that have no curated strategies. The names are the values `--strategy` accepts; the [red teaming guide](../guides/red-teaming.md#curated-strategies-by-category) explains each column.
 
 ```bash
 eq redteam strategies [--json]
