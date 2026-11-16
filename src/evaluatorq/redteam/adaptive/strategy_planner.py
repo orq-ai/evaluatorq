@@ -30,7 +30,7 @@ from evaluatorq.redteam.contracts import (
     Vulnerability,
 )
 from evaluatorq.redteam.tracing import with_redteam_span
-from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY, resolve_category
+from evaluatorq.redteam.vulnerability_registry import resolve_category, resolve_vulnerabilities
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -55,7 +55,7 @@ def full_sweep_attack_ceiling(*, multi_agent: bool, generated_per_vulnerability:
     capability filtering and the ``max_*`` caps, which only lower it. A single-agent target is not
     planned for ``_MULTI_AGENT_ONLY_VULNS``.
     """
-    every = list(dict.fromkeys(CATEGORY_TO_VULNERABILITY[category] for category in list_available_categories()))
+    every = resolve_vulnerabilities(list_available_categories())  # what a run with no categories selects
     vulnerabilities = planned_vulnerabilities(every, multi_agent=multi_agent)
     curated = sum(len(get_strategies_for_vulnerability(vulnerability)) for vulnerability in vulnerabilities)
     return curated + generated_per_vulnerability * len(vulnerabilities)

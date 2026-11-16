@@ -9,14 +9,20 @@ from types import SimpleNamespace
 import pytest
 
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
-from evaluatorq.redteam.adaptive.strategy_planner import _MULTI_AGENT_ONLY_VULNS, full_sweep_attack_ceiling
+from evaluatorq.redteam.adaptive.strategy_planner import full_sweep_attack_ceiling, planned_vulnerabilities
 from evaluatorq.redteam.adaptive.strategy_registry import (
     STRATEGY_REGISTRY,
     _filter_applicable_strategies,
     curated_strategies,
+    list_available_categories,
     strategy_needs,
 )
 from evaluatorq.redteam.contracts import AgentCapability, AgentContext, AttackStrategy, ToolInfo
+from evaluatorq.redteam.vulnerability_registry import (
+    CATEGORY_TO_VULNERABILITY,
+    FRAMEWORK_TO_VULNERABILITIES,
+    resolve_vulnerabilities,
+)
 
 _HOOKS = Path(__file__).resolve().parents[2] / 'docs' / 'hooks.py'
 
@@ -55,13 +61,20 @@ def _runs(strategy: AttackStrategy, *, tools: bool, capabilities: list[AgentCapa
 @pytest.mark.parametrize('strategy', curated_strategies(), ids=lambda s: s.name)
 def test_needs_is_exactly_what_the_filter_requires(strategy: AttackStrategy) -> None:
     """A target with what the Needs column says runs the strategy; one missing any part of it does not."""
-    needed = strategy.required_capabilities[:1]
     unrelated = [c for c in AgentCapability if c not in strategy.required_capabilities][:1]
-    assert _runs(strategy, tools=True, capabilities=needed or unrelated)
-    if strategy.requires_tools:
-        assert not _runs(strategy, tools=False, capabilities=needed or unrelated)
+    for needed in [[c] for c in strategy.required_capabilities] or [unrelated]:  # 'or': any one alone suffices
+        assert _runs(strategy, tools=True, capabilities=needed)
+        if strategy.requires_tools:
+            assert not _runs(strategy, tools=False, capabilities=needed)
     if strategy.required_capabilities:
         assert not _runs(strategy, tools=True, capabilities=unrelated)
+
+
+def test_sweep_and_coverage_table_cover_the_same_vulnerabilities() -> None:
+    """The ceiling sweeps `list_available_categories`; the coverage table lists every framework code (LLM03 too)."""
+    swept = {CATEGORY_TO_VULNERABILITY[code] for code in list_available_categories()}
+    listed = {CATEGORY_TO_VULNERABILITY[code] for codes in FRAMEWORK_TO_VULNERABILITIES.values() for code in codes}
+    assert swept == listed
 
 
 def test_full_sweep_ceiling_adds_the_multi_agent_only_vulnerabilities() -> None:
@@ -71,7 +84,10 @@ def test_full_sweep_ceiling_adds_the_multi_agent_only_vulnerabilities() -> None:
     # Every curated strategy is planned for some vulnerability: none is lost to a vulnerability two categories share.
     assert full_sweep_attack_ceiling(multi_agent=True, generated_per_vulnerability=0) == len(curated_strategies())
     # The multi-agent-only vulnerabilities have no curated strategies, only generated ones.
-    assert multi - single == generated * len(_MULTI_AGENT_ONLY_VULNS)
+    every = resolve_vulnerabilities(list_available_categories())
+    multi_agent_only = len(every) - len(planned_vulnerabilities(every, multi_agent=False))
+    assert multi_agent_only > 0
+    assert multi - single == generated * multi_agent_only
 
 
 @pytest.fixture(scope='module')

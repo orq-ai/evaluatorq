@@ -25,6 +25,7 @@ markers, so they cannot drift from the code.
 from __future__ import annotations
 
 import fnmatch
+import functools
 import re
 from collections import Counter
 from typing import TYPE_CHECKING
@@ -107,6 +108,7 @@ _GENERATED_PAGE = 'guides/red-teaming.md'
 
 
 def _coverage_table() -> str:
+    from evaluatorq.common.reports.md_helpers import md_table
     from evaluatorq.redteam.adaptive.strategy_registry import curated_strategies
     from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES
     from evaluatorq.redteam.frameworks.owasp.evaluators import VULNERABILITY_EVALUATOR_REGISTRY
@@ -114,40 +116,48 @@ def _coverage_table() -> str:
 
     curated = Counter(s.category for s in curated_strategies())
     codes = sorted(code for framework in FRAMEWORK_TO_VULNERABILITIES.values() for code in framework)
-    categories = [(code, CATEGORY_TO_VULNERABILITY[code]) for code in codes]
-    rows = ['| Category | Vulnerability | Curated strategies | Judge |', '|---|---|---|---|']
-    for code, vulnerability in categories:
-        judge = '✅' if vulnerability in VULNERABILITY_EVALUATOR_REGISTRY else '❌'
-        rows.append(
-            f'| `{code}` | {OWASP_CATEGORY_NAMES[code]} (`{vulnerability.value}`) '
-            f'| {curated[code] or "generated"} | {judge} |'
-        )
-    summary = f'{len(categories)} framework categories map onto {len({v for _, v in categories})} vulnerabilities.'
-    return summary + '\n\n' + '\n'.join(rows)
+    vulnerabilities = {code: CATEGORY_TO_VULNERABILITY[code] for code in codes}
+    rows = [
+        [
+            f'`{code}`',
+            f'{OWASP_CATEGORY_NAMES[code]} (`{vulnerability.value}`)',
+            str(curated[code] or 'generated'),
+            '✅' if vulnerability in VULNERABILITY_EVALUATOR_REGISTRY else '❌',
+        ]
+        for code, vulnerability in vulnerabilities.items()
+    ]
+    summary = f'{len(codes)} framework categories map onto {len(set(vulnerabilities.values()))} vulnerabilities.'
+    return summary + '\n\n' + md_table(['Category', 'Vulnerability', 'Curated strategies', 'Judge'], rows)
 
 
 def _strategy_table() -> str:
+    from evaluatorq.common.reports.md_helpers import md_table
     from evaluatorq.redteam.adaptive.strategy_registry import strategy_catalog
     from evaluatorq.redteam.contracts import DeliveryMethod
 
     catalog = strategy_catalog()
     used = {d for row in catalog for d in row['delivery_methods']}
-    rows = [
-        '| Category | Vulnerability | Strategy | What it attempts | Turns | Needs | Technique | Delivery methods |',
-        '|---|---|---|---|---|---|---|---|',
+    headers = [
+        'Category', 'Vulnerability', 'Strategy', 'What it attempts', 'Turns', 'Needs', 'Technique', 'Delivery methods'
     ]
-    for row in catalog:
-        description = row['description'].replace('|', r'\|')
-        delivery = ', '.join(f'`{d}`' for d in row['delivery_methods'])
-        rows.append(
-            f"| `{row['category']}` | `{row['vulnerability']}` | `{row['name']}` | {description} | {row['turn_type']} "
-            f"| {row['needs'] or '—'} | `{row['attack_technique']}` | {delivery} |"
-        )
+    rows = [
+        [
+            f"`{row['category']}`",
+            f"`{row['vulnerability']}`",
+            f"`{row['name']}`",
+            row['description'],
+            row['turn_type'],
+            row['needs'] or '—',
+            f"`{row['attack_technique']}`",
+            ', '.join(f'`{d}`' for d in row['delivery_methods']),
+        ]
+        for row in catalog
+    ]
     summary = (
         f'{len(catalog)} curated strategies across {len({row["category"] for row in catalog})} categories, '
         f'using {len(used)} of the {len(DeliveryMethod)} delivery methods.'
     )
-    return summary + '\n\n' + '\n'.join(rows)
+    return summary + '\n\n' + md_table(headers, rows)
 
 
 def _generated_per_vulnerability() -> int:
@@ -156,6 +166,7 @@ def _generated_per_vulnerability() -> int:
     return RedTeamRunConfig.model_fields['generated_strategy_count'].default
 
 
+@functools.cache
 def _full_sweep(*, multi_agent: bool) -> int:
     from evaluatorq.redteam.adaptive.strategy_planner import full_sweep_attack_ceiling
 
