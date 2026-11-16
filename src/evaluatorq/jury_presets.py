@@ -561,6 +561,8 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'deepseek-v4.1-flash-fast': 'Baseten fast variant at $0.60/$2.40 per 1M, public AA index 39.5; twice deepseek-v4.1-flash and six times the deepseek-flash reserve ($0.14/$0.28) at a 3:1 blend. 2026-11-10.',
     'kimi-k3-fast': 'The same K3 weights on Fireworks at $4.50/$22.50 per 1M against Baseten $3/$15: same score, pricier. 2026-11-10.',
     'gemini-4-argon': "Public AA index 52.6 at $2/$10 per 1M, against strong-jury's gemini-3.8-flash at a $1.50 3:1 blend. No card in the project-scoped /v2/models, so no default-effort rung to rank on (2026-11-10). The strongest unreviewed candidate in the catalogue: rank it for strong-jury once the drift suite has a workspace key.",
+    'gemini-4-carbon': 'Google lists Gemini 4 Carbon as a stable Gemini 4 reasoning model, but the live catalogue has no scored card, so it cannot be ranked against the seated Gemini 3.8 judge. Re-review when the card has an Artificial Analysis score (verified 2026-11-16: https://ai.google.dev/gemini-api/docs/models/gemini-4-carbon).',
+    'gemini-4-hydrogen': 'Google lists Gemini 4 Hydrogen as a stable Gemini 4 model, but the live catalogue has no scored card, so it cannot be ranked against the seated Gemini 3.8 judge. Re-review when the card has an Artificial Analysis score (verified 2026-11-16: https://ai.google.dev/gemini-api/docs/models/gemini-4-hydrogen).',
 }
 
 
