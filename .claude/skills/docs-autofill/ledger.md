@@ -18,3 +18,5 @@ Outcomes: `prepared` (work committed, PR not yet created) · `opened` · `blocke
 | 2026-10-26 | `tier 1: CLI flags (eq sim from-traces --generate-first-message/--replay-first-message, --redact-pii/--no-redact-pii, --max-summaries)` | docs/autofill-from-traces-flags | opened |
 | 2026-11-02 | `tier 1: evaluatorq() per-row completion callback (on_datapoint_complete, DataPointComplete)` | docs/autofill-datapoint-complete-callback | opened |
 | 2026-11-09 | `entry point (red_team()) × data source (local attack dataset file)` | docs/autofill-redteam-dataset-file | opened |
+| 2026-11-16 | `tier 1: CLI flag + config field (eq insights --parallelism; insights() parallelism)` | docs/autofill-insights-parallelism | opened |
+| 2026-11-16 | `tier 1: insights() config fields (coding_labels, run_name, runs_dir) [remainder]` | docs/autofill-insights-parallelism | follow-up BACK-2425 |
