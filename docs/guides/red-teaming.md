@@ -360,14 +360,10 @@ An **attack strategy** is one hand-written attack recipe: an objective, a delive
 
 <!-- curated-strategies -->
 
-A strategy is skipped when the target does not meet its **Needs** column: `tools` means the target must declare at least one tool in its agent context, and `a` or `b` means it must have at least one of those capabilities. `tools + a` needs both. Both skips are logged only at debug level. A target that hides its tools or memory therefore runs fewer attacks than this table suggests, with no warning; the run plan shows the real count. When the target's capabilities could not be classified, because no classifier model was available or the classifier failed, a coarser check stands in: memory capabilities pass if the target has memory, knowledge retrieval passes if it has knowledge bases, and every other capability passes if it has any tool. To print the strategies per vulnerability from the installed version:
+A strategy is skipped when the target does not meet its **Needs** column: `tools` means the target must declare at least one tool in its agent context, and `a` or `b` means it must have at least one of those capabilities. `tools + a` needs both. Both skips are logged only at debug level. A target that hides its tools or memory therefore runs fewer attacks than this table suggests, with no warning; the run plan shows the real count. When the target's capabilities could not be classified, because no classifier model was available or the classifier failed, a coarser check stands in: memory capabilities pass if the target has memory, knowledge retrieval passes if it has knowledge bases, and every other capability passes if it has any tool. To list the strategies of the installed version, with the vulnerability each one tests:
 
 ```bash
-uv run python -c "
-from evaluatorq.redteam.adaptive.strategy_registry import VULNERABILITY_STRATEGY_REGISTRY
-for vulnerability, strategies in VULNERABILITY_STRATEGY_REGISTRY.items():
-    print(vulnerability.value, [s.name for s in strategies])
-"
+eq redteam strategies
 ```
 
 ## Inspect results in Python

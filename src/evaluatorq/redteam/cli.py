@@ -1015,6 +1015,60 @@ def _fmt_asr(asr: Any) -> str:
 
 
 @app.command()
+def strategies(
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help='Emit strategies as a JSON array on stdout (machine-readable).'),
+    ] = False,
+) -> None:
+    """List the curated attack strategies; the names are what --strategy accepts."""
+    from rich import box
+    from rich.console import Console
+    from rich.table import Table
+
+    from evaluatorq.redteam.adaptive.strategy_registry import VULNERABILITY_STRATEGY_REGISTRY
+
+    rows = [
+        {
+            'name': s.name,
+            'category': s.category,
+            'vulnerability': vulnerability.value,
+            **s.model_dump(
+                mode='json',
+                include={
+                    'description',
+                    'turn_type',
+                    'requires_tools',
+                    'required_capabilities',
+                    'attack_technique',
+                    'delivery_methods',
+                },
+            ),
+        }
+        for vulnerability, group in VULNERABILITY_STRATEGY_REGISTRY.items()
+        for s in group
+    ]
+    if json_output:
+        echo_json(rows)
+        return
+
+    table = Table(title=f'Curated attack strategies ({len(rows)})', box=box.ROUNDED)
+    table.add_column('Category', style='white')
+    table.add_column('Vulnerability', style='white')
+    table.add_column('Strategy', style='cyan')
+    table.add_column('Turns', style='white')
+    table.add_column('Needs', style='white')
+    for row in rows:
+        needs = ' + '.join(
+            part
+            for part in ('tools' if row['requires_tools'] else '', ' or '.join(row['required_capabilities']))
+            if part
+        )
+        table.add_row(row['category'], row['vulnerability'], row['name'], row['turn_type'], needs or '—')
+    Console().print(table)
+
+
+@app.command()
 def runs(
     path: Annotated[
         Path | None,
