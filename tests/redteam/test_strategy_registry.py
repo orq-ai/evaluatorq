@@ -254,17 +254,26 @@ class TestStrategyRegistry:
             # (This is a softer check since not all categories need multi-turn)
 
 
+
+
 def test_red_teaming_guide_lists_every_curated_strategy():
-    """The strategy table in docs/guides/red-teaming.md matches the registry, row for row."""
+    """The strategy table in docs/guides/red-teaming.md matches the registry in every column."""
     import re
     from pathlib import Path
 
+    registered = set()
+    for category, strategies in STRATEGY_REGISTRY.items():
+        if category.startswith('OWASP-'):
+            continue
+        for s in strategies:
+            capabilities = ' or '.join(f'`{c.value}`' for c in s.required_capabilities)
+            needs = ' + '.join(part for part in ('tools' if s.requires_tools else '', capabilities) if part)
+            delivery = ', '.join(f'`{d.value}`' for d in s.delivery_methods)
+            registered.add(
+                f'| `{category}` | `{s.name}` | {s.description} | {s.turn_type.value} '
+                f'| {needs or "—"} | `{s.attack_technique.value}` | {delivery} |'
+            )
+
     guide = Path(__file__).parents[2] / 'docs' / 'guides' / 'red-teaming.md'
-    documented = set(re.findall(r'^\| `([A-Z]+\d+)` \| `(\w+)` \|', guide.read_text(), re.MULTILINE))
-    registered = {
-        (category, strategy.name)
-        for category, strategies in STRATEGY_REGISTRY.items()
-        if not category.startswith('OWASP-')
-        for strategy in strategies
-    }
+    documented = set(re.findall(r'^\| `[A-Z]+\d+` \| `\w+` \|.*\|$', guide.read_text(), re.MULTILINE))
     assert documented == registered
