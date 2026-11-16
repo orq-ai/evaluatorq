@@ -87,7 +87,6 @@ def _rewrite_relative_links(text: str, source_dir: Path) -> str:
 # (out-of-tree source, destination page in docs tree)
 INGEST = [
     (REPO / "CONTRIBUTING.md", "contributing.md"),
-    (REPO / "CHANGELOG.md", "changelog.md"),
     (REPO / "ROADMAP.md", "roadmap.md"),
 ]
 
