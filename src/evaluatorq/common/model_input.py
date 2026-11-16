@@ -18,7 +18,8 @@ from evaluatorq.common.redact import scrub_known_secrets
 CHARS_PER_ESTIMATED_TOKEN = 4
 # Jev states are JSON with tool output, which tokenizes denser than prose. On 98 Claude Code
 # sessions the decider-4b (Qwen3.5) tokenizer measured 3.1 characters per token pooled, 3.0
-# median near the state cap and 2.75 at the lowest (RES-1882).
+# median near the state cap and 2.75 at the lowest (RES-1882). 3 is a typical figure, not a
+# bound: at 2.75 a full state is about 30,500 tokens.
 JEV_CHARS_PER_TOKEN = 3
 JEV_STATE_CHARS = 28_000 * JEV_CHARS_PER_TOKEN
 JEV_STATE_QUESTION_CHARS = 32_000 * JEV_CHARS_PER_TOKEN
@@ -236,6 +237,11 @@ def serialized_question_chars(questions: Sequence[Any] | Mapping[str, Any]) -> i
 def is_jev_model(model: str) -> bool:
     """Select only the Jev family for its structured state format."""
     return model.casefold().startswith('typesafe/jev')
+
+
+def chars_per_token(model: str) -> int:
+    """Characters per estimated token for `model`: denser for Jev's JSON state than for prose."""
+    return JEV_CHARS_PER_TOKEN if is_jev_model(model) else CHARS_PER_ESTIMATED_TOKEN
 
 
 def effective_trace_input_chars() -> int:

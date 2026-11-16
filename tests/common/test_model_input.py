@@ -296,7 +296,7 @@ def test_jev_final_omission_marker_stays_within_question_limited_state_budget() 
     state = fit_jev_state(jev_state(source, global_char_cap=500_000), questions)
 
     question_chars = serialized_chars(questions[0])
-    assert serialized_chars(state) <= 28_000 * 4 - question_chars
+    assert serialized_chars(state) <= JEV_STATE_CHARS - question_chars
     represented = {entry['index'] for entry in state['messages']}
     omitted = len(source) - len(represented)
     assert state['omission'] == f'[... {omitted} messages left out ...]'
@@ -679,3 +679,7 @@ def test_located_marker_overhead_preserves_useful_messages_within_budget() -> No
     assert 0 in retained and 160 in retained
     assert state_omitted_messages(state) == len(messages) - len(retained)
     assert serialized_chars(state) <= 5_000
+
+
+def test_jev_caps_assume_three_characters_per_token() -> None:
+    assert (JEV_STATE_CHARS, JEV_STATE_QUESTION_CHARS, JEV_STATE_ALL_QUESTIONS_CHARS) == (84_000, 96_000, 192_000)

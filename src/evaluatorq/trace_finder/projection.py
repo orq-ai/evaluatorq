@@ -9,6 +9,7 @@ from loguru import logger
 
 from evaluatorq.common.model_input import (
     JEV_STATE_CHARS,
+    chars_per_token,
     effective_trace_input_chars,
     fit_classifier_input,
     is_jev_model,
@@ -44,9 +45,9 @@ def serialize_projection(payload: dict[str, Any]) -> str:
     return _canonical_json(payload)
 
 
-def estimate_tokens(serialized: str) -> int:
-    """Estimate tokens at four characters per token; this is not a model tokenizer count."""
-    return (len(serialized) + 3) // 4
+def estimate_tokens(serialized: str, *, model: str = '') -> int:
+    """Estimate tokens at `chars_per_token(model)`, rounded up; this is not a model tokenizer count."""
+    return -(-len(serialized) // chars_per_token(model))
 
 
 def project_trace(
@@ -93,7 +94,7 @@ def project_trace(
         return TraceProjection(
             payload=payload,
             serialized=serialized,
-            estimated_tokens=estimate_tokens(serialized),
+            estimated_tokens=estimate_tokens(serialized, model=model),
             omitted_messages=max(0, len(source) - len(represented)),
             omitted_bytes=max(
                 0,
@@ -144,7 +145,7 @@ def _project_full_conversation(
     return TraceProjection(
         payload=payload,
         serialized=serialized,
-        estimated_tokens=estimate_tokens(serialized),
+        estimated_tokens=estimate_tokens(serialized, model=model),
         omitted_messages=max(0, source_message_count - len(represented)),
         omitted_bytes=max(0, source_bytes - len(serialized.encode('utf-8'))),
     )

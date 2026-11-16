@@ -168,6 +168,8 @@ def test_jev_classifier_estimate_observes_its_combined_request_character_ceiling
     )
 
     assert _row(result, 'label').tokens_in == JEV_STATE_ALL_QUESTIONS_CHARS // JEV_CHARS_PER_TOKEN == 64_000
+    assert f'at {JEV_CHARS_PER_TOKEN} characters per token' in _row(result, 'label').basis
+    assert _row(result, 'summary').tokens_in == 500_000 // CHARS_PER_ESTIMATED_TOKEN
 
 
 @pytest.mark.parametrize(
