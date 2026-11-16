@@ -33,7 +33,6 @@ is skipped rather than silently mixed into a USD total.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import hashlib
 import inspect
 import math
@@ -63,8 +62,8 @@ class ContextTier:
     """Extended-context rates, USD per 1k tokens; exists only when the card's tier is complete.
 
     Applies to the whole call once ``input_tokens`` is strictly greater than ``threshold``.
-    ``cache_read`` is set whenever `Pricing.cache_read` is; it is ``None`` only on a card with
-    no standard cache-read rate, where cached tokens bill at the tier ``input`` rate.
+    ``cache_read`` is always set when `Pricing.cache_read` is. When it is ``None``, cached tokens
+    bill at the tier ``input`` rate.
     """
 
     threshold: int
@@ -418,47 +417,44 @@ _ABOVE_THRESHOLD_TOKENS = 200_000
 _ABOVE_TIER = ('input', 'output', 'cache_read')
 
 
+def _parse_context_tier(
+    provider: str, model_id: str, metadata: dict[str, object], cache_read: float | None
+) -> ContextTier | None:
+    """The card's complete ``all_tokens`` tier, or ``None``; an unbuildable one bills at standard rates."""
+    mode = _metadata_mode(metadata)
+    if mode != 'all_tokens':
+        if mode not in (None, 'none'):
+            logger.debug('Unknown extended_context_pricing_mode {!r}; billing the call at flat rates', mode)
+        return None
+    threshold = _metadata_threshold(metadata)
+    above_input, above_output, above_cache = (
+        _metadata_price_per_1k(metadata, f'million_tokens_above_200k_{name}_cost') for name in _ABOVE_TIER
+    )
+    # The rate keys are literally named `above_200k`; under any other threshold they are mislabelled.
+    if threshold != _ABOVE_THRESHOLD_TOKENS:
+        reason = f'its extended_context_threshold is {threshold!r}, not {_ABOVE_THRESHOLD_TOKENS}'
+    elif above_input is None or above_output is None or (cache_read is not None and above_cache is None):
+        reason = 'an above_200k rate is missing'
+    else:
+        return ContextTier(threshold, above_input, above_output, above_cache)
+    logger.warning(
+        'Model catalogue entry {}/{} prices long calls on all tokens but {}; they bill at the standard rates',
+        provider,
+        model_id,
+        reason,
+    )
+    return None
+
+
 def _parse_pricing(provider: str, model_id: str, metadata: dict[str, object]) -> Pricing:
     """Build a card's `Pricing`; a `ContextTier` only when the card publishes a complete one."""
     cache_read = _metadata_price_per_1k(metadata, 'million_tokens_cache_read_cost')
-    base = Pricing(
+    return Pricing(
         cache_read=cache_read,
         cache_write=_metadata_price_per_1k(metadata, 'million_tokens_cache_write_cost'),
         audio_input=_metadata_price_per_1k(metadata, 'million_tokens_audio_input_cost'),
+        tier=_parse_context_tier(provider, model_id, metadata, cache_read),
     )
-    mode = _metadata_mode(metadata)
-    threshold = _metadata_threshold(metadata)
-    if mode == 'all_tokens' and threshold is not None:
-        above = {
-            name: _metadata_price_per_1k(metadata, f'million_tokens_above_200k_{name}_cost') for name in _ABOVE_TIER
-        }
-        # The keys are literally named `above_200k`; under any other threshold they would be
-        # mislabelled, so the tier is not built and calls bill at the standard rates.
-        if threshold != _ABOVE_THRESHOLD_TOKENS and any(rate is not None for rate in above.values()):
-            logger.debug(
-                'Model catalogue entry {}/{} has extended_context_threshold={!r}, not {}; ignoring its above_200k rates',
-                provider,
-                model_id,
-                threshold,
-                _ABOVE_THRESHOLD_TOKENS,
-            )
-        above_input, above_output, above_cache = above['input'], above['output'], above['cache_read']
-        if (
-            threshold == _ABOVE_THRESHOLD_TOKENS
-            and above_input is not None
-            and above_output is not None
-            and (cache_read is None or above_cache is not None)
-        ):
-            return dataclasses.replace(base, tier=ContextTier(threshold, above_input, above_output, above_cache))
-        logger.debug(
-            'Model catalogue entry {}/{} advertises an incomplete above-threshold tier; billing it at standard rates',
-            provider,
-            model_id,
-        )
-        return base
-    if mode not in (None, 'none', 'all_tokens'):
-        logger.debug('Unknown extended_context_pricing_mode {!r}; billing the call at flat rates', mode)
-    return base
 
 
 def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:

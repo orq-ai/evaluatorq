@@ -69,9 +69,10 @@ def test_absent_fields_are_none():
     assert info.input_cost_per_1k == pytest.approx(0.00125)
 
 
-@pytest.mark.parametrize(
-    'bad', [True, False, -1, -0.5, float('inf'), float('nan'), 'abc', '1.0', None, [1], {'a': 1}, 10**400]
-)
+MALFORMED_RATES = [True, False, -1, -0.5, float('inf'), float('nan'), 'abc', '1.0', None, [1], {'a': 1}, 10**400]
+
+
+@pytest.mark.parametrize('bad', MALFORMED_RATES)
 @pytest.mark.parametrize(
     ('key', 'field'),
     [
@@ -88,32 +89,29 @@ def test_malformed_standalone_rate_drops_only_that_field(key: str, field: str, b
     assert dataclasses.replace(info.pricing, **{field: None}) == dataclasses.replace(_tiered().pricing, **{field: None})
 
 
-@pytest.mark.parametrize(
-    'bad', [True, False, -1, -0.5, float('inf'), float('nan'), 'abc', '1.0', None, [1], {'a': 1}, 10**400]
-)
+@pytest.mark.parametrize('bad', MALFORMED_RATES)
 @pytest.mark.parametrize(
     'key',
     [
         'million_tokens_above_200k_input_cost',
         'million_tokens_above_200k_output_cost',
         'million_tokens_above_200k_cache_read_cost',
-        'million_tokens_cache_read_cost',
     ],
 )
-def test_malformed_tier_or_cache_read_rate_leaves_no_tier_but_keeps_the_card(key: str, bad: object):
-    # Each of these makes the advertised tier unbuildable (a missing above rate, or a standard
-    # cache-read rate without its above-threshold counterpart), except dropping the standard
-    # cache-read rate, which leaves the tier complete.
+def test_malformed_above_rate_leaves_no_tier_but_keeps_the_card(key: str, bad: object):
     info = _parse({**GEMINI_METADATA, key: bad})
     assert info.input_cost_per_1k == pytest.approx(0.00125)
     assert info.pricing.cache_write == pytest.approx(0.0045)
     assert info.pricing.audio_input == pytest.approx(0.003)
-    if key == 'million_tokens_cache_read_cost':
-        assert info.pricing.cache_read is None
-        assert info.pricing.tier is not None
-    else:
-        assert info.pricing.tier is None
-        assert cost_of(info, 300_000, 1_000) == pytest.approx((300 * 0.00125, 0.01))
+    assert info.pricing.tier is None
+    assert cost_of(info, 300_000, 1_000) == pytest.approx((300 * 0.00125, 0.01))
+
+
+@pytest.mark.parametrize('bad', MALFORMED_RATES)
+def test_malformed_standard_cache_read_rate_keeps_the_tier(bad: object):
+    info = _parse({**GEMINI_METADATA, 'million_tokens_cache_read_cost': bad})
+    assert info.pricing.cache_read is None
+    assert info.pricing.tier is not None
 
 
 def test_zero_rate_is_kept():
@@ -262,9 +260,26 @@ def test_incomplete_tier_never_builds_a_context_tier(fields: dict[str, float]):
     assert pricing.tier is None
 
 
-def test_threshold_128k_with_above_rates_never_builds_a_context_tier():
-    pricing = _parse({**GEMINI_METADATA, 'extended_context_threshold': 128000}).pricing
-    assert pricing.tier is None
+@pytest.mark.parametrize(
+    'metadata',
+    [
+        {**GEMINI_METADATA, 'million_tokens_above_200k_input_cost': None},
+        {**GEMINI_METADATA, 'extended_context_threshold': 128000},
+        {**GEMINI_METADATA, 'extended_context_threshold': 'big'},
+    ],
+    ids=['missing-rate', 'other-threshold', 'malformed-threshold'],
+)
+def test_unbuildable_tier_warns_at_parse(metadata: dict[str, object], caplog: pytest.LogCaptureFixture):
+    with caplog.at_level('WARNING'):
+        _parse(metadata)
+    assert len([r for r in caplog.records if 'they bill at the standard rates' in r.getMessage()]) == 1
+
+
+def test_complete_tier_and_flat_card_do_not_warn(caplog: pytest.LogCaptureFixture):
+    with caplog.at_level('WARNING'):
+        _parse(GEMINI_METADATA)
+        _parse({**GEMINI_METADATA, 'extended_context_pricing_mode': 'none'})
+    assert [r for r in caplog.records if r.levelname == 'WARNING'] == []
 
 
 def test_parsed_incomplete_tier_bills_every_call_at_the_standard_rate():
