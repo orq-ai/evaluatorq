@@ -13,7 +13,7 @@ from evaluatorq.anthropic.responses import build_responses_request, to_parsed_re
 from evaluatorq.common.llm_client import LLMConfigurationError
 
 FALLBACK_BETA = 'server-side-fallback-2026-07-01'
-_PLATFORMS_WITHOUT_FALLBACKS = ('Bedrock', 'Vertex')
+_PLATFORMS_WITHOUT_FALLBACKS = ('Bedrock', 'Vertex', 'Foundry')
 
 
 @dataclass
@@ -38,7 +38,7 @@ class _Sender:
             if any(name in cls for cls in hierarchy for name in _PLATFORMS_WITHOUT_FALLBACKS):
                 raise LLMConfigurationError(
                     f'Server-side fallbacks are available on the Claude API only, not on {platform} '
-                    '(Amazon Bedrock and Google Vertex AI). Remove extra_kwargs={"fallbacks": ...} from the LLMCallConfig.'
+                    '(Amazon Bedrock, Google Vertex AI and Microsoft Foundry). Remove extra_kwargs={"fallbacks": ...} from the LLMCallConfig.'
                 )
             message = await self._client.beta.messages.create(**request, betas=[FALLBACK_BETA])
         else:
