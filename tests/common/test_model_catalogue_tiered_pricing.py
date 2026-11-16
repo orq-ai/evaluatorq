@@ -261,24 +261,69 @@ def test_incomplete_tier_never_builds_a_context_tier(fields: dict[str, float]):
 
 
 @pytest.mark.parametrize(
-    'metadata',
+    ('metadata', 'reason'),
     [
-        {**GEMINI_METADATA, 'million_tokens_above_200k_input_cost': None},
-        {**GEMINI_METADATA, 'extended_context_threshold': 128000},
-        {**GEMINI_METADATA, 'extended_context_threshold': 'big'},
+        ({**GEMINI_METADATA, 'million_tokens_above_200k_input_cost': None}, 'no usable above_200k input rate'),
+        (
+            {
+                **GEMINI_METADATA,
+                'million_tokens_above_200k_input_cost': None,
+                'million_tokens_above_200k_output_cost': None,
+            },
+            'no usable above_200k input/output rate',
+        ),
+        (
+            {**GEMINI_METADATA, 'million_tokens_above_200k_cache_read_cost': None},
+            'no usable above_200k cache_read rate',
+        ),
+        ({**GEMINI_METADATA, 'extended_context_threshold': 128000}, 'extended_context_threshold is 128000, not 200000'),
+        ({**GEMINI_METADATA, 'extended_context_threshold': 'big'}, 'no usable extended_context_threshold'),
+        (
+            {k: v for k, v in GEMINI_METADATA.items() if k != 'extended_context_threshold'},
+            'no usable extended_context_threshold',
+        ),
+        (
+            {k: v for k, v in GEMINI_METADATA.items() if k != 'extended_context_pricing_mode'},
+            'no usable extended_context_pricing_mode',
+        ),
+        (
+            {**GEMINI_METADATA, 'extended_context_pricing_mode': 'none'},
+            "extended_context_pricing_mode is 'none', not all_tokens",
+        ),
+        (
+            {**GEMINI_METADATA, 'extended_context_pricing_mode': 5},
+            'no usable extended_context_pricing_mode',
+        ),
     ],
-    ids=['missing-rate', 'other-threshold', 'malformed-threshold'],
+    ids=[
+        'missing-input-rate',
+        'missing-input-and-output-rates',
+        'missing-above-cache-read-rate',
+        'other-threshold',
+        'malformed-threshold',
+        'no-threshold',
+        'rates-without-mode',
+        'rates-with-mode-none',
+        'rates-with-malformed-mode',
+    ],
 )
-def test_unbuildable_tier_warns_at_parse(metadata: dict[str, object], caplog: pytest.LogCaptureFixture):
+def test_unusable_long_context_pricing_warns_once_with_its_reason(
+    metadata: dict[str, object], reason: str, caplog: pytest.LogCaptureFixture
+):
     with caplog.at_level('WARNING'):
-        _parse(metadata)
-    assert len([r for r in caplog.records if 'they bill at the standard rates' in r.getMessage()]) == 1
+        info = _parse(metadata)
+    warnings = [r.getMessage() for r in caplog.records if 'long calls bill at the standard rates' in r.getMessage()]
+    assert len(warnings) == 1
+    assert reason in warnings[0]
+    assert info.pricing.tier is None
 
 
 def test_complete_tier_and_flat_card_do_not_warn(caplog: pytest.LogCaptureFixture):
+    flat = {k: v for k, v in GEMINI_METADATA.items() if not k.startswith('million_tokens_above_200k')}
     with caplog.at_level('WARNING'):
         _parse(GEMINI_METADATA)
-        _parse({**GEMINI_METADATA, 'extended_context_pricing_mode': 'none'})
+        _parse({**flat, 'extended_context_pricing_mode': 'none'})
+        _parse({k: v for k, v in flat.items() if k != 'extended_context_pricing_mode'})
     assert [r for r in caplog.records if r.levelname == 'WARNING'] == []
 
 

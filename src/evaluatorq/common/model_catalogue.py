@@ -420,25 +420,38 @@ _ABOVE_TIER = ('input', 'output', 'cache_read')
 def _parse_context_tier(
     provider: str, model_id: str, metadata: dict[str, object], cache_read: float | None
 ) -> ContextTier | None:
-    """The card's complete ``all_tokens`` tier, or ``None``; an unbuildable one bills at standard rates."""
+    """The card's complete ``all_tokens`` tier, or ``None``; long-context rates it cannot use bill at standard rates."""
     mode = _metadata_mode(metadata)
-    if mode != 'all_tokens':
-        if mode not in (None, 'none'):
-            logger.debug('Unknown extended_context_pricing_mode {!r}; billing the call at flat rates', mode)
-        return None
     threshold = _metadata_threshold(metadata)
     above_input, above_output, above_cache = (
         _metadata_price_per_1k(metadata, f'million_tokens_above_200k_{name}_cost') for name in _ABOVE_TIER
     )
-    # The rate keys are literally named `above_200k`; under any other threshold they are mislabelled.
-    if threshold != _ABOVE_THRESHOLD_TOKENS:
-        reason = f'its extended_context_threshold is {threshold!r}, not {_ABOVE_THRESHOLD_TOKENS}'
-    elif above_input is None or above_output is None or (cache_read is not None and above_cache is None):
-        reason = 'an above_200k rate is missing'
+    if mode == 'all_tokens':
+        if threshold is None:
+            reason = 'it publishes no usable extended_context_threshold'
+        # The rate keys are literally named `above_200k`; under any other threshold they are mislabelled.
+        elif threshold != _ABOVE_THRESHOLD_TOKENS:
+            reason = f'its extended_context_threshold is {threshold}, not {_ABOVE_THRESHOLD_TOKENS}'
+        elif above_input is not None and above_output is not None and (cache_read is None or above_cache is not None):
+            return ContextTier(threshold, above_input, above_output, above_cache)
+        else:
+            needed = (('input', above_input), ('output', above_output), ('cache_read', above_cache))
+            missing = [
+                name for name, rate in needed if rate is None and (name != 'cache_read' or cache_read is not None)
+            ]
+            reason = f'it publishes no usable above_200k {"/".join(missing)} rate'
+    elif any(rate is not None for rate in (above_input, above_output, above_cache)):
+        reason = (
+            'it publishes no usable extended_context_pricing_mode'
+            if mode is None
+            else f'its extended_context_pricing_mode is {mode!r}, not all_tokens'
+        )
     else:
-        return ContextTier(threshold, above_input, above_output, above_cache)
+        if mode not in (None, 'none'):
+            logger.debug('Unknown extended_context_pricing_mode {!r}; billing the call at flat rates', mode)
+        return None
     logger.warning(
-        'Model catalogue entry {}/{} prices long calls on all tokens but {}; they bill at the standard rates',
+        'Model catalogue entry {}/{} has long-context pricing it cannot use: {}; long calls bill at the standard rates',
         provider,
         model_id,
         reason,
