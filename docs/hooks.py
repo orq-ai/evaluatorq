@@ -19,14 +19,14 @@ moment the scope widened.
 
 Generated tables: the coverage table, the curated attack strategy table and the full-sweep
 attack count in the red teaming guide are rendered here from the registries in place of
-markers, so they cannot drift from the code. A hand-written copy needed a test
-re-implementing the row format to stay in sync.
+markers, so they cannot drift from the code.
 """
 
 from __future__ import annotations
 
 import fnmatch
 import re
+from collections import Counter
 from typing import TYPE_CHECKING
 
 from mkdocs.exceptions import PluginError
@@ -36,8 +36,6 @@ if TYPE_CHECKING:
     from mkdocs.structure.files import Files
     from mkdocs.structure.nav import Navigation
     from mkdocs.structure.pages import Page
-
-    from evaluatorq.redteam.contracts import AttackStrategy, Vulnerability
 
 # Structural pages that are navigation scaffolding, not documentation content, so they
 # are not expected in the llms.txt catalog (the section-index landings + literate-nav files).
@@ -108,92 +106,77 @@ _HIGHLIGHT_EXEMPT = ('index.md', 'tracing.md')
 _GENERATED_PAGE = 'guides/red-teaming.md'
 
 
-def _codes(values) -> str:
-    return ', '.join(f'`{v.value}`' for v in values)
-
-
-def _curated_by_category() -> dict[str, list[AttackStrategy]]:
-    from evaluatorq.redteam.adaptive.strategy_registry import STRATEGY_REGISTRY
-
-    # The registry also carries every category under an `OWASP-` alias.
-    return {c: group for c, group in STRATEGY_REGISTRY.items() if group and not c.startswith('OWASP-')}
-
-
-def _framework_categories() -> dict[str, Vulnerability]:
-    from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
-
-    return {c: v for c, v in sorted(CATEGORY_TO_VULNERABILITY.items()) if not c.startswith('OWASP-')}
-
-
 def _coverage_table() -> str:
+    from evaluatorq.redteam.adaptive.strategy_registry import curated_strategies
     from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES
     from evaluatorq.redteam.frameworks.owasp.evaluators import VULNERABILITY_EVALUATOR_REGISTRY
+    from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY, FRAMEWORK_TO_VULNERABILITIES
 
-    categories = _framework_categories()
-    curated = _curated_by_category()
+    curated = Counter(s.category for s in curated_strategies())
+    codes = sorted(code for framework in FRAMEWORK_TO_VULNERABILITIES.values() for code in framework)
+    categories = [(code, CATEGORY_TO_VULNERABILITY[code]) for code in codes]
     rows = ['| Category | Vulnerability | Curated strategies | Judge |', '|---|---|---|---|']
-    for code, vulnerability in categories.items():
-        count = len(curated.get(code, []))
+    for code, vulnerability in categories:
         judge = '✅' if vulnerability in VULNERABILITY_EVALUATOR_REGISTRY else '❌'
         rows.append(
-            f'| `{code}` | {OWASP_CATEGORY_NAMES.get(code, code)} (`{vulnerability.value}`) '
-            f'| {count or "generated"} | {judge} |'
+            f'| `{code}` | {OWASP_CATEGORY_NAMES[code]} (`{vulnerability.value}`) '
+            f'| {curated[code] or "generated"} | {judge} |'
         )
-    summary = f'{len(categories)} framework categories map onto {len(set(categories.values()))} vulnerabilities.'
+    summary = f'{len(categories)} framework categories map onto {len({v for _, v in categories})} vulnerabilities.'
     return summary + '\n\n' + '\n'.join(rows)
 
 
 def _strategy_table() -> str:
+    from evaluatorq.redteam.adaptive.strategy_registry import strategy_catalog
     from evaluatorq.redteam.contracts import DeliveryMethod
 
-    categories = _framework_categories()
-    strategies = [s for group in _curated_by_category().values() for s in group]
-    used = {d for s in strategies for d in s.delivery_methods}
+    catalog = strategy_catalog()
+    used = {d for row in catalog for d in row['delivery_methods']}
     rows = [
         '| Category | Vulnerability | Strategy | What it attempts | Turns | Needs | Technique | Delivery methods |',
         '|---|---|---|---|---|---|---|---|',
     ]
-    for s in strategies:
-        capabilities = ' or '.join(f'`{c.value}`' for c in s.required_capabilities)
-        needs = ' + '.join(part for part in ('tools' if s.requires_tools else '', capabilities) if part)
-        description = s.description.replace('|', r'\|')
+    for row in catalog:
+        description = row['description'].replace('|', r'\|')
+        delivery = ', '.join(f'`{d}`' for d in row['delivery_methods'])
         rows.append(
-            f'| `{s.category}` | `{categories[s.category].value}` | `{s.name}` | {description} | {s.turn_type.value} '
-            f'| {needs or "—"} | `{s.attack_technique.value}` | {_codes(s.delivery_methods)} |'
+            f"| `{row['category']}` | `{row['vulnerability']}` | `{row['name']}` | {description} | {row['turn_type']} "
+            f"| {row['needs'] or '—'} | `{row['attack_technique']}` | {delivery} |"
         )
     summary = (
-        f'{len(strategies)} curated strategies across {len(_curated_by_category())} categories, '
+        f'{len(catalog)} curated strategies across {len({row["category"] for row in catalog})} categories, '
         f'using {len(used)} of the {len(DeliveryMethod)} delivery methods.'
     )
     return summary + '\n\n' + '\n'.join(rows)
 
 
-def _full_sweep() -> tuple[int, int, int]:
-    """Curated strategies, generated strategies per vulnerability (the default), vulnerabilities."""
-    import inspect
+def _generated_per_vulnerability() -> int:
+    from evaluatorq.redteam.run_config import RedTeamRunConfig
 
-    from evaluatorq.redteam.runner import red_team
+    return RedTeamRunConfig.model_fields['generated_strategy_count'].default
 
-    per_vulnerability = inspect.signature(red_team).parameters['generated_strategy_count'].default
-    curated = sum(len(group) for group in _curated_by_category().values())
-    return curated, per_vulnerability, len(set(_framework_categories().values()))
+
+def _full_sweep(*, multi_agent: bool) -> int:
+    from evaluatorq.redteam.adaptive.strategy_planner import full_sweep_attack_ceiling
+
+    per_vulnerability = _generated_per_vulnerability()
+    return full_sweep_attack_ceiling(multi_agent=multi_agent, generated_per_vulnerability=per_vulnerability)
 
 
 def _full_sweep_total() -> str:
-    curated, per_vulnerability, vulnerabilities = _full_sweep()
-    return str(curated + per_vulnerability * vulnerabilities)
+    return f'{_full_sweep(multi_agent=False)} ({_full_sweep(multi_agent=True)} multi-agent)'
 
 
 def _full_sweep_ceiling() -> str:
-    curated, per_vulnerability, vulnerabilities = _full_sweep()
+    from evaluatorq.redteam.adaptive.strategy_registry import curated_strategies
+
     return (
-        f'**{_full_sweep_total()}**: {curated} curated strategies, plus {per_vulnerability} generated for each of '
-        f'the {vulnerabilities} vulnerabilities'
+        f'**{_full_sweep(multi_agent=False)}** for a single-agent target and **{_full_sweep(multi_agent=True)}** '
+        f'for a multi-agent one: {len(curated_strategies())} curated strategies plus {_generated_per_vulnerability()} '
+        'generated per vulnerability, and the inter-agent vulnerabilities are only planned for multi-agent targets'
     )
 
 
-# Marker -> renderer. Each marker must appear in the page, so deleting one fails the build
-# instead of silently dropping its content.
 _GENERATED = {
     '<!-- coverage-table -->': _coverage_table,
     '<!-- curated-strategies -->': _strategy_table,
@@ -207,7 +190,9 @@ def on_page_markdown(markdown: str, page: Page, config: MkDocsConfig, files: Fil
         return markdown
     for marker, render in _GENERATED.items():
         if marker not in markdown:
-            raise PluginError(f'{_GENERATED_PAGE}: the {marker} marker its generated content renders into is gone')
+            raise PluginError(
+                f'{_GENERATED_PAGE}: the {marker} marker is missing, so its generated content has nowhere to go'
+            )
         markdown = markdown.replace(marker, render())
     return markdown
 

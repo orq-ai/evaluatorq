@@ -17,6 +17,7 @@ from evaluatorq.redteam.adaptive.objective_generator import generate_strategies_
 from evaluatorq.redteam.adaptive.strategy_registry import (
     _filter_by_method,
     get_strategies_for_vulnerability,
+    list_available_categories,
     select_applicable_strategies,
     select_applicable_strategies_for_vulnerability,
 )
@@ -29,7 +30,7 @@ from evaluatorq.redteam.contracts import (
     Vulnerability,
 )
 from evaluatorq.redteam.tracing import with_redteam_span
-from evaluatorq.redteam.vulnerability_registry import resolve_category
+from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY, resolve_category
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -40,6 +41,24 @@ if TYPE_CHECKING:
 # Vulnerabilities that only make sense against a multi-agent system. Skipped for
 # single-agent targets (see AgentContext.is_multi_agent).
 _MULTI_AGENT_ONLY_VULNS = {Vulnerability.INTER_AGENT_COMMS, Vulnerability.CASCADING_FAILURES}
+
+
+def planned_vulnerabilities(vulnerabilities: list[Vulnerability], *, multi_agent: bool) -> list[Vulnerability]:
+    """``vulnerabilities`` without `_MULTI_AGENT_ONLY_VULNS` unless the target is multi-agent."""
+    return vulnerabilities if multi_agent else [v for v in vulnerabilities if v not in _MULTI_AGENT_ONLY_VULNS]
+
+
+def full_sweep_attack_ceiling(*, multi_agent: bool, generated_per_vulnerability: int) -> int:
+    """Most attacks a dynamic run over every category plans for one target.
+
+    Every curated strategy plus ``generated_per_vulnerability`` per planned vulnerability, before
+    capability filtering and the ``max_*`` caps, which only lower it. A single-agent target is not
+    planned for ``_MULTI_AGENT_ONLY_VULNS``.
+    """
+    every = list(dict.fromkeys(CATEGORY_TO_VULNERABILITY[category] for category in list_available_categories()))
+    vulnerabilities = planned_vulnerabilities(every, multi_agent=multi_agent)
+    curated = sum(len(get_strategies_for_vulnerability(vulnerability)) for vulnerability in vulnerabilities)
+    return curated + generated_per_vulnerability * len(vulnerabilities)
 
 
 async def plan_strategies_for_vulnerabilities(
@@ -105,19 +124,19 @@ async def plan_strategies_for_vulnerabilities(
     # generated strategies that degrade to single-agent social engineering. The
     # is_multi_agent flag is set during capability classification (default False,
     # so an unclassified or unconfirmed target is treated as single-agent).
-    if not agent_context.is_multi_agent:
-        multi_only = [v for v in vulnerabilities if v in _MULTI_AGENT_ONLY_VULNS]
-        if multi_only:
-            logger.warning(
-                'Skipping %d multi-agent-only vulnerabilit%s for single-agent target %s: %s. '
-                'ASI07/ASI08 assume a multi-agent system and cannot be meaningfully tested '
-                'against a single agent.',
-                len(multi_only),
-                'y' if len(multi_only) == 1 else 'ies',
-                agent_context.key,
-                ', '.join(v.value for v in multi_only),
-            )
-            vulnerabilities = [v for v in vulnerabilities if v not in _MULTI_AGENT_ONLY_VULNS]
+    planned = planned_vulnerabilities(vulnerabilities, multi_agent=agent_context.is_multi_agent)
+    multi_only = [v for v in vulnerabilities if v not in planned]
+    if multi_only:
+        logger.warning(
+            'Skipping %d multi-agent-only vulnerabilit%s for single-agent target %s: %s. '
+            'ASI07/ASI08 assume a multi-agent system and cannot be meaningfully tested '
+            'against a single agent.',
+            len(multi_only),
+            'y' if len(multi_only) == 1 else 'ies',
+            agent_context.key,
+            ', '.join(v.value for v in multi_only),
+        )
+    vulnerabilities = planned
 
     all_hardcoded_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {}
     applicable_hardcoded_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {}

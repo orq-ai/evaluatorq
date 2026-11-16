@@ -9,7 +9,7 @@ This module provides:
 from __future__ import annotations
 
 import types
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from loguru import logger
 
@@ -243,7 +243,56 @@ def known_strategy_names() -> set[str]:
     LLM-generated strategy names, which carry a ``generated_`` prefix and
     cannot be enumerated ahead of a run.
     """
-    return {strategy.name for strategies in VULNERABILITY_STRATEGY_REGISTRY.values() for strategy in strategies}
+    return {strategy.name for strategy in curated_strategies()}
+
+
+def curated_strategies() -> list[AttackStrategy]:
+    """Every hand-written strategy once, in registry order, without the ``OWASP-`` aliases."""
+    return [s for category, group in _strategy_registry.items() if not category.startswith('OWASP-') for s in group]
+
+
+def strategy_needs(strategy: AttackStrategy) -> str:
+    """What a target needs for ``strategy`` to run, e.g. ``tools + web_request or user_data``; ``''`` for nothing.
+
+    Mirrors the skip rules in `_filter_applicable_strategies`: tools when ``requires_tools``, and at
+    least one of ``required_capabilities``.
+    """
+    capabilities = ' or '.join(capability.value for capability in strategy.required_capabilities)
+    return ' + '.join(part for part in ('tools' if strategy.requires_tools else '', capabilities) if part)
+
+
+class StrategyRow(TypedDict):
+    """One curated strategy as `eq redteam strategies` lists it and the red teaming guide tabulates it."""
+
+    name: str
+    category: str
+    vulnerability: str
+    description: str
+    turn_type: str
+    needs: str
+    requires_tools: bool
+    required_capabilities: list[str]
+    attack_technique: str
+    delivery_methods: list[str]
+
+
+def strategy_catalog() -> list[StrategyRow]:
+    """`curated_strategies` as display rows."""
+    return [
+        StrategyRow(
+            name=s.name,
+            category=s.category,
+            vulnerability=CATEGORY_TO_VULNERABILITY[s.category].value,
+            description=s.description,
+            turn_type=s.turn_type.value,
+            needs=strategy_needs(s),
+            requires_tools=s.requires_tools,
+            required_capabilities=[c.value for c in s.required_capabilities],
+            attack_technique=s.attack_technique.value,
+            delivery_methods=[d.value for d in s.delivery_methods],
+        )
+        for s in curated_strategies()
+    ]
 
 
 def _fallback_capability_check(required: list[AgentCapability], agent_context: AgentContext) -> bool:
