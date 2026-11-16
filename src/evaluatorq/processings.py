@@ -297,7 +297,7 @@ async def process_evaluator(
         EvaluatorScore with the evaluation result or error
     """
     # Import tracing utilities lazily to avoid import errors when OTEL is not installed
-    from .common.tracing import record_span_payload, set_span_error
+    from .common.tracing import EVALUATION_INPUT_KEYS, EVALUATION_OUTPUT_KEYS, record_span_payload, set_span_error
     from .tracing.spans import (
         EvaluationSpanOptions,
         set_evaluation_attributes,
@@ -331,7 +331,7 @@ async def process_evaluator(
             if row_index is not None:
                 scorer_param['row'] = row_index
 
-            record_span_payload(eval_span, key='orq.evaluation.input', payload=scorer_param)
+            record_span_payload(eval_span, key=EVALUATION_INPUT_KEYS, payload=scorer_param)
             result = await evaluator['scorer'](scorer_param)
 
             # Convert dict to EvaluationResult if needed
@@ -356,7 +356,7 @@ async def process_evaluator(
 
         except Exception as error:
             set_span_error(eval_span, str(error))
-            record_span_payload(eval_span, key='orq.evaluation.output', payload={'error': str(error)})
+            record_span_payload(eval_span, key=EVALUATION_OUTPUT_KEYS, payload={'error': str(error)})
             # Return error result with empty score
             return EvaluatorScore(
                 evaluator_name=evaluator_name,

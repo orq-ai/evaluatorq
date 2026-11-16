@@ -173,6 +173,8 @@ Span attributes on `orq.evaluation`:
 | `orq.score` | JSON-serialised score value |
 | `orq.explanation` | Explanation string (if the evaluator provides one) |
 | `orq.pass` | Boolean pass/fail result |
+| `orq.evaluation.input` / `gen_ai.input` | JSON scorer input: the datapoint, the job output and the row (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
+| `orq.evaluation.output` / `gen_ai.output` | JSON verdict: `passed`, `value`, `type`, `reason`, or `error` when the scorer raised (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 
 ### Red teaming spans
 
