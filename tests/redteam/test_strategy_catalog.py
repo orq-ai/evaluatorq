@@ -14,14 +14,13 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     STRATEGY_REGISTRY,
     _filter_applicable_strategies,
     curated_strategies,
-    list_available_categories,
+    default_vulnerabilities,
     strategy_needs,
 )
 from evaluatorq.redteam.contracts import AgentCapability, AgentContext, AttackStrategy, ToolInfo
 from evaluatorq.redteam.vulnerability_registry import (
     CATEGORY_TO_VULNERABILITY,
     FRAMEWORK_TO_VULNERABILITIES,
-    resolve_vulnerabilities,
 )
 
 _HOOKS = Path(__file__).resolve().parents[2] / 'docs' / 'hooks.py'
@@ -71,8 +70,8 @@ def test_needs_is_exactly_what_the_filter_requires(strategy: AttackStrategy) -> 
 
 
 def test_sweep_and_coverage_table_cover_the_same_vulnerabilities() -> None:
-    """The ceiling sweeps `list_available_categories`; the coverage table lists every framework code (LLM03 too)."""
-    swept = {CATEGORY_TO_VULNERABILITY[code] for code in list_available_categories()}
+    """The ceiling sweeps `default_vulnerabilities`; the coverage table lists every framework code (LLM03 too)."""
+    swept = set(default_vulnerabilities())
     listed = {CATEGORY_TO_VULNERABILITY[code] for codes in FRAMEWORK_TO_VULNERABILITIES.values() for code in codes}
     assert swept == listed
 
@@ -84,10 +83,20 @@ def test_full_sweep_ceiling_adds_the_multi_agent_only_vulnerabilities() -> None:
     # Every curated strategy is planned for some vulnerability: none is lost to a vulnerability two categories share.
     assert full_sweep_attack_ceiling(multi_agent=True, generated_per_vulnerability=0) == len(curated_strategies())
     # The multi-agent-only vulnerabilities have no curated strategies, only generated ones.
-    every = resolve_vulnerabilities(list_available_categories())
+    every = default_vulnerabilities()
     multi_agent_only = len(every) - len(planned_vulnerabilities(every, multi_agent=False))
     assert multi_agent_only > 0
     assert multi - single == generated * multi_agent_only
+
+
+def test_a_run_with_no_selection_covers_default_vulnerabilities(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The runner and the full-sweep ceiling read the same default selection."""
+    from evaluatorq.redteam import runner
+
+    sentinel = default_vulnerabilities()[:1]
+    monkeypatch.setattr(runner, 'default_vulnerabilities', lambda: sentinel)
+    vulnerabilities, _ = runner._resolve_vulns_and_categories(replay=None, vulnerabilities=None, categories=None)
+    assert vulnerabilities == sentinel
 
 
 @pytest.fixture(scope='module')

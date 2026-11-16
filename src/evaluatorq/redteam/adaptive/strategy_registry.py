@@ -26,7 +26,11 @@ from evaluatorq.redteam.contracts import (
 from evaluatorq.redteam.frameworks.owasp.evaluators import OWASP_EVALUATOR_REGISTRY
 from evaluatorq.redteam.frameworks.owasp_asi import ASI_STRATEGIES
 from evaluatorq.redteam.frameworks.owasp_llm import LLM_STRATEGIES
-from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY, VULNERABILITY_DEFS
+from evaluatorq.redteam.vulnerability_registry import (
+    CATEGORY_TO_VULNERABILITY,
+    VULNERABILITY_DEFS,
+    resolve_vulnerabilities,
+)
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
@@ -331,6 +335,11 @@ def list_available_categories() -> list[str]:
     strategy_cats = {k for k in STRATEGY_REGISTRY if not k.startswith('OWASP-')}
     evaluator_cats = {k for k in OWASP_EVALUATOR_REGISTRY if not k.startswith('OWASP-')}
     return sorted(strategy_cats | evaluator_cats)
+
+
+def default_vulnerabilities() -> list[Vulnerability]:
+    """The vulnerabilities a run covers when it selects no categories or vulnerabilities."""
+    return resolve_vulnerabilities(list_available_categories())
 
 
 def get_category_info() -> dict[str, dict[str, Any]]:

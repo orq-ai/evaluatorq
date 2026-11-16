@@ -60,6 +60,7 @@ from evaluatorq.redteam.adaptive.pipeline import (
 )
 from evaluatorq.redteam.adaptive.strategy_registry import (
     _filter_by_method,
+    default_vulnerabilities,
     get_strategies_for_category,
     get_strategies_for_vulnerability,
     list_available_categories,
@@ -944,7 +945,7 @@ def _resolve_vulns_and_categories(
     else:
         resolved_categories = list_available_categories()
         try:
-            resolved_vulns = resolve_vulnerabilities(resolved_categories)
+            resolved_vulns = default_vulnerabilities()
         except ValueError:
             resolved_vulns = None
 
