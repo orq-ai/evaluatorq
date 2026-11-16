@@ -37,6 +37,8 @@ if TYPE_CHECKING:
     from mkdocs.structure.nav import Navigation
     from mkdocs.structure.pages import Page
 
+    from evaluatorq.redteam.contracts import AttackStrategy, Vulnerability
+
 # Structural pages that are navigation scaffolding, not documentation content, so they
 # are not expected in the llms.txt catalog (the section-index landings + literate-nav files).
 _PARITY_EXEMPT = ('*/SUMMARY.md', 'reference/index.md', 'examples/index.md')
@@ -110,14 +112,14 @@ def _codes(values) -> str:
     return ', '.join(f'`{v.value}`' for v in values)
 
 
-def _curated_by_category() -> dict:
+def _curated_by_category() -> dict[str, list[AttackStrategy]]:
     from evaluatorq.redteam.adaptive.strategy_registry import STRATEGY_REGISTRY
 
     # The registry also carries every category under an `OWASP-` alias.
     return {c: group for c, group in STRATEGY_REGISTRY.items() if group and not c.startswith('OWASP-')}
 
 
-def _framework_categories() -> dict:
+def _framework_categories() -> dict[str, Vulnerability]:
     from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
 
     return {c: v for c, v in sorted(CATEGORY_TO_VULNERABILITY.items()) if not c.startswith('OWASP-')}
