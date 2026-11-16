@@ -16,6 +16,10 @@ The guard covers every page, not just `reference/`. Scoping it to docstring-gene
 pages missed the whole `examples/` tree, where an example whose own docstring fences a
 snippet closed the generator's outer fence and rendered its body as prose — caught the
 moment the scope widened.
+
+Strategy table: the curated attack strategy table in the red teaming guide is rendered
+here from `STRATEGY_REGISTRY` in place of a marker, so it cannot drift from the code. A
+hand-written copy needed a test re-implementing the row format to stay in sync.
 """
 
 from __future__ import annotations
@@ -96,6 +100,48 @@ _DIAGRAM = re.compile(
 # exemption is per page and kept to exactly these two. Everything else, `reference/`
 # included, is zero-tolerance; do not add a page here to silence a real finding.
 _HIGHLIGHT_EXEMPT = ('index.md', 'tracing.md')
+
+
+_STRATEGY_PAGE = 'guides/red-teaming.md'
+_STRATEGY_MARKER = '<!-- curated-strategies -->'
+
+
+def _strategy_table() -> str:
+    from evaluatorq.redteam.adaptive.strategy_registry import STRATEGY_REGISTRY
+    from evaluatorq.redteam.contracts import DeliveryMethod
+
+    def codes(values) -> str:
+        return ', '.join(f'`{v.value}`' for v in values)
+
+    # The registry also carries every category under an `OWASP-` alias.
+    by_category = {c: group for c, group in STRATEGY_REGISTRY.items() if group and not c.startswith('OWASP-')}
+    strategies = [s for group in by_category.values() for s in group]
+    used = {d for s in strategies for d in s.delivery_methods}
+    rows = [
+        '| Category | Strategy | What it attempts | Turns | Needs | Technique | Delivery methods |',
+        '|---|---|---|---|---|---|---|',
+    ]
+    for s in strategies:
+        capabilities = ' or '.join(f'`{c.value}`' for c in s.required_capabilities)
+        needs = ' + '.join(part for part in ('tools' if s.requires_tools else '', capabilities) if part)
+        description = s.description.replace('|', r'\|')
+        rows.append(
+            f'| `{s.category}` | `{s.name}` | {description} | {s.turn_type.value} '
+            f'| {needs or "—"} | `{s.attack_technique.value}` | {codes(s.delivery_methods)} |'
+        )
+    summary = (
+        f'{len(strategies)} curated strategies across {len(by_category)} categories, '
+        f'using {len(used)} of the {len(DeliveryMethod)} delivery methods.'
+    )
+    return summary + '\n\n' + '\n'.join(rows)
+
+
+def on_page_markdown(markdown: str, page: Page, config: MkDocsConfig, files: Files) -> str:
+    if page.file.src_uri != _STRATEGY_PAGE:
+        return markdown
+    if _STRATEGY_MARKER not in markdown:
+        raise PluginError(f'{_STRATEGY_PAGE}: the {_STRATEGY_MARKER} marker the strategy table renders into is gone')
+    return markdown.replace(_STRATEGY_MARKER, _strategy_table())
 
 
 def on_post_page(output: str, page: Page, config: MkDocsConfig) -> str:
