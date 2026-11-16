@@ -275,5 +275,7 @@ def test_red_teaming_guide_lists_every_curated_strategy():
             )
 
     guide = Path(__file__).parents[2] / 'docs' / 'guides' / 'red-teaming.md'
-    documented = set(re.findall(r'^\| `[A-Z]+\d+` \| `\w+` \|.*\|$', guide.read_text(), re.MULTILINE))
+    # splitlines() and an explicit encoding keep this stable on a Windows (CRLF, cp1252) checkout.
+    lines = guide.read_text(encoding='utf-8').splitlines()
+    documented = {line for line in lines if re.match(r'\| `[A-Z]+\d+` \| `\w+` \|', line)}
     assert documented == registered
