@@ -19,7 +19,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--mode` | `str` / `dynamic` | Execution mode: `dynamic`, `static`, or `hybrid`. |
 | `--category` / `-c` | `str` (repeatable) | OWASP categories to test (e.g. `ASI01`). Repeatable and/or comma-separated. Defaults to all. |
 | `--vulnerability` / `-V` | `str` (repeatable) | Vulnerability IDs to test (e.g. `goal_hijacking`). Repeatable and/or comma-separated. Also accepts OWASP codes. Takes precedence over `--category`. |
-| `--strategy` / `-s` | `str` (repeatable) | Restrict to named attack strategies. Repeatable and/or comma-separated. Unknown registry names are rejected. |
+| `--strategy` / `-s` | `str` (repeatable) | Restrict to named attack strategies. Repeatable and/or comma-separated. Unknown registry names are rejected. The names are listed in [Curated strategies by category](../guides/red-teaming.md#curated-strategies-by-category). |
 | `--delivery-method` / `-d` | `str` (repeatable) | Restrict to one or more delivery methods. Repeatable and/or comma-separated. |
 | `--max-turns` | `int` / `5` | Maximum conversation turns for multi-turn attacks. |
 | `--max-backtracks` | `int` (0 to 10) / `0` | Turns a Crescendo attack may erase and retry without using up a turn, released across the attack. See [Backtracking](../guides/red-teaming.md#backtracking). |
