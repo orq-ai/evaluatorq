@@ -38,6 +38,7 @@ from evaluatorq.redteam.contracts import (
     EvaluatorqEvaluatorConfig,
     LLMCallConfig,
     RedTeamInput,
+    RedTeamSample,
     StaticDataset,
     category_key,
     evaluator_model_for,
@@ -115,7 +116,7 @@ def _normalize_num_samples(num_samples: int | None) -> int | None:
 
 
 def load_owasp_agentic_dataset(
-    dataset: str | Path | None = None,
+    dataset: str | Path | StaticDataset | None = None,
     num_samples: int | None = None,
     categories: list[str] | None = None,
     delivery_methods: Collection[DeliveryMethod | str] | None = None,
@@ -128,6 +129,8 @@ def load_owasp_agentic_dataset(
             - Local file path (string or ``Path``): loads from a JSON file
             - ``"hf:org/repo"``: custom HuggingFace repository (default filename)
             - ``"hf:org/repo/filename.json"``: specific file in a HuggingFace repository
+            - A ``StaticDataset``: samples already in memory, for example from
+              ``load_openresponses_dataset()``. Nothing is read from disk.
         num_samples: Maximum number of samples to load (None = all).
         categories: Filter to these OWASP category codes.
         delivery_methods: Filter to rows whose ``delivery_method`` matches one of
@@ -148,6 +151,13 @@ def load_owasp_agentic_dataset(
             categories=categories,
             delivery_methods=delivery_methods,
         )
+
+    if isinstance(dataset, StaticDataset):
+        datapoints = _datapoints_from_samples(
+            dataset.samples, num_samples=num_samples, categories=categories, delivery_methods=delivery_methods
+        )
+        logger.debug(f'Took {len(datapoints)} samples from a StaticDataset')
+        return datapoints
 
     if isinstance(dataset, Path):
         return _load_from_file(
@@ -472,16 +482,16 @@ _HF_MISSING_MSG = (
 )
 
 
-def is_huggingface_source(dataset: str | Path | None) -> bool:
+def is_huggingface_source(dataset: str | Path | StaticDataset | None) -> bool:
     """Return True when ``dataset`` resolves to a HuggingFace fetch.
 
     ``None`` (the default ``orq/redteam-vulnerabilities`` dataset) and any
-    ``hf:`` specifier require huggingface-hub; local paths and ``orq:`` dataset
-    IDs do not.
+    ``hf:`` specifier require huggingface-hub; local paths, ``orq:`` dataset IDs
+    and an in-memory ``StaticDataset`` do not.
     """
     if dataset is None:
         return True
-    if isinstance(dataset, Path):
+    if isinstance(dataset, Path | StaticDataset):
         return False
     return str(dataset).startswith('hf:')
 
@@ -652,8 +662,24 @@ def _load_from_file(
             'Check that the file exists and contains valid JSON in {"samples": [...]} format.'
         )
         raise DatasetError(msg) from e
-    samples = dataset.samples
+    datapoints = _datapoints_from_samples(
+        dataset.samples, num_samples=num_samples, categories=categories, delivery_methods=delivery_methods
+    )
+    logger.debug(f'Parsed {len(datapoints)} samples from {path.name}')
+    return datapoints
 
+
+def _datapoints_from_samples(
+    samples: list[RedTeamSample],
+    num_samples: int | None = None,
+    categories: list[str] | None = None,
+    delivery_methods: Collection[DeliveryMethod | str] | None = None,
+) -> list[DataPoint]:
+    """Filter validated samples and turn them into datapoints.
+
+    Shared by a dataset read from a file and a ``StaticDataset`` passed in, so
+    both get the same category filter, delivery-method filter and sample cap.
+    """
     if categories is not None:
         samples = _filter_by_categories(
             samples, categories, category_of=lambda s: s.input.category, id_of=lambda s: s.input.id
@@ -670,7 +696,7 @@ def _load_from_file(
     if num_samples is not None:
         samples = samples[:num_samples]
 
-    datapoints = [
+    return [
         DataPoint(
             inputs={
                 **s.input.model_dump(mode='json'),
@@ -679,8 +705,6 @@ def _load_from_file(
         )
         for s in samples
     ]
-    logger.debug(f'Parsed {len(datapoints)} samples from {path.name}')
-    return datapoints
 
 
 def _apply_filters(
