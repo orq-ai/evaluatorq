@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 
 from evaluatorq import jury_presets, llm_jury
-from evaluatorq.common.llm_client import MissingLLMCredentialsError
+from evaluatorq.common.model_catalogue import ModelCatalogueError
 from evaluatorq.llm_jury import _apply_preset
 from evaluatorq.jury_presets import (
     DROPPED_PRESETS,
@@ -26,7 +26,7 @@ from evaluatorq.jury_presets import (
     judge_rates,
     model_identity,
 )
-from evaluatorq.common.model_frontier import with_manual_cards
+from evaluatorq.common.model_frontier import NO_STRUCTURED_VERDICT, with_manual_cards
 from tests.common.garden_fakes import seated_garden
 
 
@@ -118,10 +118,10 @@ class TestShippedPresets:
             assert name not in PRESETS
 
     def test_cheap_aggregate_ships(self):
-        """Withheld while a MiniMax seat answered schemas in prose; the derived panel no longer seats one."""
+        """Withheld while a MiniMax seat answered schemas in prose; no seat may be one that does."""
         preset = get_preset('cheap-aggregate')
 
-        assert not any('minimax' in judge.lower() for judge in preset.judges)
+        assert not set(preset.judges) & set(NO_STRUCTURED_VERDICT)
         assert 'cheap-aggregate' not in WITHHELD_PRESETS
 
 
@@ -175,7 +175,8 @@ class TestPublishedCost:
             seat.input_price * ESTIMATED_PROMPT_TOKENS + seat.output_price * ESTIMATED_COMPLETION_TOKENS
         ) / 1_000
 
-        assert alone.cost_per_1k(garden) == pytest.approx(expected, abs=0.005)
+        # The figure is rounded half-up to the cent, so a seat landing on a half-cent sits exactly 0.005 away.
+        assert alone.cost_per_1k(garden) == pytest.approx(expected, abs=0.005 + 1e-9)
 
     def test_seated_efforts_read_the_catalogue_default(self, garden):
         preset = PRESETS['balanced-trio']
@@ -199,7 +200,7 @@ class TestDeprecatedRates:
         with pytest.deprecated_call():
             assert judge_rates('openai/not-a-model', garden) is None
 
-    @pytest.mark.parametrize('error', [RuntimeError('loop running'), MissingLLMCredentialsError('no key')])
+    @pytest.mark.parametrize('error', [RuntimeError('loop running'), ModelCatalogueError('catalogue down')])
     def test_judge_rates_is_none_when_no_live_catalogue_can_be_read(self, monkeypatch, error):
         def unreadable():
             raise error

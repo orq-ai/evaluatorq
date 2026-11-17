@@ -87,12 +87,18 @@ def test_an_undated_listing_does_not_crash():
     drift_report(_garden(), listed, now=NOW)
 
 
-@pytest.mark.parametrize(('stamp', 'expected'), [(1_700_000_000, 1_700_000_000_000), (1_700_000_000_000, 1_700_000_000_000)])
+@pytest.mark.parametrize(
+    ('stamp', 'expected'), [(1_700_000_000, 1_700_000_000_000), (1_700_000_000_000, 1_700_000_000_000)]
+)
 def test_seconds_and_milliseconds_stamps_date_the_same(stamp, expected):
     assert earliest_listing({'openai/gpt-6-luna': stamp}) == {'gpt-6-luna': expected}
 
 
-def test_a_waived_unscored_seat_raises_no_finding():
+def test_a_waived_unscored_seat_raises_no_finding(monkeypatch):
+    monkeypatch.setattr(
+        'evaluatorq.preset_drift.UNSCORED_SEAT_WAIVERS',
+        {'deepseek/deepseek-flash': 'Reserve kept unscored on purpose.'},
+    )
     garden = _garden()
     del garden['deepseek/deepseek-flash']
 
@@ -113,7 +119,11 @@ def test_an_unscored_seat_without_a_waiver_needs_a_human(monkeypatch):
     assert finding.needs_human
 
 
-def test_a_waiver_for_a_seat_that_is_now_scored_is_reported_as_stale():
+def test_a_waiver_for_a_seat_that_is_now_scored_is_reported_as_stale(monkeypatch):
+    monkeypatch.setattr(
+        'evaluatorq.preset_drift.UNSCORED_SEAT_WAIVERS',
+        {'deepseek/deepseek-flash': 'Reserve kept unscored on purpose.'},
+    )
     report = drift_report(_garden(), _everything_listed(), now=NOW)
 
     stale = [f for f in report.findings if f.kind == 'stale_waiver' and f.subject == 'deepseek/deepseek-flash']

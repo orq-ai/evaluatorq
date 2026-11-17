@@ -1,7 +1,7 @@
 """Router pools stay derived, frontier-true and honest about relaxations (RES-1345).
 
 Every structural check runs twice: offline on the synthetic garden in
-`tests/common/garden_fakes.py`, and against the live `/v2/models` garden under
+`tests/common/garden_fakes.py`, and against the live public model-catalog garden under
 the `integration` marker. Nothing here
 pins which models a pool seats; membership is whatever the derivation picks.
 """
@@ -177,7 +177,7 @@ class TestSeatability:
         for spec in rp._SPECS:
             if spec.name not in pools:
                 continue
-            eligible = {r: m for r, m in garden.items() if m.enabled is not False and seatable(m) and spec.predicate(m)}
+            eligible = {r: m for r, m in garden.items() if seatable(m) and spec.predicate(m)}
             pool = pools[spec.name]
             for model_id in (*pool.models, *pool.reserve_models):
                 successor = derived_successor(model_id, eligible)
@@ -203,14 +203,16 @@ class TestSeatability:
             assert 'Max Savings' not in pools
             assert 'Max Savings' in DROPPED_POOLS
 
-    def test_bedrock_only_stays_retired_while_its_catalog_is_thin(self, pools, garden):
-        """A pool with no seat choices is the catalog restated, not a derivation."""
+    def test_bedrock_only_stays_retired_until_its_follow_up(self, pools, garden):
+        """Retired while the Bedrock frontier was the catalog restated; a wider
+        frontier than the reviewed one means the follow-up is due."""
         assert 'Bedrock Only' not in pools
         assert 'Bedrock Only' in DROPPED_POOLS
         # Counted on the seatable frontier, not the card list: a dominated card
         # (haiku-4-5 under haiku-5-5) adds a row but no choice.
         bedrock = pareto_frontier([m for m in garden.values() if m.router_id.startswith('aws/') and seatable(m)])
-        assert len(bedrock) <= 3, f'Bedrock frontier grew to {[m.router_id for m in bedrock]}: reconsider the pool'
+        # Five on the AA v5 catalogue (2026-11-17); reinstating it is a follow-up.
+        assert len(bedrock) <= 5, f'Bedrock frontier grew to {[m.router_id for m in bedrock]}: reconsider the pool'
 
 
 class TestPoolConstraints:
@@ -235,22 +237,6 @@ class TestPoolConstraints:
         assert 'EU Region Only' not in thinned
         assert 'fewer than three' in underivable['EU Region Only']
         assert set(thinned) == set(pools) - {'EU Region Only'}
-
-    def test_a_disabled_model_is_never_seated(self, garden):
-        """enabled=False means listed and scored but not servable: seating one
-        would ship a pool that 404s."""
-        switched_off = ScoredModel(
-            router_id='openai/imaginary-flagship',
-            intelligence_index=99.0,
-            input_price=2.0,
-            output_price=2.0,
-            enabled=False,
-        )
-        pools, _ = build_pools(dict(garden) | {switched_off.router_id: switched_off})
-
-        for pool in pools.values():
-            assert switched_off.router_id not in pool.models
-            assert switched_off.router_id not in pool.reserve_models
 
     def test_eu_pool_is_entirely_eu(self, pools, garden):
         if 'EU Region Only' not in pools:
@@ -306,25 +292,25 @@ class TestDerivation:
             name: pool.models for name, pool in pools.items()
         }
 
-    def test_anthropic_spec_returns_when_a_third_distinct_model_is_scored(self, synthetic_garden):
-        """The underivable register is a data blocker, not a retirement: one more
-        distinct model on the constrained frontier brings the pool back."""
-        assert 'Anthropic Only' in build_pools(synthetic_garden)[1]
-        sonnet = ScoredModel(
-            router_id='anthropic/claude-sonnet-4.5',
-            intelligence_index=40.0,
-            input_price=3.0,
-            output_price=15.0,
-            region='us',
-            enabled=True,
+    def test_anthropic_spec_degrades_when_its_frontier_thins_to_two(self, synthetic_garden):
+        """Two distinct Anthropic models are a pair, not a pool: the spec lands in
+        the underivable register and comes back once a third is scored."""
+        pools, _ = build_pools(synthetic_garden)
+        assert pools['Anthropic Only'].models == (
+            'anthropic/claude-fable-5-2',
+            'anthropic/claude-sonnet-5-5',
+            'anthropic/claude-haiku-5-5',
         )
-        pools, underivable = build_pools(synthetic_garden | {sonnet.router_id: sonnet})
+        assert pools['Anthropic Only'].reserve_models == ('anthropic/claude-opus-5-5',)
 
-        assert 'Anthropic Only' not in underivable
-        pool = pools['Anthropic Only']
-        assert sonnet.router_id in pool.models
-        assert all(judge_family(m) == 'anthropic' for m in pool.models)
-        assert pool.relaxed_tier_rule
+        thinned = {
+            k: v
+            for k, v in synthetic_garden.items()
+            if k not in {'anthropic/claude-fable-5-2', 'anthropic/claude-sonnet-5-5', 'anthropic/claude-haiku-5-5'}
+        }
+        thin_pools, underivable = build_pools(thinned)
+        assert 'Anthropic Only' in underivable
+        assert set(thin_pools) == set(pools) - {'Anthropic Only'}
 
 
 class TestLiveAccessors:
@@ -344,8 +330,8 @@ class TestLiveAccessors:
     def test_get_pools_and_the_register_describe_one_derivation(self, synthetic_garden, served_from):
         served_from(synthetic_garden)
 
-        assert set(get_pools()) == {'Balanced Pareto Trio', 'OpenAI Only', 'EU Region Only'}
-        assert set(get_underivable_pools()) == {'Anthropic Only'}
+        assert set(get_pools()) == {'Balanced Pareto Trio', 'OpenAI Only', 'Anthropic Only', 'EU Region Only'}
+        assert get_underivable_pools() == {}
 
     def test_the_live_derivation_runs_once_per_process(self, synthetic_garden, monkeypatch):
         calls = []

@@ -16,16 +16,18 @@ correctness = llm_jury(
 
 Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, uncached, one call per judge per item. The token counts are a flat 3:1 assumption, the same for every seat whatever its reasoning effort, and the same ratio the seats are ranked on. Every figure is recomputed by a weekly check from the live model catalog's rates (seats priced from `MANUAL_MODEL_CARDS` use that register's dated rates), so a repricing shows up as a failing run rather than a quietly wrong table.
 
-| Preset | Judges | Aggregation | $ / 1k | Reserve |
-| --- | --- | --- | --- | --- |
-| **`balanced-trio`** (default) | `baseten/deepseek-v4.1-flash`<br>`openai/gpt-6-luna`<br>`google-ai/gemini-3.8-flash` | majority | 4.45 | `deepseek/deepseek-flash` |
-| **`strong-jury`** | `anthropic/claude-opus-5-5`<br>`openai/gpt-6.1-sol`<br>`google-ai/gemini-3.8-flash` | majority | 27.00 | `baseten/deepseek-v4.1-flash` |
-| **`cheap-aggregate`** | `zai/glm-5.3-flash`<br>`google-ai/gemini-3.8-flash`<br>`baseten/deepseek-v4.1-flash` | majority | 4.29 | `mistral/mistral-large-4` |
-| **`open-weight-portable`** | `baseten/deepseek-v4.1-flash`<br>`baseten/kimi-k3`<br>`zai/glm-5.3-flash` | majority | 13.29 | `greenpt/qwen3.6-35b-a3b` |
-| **`eu-region`** | `aws/eu.anthropic.claude-haiku-5-5`<br>`google/eu.gemini-3.7-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 4.64 | `google/eu.claude-sonnet-5` |
-| **`single-provider-trio`** | `openai/gpt-6.1-sol`<br>`openai/gpt-6.1-terra`<br>`openai/gpt-6-luna` | majority | 12.40 | `openai/gpt-6-sol` |
+Hosting in brackets is the region the catalog lists for each endpoint on 2026-11-17. `cheap-aggregate` and `open-weight-portable` seat `tencent/deepseek-v4.1-flash`, which is served only from Singapore, and `strong-jury` keeps it in reserve. `balanced-trio`, the default, seats the same model on Baseten instead at twice the rate, so the default never routes to Singapore unasked.
 
-`balanced-trio` and `single-provider-trio` use GPT-6 Luna at its `medium` default. On the same Artificial Analysis Intelligence Index v4.3.2, [GPT-6 Luna (Medium)](https://artificialanalysis.ai/models/gpt-6-luna-medium) scores 29.93 against [GPT-5.6 Luna (Medium)](https://artificialanalysis.ai/models/gpt-5-6-luna-medium)'s 25.04, while Orq's captured rates fall from $0.20/$1.20 to $0.10/$0.50 per million input/output tokens. Do not compare these scores with the older index values still present on some catalogue cards. The EU preset keeps its EU-hosted GPT-5.6 Luna seat; the US-hosted successor is not a residency-compatible replacement.
+| Preset | Judges (hosting) | Aggregation | $ / 1k | Reserve (hosting) |
+| --- | --- | --- | --- | --- |
+| **`balanced-trio`** (default) | `baseten/deepseek-v4.1-flash` (Global)<br>`openai/gpt-6-luna` (US)<br>`google-ai/gemini-3.8-flash` (Global) | majority | 4.45 | `deepseek/deepseek-flash` (Global) |
+| **`strong-jury`** | `anthropic/claude-opus-5-5` (Global)<br>`openai/gpt-6.1-sol` (US)<br>`google-ai/gemini-3.8-flash` (Global) | majority | 27.00 | `tencent/deepseek-v4.1-flash` (Singapore) |
+| **`cheap-aggregate`** | `google-ai/gemini-3.8-flash` (Global)<br>`tencent/deepseek-v4.1-flash` (Singapore)<br>`wafer/MiniMax-M3.1-Flash` (Global) | majority | 4.05 | `wafer/GLM-5.3-Flash` (Global) |
+| **`open-weight-portable`** | `tencent/deepseek-v4.1-flash` (Singapore)<br>`moonshotai/kimi-k3.1-pro` (Global)<br>`wafer/GLM-5.3-Flash` (Global) | majority | 8.70 | `alibaba/qwen3.6-35b-a3b` (US) |
+| **`eu-region`** | `aws/eu.anthropic.claude-haiku-5-5` (EU)<br>`google/eu.gemini-3.7-flash` (EU)<br>`openai/eu.gpt-6-luna` (EU) | majority | 4.18 | `google/eu.claude-sonnet-5` (EU) |
+| **`single-provider-trio`** | `openai/gpt-6.1-sol` (US)<br>`openai/gpt-6.1-terra` (US)<br>`openai/gpt-6-luna` (US) | majority | 12.40 | `openai/gpt-6-sol` (US) |
+
+`balanced-trio` and `single-provider-trio` use GPT-6 Luna at its `medium` default, and `eu-region` seats the same model on the OpenAI EU endpoint (`openai/eu.gpt-6-luna`, $0.11/$0.55 per million input/output tokens). Every score on this page is the Artificial Analysis Intelligence Index v5 as Orq's model catalog carried it on 2026-11-17; v5 runs lower than v4.3, so do not compare these numbers with older v4.3 figures.
 
 ## Which one to pick
 
@@ -33,9 +35,9 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, un
 
 **`strong-jury`** costs about six times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
 
-**`cheap-aggregate`** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it shares two seats with `balanced-trio` and costs about the same; the difference is the third lineage (Zhipu instead of OpenAI). The `zai/glm-5.3-flash` seat is costed on its catalog card rate ($0.075/$0.25 per million); usage on the judge endpoint has been billed at twice that, which would put the panel at $4.53 rather than $4.29, and Portable at $13.53 rather than $13.29.
+**`cheap-aggregate`** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it seats the same Gemini model and the same DeepSeek weights as `balanced-trio` (DeepSeek on Tencent instead of Baseten) and costs a little less; the difference is the third lineage (MiniMax instead of OpenAI).
 
-**`open-weight-portable`** buys independence from any closed frontier vendor, and a migration path if you later want to serve the judges yourself. It is not the cheap option: it costs about three times the default trio, almost all of it the Kimi K3 seat.
+**`open-weight-portable`** buys independence from any closed frontier vendor, and a migration path if you later want to serve the judges yourself. It is not the cheap option: it costs about twice the default trio, almost all of it the Kimi K3.1 Pro seat.
 
 **`eu-region`** seats every judge on an EU endpoint, at about the price of `balanced-trio`. It is not `balanced-trio` relocated: the DeepSeek seat has no EU endpoint newer than v3.1, so the panel is Anthropic, Google and OpenAI, which is what the EU catalog can field at the current generation.
 
@@ -56,7 +58,7 @@ Presets are pointwise panels, one call per judge per item, so `assignment="cycli
 
 ## What a preset does not carry
 
-A preset sends no reasoning effort, so each seat runs at its provider's default. `JuryPreset.seated_efforts()` reads it from the live catalog (it needs `ORQ_API_KEY`), with `None` for a model whose catalog entry has no effort setting. Inside async code, `await load_garden()` from `evaluatorq.common.model_frontier` and pass the result as `garden=` instead:
+A preset sends no reasoning effort, so each seat runs at its provider's default. `JuryPreset.seated_efforts()` reads it from the live public catalog (no key needed), with `None` for a model whose catalog entry has no effort setting. Inside async code, `await load_garden()` from `evaluatorq.common.model_frontier` and pass the result as `garden=` instead:
 
 ```python
 from evaluatorq import get_preset
@@ -65,7 +67,7 @@ get_preset("strong-jury").seated_efforts()
 # {'anthropic/claude-opus-5-5': 'medium', 'openai/gpt-6.1-sol': 'medium', 'google-ai/gemini-3.8-flash': 'medium'}
 ```
 
-Seats are ranked on their Artificial Analysis score at that default effort. Where a card has no score at its default, it ranks on its headline index, which carries no reasoning level: `baseten/deepseek-v4.1-flash` runs at `high` while Artificial Analysis measures it only at `max` and `none`, so it ranks on its `max` headline although it runs lower, and `mistral/mistral-large-4`'s card carries a headline with no rungs at all. `openai/gpt-6.1-terra`'s headline is on index v5.0.1 rather than the v4.3 every other card uses, so the in-family frontier check exempts GPT-6.1 Sol from it.
+Seats are ranked on their Artificial Analysis score at that default effort. Where a card has no score at its default, it ranks on its headline index, which carries no reasoning level: `tencent/deepseek-v4.1-flash` runs at `high` while Artificial Analysis measures it only at `max` and `none`, so it ranks on its `max` headline although it runs lower, and `wafer/GLM-5.3-Flash`'s card carries a headline with no rungs at all. `openai/gpt-6.1-terra` has no score in the catalog, so it is priced and ranked from its `MANUAL_MODEL_CARDS` entry.
 
 `llm_jury()` takes one `reasoning_effort` for the whole panel, so passing one overrides every seat's default. Per-judge call settings are a schema change and a separate ticket.
 
@@ -76,9 +78,9 @@ Two more limits worth knowing before you quote a number:
 
 ## How a preset stays current
 
-Seats are chosen in this package. `evaluatorq.common.model_frontier` reads the live `/v2/models` catalog, where every autorouter-eligible card carries Artificial Analysis intelligence scores per reasoning effort beside its rates, and ranks each model at its default effort on a 3:1 blended price. Compare seats within each lineage, because lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
+Seats are chosen in this package. `evaluatorq.common.model_frontier` reads the keyless public `/v2/model-catalog`, where scored cards carry Artificial Analysis intelligence scores per reasoning effort beside their rates, and ranks each model at its default effort on a 3:1 blended price. Compare seats within each lineage, because lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
 
-Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh; the exceptions are the seats the catalog does not list, which are priced from the dated `MANUAL_MODEL_CARDS` register. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog; a failure leaves that run red in Actions and opens a pull request (see below). Each failure names the seat and the register to update:
+Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh; the exceptions are seats the catalog lists without a score, which are ranked from the dated `MANUAL_MODEL_CARDS` register. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog; a failure leaves that run red in Actions and opens a pull request (see below). Each failure names the seat and the register to update:
 
 - a seat the catalog no longer serves
 - a repricing that moves a published figure in the table above
@@ -89,7 +91,7 @@ Nothing about a seat is committed except the decision to seat it. Rates and defa
 
 When the check fails, the workflow runs `python -m evaluatorq.preset_drift`, which lists what moved and the options the arithmetic allows: the reserve that can replace a retired seat, the same-lineage models that beat a seat, the newer models nobody has reviewed. A Pi agent, launched through the orq CLI with the router key, then proposes the register changes. It must confirm on the vendor's own pages that a candidate really is newer or superseded, because the catalog knows listing dates and not release notes, and it records each source beside the change. The workflow re-runs the live check on the result and always opens a real pull request: a fix when the check passes again, otherwise one labelled `needs-human-attention` that carries the report and the agent's summary. Nothing merges automatically. The pull request is opened with the repository's default token, which GitHub does not treat as a person: its CI runs may wait as `action_required` until a maintainer approves them, or until someone pushes to the branch.
 
-Read the catalog with a workspace-scoped key. A project-scoped key lists only what that project has enabled, so the checks would run on a truncated catalog; the suite fails on purpose when it sees one. Routes the router serves but the catalog omits are recorded in `MANUAL_MODEL_CARDS`, each with its source and date.
+The public catalog lists the whole platform catalog whatever key you hold, so the checks need no key; `/v2/models` would list only what one workspace or project enabled. Routes the router serves that the catalog does not price or score are recorded in `MANUAL_MODEL_CARDS`, each with its source and date.
 
 A preset that is not in `PRESETS` still owes you a reason. `DROPPED_PRESETS` records one that shipped and was then retired, `WITHHELD_PRESETS` one that is derived and costed but not seated because a seat cannot do the job yet, and asking for either by name raises an error carrying that reason rather than a bare "unknown preset".
 
@@ -102,7 +104,7 @@ A preset that is not in `PRESETS` still owes you a reason. `DROPPED_PRESETS` rec
 ```python
 from evaluatorq.router_pools import get_pools, get_underivable_pools
 
-pools = get_pools()  # reads /v2/models; needs ORQ_API_KEY
+pools = get_pools()  # reads the public /v2/model-catalog; no key needed
 pools["EU Region Only"].models
 get_underivable_pools()  # constraint name -> why no pool could be seated today
 ```
