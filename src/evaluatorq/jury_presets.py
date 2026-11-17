@@ -326,7 +326,8 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
     judges=(
         # Held by gpt-oss-120b until the family entered NEVER_SEAT (PR #330
         # review, 2026-08-24), then deepseek-v4-pro; reseated 2026-11-10 to
-        # v4.1 Flash and 2026-11-17 to Tencent, as on balanced-trio.
+        # v4.1 Flash and 2026-11-17 to Tencent for half the Baseten price
+        # (Singapore only; balanced-trio keeps Baseten).
         'tencent/deepseek-v4.1-flash',
         # Reseated 2026-11-17 from kimi-k3 on Baseten (v5 max 35.2, $6.00
         # blend) by the in-family check: K3.1 Pro is 46.5 for $4.00. Its card
