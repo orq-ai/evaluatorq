@@ -86,6 +86,7 @@ from evaluatorq.redteam.contracts import (
     RedTeamReport,
     RedTeamResult,
     SaveMode,
+    StaticDataset,
     TargetConfig,
     TargetKind,
     Vulnerability,
@@ -127,6 +128,15 @@ if TYPE_CHECKING:
     from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.types import DataPointResult
+
+
+def _dataset_label(dataset: Path | str | StaticDataset | None) -> str | None:
+    """How run metadata names the dataset: the path or specifier, or a short label for one passed in memory."""
+    if dataset is None or dataset == '':
+        return None
+    if isinstance(dataset, StaticDataset):
+        return f'StaticDataset ({len(dataset.samples)} samples, in memory)'
+    return str(dataset)
 
 
 def _save_stage(output_dir: Path | None, filename: str, content: str) -> None:
@@ -624,7 +634,7 @@ def _resolve_save_mode(*, save: SaveMode | bool) -> SaveMode:
 class _ReplayResolutionInputs:
     previous_run: str | None
     mode: Pipeline | str | None
-    dataset: Path | str | None
+    dataset: Path | str | StaticDataset | None
     categories: list[str] | None
     vulnerabilities: list[str] | None
     strategies: list[str] | None
@@ -806,7 +816,7 @@ def _validate_credentials_and_deps(
     llm_client: AsyncOpenAI | None,
     replay: RedTeamReplay | None,
     resolved_mode: Pipeline,
-    dataset: Path | str | None,
+    dataset: Path | str | StaticDataset | None,
 ) -> None:
     # Early credential validation, before any work. A role with its own client, or a run with an injected client,
     # needs nothing from the environment; every other role resolves its client from it.
@@ -1059,7 +1069,7 @@ class _PipelineDispatchInputs:
     cleanup_memory: bool
     llm_client: AsyncOpenAI | None
     description: str | None
-    dataset: Path | str | None
+    dataset: Path | str | StaticDataset | None
     hooks: PipelineHooks
     output_dir: Path | None
     target_config: TargetConfig | None
@@ -1375,7 +1385,7 @@ async def red_team(
     llm_client: LLMClient | None = None,
     name: str | None = None,
     description: str | None = None,
-    dataset: Path | str | None = None,
+    dataset: Path | str | StaticDataset | None = None,
     previous_run: str | None = None,
     hooks: PipelineHooks | None = None,
     artifacts_dir: Path | str | None = None,
@@ -1465,7 +1475,9 @@ async def red_team(
             name and for the auto-saved run filename. Defaults to ``'red-team'``.
         description: Optional description for the report.
         dataset: Dataset source. Accepts: local file path, ``"hf:org/repo"``,
-            ``"hf:org/repo/filename.json"``, or ``None`` for the default HuggingFace dataset.
+            ``"hf:org/repo/filename.json"``, ``"orq:<dataset-id>"``, a ``StaticDataset``
+            already in memory (for example from ``load_openresponses_dataset()``), or
+            ``None`` for the default HuggingFace dataset.
         previous_run: Replay a prior run instead of building new datapoints.
             Accepts a saved run's file name, its run id (full or an unambiguous
             8+ character prefix), a path to a saved run JSON, or ``"latest"``.
@@ -3921,7 +3933,7 @@ def _build_confirm_payload(*, inputs: _ConfirmPayloadInputs) -> ConfirmPayload:
         'strategy_breakdown': strategy_breakdown or None,
         'mode': str(mode.value) if hasattr(mode, 'value') else str(mode),
         'target': ', '.join(all_target_labels),
-        'dataset_path': str(dataset) if dataset else None,
+        'dataset_path': _dataset_label(dataset),
         'vulnerabilities': [v.value for v in resolved_vulns] if resolved_vulns else None,
         'replay_of': replay_of,
     }
@@ -4580,7 +4592,7 @@ def _static_confirm_payload(*, inputs: _StaticConfirmPayloadInputs) -> tuple[Con
         'filtering_metadata': None,
         'mode': 'static',
         'target': ', '.join(all_target_labels),
-        'dataset_path': str(dataset) if dataset else None,
+        'dataset_path': _dataset_label(dataset),
         'vulnerabilities': vulnerabilities,
         'replay_of': replay_of,
     }

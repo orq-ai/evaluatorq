@@ -59,6 +59,42 @@ async def test_full_hybrid_run(
 
 
 @pytest.mark.asyncio
+async def test_hybrid_run_takes_an_in_memory_static_dataset(
+    mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
+    static_dataset_path: Path,
+) -> None:
+    """A `StaticDataset` object runs like the file it was read from: same static datapoint count."""
+    import json
+
+    from evaluatorq.redteam.contracts import StaticDataset
+
+    in_memory = StaticDataset.model_validate(json.loads(static_dataset_path.read_text(encoding='utf-8')))
+    reports = []
+    for dataset in (str(static_dataset_path), in_memory):
+        with _hybrid_patches(mock_backend_bundle):
+            reports.append(
+                await red_team(
+                    'agent:e2e-test-agent',
+                    mode='hybrid',
+                    categories=['ASI01'],
+                    generate_strategies=False,
+                    datapoint_parallelism=2,
+                    llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+                    dataset=dataset,
+                    description='E2E hybrid test',
+                )
+            )
+    from_file, from_memory = reports
+
+    errors = validate_report_structure(from_memory, expected_pipeline='hybrid', min_results=1)
+    assert not errors, f'Report validation errors: {errors}'
+    assert from_file.summary.datapoint_breakdown is not None
+    assert from_memory.summary.datapoint_breakdown == from_file.summary.datapoint_breakdown
+    assert from_memory.summary.datapoint_breakdown.get('static', 0) > 0, 'the static rows took part in the run'
+
+
+@pytest.mark.asyncio
 async def test_hybrid_delivery_filter_threads_to_static(
     mock_llm_client: DeterministicAsyncOpenAI,
     mock_backend_bundle: MockBackend,
