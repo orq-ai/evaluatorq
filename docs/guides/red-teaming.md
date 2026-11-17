@@ -360,14 +360,10 @@ An **attack strategy** is one hand-written attack recipe: an objective, a delive
 
 <!-- curated-strategies -->
 
-A strategy is skipped when the target does not meet its **Needs** column: `tools` means the target must declare at least one tool in its agent context, and `a` or `b` means it must have at least one of those capabilities. `tools + a` needs both. Both skips are logged only at debug level. A target that hides its tools or memory therefore runs fewer attacks than this table suggests, with no warning; the run plan shows the real count. When the target's capabilities could not be classified, because no classifier model was available or the classifier failed, a coarser check stands in: memory capabilities pass if the target has memory, knowledge retrieval passes if it has knowledge bases, and every other capability passes if it has any tool. To print the strategies per vulnerability from the installed version:
+A strategy is skipped when the target does not meet its **Needs** column: `tools` means the target must declare at least one tool in its agent context, and `a` or `b` means it must have at least one of those capabilities. `tools + a` needs both. Both skips are logged only at debug level. A target that hides its tools or memory therefore runs fewer attacks than this table suggests, with no warning; the run plan shows the real count. When the target's capabilities could not be classified, because no classifier model was available or the classifier failed, a coarser check stands in: memory capabilities pass if the target has memory, knowledge retrieval passes if it has knowledge bases, and every other capability passes if it has any tool. To list the strategies of the installed version, with the vulnerability each one tests:
 
 ```bash
-uv run python -c "
-from evaluatorq.redteam.adaptive.strategy_registry import VULNERABILITY_STRATEGY_REGISTRY
-for vulnerability, strategies in VULNERABILITY_STRATEGY_REGISTRY.items():
-    print(vulnerability.value, [s.name for s in strategies])
-"
+eq redteam strategies
 ```
 
 ## Inspect results in Python
@@ -581,7 +577,7 @@ Three numbers describe a run: how many setup calls it makes before attacking, ho
 
 Call count is **setup calls + attacks × (turns × 2 + 1)**: each turn is one adversarial generation plus one target call, and the judge runs once after the turn loop, not per turn.
 
-**One attack is one strategy against one vulnerability**, not one category — a category contributes several. The count for a run is the sum, over each selected vulnerability, of the registry strategies that apply to the target plus `generated_strategy_count` (default 2), then capped by `max_per_category` and `max_dynamic_datapoints`. A full dynamic sweep of one target therefore tops out at <!-- full-sweep-ceiling -->. Capability filtering only removes strategies, so that is a ceiling; multiple targets multiply it. The run plan shown before datapoint generation carries the exact count, so you never have to guess for a run you are about to start.
+**One attack is one strategy against one vulnerability**, not one category — a category contributes several. The count for a run is the sum, over each selected vulnerability, of the registry strategies that apply to the target plus `generated_strategy_count` (default <!-- generated-per-vulnerability -->), then capped by `max_per_category` and `max_dynamic_datapoints`. A full dynamic sweep of one target therefore tops out at <!-- full-sweep-ceiling -->. Capability filtering only removes strategies, so that is a ceiling; multiple targets multiply it. The run plan shown before datapoint generation carries the exact count, so you never have to guess for a run you are about to start.
 
 **Setup calls** are the ones that happen before and after the attack loop. The default of 7 is a dynamic run against one tool-bearing target with the standard report options on:
 
