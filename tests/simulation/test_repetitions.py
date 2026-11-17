@@ -301,6 +301,7 @@ def test_the_dashboard_heatmap_shows_n_only_where_a_cell_averages_several_conver
 
 
 def test_the_cli_offers_the_option_on_both_commands() -> None:
+    import click
     import typer
     from typer.testing import CliRunner
 
@@ -308,8 +309,9 @@ def test_the_cli_offers_the_option_on_both_commands() -> None:
 
     # Read the option from the command definition: help text is styled differently per terminal.
     group = typer.main.get_command(sim_app)
+    assert isinstance(group, click.Group)
     for command in ('run', 'simulate'):
-        options = {opt for param in group.commands[command].params for opt in param.opts}  # type: ignore[attr-defined]
+        options = {opt for param in group.commands[command].params for opt in param.opts}
         assert '--repetitions' in options
         rejected = CliRunner().invoke(sim_app, [command, '--repetitions', '0'])
         assert rejected.exit_code == 2, 'zero is a usage error'
