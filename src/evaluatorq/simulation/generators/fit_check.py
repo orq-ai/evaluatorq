@@ -22,7 +22,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from itertools import starmap
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
 from pydantic import BaseModel, Field
 
@@ -30,8 +31,8 @@ from evaluatorq.common.judge import EvaluatorResponsePayload, run_judge
 from evaluatorq.common.llm_client import as_llm_client
 from evaluatorq.common.llm_errors import SDK_ERRORS
 from evaluatorq.common.sanitize import delimit
-from evaluatorq.common.structured_output import StructuredGenerationError
-from evaluatorq.contracts import LLMCallConfig, TokenUsage  # noqa: TC001 - pydantic reads both at runtime
+from evaluatorq.common.structured_output import StructuredGenerationError, usage_from_exception
+from evaluatorq.contracts import LLMCallConfig, TokenUsage
 from evaluatorq.simulation._config import resolve_sim_llm_config, sim_llm_config, sim_role_config
 from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.contracts import Persona, Scenario
@@ -55,6 +56,47 @@ _DEFAULT_AGENT = 'a general-purpose conversational assistant'
 # What a failed regeneration call raises: an SDK error, or the structured-output
 # ladder giving up. Anything else is a bug and propagates.
 _GENERATION_ERRORS: tuple[type[BaseException], ...] = (*SDK_ERRORS, StructuredGenerationError)
+
+_MAX_CONCURRENCY = 10
+"""Judge and generator calls in flight at once. The same bound the simulation runner uses for conversations."""
+
+_T = TypeVar('_T')
+
+
+async def _gather_bounded(calls: Sequence[Callable[[], Awaitable[_T]]]) -> list[_T | BaseException]:
+    """Run every call, at most `_MAX_CONCURRENCY` at a time, and wait for all of them.
+
+    A call that raises is returned as its exception, in place. Nothing is left
+    running when this returns, so the caller can close the client safely.
+    """
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
+
+    async def run(call: Callable[[], Awaitable[_T]]) -> _T:
+        async with semaphore:
+            return await call()
+
+    return list(await asyncio.gather(*[run(call) for call in calls], return_exceptions=True))
+
+
+def _raise_first(results: Sequence[_T | BaseException]) -> list[_T]:
+    """The results, or the first exception among them."""
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
+    return cast('list[_T]', list(results))
+
+
+def _agent_or_default(agent_description: str) -> str:
+    """The agent to judge against. With none given the fallback is so broad that almost any item fits it, so say so."""
+    if agent_description:
+        return agent_description
+    logger.warning(
+        'fit check: no agent_description given, so fit is judged against %r; almost any item fits that. '
+        'Pass agent_description to check fit against your agent.',
+        _DEFAULT_AGENT,
+    )
+    return _DEFAULT_AGENT
+
 
 _CHECKS: dict[Kind, str] = {
     'persona': (
@@ -219,18 +261,17 @@ class FitJudge(UsageTracking):
                 'orq.simulation.model': self._model,
             },
         ):
-            return list(
-                await asyncio.gather(*[
-                    self._judge_one(
-                        kind,
-                        item,
-                        agent_description=agent_description,
-                        context=context,
-                        seed=seeds[index] if seeds is not None else '',
-                    )
-                    for index, item in enumerate(items)
-                ])
-            )
+
+            def call(index: int, item: Persona | Scenario) -> Callable[[], Awaitable[ItemVerdict | str]]:
+                return lambda: self._judge_one(
+                    kind,
+                    item,
+                    agent_description=agent_description,
+                    context=context,
+                    seed=seeds[index] if seeds is not None else '',
+                )
+
+            return _raise_first(await _gather_bounded(list(starmap(call, enumerate(items)))))
 
     async def _judge_one(
         self, kind: Kind, item: Persona | Scenario, *, agent_description: str, context: str, seed: str
@@ -323,14 +364,21 @@ async def _run_fit_loop(
             break
         rounds += 1
         generator_calls += len(rejected)
-        replacements = await asyncio.gather(*[regenerate(i, outcomes[i].explanation) for i in rejected])
+
+        def call(index: int) -> Callable[[], Awaitable[ItemT | None]]:
+            return lambda: regenerate(index, outcomes[index].explanation)
+
+        replacements = _raise_first(await _gather_bounded([call(i) for i in rejected]))
         pending = []
         for index, replacement in zip(rejected, replacements, strict=True):
-            outcomes[index].attempts += 1
             if replacement is None:
                 # Keep the rejected item and its reason: there is nothing better to return.
-                outcomes[index].explanation = f'{outcomes[index].explanation} (regeneration returned nothing)'.strip()
+                # `attempts` counts items generated, so a regeneration that produced none does not add one.
+                outcomes[
+                    index
+                ].explanation = f'{outcomes[index].explanation} (regeneration failed or returned nothing)'.strip()
                 continue
+            outcomes[index].attempts += 1
             items[index] = replacement
             pending.append(index)
     return outcomes, rounds, generator_calls
@@ -361,7 +409,7 @@ async def _check(
             kind,
             checked,
             judge=judge,
-            agent_description=agent_description or _DEFAULT_AGENT,
+            agent_description=_agent_or_default(agent_description),
             context=context,
             seeds=seeds,
             max_rounds=0,
@@ -447,7 +495,7 @@ async def _generate_checked(
     if not seeds:
         raise ValueError(f'generate_checked_{kind}s requires at least one seed')
     _validate(max_rounds, seeds, seeds)
-    description = agent_description or _DEFAULT_AGENT
+    description = _agent_or_default(agent_description)
     config = sim_llm_config(llm_config)
     generator: PersonaGenerator | ScenarioGenerator = (
         PersonaGenerator(client=as_llm_client(generation_client), config=config)
@@ -469,18 +517,30 @@ async def _generate_checked(
         )
         return batch[0] if batch else None
 
+    # A failed generator call can still be billed; the generator only counts calls that succeeded.
+    failed_usage = TokenUsage()
+
     async def regenerate(index: int, explanation: str) -> Any:
+        nonlocal failed_usage
         try:
             item = await one(seeds[index], _feedback(generation_instructions, explanation))
         except _GENERATION_ERRORS as exc:
             logger.warning('fit check: regenerating %s %d failed: %s: %s', kind, index, type(exc).__name__, exc)
+            billed = usage_from_exception(exc)
+            if billed is not None:
+                failed_usage = failed_usage + billed
             return None
         if item is None:
             logger.warning('fit check: regenerating %s %d returned nothing; keeping the rejected one', kind, index)
         return item
 
     try:
-        first = await asyncio.gather(*[one(seed, generation_instructions) for seed in seeds])
+
+        def first_call(seed: str) -> Callable[[], Awaitable[Any]]:
+            return lambda: one(seed, generation_instructions)
+
+        # Every call finishes before an error is raised, so none is still using the client the `finally` closes.
+        first = _raise_first(await _gather_bounded([first_call(seed) for seed in seeds]))
         for seed, item in zip(seeds, first, strict=True):
             if item is None:
                 raise SimulationError(f'{kind} generation returned nothing for seed: {seed!r}')
@@ -506,7 +566,7 @@ async def _generate_checked(
         rounds=rounds,
         judge_calls=judge.calls,
         generator_calls=generator_calls,
-        usage=judge.get_usage() + generator.get_usage(),
+        usage=judge.get_usage() + generator.get_usage() + failed_usage,
     )
 
 

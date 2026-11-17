@@ -281,12 +281,14 @@ A rejected item goes back to the generator with the judge's explanation, up to `
 | Outcome `status` | Meaning | Counts as a pass |
 |---|---|---|
 | `approved` | The judge said the item fits. | Yes |
-| `rejected` | The judge still said no after the last round, or the regeneration returned nothing. `explanation` holds the reason. | No |
+| `rejected` | The judge still said no after the last round, or the regeneration failed or returned nothing. `explanation` holds the reason. | No |
 | `unchecked` | There is no verdict: the judge call failed, the judge abstained, or its answer was not true or false. `explanation` says which. | No |
 
 **Read `report.unresolved` before you use the items.** `report.items` always holds one item per seed, including the rejected and unchecked ones, so passing it straight to `simulate()` runs them without a word. `report.all_approved` is the one-line gate.
 
 A judge model id that does not exist makes every item `unchecked`: each judge call fails on its own, so the report comes back complete and nothing in it is approved.
+
+Pass `agent_description`. Without it the judge checks fit against "a general-purpose conversational assistant", which almost any item fits, and a warning is logged. `outcome.attempts` counts the items generated for a seed, so a regeneration that failed does not add one. At most 10 judge or generator calls run at once, and `report.usage` includes a regeneration that failed after the provider billed it.
 
 The judge runs on the `sim.judge` model role, so it is not the generator's model by default. Setting `llm_config.model` applies one model to every simulation-side call, the judge included. Pass `judge_client=` to send the judge calls through a different client than generation.
 

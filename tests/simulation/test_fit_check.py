@@ -195,8 +195,8 @@ async def test_a_failed_regeneration_keeps_the_rejected_item_and_says_so(fakes: 
     assert [p.name for p in report.items] == ['item-1']
     outcome = report.outcomes[0]
     assert outcome.status == 'rejected'
-    assert outcome.explanation == 'wrong domain (regeneration returned nothing)'
-    assert outcome.attempts == 2
+    assert outcome.explanation == 'wrong domain (regeneration failed or returned nothing)'
+    assert outcome.attempts == 1, 'only one persona was ever generated for this seed'
     assert report.judge_calls == 1, 'nothing new to judge after a failed regeneration'
 
 
@@ -426,7 +426,8 @@ async def test_a_generator_error_during_regeneration_keeps_the_rejected_item(fak
 
     assert [p.name for p in report.items] == ['item-1', 'item-2']
     assert [o.status for o in report.outcomes] == ['rejected', 'approved']
-    assert report.outcomes[0].explanation == 'off topic (regeneration returned nothing)'
+    assert report.outcomes[0].explanation == 'off topic (regeneration failed or returned nothing)'
+    assert report.outcomes[0].attempts == 1
 
 
 @pytest.mark.asyncio
@@ -505,3 +506,121 @@ def test_a_report_survives_a_serialization_round_trip() -> None:
 
     assert restored == report
     assert restored.unresolved == [0]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_regeneration_that_was_billed_is_in_the_usage(fakes: _Fakes, monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.common.structured_output import StructuredGenerationError
+
+    fakes.judge_says('item-1', _rejects('off topic'))
+    original = fakes.generate
+    billed = TokenUsage(input_tokens=70, output_tokens=7, total_tokens=77, calls=1)
+
+    async def failing(client: object, *, messages: list[dict[str, Any]], **kw: Any) -> StructuredResult[Any]:
+        if 'A reviewer rejected the previous attempt' in messages[-1]['content']:
+            raise StructuredGenerationError('response truncated', usage=billed)
+        return await original(client, messages=messages, **kw)
+
+    monkeypatch.setattr('evaluatorq.simulation.generators.persona_generator.generate_structured', failing)
+
+    report = await generate_checked_personas(['seed'], agent_description='a bot', max_rounds=1)
+
+    assert report.outcomes[0].status == 'rejected'
+    assert report.usage.total_tokens == 12 + 77, 'one judge call plus the failed regeneration the provider billed'
+
+
+@pytest.mark.asyncio
+async def test_one_failed_seed_waits_for_the_other_first_generations_before_raising(
+    fakes: _Fakes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from evaluatorq.common.structured_output import StructuredGenerationError
+
+    finished: list[str] = []
+
+    async def generate(client: object, *, messages: list[dict[str, Any]], **kw: Any) -> StructuredResult[Any]:
+        if 'breaks' in messages[-1]['content']:
+            raise StructuredGenerationError('response truncated')
+        await asyncio.sleep(0.05)
+        finished.append('slow')
+        return await fakes.generate(client, messages=messages, **kw)
+
+    monkeypatch.setattr('evaluatorq.simulation.generators.persona_generator.generate_structured', generate)
+
+    with pytest.raises(StructuredGenerationError):
+        await generate_checked_personas(['breaks', 'slow one', 'slow two'], agent_description='a bot')
+
+    assert finished == ['slow', 'slow'], 'the other calls ended before the error surfaced and the client was closed'
+    assert fakes.judge_requests == []
+
+
+@pytest.mark.asyncio
+async def test_no_agent_description_warns_that_the_check_is_weak(fakes: _Fakes, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level('WARNING', logger='evaluatorq.simulation.generators.fit_check'):
+        await check_personas([_persona('p')])
+    assert any('no agent_description given' in record.getMessage() for record in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level('WARNING', logger='evaluatorq.simulation.generators.fit_check'):
+        await check_personas([_persona('p')], agent_description='a support bot')
+    assert not caplog.records, 'a given agent is not warned about'
+
+
+@pytest.mark.asyncio
+async def test_each_client_reaches_only_its_own_calls(fakes: _Fakes, monkeypatch: pytest.MonkeyPatch) -> None:
+    judge_client, generation_client = object(), object()
+    generator_clients: list[object] = []
+    monkeypatch.setattr('evaluatorq.openresponses.client.build_simulation_client', lambda c=None, **_kw: (c, False))
+    original = fakes.generate
+
+    async def recording(client: object, *, messages: list[dict[str, Any]], **kw: Any) -> StructuredResult[Any]:
+        generator_clients.append(client)
+        return await original(client, messages=messages, **kw)
+
+    monkeypatch.setattr('evaluatorq.simulation.generators.persona_generator.generate_structured', recording)
+    fakes.judge_says('item-1', _rejects('off topic'))
+
+    await generate_checked_personas(
+        ['seed'],
+        agent_description='a bot',
+        judge_client=cast(Any, judge_client),
+        generation_client=cast(Any, generation_client),
+    )
+
+    assert len(generator_clients) == 2, 'the first generation and one regeneration'
+    assert all(client is generation_client for client in generator_clients)
+    assert len(fakes.judge_requests) == 2
+    assert all(request['client'] is judge_client for request in fakes.judge_requests)
+
+
+@pytest.mark.asyncio
+async def test_judge_and_generator_calls_are_bounded(fakes: _Fakes, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    in_flight = {'judge': 0, 'generate': 0}
+    peak = {'judge': 0, 'generate': 0}
+    original_generate, original_judge = fakes.generate, fakes.run_judge
+
+    async def tracked(kind: str, call: Any) -> Any:
+        in_flight[kind] += 1
+        peak[kind] = max(peak[kind], in_flight[kind])
+        await asyncio.sleep(0.01)
+        try:
+            return await call
+        finally:
+            in_flight[kind] -= 1
+
+    async def generate(client: object, **kw: Any) -> StructuredResult[Any]:
+        return await tracked('generate', original_generate(client, **kw))
+
+    async def judge(**kw: Any) -> JudgeOutcome:
+        return await tracked('judge', original_judge(**kw))
+
+    monkeypatch.setattr('evaluatorq.simulation.generators.persona_generator.generate_structured', generate)
+    monkeypatch.setattr('evaluatorq.simulation.generators.fit_check.run_judge', judge)
+
+    report = await generate_checked_personas([f'seed {i}' for i in range(35)], agent_description='a bot')
+
+    assert len(report.items) == 35
+    assert peak == {'judge': fit_check._MAX_CONCURRENCY, 'generate': fit_check._MAX_CONCURRENCY}
