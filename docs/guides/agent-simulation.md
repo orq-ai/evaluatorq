@@ -272,7 +272,9 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-The judge answers one question per item: does it fit? For a persona that means it is a plausible user of the agent, it embodies its seed, and its numeric traits agree with its background. For a scenario it means the goal is something a user would bring to the agent, it is built around its seed, and its criteria are about that goal. A short item that passes those checks fits, and a seed counts when its meaning is there, whatever the wording.
+The judge answers one question per item: does it fit? For a persona that means it is a plausible user of the agent, it embodies its seed, and its numeric traits agree with its background. For a scenario it means the goal is something a user would bring to the agent, it is built around its seed, and its criteria are about that goal, do not contradict each other and can be observed in a conversation. A short item that passes those checks fits, and a seed counts when its meaning is there, whatever the wording.
+
+Difficult users and deliberate probes fit. A hostile or derailing persona is a valid user to test against. A scenario whose goal is out of scope on purpose, or a misuse or manipulation attempt, fits when the seed asks for it, the scenario is marked `is_edge_case`, or its criteria expect the agent to decline or resist. An unrelated goal with none of those signals is rejected.
 
 A rejected item goes back to the generator with the judge's explanation, up to `max_rounds` times (default `2`). An approved item is never regenerated. Pass `max_rounds=0` to judge once and regenerate nothing.
 
@@ -283,6 +285,8 @@ A rejected item goes back to the generator with the judge's explanation, up to `
 | `unchecked` | There is no verdict: the judge call failed, the judge abstained, or its answer was not true or false. `explanation` says which. | No |
 
 **Read `report.unresolved` before you use the items.** `report.items` always holds one item per seed, including the rejected and unchecked ones, so passing it straight to `simulate()` runs them without a word. `report.all_approved` is the one-line gate.
+
+A judge model id that does not exist makes every item `unchecked`: each judge call fails on its own, so the report comes back complete and nothing in it is approved.
 
 The judge runs on the `sim.judge` model role, so it is not the generator's model by default. Setting `llm_config.model` applies one model to every simulation-side call, the judge included. Pass `judge_client=` to send the judge calls through a different client than generation.
 
