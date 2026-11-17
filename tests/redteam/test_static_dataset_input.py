@@ -90,7 +90,8 @@ def test_an_in_memory_dataset_never_needs_huggingface() -> None:
 def test_run_metadata_names_an_in_memory_dataset_without_dumping_it() -> None:
     assert _dataset_label(_fixture_dataset()) == 'StaticDataset (3 samples, in memory)'
     assert _dataset_label('hf:org/repo') == 'hf:org/repo'
-    assert _dataset_label(Path('data/local.json')) == 'data/local.json'
+    local = Path('data') / 'local.json'
+    assert _dataset_label(local) == str(local), 'a path is recorded as the platform writes it'
     assert _dataset_label(None) is None
     assert _dataset_label('') is None
 
