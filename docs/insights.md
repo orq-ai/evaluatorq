@@ -163,6 +163,7 @@ The command prints cluster and label summaries, failed-trace counts, projection 
 | File-source limits | Finder exports and snapshots reject other population filters, `--window-days`, and `--limit`. |
 | `--preview-input` | With `--from-snapshot PATH`, measure truncation without model requests or an Orq credential. Full runs still need an Orq credential for model requests. |
 | `--no-cache` | Bypass the local summary and embedding cache. |
+| `--parallelism N` | Traces each stage works on at once, `1` to `200`. It is not the ceiling on in-flight requests; see [Pace a run against a rate limit](#pace-a-run-against-a-rate-limit). |
 
 The priority matrix uses `intent` when selected, otherwise the first `--dimension`. `--priority-dimension` must name one of the selected dimensions.
 
@@ -265,6 +266,65 @@ Below five traces carrying signal the dimension is skipped outright, produces no
 At the other end, a clustered population of more than 5000 traces fails rather than sampling traces away, with `clustering supports at most 5000 traces per population`. That dimension is dropped and the run still saves, with `status='error'` and every other dimension intact. The 5000 counts per clustered population — per sentiment answer for `sentiment` — and only traces carrying signal count toward it. Since `--limit` itself stops at 5000, only a Finder export or a snapshot can cross the line, so the fix is to export or snapshot fewer traces.
 
 Bad values are rejected before any model is called: the CLI rejects an out-of-range number while parsing the command, and `insights()` raises before it fetches a trace.
+
+## Pace a run against a rate limit
+
+When a provider starts rate-limiting an Insights run — traces landing in the failed-trace count after their retries run out — the lever is `--parallelism`, turned **down**: add `--parallelism 4` to the `eq insights` command you already run, and raise it again once the run completes clean.
+
+Down, not up, because two different numbers are at work and the flag is not the one most people assume. `--parallelism` bounds how many **traces a stage works on at once**. How many **requests are in flight** is bounded separately by `llm_parallelism`, which defaults to 10 for every evaluatorq run — see [Bounding LLM requests](evaluation-reference.md#bounding-llm-requests). Ten slots are shared across the process, so a stage handed 100 traces still has ten calls out at a time, and the two defaults that look five times apart — `100` on the CLI and in Python, `20` in the dashboard's form — meet the same ceiling. Only below ten does `--parallelism` become the binding constraint and genuinely thin the traffic. Lowering it does not make a run cheaper: the same requests are made, more slowly.
+
+| Surface | Control | Default | Accepted |
+|---|---|---|---|
+| CLI | `--parallelism N` | `100`, after the precedence below | `1`–`200`; outside that the command exits `2` before loading a trace |
+| Python | `parallelism=N` on `insights()` / `insights_sync()` | `100` | `1` and above, with nothing capping the top end; below `1` is rejected before any model call |
+| Dashboard | **Parallel requests**, step 3 of the run form | `20` | `1`–`200` |
+
+**Moving the request ceiling itself takes Python, because `eq insights` has no flag for it.** `llm_concurrency_limit` accepts either `with` or `async with`:
+
+```python
+import asyncio
+
+from evaluatorq import llm_concurrency_limit
+from evaluatorq.insights import insights
+
+
+async def main(population):
+    # Five in flight instead of the default ten, with `parallelism` matched to it
+    # so the stages do not queue work the ceiling will not let through.
+    async with llm_concurrency_limit(5):
+        return await insights(population, parallelism=5)
+```
+
+Build `population` as [Run from Python](#run-from-python) shows, then `asyncio.run(main(population))`.
+
+**On the CLI the `--parallelism` default is not a literal.** The flag is unset by default and resolves in precedence order: the flag, then `EVALUATORQ_FINDER_PARALLELISM`, then a value saved in the dashboard settings file, then `100`. That variable's name says finder and it governs an `eq insights` run all the same. An out-of-range or unparseable value in it is ignored with a logged warning instead of failing the command, so a typo leaves the run at the next source down rather than at the value you meant — pass the flag when that matters, because the flag is validated and exits `2`. The dashboard's run form does not take part in that chain: its `20` is a literal.
+
+The cap is applied per stage, to each stage that works through its traces a model call at a time: the label questions, the trace summaries, the cluster descriptions, the cluster-merge checks and the top-level cluster descriptions. Labels and summaries dominate the request count because they visit every trace, and `--coding` adds more per trace, where the tool-call labels get their own call (see [Analyze coding agents](#analyze-coding-agents)). The calls that plan the population, such as query compilation and facet selection, sit outside the cap. What a run does when a stage's retries are exhausted is in [Failures and cache](#failures-and-cache).
+
+**Embeddings are outside both knobs.** They go to `client.embeddings.create` in sequential batches of 256 texts, so that stage is already one request at a time and no number makes it faster or gentler; [a separate embedding client](#embed-with-a-separate-client) moves it to another endpoint instead.
+
+A finished run records the `--parallelism` it used in its saved report, readable as `.config.parallelism`; the command prints the report's path when it finishes. The in-flight ceiling is not recorded there, so check it in the process instead:
+
+```python
+import inspect
+
+from evaluatorq import llm_concurrency_limit
+from evaluatorq.common.llm_limit import active_llm_parallelism
+from evaluatorq.insights import InsightsConfig, insights
+
+print("insights() parallelism default:", inspect.signature(insights).parameters["parallelism"].default)
+print("in-flight request ceiling, nothing set:", active_llm_parallelism())
+with llm_concurrency_limit(5):
+    print("in-flight request ceiling, lowered:", active_llm_parallelism())
+
+for value in (0, 200, 500):
+    try:
+        InsightsConfig(labels=(), dimensions=("intent",), parallelism=value)
+    except Exception as exc:
+        print(f"parallelism={value} rejected: {type(exc).__name__}")
+    else:
+        print(f"parallelism={value} accepted")
+```
 
 ## Analyze coding agents
 
