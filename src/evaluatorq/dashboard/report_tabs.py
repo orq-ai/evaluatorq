@@ -926,7 +926,7 @@ def _sim_heat_cell_count(cell: dict) -> str:
     if rate is not None:
         parts.append(f'goal achieved in {pct(rate)}')
     title = esc(' · '.join(parts))
-    return f'<span class="rk-heat-n" style="display:block;font-size:11px;opacity:.8" title="{title}">n={n}</span>'
+    return f'<span class="rk-heat-n" style="margin-left:8px;font-size:11px;font-weight:400;opacity:.85" title="{title}">n={n}</span>'
 
 
 def _sim_heat_cell_trigger(rid: str, entity_context: dict[str, Any]) -> Callable[[dict, str], str]:
@@ -945,15 +945,17 @@ def _sim_heat_cell_trigger(rid: str, entity_context: dict[str, Any]) -> Callable
         if not entries:
             return text + _sim_heat_cell_count(cell)
         n = len(entries)
+        # Inside the visible button: the button fills the cell, so anything after it wraps underneath.
+        count = _sim_heat_cell_count(cell)
         label = f'Open {n} conversation{"s" if n != 1 else ""}: {cell.get("persona")} × {cell.get("scenario")}'  # noqa: RUF001
         buttons = [
             f'<button type="button" class="rk-heat-trigger" data-sim-entity-trigger data-entity-kind="conversation" '
             f'data-drawer-url="/r/{esc(rid)}/sim/transcript?idx={int(e.index)}"'
-            + (f' aria-label="{esc(label)}">{text}' if i == 0 else ' hidden tabindex="-1">')
+            + (f' aria-label="{esc(label)}">{text}{count}' if i == 0 else ' hidden tabindex="-1">')
             + '</button>'
             for i, e in enumerate(entries)
         ]
-        return ''.join(buttons) + _sim_heat_cell_count(cell)
+        return ''.join(buttons)
 
     return render
 
