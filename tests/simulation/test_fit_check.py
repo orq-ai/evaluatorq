@@ -592,35 +592,3 @@ async def test_each_client_reaches_only_its_own_calls(fakes: _Fakes, monkeypatch
     assert all(client is generation_client for client in generator_clients)
     assert len(fakes.judge_requests) == 2
     assert all(request['client'] is judge_client for request in fakes.judge_requests)
-
-
-@pytest.mark.asyncio
-async def test_judge_and_generator_calls_are_bounded(fakes: _Fakes, monkeypatch: pytest.MonkeyPatch) -> None:
-    import asyncio
-
-    in_flight = {'judge': 0, 'generate': 0}
-    peak = {'judge': 0, 'generate': 0}
-    original_generate, original_judge = fakes.generate, fakes.run_judge
-
-    async def tracked(kind: str, call: Any) -> Any:
-        in_flight[kind] += 1
-        peak[kind] = max(peak[kind], in_flight[kind])
-        await asyncio.sleep(0.01)
-        try:
-            return await call
-        finally:
-            in_flight[kind] -= 1
-
-    async def generate(client: object, **kw: Any) -> StructuredResult[Any]:
-        return await tracked('generate', original_generate(client, **kw))
-
-    async def judge(**kw: Any) -> JudgeOutcome:
-        return await tracked('judge', original_judge(**kw))
-
-    monkeypatch.setattr('evaluatorq.simulation.generators.persona_generator.generate_structured', generate)
-    monkeypatch.setattr('evaluatorq.simulation.generators.fit_check.run_judge', judge)
-
-    report = await generate_checked_personas([f'seed {i}' for i in range(35)], agent_description='a bot')
-
-    assert len(report.items) == 35
-    assert peak == {'judge': fit_check._MAX_CONCURRENCY, 'generate': fit_check._MAX_CONCURRENCY}

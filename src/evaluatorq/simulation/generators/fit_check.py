@@ -57,25 +57,17 @@ _DEFAULT_AGENT = 'a general-purpose conversational assistant'
 # ladder giving up. Anything else is a bug and propagates.
 _GENERATION_ERRORS: tuple[type[BaseException], ...] = (*SDK_ERRORS, StructuredGenerationError)
 
-_MAX_CONCURRENCY = 10
-"""Judge and generator calls in flight at once. The same bound the simulation runner uses for conversations."""
-
 _T = TypeVar('_T')
 
 
-async def _gather_bounded(calls: Sequence[Callable[[], Awaitable[_T]]]) -> list[_T | BaseException]:
-    """Run every call, at most `_MAX_CONCURRENCY` at a time, and wait for all of them.
+async def _gather_all(calls: Sequence[Callable[[], Awaitable[_T]]]) -> list[_T | BaseException]:
+    """Run every call and wait for all of them.
 
     A call that raises is returned as its exception, in place. Nothing is left
-    running when this returns, so the caller can close the client safely.
+    running when this returns, so the caller can close the client safely. How
+    many run at once is `llm_slot()`'s job, inside each model call.
     """
-    semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
-
-    async def run(call: Callable[[], Awaitable[_T]]) -> _T:
-        async with semaphore:
-            return await call()
-
-    return list(await asyncio.gather(*[run(call) for call in calls], return_exceptions=True))
+    return list(await asyncio.gather(*[call() for call in calls], return_exceptions=True))
 
 
 def _raise_first(results: Sequence[_T | BaseException]) -> list[_T]:
@@ -271,7 +263,7 @@ class FitJudge(UsageTracking):
                     seed=seeds[index] if seeds is not None else '',
                 )
 
-            return _raise_first(await _gather_bounded(list(starmap(call, enumerate(items)))))
+            return _raise_first(await _gather_all(list(starmap(call, enumerate(items)))))
 
     async def _judge_one(
         self, kind: Kind, item: Persona | Scenario, *, agent_description: str, context: str, seed: str
@@ -368,7 +360,7 @@ async def _run_fit_loop(
         def call(index: int) -> Callable[[], Awaitable[ItemT | None]]:
             return lambda: regenerate(index, outcomes[index].explanation)
 
-        replacements = _raise_first(await _gather_bounded([call(i) for i in rejected]))
+        replacements = _raise_first(await _gather_all([call(i) for i in rejected]))
         pending = []
         for index, replacement in zip(rejected, replacements, strict=True):
             if replacement is None:
@@ -540,7 +532,7 @@ async def _generate_checked(
             return lambda: one(seed, generation_instructions)
 
         # Every call finishes before an error is raised, so none is still using the client the `finally` closes.
-        first = _raise_first(await _gather_bounded([first_call(seed) for seed in seeds]))
+        first = _raise_first(await _gather_all([first_call(seed) for seed in seeds]))
         for seed, item in zip(seeds, first, strict=True):
             if item is None:
                 raise SimulationError(f'{kind} generation returned nothing for seed: {seed!r}')
