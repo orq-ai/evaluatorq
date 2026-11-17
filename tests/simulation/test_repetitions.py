@@ -301,14 +301,15 @@ def test_the_dashboard_heatmap_shows_n_only_where_a_cell_averages_several_conver
 
 
 def test_the_cli_offers_the_option_on_both_commands() -> None:
+    import typer
     from typer.testing import CliRunner
 
     from evaluatorq.simulation.cli import app as sim_app
 
-    runner = CliRunner()
+    # Read the option from the command definition: help text is styled differently per terminal.
+    group = typer.main.get_command(sim_app)
     for command in ('run', 'simulate'):
-        result = runner.invoke(sim_app, [command, '--help'], env={'COLUMNS': '200', 'NO_COLOR': '1'})
-        assert result.exit_code == 0
-        assert '--repetitions' in result.output
-        rejected = runner.invoke(sim_app, [command, '--repetitions', '0'])
+        options = {opt for param in group.commands[command].params for opt in param.opts}  # type: ignore[attr-defined]
+        assert '--repetitions' in options
+        rejected = CliRunner().invoke(sim_app, [command, '--repetitions', '0'])
         assert rejected.exit_code == 2, 'zero is a usage error'
