@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 import pytest
+from loguru import logger
 
 from evaluatorq.common import model_catalogue, model_frontier
 from tests.common.garden_fakes import card
@@ -258,6 +259,10 @@ class TestSeatable:
 
         assert not seatable(scored(f'some-new-host/{family}-turbo', 99.0, 0.01))
 
+    def test_the_contributor_tier_stays_out_and_the_standard_tier_stays_seatable(self):
+        assert not seatable(scored('meta/muse-spark-1.3-contributor', 99.0, 0.01))
+        assert seatable(scored('meta/muse-spark-1.3', 99.0, 0.01))
+
 
 class TestRankCheapestTop:
     """The cheap-aggregate derivation: best model per family under a blend ceiling."""
@@ -496,7 +501,7 @@ class TestEffortCapture:
 
     def test_a_headline_is_placed_on_the_one_rung_with_its_index(self):
         """Without a scored default, an equal index is the only evidence of where the headline was measured."""
-        rungs = {'none': {'intelligence_index': 11.7}, 'reasoning': {'intelligence_index': 14.8}}
+        rungs = {'none': {'intelligence_index': 11.7, 'index_version': 'v5'}, 'reasoning': {'intelligence_index': 14.8, 'index_version': 'v5'}}
         model = scored_model_from_card(card('p', 'm', index=14.8, reasoning_efforts=rungs))
 
         assert model is not None
@@ -504,7 +509,7 @@ class TestEffortCapture:
         assert not headline_contradicts_its_own_rung(model)
 
     def test_a_scored_default_wins_over_an_equal_index_on_another_rung(self):
-        rungs = {'medium': {'intelligence_index': 30.0}, 'high': {'intelligence_index': 40.0}}
+        rungs = {'medium': {'intelligence_index': 30.0, 'index_version': 'v5'}, 'high': {'intelligence_index': 40.0, 'index_version': 'v5'}}
         model = scored_model_from_card(
             _effort_card(40.0, default_effort='medium', default_effort_scored=True, reasoning_efforts=rungs)
         )
@@ -520,7 +525,7 @@ class TestEffortCapture:
         assert model.default_index == 40.0
 
     def test_two_rungs_on_the_headline_index_place_it_nowhere(self):
-        rungs = {'high': {'intelligence_index': 30.0}, 'max': {'intelligence_index': 30.0}}
+        rungs = {'high': {'intelligence_index': 30.0, 'index_version': 'v5'}, 'max': {'intelligence_index': 30.0, 'index_version': 'v5'}}
         model = scored_model_from_card(_effort_card(30.0, default_effort='medium', reasoning_efforts=rungs))
 
         assert model is not None
@@ -675,6 +680,52 @@ class TestLiveGarden:
 
         assert set(await load_garden()) == {'a/new', 'c/plain'}
 
+    @pytest.mark.asyncio
+    async def test_a_kept_card_ranks_on_its_v5_rungs_only(self, monkeypatch):
+        """{medium: v5, high: v4.3} on a high default must not rank at the v4.3 score."""
+        mixed = {
+            'reasoning_efforts': {
+                'medium': {'intelligence_index': 24.6, 'index_version': 'v5'},
+                'high': {'intelligence_index': 34.5, 'index_version': 'v4.3'},
+            },
+            'supported_parameters': ['reasoning_effort'],
+            'default_effort': 'high',
+        }
+        _serve(monkeypatch, [{'data': [card('a', 'mixed', **mixed)], 'has_more': False}])
+
+        assert (await load_garden())['a/mixed'].effort_indices == {'medium': 24.6}
+
+    @pytest.mark.asyncio
+    async def test_cards_left_out_for_price_and_kept_without_a_ladder_are_logged(self, monkeypatch):
+        eur = {'input': {'cost': 1.0, 'currency': 'EUR', 'per': 1_000_000, 'unit': 'tokens'}, 'output': {}}
+        _serve(
+            monkeypatch,
+            [
+                {
+                    'data': [
+                        card('a', 'ladder', **V5_RUNG),
+                        card('b', 'eur', pricing=eur),
+                        card('c', 'free-text', pricing={}),
+                        card('d', 'unscored', index=None, pricing={}),
+                        card('e', 'plain'),
+                    ],
+                    'has_more': False,
+                }
+            ],
+        )
+        messages: list[str] = []
+        sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+        try:
+            garden = await load_garden()
+        finally:
+            logger.remove(sink_id)
+
+        assert set(garden) == {'a/ladder', 'e/plain'}
+        assert any('non-USD price' in m and 'b/eur' in m and 'c/free-text' not in m for m in messages)
+        assert any('no USD per-token price' in m and 'c/free-text' in m for m in messages)
+        assert not any('d/unscored' in m for m in messages)
+        assert any('no effort ladder' in m and 'e/plain' in m and 'a/ladder' not in m for m in messages)
+
     def test_the_sync_reader_refuses_inside_a_running_loop(self):
         import asyncio
 
@@ -728,7 +779,7 @@ class TestMalformedScores:
 
     @pytest.mark.parametrize('rung', ['n/a', True, float('nan')])
     def test_a_bad_rung_is_dropped_and_the_card_survives(self, rung):
-        card_ = self.card_with(30, {'low': {'intelligence_index': rung}, 'high': {'intelligence_index': 40}})
+        card_ = self.card_with(30, {'low': {'intelligence_index': rung, 'index_version': 'v5'}, 'high': {'intelligence_index': 40, 'index_version': 'v5'}})
         garden = model_frontier.garden_from_cards([card_, card('q', 'other')])
         assert set(garden) == {'p/m', 'q/other'}
         assert garden['p/m'].effort_indices == {'high': 40.0}

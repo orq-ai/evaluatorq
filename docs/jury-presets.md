@@ -16,7 +16,7 @@ correctness = llm_jury(
 
 Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, uncached, one call per judge per item. The token counts are a flat 3:1 assumption, the same for every seat whatever its reasoning effort, and the same ratio the seats are ranked on. Every figure is recomputed by a weekly check from the live model catalog's rates (seats priced from `MANUAL_MODEL_CARDS` use that register's dated rates), so a repricing shows up as a failing run rather than a quietly wrong table.
 
-Hosting in brackets is the region the catalog lists for each endpoint on 2026-11-17. `cheap-aggregate` and `open-weight-portable` seat `tencent/deepseek-v4.1-flash`, which is served only from Singapore, and `strong-jury` keeps it in reserve. `balanced-trio`, the default, seats the same model on Baseten instead at twice the rate, so the default never routes to Singapore unasked.
+Hosting in brackets is the region the catalog lists for each endpoint on 2026-11-17. `cheap-aggregate` and `open-weight-portable` seat `tencent/deepseek-v4.1-flash`, which is served only from Singapore, and `strong-jury` keeps it in reserve. `balanced-trio`, the default, seats the same model on Baseten instead at twice the rate, so the default never routes to Singapore unasked. Tencent doubles its rate on weekdays from 01:00 to 04:00 and from 06:00 to 10:00 UTC, which adds about $0.53 per 1,000 items for each Tencent seat, so the 4.05 and 8.70 figures are best-case costs and run to about 4.58 and 9.23 inside those hours.
 
 | Preset | Judges (hosting) | Aggregation | $ / 1k | Reserve (hosting) |
 | --- | --- | --- | --- | --- |

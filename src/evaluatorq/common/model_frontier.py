@@ -163,8 +163,7 @@ NEVER_SEAT: dict[str, str] = {
         'against $1.25/$4.25 standard) is discounted in exchange for Meta training on '
         "prompts and completions, so seating it would send users' eval data to Meta "
         'unasked. The standard tier ranks on its own card. Reported by TechCrunch '
-        '(2026-09-03) and listed so on Vercel AI Gateway; Meta pricing page not read. '
-        '2026-11-17.'
+        '(2026-09-03).'
     ),
 }
 
@@ -371,10 +370,21 @@ def _score(value: object) -> float | None:
     return float(value)
 
 
+def _rung_version(entry: Mapping[str, Any]) -> str:
+    """The major AA index version a rung names, e.g. 'v5' for 'v5.1', or '' when it names none."""
+    return str(entry.get('index_version', '')).split('.')[0]
+
+
 def _rung_indices(router_id: str, card: Mapping[str, Any]) -> dict[str, float]:
-    """Each rung's index, dropping (with a warning) any that is present but not a finite number."""
+    """Each REQUIRED_INDEX_VERSION rung's index, dropping (with a warning) any that is present but not a finite number.
+
+    A rung on another version is left out whatever its score, so a partly
+    migrated card never ranks a v4 number against the v5 floor and seats.
+    """
     indices: dict[str, float] = {}
     for effort, entry in _effort_ladder(card).items():
+        if _rung_version(entry) != REQUIRED_INDEX_VERSION:
+            continue
         raw = entry.get('intelligence_index')
         if raw is None:
             continue
@@ -399,6 +409,18 @@ def _price_per_million(card: Mapping[str, Any], side: Literal['input', 'output']
     if not isinstance(currency, str) or currency.upper() != 'USD':
         return None
     return round(cost / per * 1_000_000, 6)
+
+
+def _price_gap(card: Mapping[str, Any]) -> str | None:
+    """Why a card has no USD per-token price, or None when it has one."""
+    if _price_per_million(card, 'input') is not None and _price_per_million(card, 'output') is not None:
+        return None
+    pricing = card.get('pricing')
+    rates = [pricing.get(side) for side in ('input', 'output')] if isinstance(pricing, Mapping) else []
+    currencies = {rate.get('currency') for rate in rates if isinstance(rate, Mapping)}
+    if any(isinstance(currency, str) and currency.upper() != 'USD' for currency in currencies):
+        return 'non-USD price'
+    return 'no USD per-token price'
 
 
 def _headline_rung(
@@ -519,7 +541,7 @@ def reset_public_cards() -> None:
 
 def _index_versions(card: Mapping[str, Any]) -> set[str]:
     """The major AA index versions the card's effort rungs name, e.g. {'v5'}."""
-    return {str(rung.get('index_version', '')).split('.')[0] for rung in _effort_ladder(card).values()}
+    return {_rung_version(rung) for rung in _effort_ladder(card).values()}
 
 
 async def load_garden() -> dict[str, ScoredModel]:
@@ -530,7 +552,9 @@ async def load_garden() -> dict[str, ScoredModel]:
 
     A card whose ladder names no REQUIRED_INDEX_VERSION rung is left out with
     a warning, since its scores sit on another scale. A card with no ladder
-    carries no version and is kept.
+    carries no version and is kept, with one warning naming them. A scored card
+    left out for its price, which is not a USD per-token one, is named in a
+    warning too.
 
     Raises:
         ModelCatalogueError: The catalogue fetch failed or was unreadable, no
@@ -556,7 +580,29 @@ async def load_garden() -> dict[str, ScoredModel]:
             REQUIRED_INDEX_VERSION,
             ', '.join(off_scale),
         )
-    garden = garden_from_cards(card for card in cards if card['id'] not in off_scale)
+    kept = [card for card in cards if card['id'] not in off_scale]
+    garden = garden_from_cards(kept)
+    unpriced: dict[str, list[str]] = {}
+    for card in kept:
+        scores = card.get('artificial_intelligence')
+        scored = (
+            isinstance(scores, Mapping) and _score(scores.get('artificial_analysis_intelligence_index')) is not None
+        )
+        reason = _price_gap(card)
+        if scored and reason:
+            unpriced.setdefault(reason, []).append(card['id'])
+    for reason, ids in sorted(unpriced.items()):
+        logger.warning(
+            '{} scored catalogue cards have a {} and are left out: {}', len(ids), reason, ', '.join(sorted(ids))
+        )
+    unversioned = sorted(router_id for router_id in garden if not versions[router_id])
+    if unversioned:
+        logger.warning(
+            '{} seatable catalogue cards have no effort ladder, so their index version is unknown and is taken as {}: {}',
+            len(unversioned),
+            REQUIRED_INDEX_VERSION,
+            ', '.join(unversioned),
+        )
     if not garden:
         raise ModelCatalogueError('public model catalogue has cards but none with a USD price and a score')
     return garden
