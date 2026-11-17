@@ -297,7 +297,7 @@ An Orq platform dataset carries the `input` fields flattened, with `messages` be
 
 ### A dataset already in memory
 
-In Python, `dataset=` also takes a `StaticDataset` object, so a dataset you build or load in code runs without being written to a `samples` file first. The CLI has no equivalent: `--dataset` takes the four forms above.
+In Python, `dataset=` also takes a `StaticDataset` object (`from evaluatorq.redteam import StaticDataset`), so a dataset you build or load in code runs without being written to a `samples` file first. Pass `mode="static"` or `mode="hybrid"` with it: like a file, it is not read in dynamic mode. The CLI has no equivalent: `--dataset` takes the four forms above.
 
 `load_openresponses_dataset()` returns one. It reads a JSON or JSONL file whose rows carry the attack as an OpenResponses `input` array under `openresponses_input`, where the `samples` file has `messages`. The `input` metadata is the same.
 
@@ -326,7 +326,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Category filters, delivery-method filters and the sample cap apply to it exactly as they do to a file. The loader raises on a row it cannot read, naming the row, so a malformed file fails before the run starts. `function_call` items in `openresponses_input` are dropped: a static row replays text turns only, so a row made of nothing but tool calls is rejected as having no messages.
+Category filters, delivery-method filters and the sample cap apply to it exactly as they do to a file. The loader raises `ValueError` on a row it cannot read and names the row by its position, counting from 0, so a malformed file fails before the run starts. `function_call` items in `openresponses_input` are dropped: a static row replays text turns only, so a row made of nothing but tool calls is rejected as having no messages.
 
 `eq redteam validate-dataset` accepts only the first three forms: it has no `orq:` branch, so an `orq:` argument is read as a file path and fails with `No such file or directory`. Validate a platform dataset by exporting it to a file first.
 

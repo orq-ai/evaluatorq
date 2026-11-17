@@ -35,6 +35,7 @@ def test_an_in_memory_dataset_gives_the_same_datapoints_as_its_file() -> None:
 
 def test_filters_and_the_sample_cap_apply_to_an_in_memory_dataset() -> None:
     dataset = _fixture_dataset()
+    before = dataset.model_dump()
     categories = sorted({s.input.category for s in dataset.samples})
 
     assert len(load_owasp_agentic_dataset(dataset=dataset, delivery_methods=['direct-request'])) == 3
@@ -43,7 +44,7 @@ def test_filters_and_the_sample_cap_apply_to_an_in_memory_dataset() -> None:
     one_category = load_owasp_agentic_dataset(dataset=dataset, categories=[categories[0]])
     assert one_category
     assert {dp.inputs['category'] for dp in one_category} == {categories[0]}
-    assert len(dataset.samples) == 3, 'the dataset passed in is not modified'
+    assert dataset.model_dump() == before, 'the dataset passed in is not modified'
 
 
 def test_a_dataset_written_in_the_openresponses_shape_can_be_loaded_and_turned_into_datapoints(tmp_path: Path) -> None:
@@ -80,6 +81,34 @@ def test_a_dataset_written_in_the_openresponses_shape_can_be_loaded_and_turned_i
     ]
 
 
+def test_the_public_package_exports_the_dataset_types() -> None:
+    import evaluatorq.redteam as redteam
+
+    assert redteam.StaticDataset is StaticDataset
+    assert {'StaticDataset', 'RedTeamSample'} <= set(redteam.__all__)
+
+
+def test_a_row_with_no_text_turns_is_rejected_by_name(tmp_path: Path) -> None:
+    meta = {
+        'id': 'or-2',
+        'category': 'LLM07',
+        'severity': 'high',
+        'vulnerability_domain': 'agent',
+        'turn_type': 'single',
+        'source': 'unit-test',
+    }
+    good = {'input': meta, 'openresponses_input': [{'role': 'user', 'content': 'a text turn'}]}
+    only_tool_calls = {
+        'input': meta,
+        'openresponses_input': [{'type': 'function_call', 'call_id': 'c1', 'name': 'lookup', 'arguments': '{}'}],
+    }
+    path = tmp_path / 'attacks.jsonl'
+    path.write_text(json.dumps(good) + '\n' + json.dumps(only_tool_calls), encoding='utf-8')
+
+    with pytest.raises(ValueError, match=r'Dataset row 1: .*no messages'):
+        load_openresponses_dataset(path)
+
+
 def test_an_in_memory_dataset_never_needs_huggingface() -> None:
     assert is_huggingface_source(_fixture_dataset()) is False
     assert is_huggingface_source(None) is True
@@ -87,7 +116,7 @@ def test_an_in_memory_dataset_never_needs_huggingface() -> None:
     assert is_huggingface_source(Path('local.json')) is False
 
 
-def test_run_metadata_names_an_in_memory_dataset_without_dumping_it() -> None:
+def test_the_dataset_label_names_an_in_memory_dataset_without_dumping_it() -> None:
     assert _dataset_label(_fixture_dataset()) == 'StaticDataset (3 samples, in memory)'
     assert _dataset_label('hf:org/repo') == 'hf:org/repo'
     local = Path('data') / 'local.json'

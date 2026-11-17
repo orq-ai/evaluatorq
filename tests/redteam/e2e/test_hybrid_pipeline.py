@@ -68,6 +68,14 @@ async def test_hybrid_run_takes_an_in_memory_static_dataset(
     import json
 
     from evaluatorq.redteam.contracts import StaticDataset
+    from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks
+
+    confirmed: list[ConfirmPayload] = []
+
+    class _RecordConfirm(DefaultHooks):
+        async def on_confirm(self, payload: ConfirmPayload) -> bool:
+            confirmed.append(payload)
+            return True
 
     in_memory = StaticDataset.model_validate(json.loads(static_dataset_path.read_text(encoding='utf-8')))
     reports = []
@@ -82,6 +90,7 @@ async def test_hybrid_run_takes_an_in_memory_static_dataset(
                     datapoint_parallelism=2,
                     llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
                     dataset=dataset,
+                    hooks=_RecordConfirm(),
                     description='E2E hybrid test',
                 )
             )
@@ -92,6 +101,10 @@ async def test_hybrid_run_takes_an_in_memory_static_dataset(
     assert from_file.summary.datapoint_breakdown is not None
     assert from_memory.summary.datapoint_breakdown == from_file.summary.datapoint_breakdown
     assert from_memory.summary.datapoint_breakdown.get('static', 0) > 0, 'the static rows took part in the run'
+    assert [payload['dataset_path'] for payload in confirmed] == [
+        str(static_dataset_path),
+        f'StaticDataset ({len(in_memory.samples)} samples, in memory)',
+    ], 'the confirmation step names the source and does not dump the samples'
 
 
 @pytest.mark.asyncio
