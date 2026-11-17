@@ -35,8 +35,9 @@ class _Chat:
 
 
 class _Client:
-    def __init__(self, sink: dict[str, Any]) -> None:
+    def __init__(self, sink: dict[str, Any], base_url: str = 'https://my.orq.ai/v3/router') -> None:
         self.chat = _Chat(sink)
+        self.base_url = base_url
 
 
 @pytest.mark.asyncio
@@ -53,16 +54,13 @@ async def test_executive_summary_call_carries_run_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_executive_summary_call_carries_metadata_for_direct_openai() -> None:
-    """Native OpenAI metadata is sent regardless of the endpoint route."""
+async def test_executive_summary_call_omits_metadata_for_direct_openai() -> None:
+    """Direct OpenAI rejects `metadata` unless `store` is on, so it is withheld."""
     sink: dict[str, Any] = {}
     with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('rid-123'):
         await generate_executive_summary(
             facts='some facts',
-            llm_client=_Client(sink),
+            llm_client=_Client(sink, base_url='https://api.openai.com/v1'),
             model='gpt-4o',
         )
-    assert sink['kwargs']['metadata'] == {
-        'evaluatorq_pipeline': 'red_teaming',
-        'evaluatorq_run_id': 'rid-123',
-    }
+    assert 'metadata' not in sink['kwargs']

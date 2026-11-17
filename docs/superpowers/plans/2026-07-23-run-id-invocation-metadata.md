@@ -1,5 +1,7 @@
 # Run-id Invocation Metadata Implementation Plan
 
+> Superseded in part by RES-1873: request `metadata` is sent only on Orq-routed calls and on Responses calls whose `store` is on, and every LLM span now carries `orq.evaluatorq_run_id` and `orq.evaluatorq_pipeline`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Tag every LLM chat-completion / responses invocation issued during a red-team or agent-simulation run with the run's `run_id` (as request `metadata`), and stamp that id on the run's root trace span, so an operator can filter every model call of one run in Orq.

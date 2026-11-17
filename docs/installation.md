@@ -67,6 +67,7 @@ uv add "evaluatorq[all]"                   # every extra below
 | `simulation` | Chart rendering (`vl-convert-python`) | You want charts in a simulation report |
 | `dashboard` | `python-fasthtml`, `uvicorn`, chart rendering | You run `eq dashboard` to browse saved runs |
 | `insights` | `evaluatorq[orq]`, `numpy`, `scipy`, `umap-learn` | You use `insights()` or `eq insights` to label and cluster Orq traces; add `dashboard` to review saved runs on the Insights page |
+| `anthropic` | `anthropic` | You pass an `AsyncAnthropic`, Bedrock or Vertex client instead of an OpenAI one. See [Anthropic SDK clients](anthropic.md) |
 | `otel` | The OpenTelemetry SDK and its OTLP exporter | You want [traces](tracing.md) |
 | `langchain`, `langgraph`, `openai-agents`, `pydantic-ai`, `crewai` | The framework itself | Your agent under test is built on that framework. See [Framework integrations](framework-integrations.md) |
 | `orq` | Nothing — `orq-ai-sdk` is already a base dependency | Never needed; it exists so `evaluatorq[orq]` does not fail |

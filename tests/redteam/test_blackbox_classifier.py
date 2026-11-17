@@ -26,6 +26,7 @@ from evaluatorq.redteam.adaptive.blackbox_classifier import (
 )
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
 from evaluatorq.redteam.contracts import AgentCapability, LLMConfig
+from tests.common.llm_error_factories import CONNECTION_FACTORIES, STATUS_FACTORIES
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -233,12 +234,18 @@ async def test_judge_failure_sets_classification_failed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_api_errors_propagate() -> None:
-    """APIConnectionError/APIStatusError re-raise (mirrors white-box)."""
+@pytest.mark.parametrize(
+    'make_error',
+    [*(lambda f=f: f(503) for f in STATUS_FACTORIES), *CONNECTION_FACTORIES],
+    ids=['openai-status', 'anthropic-status', 'openai-connection', 'anthropic-connection'],
+)
+async def test_api_errors_propagate(make_error: Any) -> None:
+    """Connection and status errors from either SDK re-raise (mirrors white-box)."""
     target = _ScriptedTarget(_BLAND_REPLIES)
-    client = _failing_judge(APIConnectionError(request=MagicMock()))
+    error = make_error()
+    client = _failing_judge(error)
 
-    with pytest.raises(APIConnectionError):
+    with pytest.raises(type(error)):
         await classify_agent_capabilities_blackbox(target, client, model='m')
 
 

@@ -55,5 +55,5 @@ def review_page(run: InsightsRun, manifest: RunManifest | None = None) -> str:
         active_nav='insights',
         body_class='eq-insights-review',
         topbar=False,
-        head_html=f'{component_assets()}{_REVIEW_STYLESHEET}{stylesheet_asset(filename="insights-signals.css")}{run_form_script_tag()}\n{script_asset(filename="insights-signals.js")}{_REVIEW_SCRIPT}',
+        head_html=f'{component_assets()}{stylesheet_asset(filename="review-kit.css")}{_REVIEW_STYLESHEET}{stylesheet_asset(filename="insights-signals.css")}{run_form_script_tag()}\n{script_asset(filename="insights-signals.js")}{_REVIEW_SCRIPT}',
     )

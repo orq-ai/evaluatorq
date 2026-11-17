@@ -19,6 +19,7 @@ If this file rots, `docs-coverage` reports stale gaps and people stop reading it
 | **trace replay position** | `redteam.datapoints_from_traces(start_from=...)` | `first_user` · `last_assistant` |
 | **evaluator kind** | `VULNERABILITY_EVALUATOR_REGISTRY`, `SIMULATION_EVALUATORS`, pairwise types, `evaluatorq.signals.__all__` | built-in scorer, LLM jury, pairwise jury, custom `Evaluator` (including deterministic signal scorers from `signal_evaluator(s)`) |
 | **reasoning-effort scope** | fixed (see below) | target under test · pipeline attacker/judge · simulator's own calls · core-evaluation judge |
+| **LLM provider client** | `common.llm_client.as_llm_client` and the entry points that call it (`red_team(llm_client=)`, `simulate(llm_config=)` / `generation_client=`, `insights(llm_client=, embedding_client=)`, `llm_jury(client=)`, signals and trace finder `client=`) | OpenAI-compatible client (OpenAI, Orq router, any compatible endpoint) · Anthropic SDK client (`AsyncAnthropic`, `AsyncAnthropicBedrock`, `AsyncAnthropicVertex`) |
 | **API endpoint** | `LLMCallConfig.api` / `EvaluatorConfig.api` (`contracts.py`, `redteam/contracts.py`) | `chat_completions` · `responses` |
 | **own-calls LLM config** | `llm_config=` on `simulate()` / `generate_and_simulate()` / `generate()` / the trace helpers, `llm_config=` on `red_team()`, plus the `sim_model=` / `model=` shorthands; on the CLI, `--llm-config` or `"llm_config"` in `--config` for the full config and `--sim-model` / `--attack-model` / `--evaluator-model` for the shorthand | full `LLMCallConfig` · model-name shorthand · neither (per-call-site defaults) |
 | **dashboard auth scope** | `DashboardSettings.orq_auth_method`, `orq_oauth_server`, `orq_workspace`, `orq_project_id` and Settings `/settings/oauth-scope` | CLI OAuth server · CLI OAuth workspace · CLI OAuth project · credential-wide scope for other methods |
@@ -67,6 +68,11 @@ Marked `N/A` in the matrix, never reported as a gap.
 
 | Pair | Why |
 |---|---|
+| LLM provider client × dashboard | it reads saved artifacts; it makes no model call to route |
+| LLM provider client × `evaluatorq()` | the core loop runs your jobs and evaluators; only `llm_jury()` inside it takes a client |
+| LLM provider client `Anthropic SDK client` × embeddings | Anthropic has no embeddings API; Insights takes a separate `embedding_client` |
+| LLM provider client `Anthropic SDK client` × `openresponses` red-team backend | that backend targets Orq agents through the router and raises on an Anthropic client; a Claude target uses `OpenAIModelTarget` |
+| LLM provider client × `deployment:` / Vercel targets | those targets call their own transport, not the injected client |
 | pairwise jury × `mode` | `--mode` is red-team only |
 | pairwise jury × target kind | operates on collected outputs, not a live target |
 | `deployment()` / `invoke()` × `mode` | deployment invocation has no red-team mode |

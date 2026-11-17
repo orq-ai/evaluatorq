@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 
+from evaluatorq.common.llm_errors import error_body
 from evaluatorq.common.target_call import extract_status_code
 
 __all__ = ['extract_provider_error_code', 'extract_status_code']
@@ -23,11 +24,10 @@ def extract_provider_error_code(exc: Exception) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
 
-    body = getattr(exc, 'body', None)
-    if isinstance(body, dict):
-        error = body.get('error') if isinstance(body.get('error'), dict) else body
+    error = error_body(exc)
+    if error is not None:
         for key in ('code', 'type', 'error_code'):
-            value = error.get(key) if isinstance(error, dict) else None
+            value = error.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip().lower()
 

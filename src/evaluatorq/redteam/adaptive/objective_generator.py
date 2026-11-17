@@ -10,11 +10,12 @@ import random
 from typing import Any
 
 from loguru import logger
-from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.content_filter import is_content_filter_error, regenerate_on_content_filter
 from evaluatorq.common.llm_call import execute_chat_parse
+from evaluatorq.common.llm_errors import CONNECTION_ERRORS, STATUS_ERRORS
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
@@ -251,7 +252,7 @@ async def _call_llm_for_objectives_single(
             logger.debug(f'Generated {len(result.objectives)} objectives for {log_label}')
             return result.objectives[:count]
 
-    except (asyncio.CancelledError, APIConnectionError, APIStatusError) as e:
+    except (asyncio.CancelledError, *CONNECTION_ERRORS, *STATUS_ERRORS) as e:
         # A content filter that surfaced as an error survived the retries above — drop
         # this vulnerability's objectives rather than failing the whole run. Other
         # transport/status errors propagate to the caller's own retry/handling.

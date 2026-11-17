@@ -38,9 +38,9 @@ import inspect
 from typing import TYPE_CHECKING
 
 from loguru import logger
-from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel, Field
 
+from evaluatorq.common.llm_errors import CONNECTION_ERRORS, STATUS_ERRORS
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import call_target_with_retry
@@ -57,6 +57,7 @@ from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
 
 if TYPE_CHECKING:
+    from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionMessageParam
 
     from evaluatorq.contracts import AgentTarget
@@ -490,7 +491,7 @@ async def classify_agent_capabilities_blackbox(
 
     try:
         inference = await _judge_transcript(transcript, llm_client, model, cfg)
-    except (APIConnectionError, APIStatusError):
+    except CONNECTION_ERRORS + STATUS_ERRORS:
         raise
     except Exception as e:  # degrade to a coverage-gap signal, mirror white-box  # noqa: BLE001
         logger.error('Blackbox judge call failed, strategies will be included optimistically: {}', e)

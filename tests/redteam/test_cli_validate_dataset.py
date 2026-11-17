@@ -73,6 +73,80 @@ def test_truncates_sample_validation_errors_after_twenty(tmp_path: Path) -> None
     assert '  ... and 2 more' in result.stderr
 
 
+@pytest.mark.parametrize(
+    ('category', 'vulnerability', 'hint'),
+    [
+        ('sensitive_information_disclosure', None, None),
+        ('LLM03', None, "Use 'ASI04'."),
+        ('owasp-llm03', None, "Use 'ASI04'."),
+        ('LLM03', 'goal_hijacking', "Use 'ASI01'."),
+        ('ASI1', 'tool_misuse', "Use 'ASI02'."),
+    ],
+)
+def test_rejects_category_a_run_would_not_request(
+    tmp_path: Path, category: str, vulnerability: str | None, hint: str | None
+) -> None:
+    sample = _valid_sample('row-7')
+    sample['input']['category'] = category
+    if vulnerability:
+        sample['input']['vulnerability'] = vulnerability
+    dataset = _write_dataset(tmp_path, {'samples': [_valid_sample(), sample]})
+
+    result = runner.invoke(app, ['validate-dataset', str(dataset)])
+
+    assert result.exit_code == 1, result.output
+    assert 'FAIL: 1 validation error(s):' in result.stderr
+    assert f"sample[1] (id='row-7').input.category: {category!r} is not in the default category set" in result.stderr
+    if hint:
+        assert hint in result.stderr
+    else:
+        assert 'Use ' not in result.stderr
+
+
+def test_accepts_lowercase_and_prefixed_category(tmp_path: Path) -> None:
+    lower, prefixed = _valid_sample('a'), _valid_sample('b')
+    lower['input']['category'] = 'asi01'
+    prefixed['input']['category'] = 'OWASP-LLM01'
+    dataset = _write_dataset(tmp_path, {'samples': [lower, prefixed]})
+
+    result = runner.invoke(app, ['validate-dataset', str(dataset)])
+
+    assert result.exit_code == 0, result.output
+    assert 'OK: All 2 samples are valid.' in result.output
+
+
+def test_rejects_unresolvable_vulnerability(tmp_path: Path) -> None:
+    sample = _valid_sample()
+    del sample['input']['category']
+    sample['input']['vulnerability'] = 'sensitive_information_disclosure'
+    dataset = _write_dataset(tmp_path, {'samples': [sample]})
+
+    result = runner.invoke(app, ['validate-dataset', str(dataset)])
+
+    assert result.exit_code == 1, result.output
+    assert (
+        "sample[0] (id='sample-1').input: Value error, Unknown vulnerability 'sensitive_information_disclosure'."
+        in result.stderr
+    )
+
+
+def test_prints_valid_vulnerabilities_once(tmp_path: Path) -> None:
+    samples = []
+    for i in range(3):
+        sample = _valid_sample(f'row-{i}')
+        sample['input']['vulnerability'] = 'unbounded_consumption'
+        samples.append(sample)
+    dataset = _write_dataset(tmp_path, {'samples': samples})
+
+    result = runner.invoke(app, ['validate-dataset', str(dataset)])
+
+    assert result.exit_code == 1, result.output
+    assert 'FAIL: 3 validation error(s):' in result.stderr
+    assert result.stderr.count('Valid vulnerabilities:') == 1
+    assert "Valid vulnerabilities: ['cascading_failures'," in result.stderr
+    assert "'unbounded_consumption'.\n" in result.stderr
+
+
 def test_reports_default_huggingface_download_failure(monkeypatch: Any) -> None:
     def raise_download(**_: object) -> str:
         raise RuntimeError('network down')
@@ -137,3 +211,26 @@ def test_accepts_valid_local_dataset(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert 'OK: All 1 samples are valid.' in result.stdout
+
+
+@pytest.mark.parametrize(
+    ('args', 'revision'),
+    [([], '5bea0563ac7e99407388b0fad4b6f761dd3d32ae'), (['hf:org/repo/file.json'], None)],
+    ids=['default-is-pinned', 'explicit-source-is-latest'],
+)
+def test_default_dataset_download_is_pinned(
+    monkeypatch: Any, tmp_path: Path, args: list[str], revision: str | None
+) -> None:
+    calls: list[dict[str, object]] = []
+    dataset = _write_dataset(tmp_path, {'samples': [_valid_sample()]})
+
+    def record(**kwargs: object) -> str:
+        calls.append(kwargs)
+        return str(dataset)
+
+    monkeypatch.setattr(huggingface_hub, 'hf_hub_download', record)
+
+    result = runner.invoke(app, ['validate-dataset', *args])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]['revision'] == revision

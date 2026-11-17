@@ -65,6 +65,23 @@ When `ORQ_API_KEY` is set, the run also prints an Experiment URL on `my.orq.ai`.
 | `07_openai_agents_simulation.py` | Simulating an OpenAI Agents SDK `Agent` via `OpenAIAgentTarget` — needs `evaluatorq[openai-agents]` |
 | `08_pydantic_ai_simulation.py` | Simulating a Pydantic AI `Agent` via `PydanticAITarget` — needs `evaluatorq[pydantic-ai]` |
 | `09_crewai_simulation.py` | Simulating a CrewAI `Crew` via `CrewAITarget` — needs `evaluatorq[crewai]` |
+| [`failure_and_recovery/`](failure_and_recovery/README.md) | Deterministic refund-timeout, idempotency, and customer-message safety checks; local tests need no API key |
+
+### Failure recovery without an API key
+
+The [failure-and-recovery example](failure_and_recovery/README.md) uses a local
+fake refund ledger to show why a timeout leaves an agent uncertain until it
+gets status evidence. Its deterministic tests are under
+`tests/simulation/failure_recovery/`, so default pytest discovery and CI collect
+them. Run them with:
+
+```bash
+uv run pytest tests/simulation/failure_recovery/
+```
+
+These tests do not call a model, require an API key, or contact a payment
+provider. The separate live-model demonstration is optional and documented in
+the example README.
 
 ## External agent frameworks
 

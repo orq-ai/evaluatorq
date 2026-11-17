@@ -7,59 +7,124 @@ anyone with access — no API key, no workspace config, no ``orq`` CLI. This mod
 is the fallback for runs without an ``experiment_url``: it reads the
 workspace from the environment, then discovers the active CLI credential's
 slug. Links are hidden when no workspace slug is available.
+
+CLI discovery runs on a background thread and is cached per credential, so a
+report render never waits on the ``orq`` CLI (#271).
 """
 
 from __future__ import annotations
 
+import json
 import shutil
-from contextlib import contextmanager
-from contextvars import ContextVar
+import threading
+from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from loguru import logger
 
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw, env_text
 
-if TYPE_CHECKING:
-    from collections.abc import Generator
-
 # Retained for backward-compatible imports; the canonical value lives in common.env_config.
 DEFAULT_BASE_URL = DEFAULT_ORQ_BASE_URL
-_cli_slug_cache: dict[tuple[str | None, str | None, bool], tuple[float, str | None]] = {}
-_render_cli_slug_cache: ContextVar[dict[tuple[str | None, str | None], str | None] | None] = ContextVar(
-    'render_cli_slug_cache', default=None
-)
+_CacheKey = tuple[str | None, str | None, str | None]
+_FOUND_TTL_S = 300
+_MISSING_TTL_S = 30
+_cli_slug_cache: dict[_CacheKey, tuple[float, str | None]] = {}
+_pending: dict[_CacheKey, threading.Thread] = {}
+_lock = threading.Lock()
+_CLI_CONFIG_DIR = Path.home() / '.orq'
+_session_memo: tuple[tuple[int | None, int | None], str] | None = None
 
 
-@contextmanager
-def cli_slug_render_scope() -> Generator[None, None, None]:
-    """Reuse CLI-session slug discovery for one render, then discard it."""
-    token = _render_cli_slug_cache.set({})
+def _mtime_ns(path: Path) -> int | None:
     try:
-        yield
-    finally:
-        _render_cli_slug_cache.reset(token)
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _cache_key(profile: str | None, fingerprint: str | None, *, use_cli_session: bool) -> _CacheKey:
+    """Key a lookup by credential; for the CLI session, by the account the CLI is signed in as."""
+    return (profile, fingerprint, _cli_session_identity() if use_cli_session else None)
+
+
+def _cli_session_identity() -> str:
+    """Identify the CLI's active account, re-reading its files only when one of them changed."""
+    global _session_memo
+    stamp = (_mtime_ns(_CLI_CONFIG_DIR / 'config.json'), _mtime_ns(_CLI_CONFIG_DIR / 'credentials.json'))
+    if _session_memo is None or _session_memo[0] != stamp:
+        _session_memo = (stamp, _read_cli_session_identity())
+    return _session_memo[1]
+
+
+def _read_cli_session_identity() -> str:
+    """Hash the active profile's key and host, so other writes to the files (path bindings, flags) keep the cache.
+
+    A re-login under the same profile name changes the key and so the identity.
+    """
+    from evaluatorq.trace_finder.settings import credential_fingerprint
+
+    def profile_entry(data: object, name: str) -> dict:
+        profiles = data.get('profiles') if isinstance(data, dict) else None
+        entry = profiles.get(name) if isinstance(profiles, dict) else None
+        return entry if isinstance(entry, dict) else {}
+
+    def load(name: str) -> object:
+        try:
+            return json.loads((_CLI_CONFIG_DIR / name).read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return None
+
+    config = load('config.json')
+    current = config.get('current') if isinstance(config, dict) else None
+    if not isinstance(current, str):
+        return ''
+    entry = profile_entry(load('credentials.json'), current) or profile_entry(config, current)
+    key, host = entry.get('api_key'), entry.get('server') or entry.get('base_url')
+    if not isinstance(key, str):
+        return f'profile:{current}'
+    return credential_fingerprint(key, host if isinstance(host, str) else None) or f'profile:{current}'
 
 
 def _cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool = False) -> str | None:
-    """Cache credential lookups and reuse CLI-session discovery within one render."""
-    key = (profile, fingerprint, use_cli_session)
-    render_cache = _render_cli_slug_cache.get() if use_cli_session else None
-    if render_cache is not None and (profile, fingerprint) in render_cache:
-        return render_cache[profile, fingerprint]
-    cached = _cli_slug_cache.get(key) if not use_cli_session else None
-    if cached is not None and cached[0] > monotonic():
-        return cached[1]
+    """Return the cached slug for this credential, starting a background lookup when it is missing or expired.
 
-    slug = _discover_cli_slug(profile, fingerprint, use_cli_session=use_cli_session)
-    if render_cache is not None:
-        render_cache[profile, fingerprint] = slug
-    return slug
+    Never runs the CLI on the caller's thread. An expired slug is still returned while it
+    refreshes, because it belongs to the same credential; a missing one returns ``None``.
+    """
+    key = _cache_key(profile, fingerprint, use_cli_session=use_cli_session)
+    with _lock:
+        cached = _cli_slug_cache.get(key)
+        if cached is not None and cached[0] > monotonic():
+            return cached[1]
+        if key not in _pending:
+            thread = threading.Thread(
+                target=_discover_in_background, args=(key,), name='orq-workspace-slug', daemon=True
+            )
+            _pending[key] = thread
+            thread.start()
+    return cached[1] if cached is not None else None
 
 
-def _discover_cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool) -> str | None:
+def _discover_in_background(key: _CacheKey) -> None:
+    profile, _fingerprint, stamp = key
+    slug = None
+    try:
+        slug = _discover_cli_slug(profile, use_cli_session=stamp is not None)
+    except Exception:  # noqa: BLE001 - a failed lookup is cached as missing and retried
+        logger.opt(exception=True).warning('Orq workspace lookup failed')
+    finally:
+        with _lock:
+            # Tests swap `_pending` between runs; a lookup no longer registered must not publish.
+            if _pending.get(key) is threading.current_thread():
+                for old in [k for k in _cli_slug_cache if k[:2] == key[:2]]:
+                    del _cli_slug_cache[old]
+                _cli_slug_cache[key] = (monotonic() + (_FOUND_TTL_S if slug else _MISSING_TTL_S), slug)
+                del _pending[key]
+
+
+def _discover_cli_slug(profile: str | None, *, use_cli_session: bool) -> str | None:
     from evaluatorq.dashboard.orq_scope import discover_orq_scope
 
     scope = discover_orq_scope(profile, use_cli_session=use_cli_session)
@@ -69,13 +134,11 @@ def _discover_cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_
             'Could not resolve the Orq workspace slug from the CLI: {}',
             scope.error or 'the credential has no matching listed workspace',
         )
-    if not use_cli_session:
-        _cli_slug_cache[profile, fingerprint, False] = (monotonic() + (300 if slug and fingerprint else 30), slug)
     return slug
 
 
-def resolve_slug() -> str | None:
-    """Workspace slug from the selected OAuth scope, environment, or active CLI credential."""
+def _slug_source() -> str | tuple[str | None, str | None, bool] | None:
+    """The configured slug, or the credential the CLI is asked about, or ``None`` when neither applies."""
     from evaluatorq.trace_finder.settings import credential_fingerprint, load_settings
 
     settings = load_settings()
@@ -87,11 +150,32 @@ def resolve_slug() -> str | None:
     if not shutil.which('orq'):
         return None
     if settings.orq_auth_method == 'cli_profile' and settings.orq_profile:
-        return _cli_slug(settings.orq_profile, settings.orq_credential_fingerprint)
+        return (settings.orq_profile, settings.orq_credential_fingerprint, False)
     api_key = env_text('ORQ_API_KEY')
     if api_key:
-        return _cli_slug(None, credential_fingerprint(api_key, env_raw('ORQ_BASE_URL')))
-    return _cli_slug(None, None, use_cli_session=True)
+        return (None, credential_fingerprint(api_key, env_raw('ORQ_BASE_URL')), False)
+    return (None, None, True)
+
+
+def resolve_slug() -> str | None:
+    """Workspace slug from the selected OAuth scope, environment, or active CLI credential."""
+    source = _slug_source()
+    if isinstance(source, tuple):
+        profile, fingerprint, use_cli_session = source
+        if use_cli_session:
+            return _cli_slug(profile, fingerprint, use_cli_session=True)
+        return _cli_slug(profile, fingerprint)
+    return source
+
+
+def slug_lookup_pending() -> bool:
+    """Whether a lookup is running for the credential the dashboard currently uses."""
+    source = _slug_source()
+    if not isinstance(source, tuple):
+        return False
+    key = _cache_key(source[0], source[1], use_cli_session=source[2])
+    with _lock:
+        return key in _pending
 
 
 def resolve_base_url() -> str:

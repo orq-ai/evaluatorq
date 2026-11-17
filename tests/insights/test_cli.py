@@ -30,6 +30,7 @@ from evaluatorq.trace_finder.export import (
 from evaluatorq.trace_finder import cli as finder_cli
 from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
 from evaluatorq.trace_finder.models import Snapshot
+from tests.common.llm_error_factories import STATUS_FACTORIES
 from tests.insights.test_population import make_trace
 from tests.local_sessions.conftest import claude_projects, codex_home
 
@@ -717,3 +718,19 @@ async def test_cleanup_failure_does_not_replace_the_insights_error(monkeypatch: 
     with pytest.raises(ValueError, match='the real failure'):
         await cli_module._run_insights_with_profile(InsightsPopulation(), profile)
     resolved.client.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize('make_error', STATUS_FACTORIES, ids=['openai', 'anthropic'])
+def test_sdk_error_is_a_clean_error_and_exit_one(monkeypatch: Any, make_error: Any) -> None:
+    """A status error from either SDK becomes one error line and exit 1, not a traceback."""
+
+    async def failing_run(population: Any, profile: Any, **kwargs: Any) -> Any:
+        raise make_error(401, 'invalid api key')
+
+    monkeypatch.setattr(cli_module, '_run_insights_with_profile', failing_run)
+    result = CliRunner().invoke(_app(), ['insights'])
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit)
+    assert 'invalid api key' in unstyle(result.output)
+    assert 'Traceback' not in result.output

@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from evaluatorq.common.model_catalogue import ModelInfo, register_model
 from evaluatorq.common.structured_output import StructuredResult, generate_structured, sum_structured_usage
+from tests.common.llm_error_factories import STATUS_FACTORIES
 
 MODEL = 'test/usage-model'
 
@@ -441,6 +442,21 @@ async def test_a_truncated_parse_rung_without_usage_is_unpriced_not_free(
     assert usage.priced_calls == 0
     assert usage.total_cost is None
     assert 'no readable usage block' in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('make', STATUS_FACTORIES)
+async def test_a_schema_rejecting_400_from_either_sdk_falls_to_the_next_rung(make: Any) -> None:
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=make(400, 'response_format is not supported'))
+    client.chat.completions.create = AsyncMock(
+        return_value=_text_completion('{"value": "ok"}', prompt=5, completion=2)
+    )
+
+    result = await _generate(client)
+
+    assert result.parsed == SampleResponse(value='ok')
+    client.chat.completions.create.assert_awaited_once()
 
 
 @pytest.mark.asyncio

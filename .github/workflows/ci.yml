@@ -76,13 +76,13 @@ jobs:
 
       - name: Test (unit only)
         if: matrix.python-version != '3.13' || matrix.os != 'ubuntu-latest'
-        run: uv run pytest -m 'not integration'
+        run: uv run pytest -m 'not integration' -n auto
 
       # Coverage instrumentation costs wall-clock, so only the canonical leg pays
       # for it. The other legs run the same suite bare, above.
       - name: Test (unit only, with coverage)
         if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
-        run: uv run pytest -m 'not integration' --cov --cov-report=term
+        run: uv run pytest -m 'not integration' -n auto --cov --cov-report=term
 
       # Posts a coverage comment on PRs and, on push to main, writes badge +
       # report data to the `python-coverage-comment-action-data` branch. Uses the

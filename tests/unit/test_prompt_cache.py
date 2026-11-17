@@ -297,3 +297,49 @@ def test_caching_applies_needs_both_the_router_and_a_model_that_benefits(
 
 def test_caching_applies_is_false_without_a_client() -> None:
     assert caching_applies(None, 'anthropic/claude-sonnet-4-6') is False
+
+
+@pytest.mark.parametrize('model', ['claude-sonnet-5-5', 'anthropic/claude-sonnet-5-5', 'gpt-5-mini', 'custom-id'])
+def test_caching_applies_to_an_anthropic_client_whatever_the_model_id(model: str) -> None:
+    from anthropic import AsyncAnthropic
+
+    from evaluatorq.anthropic import AnthropicLLMClient
+
+    wrapped = AnthropicLLMClient(AsyncAnthropic(api_key='test-key'))
+    assert caching_applies(typing.cast('typing.Any', wrapped), model) is True
+
+
+def test_an_anthropic_client_receives_the_breakpoints_as_cache_control() -> None:
+    import asyncio
+
+    from anthropic.types import Message as AnthropicMessage
+    from anthropic.types import TextBlock, Usage
+
+    from evaluatorq.anthropic import AnthropicLLMClient
+
+    sent: list[dict[str, object]] = []
+
+    class Messages:
+        async def create(self, **kwargs: object) -> AnthropicMessage:
+            sent.append(kwargs)
+            return AnthropicMessage(
+                id='m',
+                type='message',
+                role='assistant',
+                model='claude-sonnet-5-5',
+                content=[TextBlock(type='text', text='ok')],
+                stop_reason='end_turn',
+                stop_sequence=None,
+                usage=Usage(input_tokens=1, output_tokens=1),
+            )
+
+    fake = MagicMock(base_url='https://api.anthropic.com', max_retries=0)
+    fake.messages = Messages()
+    client = AnthropicLLMClient(fake)
+    assert caching_applies(typing.cast('typing.Any', client), 'claude-sonnet-5-5')
+    marked = apply_cache_breakpoints(
+        [{'role': 'system', 'content': _long('system')}, {'role': 'user', 'content': _long('hello')}],
+        volatile_tail=0,
+    )
+    asyncio.run(client.chat.completions.create(model='claude-sonnet-5-5', messages=marked))
+    assert 'cache_control' in json.dumps(sent[0])

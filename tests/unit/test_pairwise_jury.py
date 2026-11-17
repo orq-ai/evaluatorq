@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -24,7 +24,7 @@ async def test_comparator_reconciles_a_consistent_judge(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(llm_jury_module, 'run_judge', fake_run_judge)
 
-    comparator = llm_jury_pairwise(judges=['judge-1'], client=object())
+    comparator = llm_jury_pairwise(judges=['judge-1'], client=cast('Any', object()))
     result = await comparator.compare(question='Which is better?', response_a='GOOD', response_b='BAD')
 
     assert result.winner == 'A'
@@ -42,7 +42,7 @@ async def test_comparator_runs_both_orderings(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(llm_jury_module, 'run_judge', fake_run_judge)
 
-    comparator = llm_jury_pairwise(judges=['judge-1'], client=object())
+    comparator = llm_jury_pairwise(judges=['judge-1'], client=cast('Any', object()))
     result = await comparator.compare(question='Q?', response_a='GOOD', response_b='BAD')
 
     assert seen_first == ['GOOD', 'BAD']
@@ -62,7 +62,7 @@ async def test_swap_off_runs_one_ordering(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(llm_jury_module, 'run_judge', fake_run_judge)
 
-    comparator = llm_jury_pairwise(judges=['judge-1'], client=object(), swap=False)
+    comparator = llm_jury_pairwise(judges=['judge-1'], client=cast('Any', object()), swap=False)
     result = await comparator.compare(question='Q?', response_a='GOOD', response_b='BAD')
 
     assert calls == 1

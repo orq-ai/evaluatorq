@@ -556,11 +556,14 @@ def test_nonzero_exit_is_recognised_in_each_harness_format(tool: str, content: s
     assert 'output shows: nonzero_exit' in view
 
 
-def test_codex_exec_script_is_read_as_a_shell_call() -> None:
-    script = 'const r = await tools.exec_command({cmd:"git push --force origin main","workdir":"/repo"}); text(r);'
+_CODEX_EXEC_SCRIPT = 'const r = await tools.exec_command({cmd:"git push --force origin main","workdir":"/repo"}); text(r);'
+
+
+@pytest.mark.parametrize('arguments', [_CODEX_EXEC_SCRIPT, {'input': _CODEX_EXEC_SCRIPT}], ids=['raw', 'custom-tool-input'])
+def test_codex_exec_script_is_read_as_a_shell_call(arguments: dict[str, Any] | str) -> None:
     trace = _trace(
         {'role': 'user', 'content': 'Ship it.'},
-        {'role': 'assistant', 'tool_calls': [_call('c1', 'exec', script)]},
+        {'role': 'assistant', 'tool_calls': [_call('c1', 'exec', arguments)]},
         {'role': 'tool', 'tool_call_id': 'c1', 'content': 'Script failed\nOutput:\nrejected'},
     )
 

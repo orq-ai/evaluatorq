@@ -65,6 +65,13 @@ _ROWS = (
     EnvVar('ORQ_API_KEY', 'raw', None, 'Orq platform API key; also enables tracing.', secret=True),
     EnvVar('ORQ_BASE_URL', 'raw', DEFAULT_ORQ_BASE_URL, 'Orq API base URL.'),
     EnvVar('OPENAI_API_KEY', 'raw', None, 'OpenAI-compatible backend key when ORQ_API_KEY is absent.', secret=True),
+    EnvVar(
+        'ANTHROPIC_API_KEY',
+        'raw',
+        None,
+        'Anthropic backend key when neither ORQ_API_KEY nor OPENAI_API_KEY is set.',
+        secret=True,
+    ),
     EnvVar('OPENAI_BASE_URL', 'raw', None, 'OpenAI-compatible host for the red teaming LLM client.'),
     EnvVar('EVALUATORQ_CATALOGUE_TIMEOUT_S', 'float', 30.0, 'Model catalogue fetch timeout, read at import.', 0.1),
     # Model roles

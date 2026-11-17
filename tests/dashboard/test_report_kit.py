@@ -124,6 +124,14 @@ def test_heatmap_empty_cell_dash():
     assert '—' in html
 
 
+def test_heatmap_render_cell_replaces_td_and_keeps_empty_dash():
+    cells = [{'persona': 'P', 'scenario': 'S', 'success_rate': 0.9}]
+    html = report_kit.heatmap(['P', 'Q'], ['S'], cells, render_cell=lambda c: f'<td class="mine">{c["persona"]}</td>')
+    assert '<td class="mine">P</td>' in html
+    assert 'rk-heat-empty' in html
+    assert 'background' not in html
+
+
 def test_heatmap_generic_keys_and_scale():
     cells = [{'vulnerability': 'ASI01', 'technique': 'crescendo', 'vulnerability_rate': 1.0}]
     html = report_kit.heatmap(

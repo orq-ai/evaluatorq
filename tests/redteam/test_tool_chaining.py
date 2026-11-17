@@ -146,15 +146,22 @@ class TestToolChainingPlanner:
         }
 
     @pytest.mark.asyncio
-    async def test_decompose_prices_usage_from_catalogue(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_decompose_sends_no_metadata_to_a_direct_openai_client(self) -> None:
+        parse = AsyncMock(return_value=_parsed_response(_schema()))
+        client = _mock_client(parse=parse)
+        client.base_url = "https://api.openai.com/v1"
+        planner = ToolChainingPlanner(client=client, model="gpt-4.1")
+
+        with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('tool-chain-run'):
+            await planner.decompose("exfiltrate user data", "CustomerBot", "desc", ["lookup_tool"])
+
+        assert 'metadata' not in parse.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_decompose_prices_usage_from_catalogue(self, fake_catalogue) -> None:
         """RES-1295: an unpriced planner completion comes back priced, with
         priced_calls == calls, once a catalogue entry exists for the model."""
-        model_catalogue.reset_catalogue_cache()
-
-        async def fake_load(client=None):  # noqa: ANN001, ARG001
-            return {"gpt-4.1": model_catalogue.ModelInfo(0.00025, 0.002, "openai", supports_responses=True)}
-
-        monkeypatch.setattr(model_catalogue, "_load_catalogue", fake_load)
+        fake_catalogue({"gpt-4.1": model_catalogue.ModelInfo(0.00025, 0.002, "openai", supports_responses=True)})
 
         parse = AsyncMock(return_value=_parsed_response(_schema()))
         planner = ToolChainingPlanner(client=_mock_client(parse=parse), model="gpt-4.1")

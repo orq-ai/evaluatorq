@@ -1012,7 +1012,7 @@ def test_find_export_save_failure_is_visible(
     def fail_save(*args, **kwargs):
         raise OSError('read-only store')
 
-    monkeypatch.setattr(finder_routes.tempfile, 'NamedTemporaryFile', fail_save)
+    monkeypatch.setattr(finder_routes, 'write_private_atomic', fail_save)
     response = client.get('/find/export.json')
     assert response.status_code == 500
     assert 'Could not save Finder export for Insights.' in response.text

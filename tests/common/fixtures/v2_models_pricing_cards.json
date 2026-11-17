@@ -1,0 +1,334 @@
+[
+  {
+    "id": "3a7b878f-6a2a-4688-9277-9a05d4c078c6",
+    "refId": "google-ai/gemini-2.5-pro",
+    "provider": "google-ai",
+    "model_id": "gemini-2.5-pro",
+    "model_developer": "google",
+    "model_type": "chat",
+    "input_cost": 0.00125,
+    "input_currency": "",
+    "output_cost": 0.01,
+    "output_currency": "",
+    "metadata": {
+      "context_window": 1048576,
+      "is_private": false,
+      "region": "rest",
+      "supports_vision": true,
+      "supports_tool_calling": true,
+      "supports_parallel_tool_calls": true,
+      "supports_tool_choice": true,
+      "supports_json_schema_response_format": true,
+      "supports_streaming": true,
+      "supports_batch_api": true,
+      "batch_endpoints": [
+        "/v1/chat/completions"
+      ],
+      "supports_sampling_params": true,
+      "supports_service_tier": false,
+      "supports_reasoning": true,
+      "thinking_enforced": true,
+      "supports_extended_thinking": true,
+      "supports_web_search": true,
+      "supports_url_context": true,
+      "supports_code_execution": true,
+      "supports_prompt_caching": true,
+      "supports_distillation": true,
+      "supports_text_input": true,
+      "supports_image_input": true,
+      "supports_audio_input": true,
+      "supports_video_input": true,
+      "supports_pdf_input": true,
+      "supports_text_output": true,
+      "max_output_tokens": 65536,
+      "pricing": {
+        "variants": [
+          {
+            "when": "input_tokens > 200000"
+          },
+          {
+            "when": "tier == \"flex\""
+          },
+          {
+            "when": "tier == \"flex\" && input_tokens > 200000"
+          },
+          {
+            "when": "tier == \"priority\""
+          },
+          {
+            "when": "tier == \"priority\" && input_tokens > 200000"
+          },
+          {
+            "when": "tier == \"batch\""
+          },
+          {
+            "when": "tier == \"batch\" && input_tokens > 200000"
+          }
+        ]
+      },
+      "million_tokens_input_cost": 1.25,
+      "million_tokens_output_cost": 10,
+      "million_tokens_cache_read_cost": 0.125,
+      "million_tokens_cache_write_cost": 4.5,
+      "million_searches_cost": 35000,
+      "million_tokens_above_200k_input_cost": 2.5,
+      "million_tokens_above_200k_output_cost": 15,
+      "million_tokens_above_200k_cache_read_cost": 0.25,
+      "million_tokens_batches_input_cost": 0.625,
+      "million_tokens_batches_output_cost": 5,
+      "extended_context_threshold": 200000,
+      "extended_context_pricing_mode": "all_tokens",
+      "speed_rating": 3,
+      "intelligence_rating": 5,
+      "cost_efficiency_rating": 3,
+      "knowledge_cutoff": "2025-01-01",
+      "supports_structured_outputs": true,
+      "autorouter": {
+        "id": "Google/Gemini/2.5 Pro",
+        "version": "1",
+        "v2": {
+          "aa_slug": "gemini-2-5-pro",
+          "intelligence_index": 16.1,
+          "aa_index_version": "v4.3",
+          "price": 3.4375,
+          "aa_model_id": "27202e5f-c82d-4710-92e9-4317877d4883",
+          "aa_name": "Gemini 2.5 Pro",
+          "aa_creator": {
+            "id": "faddc6d9-2c14-445f-9b28-56726f59c793",
+            "name": "Google"
+          },
+          "aa_release_date": "2025-06-05",
+          "aa_evaluations": {
+            "artificial_analysis_agentic_index": 1.6,
+            "artificial_analysis_finance_and_accounting_index": 17.3,
+            "artificial_analysis_legal_index": 23.7,
+            "artificial_analysis_healthcare_and_medical_index": null,
+            "artificial_analysis_economics_index": 24.5,
+            "artificial_analysis_coding_index": 33.3,
+            "artificial_analysis_strategy_and_ops_index": 12.6,
+            "artificial_analysis_engineering_index": 18.9,
+            "artificial_analysis_intelligence_index": 16.1
+          },
+          "aa_pricing": {
+            "price_1m_cache_hit_tokens": 0.13,
+            "price_1m_cache_write_tokens": null,
+            "price_1m_input_tokens": 1.25,
+            "price_1m_output_tokens": 10
+          },
+          "aa_median_output_tokens_per_second": 129.06,
+          "aa_median_time_to_first_token_seconds": 18.09,
+          "aa_median_time_to_first_answer_token": 18.09
+        }
+      }
+    }
+  },
+  {
+    "id": "019f4eb1-b967-7db3-a677-0f2993eed004",
+    "refId": "orq-research@orq/autorouter-anthropic-cost",
+    "provider": "orq",
+    "model_id": "autorouter-anthropic-cost",
+    "model_developer": "unknown",
+    "model_type": "chat",
+    "input_cost": 0.005,
+    "input_currency": "usd",
+    "output_cost": 0.025,
+    "output_currency": "usd",
+    "metadata": {
+      "context_window": 200000,
+      "is_private": true,
+      "region": "europe",
+      "supports_vision": true,
+      "supports_cache_control": true,
+      "supports_tool_calling": true,
+      "supports_json_schema_response_format": true,
+      "supports_streaming": true,
+      "supports_batch_api": true,
+      "supports_sampling_params": true,
+      "supports_extended_thinking": true,
+      "supports_web_search": true,
+      "supports_prompt_caching": true,
+      "supports_text_input": true,
+      "supports_image_input": true,
+      "supports_pdf_input": true,
+      "supports_text_output": true,
+      "max_output_tokens": 64000,
+      "million_tokens_input_cost": 5,
+      "million_tokens_output_cost": 25,
+      "million_tokens_cache_read_cost": 0.5,
+      "million_tokens_cache_write_cost": 6.25,
+      "extended_context_pricing_mode": "none",
+      "speed_rating": 3,
+      "intelligence_rating": 4,
+      "cost_efficiency_rating": 4,
+      "autorouter": {
+        "strong_model": "aws/eu.anthropic.claude-opus-4-5-20251101-v1:0",
+        "economical_model": "aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "profile": "cost"
+      }
+    }
+  },
+  {
+    "id": "67f0c0ad-968e-55c7-a894-a323d2ea1e40",
+    "refId": "anthropic/claude-sonnet-5-5",
+    "provider": "anthropic",
+    "model_id": "claude-sonnet-5-5",
+    "model_developer": "anthropic",
+    "model_type": "chat",
+    "input_cost": 0.002,
+    "input_currency": "",
+    "output_cost": 0.01,
+    "output_currency": "",
+    "metadata": {
+      "context_window": 1000000,
+      "is_private": false,
+      "region": "rest",
+      "supports_vision": true,
+      "supports_cache_control": true,
+      "supports_tool_calling": true,
+      "supports_parallel_tool_calls": true,
+      "supports_tool_choice": false,
+      "supports_strict_tool": true,
+      "supports_json_schema_response_format": true,
+      "supports_streaming": true,
+      "supports_batch_api": true,
+      "batch_endpoints": [
+        "/v1/chat/completions"
+      ],
+      "supports_mid_conversation_system": true,
+      "supports_sampling_params": false,
+      "supports_service_tier": false,
+      "supports_reasoning": true,
+      "supports_reasoning_effort_low": true,
+      "supports_reasoning_effort_medium": true,
+      "supports_reasoning_effort_high": true,
+      "supports_reasoning_effort_xhigh": true,
+      "supports_reasoning_effort_max": true,
+      "thinking_enforced": true,
+      "supports_adaptive_reasoning": true,
+      "supports_web_search": true,
+      "supports_code_execution": true,
+      "supports_citations": true,
+      "supports_prompt_caching": true,
+      "supports_text_input": true,
+      "supports_image_input": true,
+      "supports_pdf_input": true,
+      "supports_text_output": true,
+      "max_output_tokens": 128000,
+      "default_max_output_tokens": 128000,
+      "max_temperature": 1,
+      "pricing": {
+        "variants": [
+          {
+            "when": "tier == \"batch\""
+          },
+          {
+            "when": "inference_geo == \"us\" && tier != \"batch\""
+          },
+          {
+            "when": "inference_geo == \"us\" && tier == \"batch\""
+          }
+        ]
+      },
+      "million_tokens_input_cost": 2,
+      "million_tokens_output_cost": 10,
+      "million_tokens_cache_read_cost": 0.1,
+      "million_tokens_cache_write_cost": 2.5,
+      "million_searches_cost": 10000,
+      "million_tokens_batches_input_cost": 1,
+      "million_tokens_batches_output_cost": 5,
+      "knowledge_cutoff": "2026-06-01",
+      "supports_structured_outputs": true,
+      "autorouter": {
+        "version": "1",
+        "v2": {
+          "aa_slug": "claude-sonnet-5-5-high",
+          "intelligence_index": 46.8,
+          "aa_index_version": "v4.3",
+          "price": 4,
+          "aa_model_id": "268525e2-f873-4178-bc07-e6a0ee1f002d",
+          "aa_name": "Claude Sonnet 5.5 (High, Default Fallback)",
+          "aa_creator": {
+            "id": "f0aa413f-e8ae-4fcd-9c48-0e049f4f3128",
+            "name": "Anthropic"
+          },
+          "aa_release_date": "2026-09-28",
+          "aa_evaluations": {
+            "artificial_analysis_intelligence_index": 46.8,
+            "artificial_analysis_finance_and_accounting_index": 47.1,
+            "artificial_analysis_legal_index": 48.7,
+            "artificial_analysis_healthcare_and_medical_index": null,
+            "artificial_analysis_engineering_index": 48.3,
+            "artificial_analysis_economics_index": 51.8,
+            "artificial_analysis_coding_index": null,
+            "artificial_analysis_agentic_index": null,
+            "artificial_analysis_strategy_and_ops_index": 51.6
+          },
+          "aa_pricing": {
+            "price_1m_input_tokens": 2,
+            "price_1m_output_tokens": 10,
+            "price_1m_cache_hit_tokens": 0.2,
+            "price_1m_cache_write_tokens": 2.5
+          },
+          "aa_median_output_tokens_per_second": 99.34,
+          "aa_median_time_to_first_token_seconds": 12.09,
+          "aa_median_time_to_first_answer_token": 12.09,
+          "default_effort": "high",
+          "default_effort_scored": true,
+          "reasoning_efforts": {
+            "low": {
+              "aa_slug": "claude-sonnet-5-5-low",
+              "intelligence_index": 35.9,
+              "aa_index_version": "v4.3"
+            },
+            "medium": {
+              "aa_slug": "claude-sonnet-5-5-medium",
+              "intelligence_index": 40.8,
+              "aa_index_version": "v4.3"
+            },
+            "xhigh": {
+              "aa_slug": "claude-sonnet-5-5-xhigh",
+              "intelligence_index": 51.9,
+              "aa_index_version": "v4.3"
+            },
+            "max": {
+              "aa_slug": "claude-sonnet-5-5",
+              "intelligence_index": 56,
+              "aa_index_version": "v4.3"
+            },
+            "high": {
+              "aa_slug": "claude-sonnet-5-5-high",
+              "intelligence_index": 46.8,
+              "aa_index_version": "v4.3"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "198e6273-8e39-52a7-8f00-ce9b0396d376",
+    "refId": "google-ai/gemini-3.5-transcribe-live",
+    "provider": "google-ai",
+    "model_id": "gemini-3.5-transcribe-live",
+    "model_developer": "google",
+    "model_type": "stt",
+    "input_cost": 0,
+    "input_currency": "",
+    "output_cost": 0.021,
+    "output_currency": "",
+    "metadata": {
+      "context_window": 131072,
+      "is_private": false,
+      "region": "rest",
+      "supports_streaming": true,
+      "supports_transcription": true,
+      "supports_google_realtime_api": true,
+      "supports_audio_input": true,
+      "supports_text_output": true,
+      "max_output_tokens": 65536,
+      "pricing": {},
+      "million_tokens_output_cost": 21,
+      "million_tokens_audio_input_cost": 3.5
+    }
+  }
+]

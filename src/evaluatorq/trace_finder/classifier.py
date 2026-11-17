@@ -11,10 +11,11 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.judge import JudgeOutcome, judge_error_payload, run_classify_judges
+from evaluatorq.common.jury import no_verdict_message
 from evaluatorq.common.llm_call import classify_request_body
 from evaluatorq.common.model_input import effective_trace_input_chars, fit_classifier_input
 from evaluatorq.contracts import JuryRepetition, JuryResult, JuryVote, LLMCallConfig, TokenUsage
-from evaluatorq.evaluatorq import evaluatorq
+from evaluatorq.evaluatorq import _AbortEvaluation, evaluatorq
 from evaluatorq.types import DataPoint, DataPointResult, EvaluationResult, Evaluator, ScorerParameter
 
 from .debug import enabled as debug_enabled
@@ -129,11 +130,12 @@ def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
     abstained = mechanical_success and bool(payload and payload.abstain)
     decisive = mechanical_success and not abstained and payload_value is not None
     success = decisive or abstained
-    message = outcome.error_message or (None if success else 'The classifier returned no verdict')
+    message = outcome.error_message or (None if success else no_verdict_message(payload_explanation or ''))
     repetition = JuryRepetition(
         value=payload_value if decisive else None,
         explanation=payload_explanation,
         raw_output=outcome.raw_output,
+        verdict_coerced=outcome.verdict_coerced,
     )
     vote = JuryVote(
         model=model,
@@ -144,6 +146,7 @@ def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
         error=message if not success else None,
         repetitions=[repetition],
         repetitions_failed=0 if success else 1,
+        repetitions_coerced=1 if outcome.verdict_coerced else 0,
     )
     jury = JuryResult(
         judges_configured=1,
@@ -390,21 +393,28 @@ async def run_classifier(
     )
 
     async def complete(result: DataPointResult) -> None:
-        classification = parse_datapoint_result(result, dimensions)
-        await on_complete(classification)
-        classifications.append(classification)
+        # evaluatorq() logs and skips a failing callback; a lost classification must fail the run instead.
+        try:
+            classification = parse_datapoint_result(result, dimensions)
+            await on_complete(classification)
+            classifications.append(classification)
+        except Exception as error:
+            raise _AbortEvaluation from error
 
-    await evaluatorq(
-        'classifier-trace-finder',
-        data=[build_datapoint(trace, projections[trace.trace_id]) for trace in traces],
-        evaluators=[evaluator],
-        inference=False,
-        datapoint_parallelism=parallelism,
-        llm_parallelism=parallelism,
-        on_datapoint_complete=complete,
-        print_results=False,
-        _send_results=False,
-    )
+    try:
+        await evaluatorq(
+            'classifier-trace-finder',
+            data=[build_datapoint(trace, projections[trace.trace_id]) for trace in traces],
+            evaluators=[evaluator],
+            inference=False,
+            datapoint_parallelism=parallelism,
+            llm_parallelism=parallelism,
+            on_datapoint_complete=complete,
+            print_results=False,
+            _send_results=False,
+        )
+    except _AbortEvaluation as aborted:
+        raise (aborted.__cause__ or aborted) from None
     return classifications
 
 

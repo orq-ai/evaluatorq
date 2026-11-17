@@ -7,7 +7,7 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime  # noqa: TC003 — runtime-required by pydantic manifest models
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, NamedTuple, TypeAlias
 
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
@@ -208,6 +208,7 @@ class LLMCallConfig(BaseModel):
         'is the only authority — an unsupported value comes back as a provider 400, which the '
         '`common.llm_call` executors turn into a drop-and-retry-once.',
     )
+    # Typed as AsyncOpenAI for the type checker and `Any` at runtime, because pydantic cannot validate the optional Anthropic SDK types. The validator below wraps a raw Anthropic client in the adapter, so it works in this field too.
     client: _Client = None
     retry_count: int = Field(
         default=1,
@@ -217,6 +218,14 @@ class LLMCallConfig(BaseModel):
         "owning caller disarms the client's own retry budget for the duration (see run_judge) so "
         'the two cannot multiply.',
     )
+
+    @field_validator('client', mode='before')
+    @classmethod
+    def _wrap_anthropic_client(cls, value: Any) -> Any:
+        """Wrap a raw Anthropic SDK client in the adapter; any other client is kept as passed."""
+        from evaluatorq.common.llm_client import as_llm_client
+
+        return as_llm_client(value)
 
     def set_values(self, *names: str) -> dict[str, Any]:
         """The named fields the caller explicitly set, as a kwargs dict.
@@ -542,6 +551,112 @@ def _usage_detail_int(usage: Any, containers: tuple[str, ...], keys: tuple[str, 
     return 0
 
 
+_INPUT_DETAILS = ('input_tokens_details', 'prompt_tokens_details', 'input_token_details')
+
+
+def _bedrock_cache_details(usage: Any) -> tuple[int, int]:
+    """Sum Bedrock Converse ``cacheDetails`` (``[{'ttl': '1h' | '5m', 'inputTokens': n}, ...]``) into ``(1h, 5m)``.
+
+    ``inputTokens`` here is the cache-write count at that TTL, not the request's input count. An unknown
+    TTL, a non-list value or an unusable count is skipped, never raised.
+    """
+    entries = _usage_get(usage, 'cacheDetails')
+    if not isinstance(entries, (list, tuple)):
+        return 0, 0
+    by_ttl = {'1h': 0, '5m': 0}
+    for entry in entries:
+        ttl = _usage_get(entry, 'ttl')
+        if ttl in by_ttl:
+            by_ttl[ttl] += _usage_first_int(entry, ('inputTokens',))
+    return by_ttl['1h'], by_ttl['5m']
+
+
+class _CacheCounts(NamedTuple):
+    """Cache token counts of one provider usage payload, already normalised to the subset contract.
+
+    ``exclusive`` is the number of tokens to ADD to the reported input count because the payload's
+    convention reports input WITHOUT them (0 when the shape is inclusive).
+    """
+
+    cached: int
+    written: int
+    written_1h: int
+    written_5m: int
+    exclusive: int
+
+
+def _cache_counts(usage: Any) -> _CacheCounts:
+    """Read cache counts from any provider usage shape and say how much of it lies outside the input.
+
+    The key that carries a count decides its convention, never the model name::
+
+        shape                          keys                                              input_tokens
+        -----------------------------  ------------------------------------------------  ---------------
+        input-side details object      input_tokens_details / prompt_tokens_details /    inclusive
+        (Orq, OpenAI, langchain,       input_token_details: cached_tokens | cache_read,
+        the Anthropic adapter)         cache_creation_tokens, audio_tokens
+        Codex CLI flat                 cached_input_tokens, cache_write_input_tokens     inclusive
+        Vercel AI SDK camelCase        cachedInputTokens                                 inclusive
+        native Anthropic flat          cache_read_input_tokens,                          exclusive
+        (also Bedrock InvokeModel,     cache_creation_input_tokens, cache_creation
+        Vertex AI, Foundry; OpenCode   {ephemeral_1h/5m_input_tokens}
+        renames into it)
+        Bedrock Converse camelCase     cacheReadInputTokens, cacheWriteInputTokens,      exclusive
+                                       cacheDetails [{ttl: '1h' | '5m', inputTokens}]
+
+    The 1h/5m cache-write split is always a subset of the write total: a tier pair that sums past the
+    reported total is clamped (1h first), and a side the provider does not report stays 0 rather than
+    being inferred as the remainder.
+
+    A payload that carries an inclusive source for a counter (any details object, or a Codex/Vercel
+    key) never has that counter added again: a details object marks the whole payload as
+    OpenAI-shaped, so stray Anthropic-named flat keys beside it are read as informational subsets.
+    """
+    details_present = any(_usage_get(usage, name) is not None for name in _INPUT_DETAILS)
+    tier_containers = (*_INPUT_DETAILS, 'cache_creation')
+
+    cached_nested = _usage_detail_int(usage, _INPUT_DETAILS, ('cached_tokens', 'cache_read'))
+    cached_inclusive_flat = _usage_first_int(usage, ('cached_input_tokens', 'cachedInputTokens'))
+    cached_exclusive_flat = _usage_first_int(usage, ('cache_read_input_tokens', 'cacheReadInputTokens'))
+    cached = cached_nested or cached_exclusive_flat or cached_inclusive_flat
+    cached_exclusive = 0 if details_present or cached_nested or cached_inclusive_flat else cached_exclusive_flat
+
+    written_1h = _usage_detail_int(
+        usage, tier_containers, ('cache_creation_1h_tokens', 'ephemeral_1h_input_tokens')
+    ) or _usage_first_int(usage, ('cache_creation_1h_tokens',))
+    written_5m = _usage_detail_int(
+        usage, tier_containers, ('cache_creation_5m_tokens', 'ephemeral_5m_input_tokens')
+    ) or _usage_first_int(usage, ('cache_creation_5m_tokens',))
+    written_nested = _usage_detail_int(usage, _INPUT_DETAILS, ('cache_creation_tokens', 'cache_creation_input_tokens'))
+    bedrock_1h, bedrock_5m = _bedrock_cache_details(usage)
+    written_1h = written_1h or bedrock_1h
+    written_5m = written_5m or bedrock_5m
+    tiers = _usage_get(usage, 'cache_creation')
+    written_exclusive_flat = (
+        _usage_first_int(usage, ('cache_creation_input_tokens',))
+        or (
+            _usage_first_int(tiers, ('ephemeral_1h_input_tokens',))
+            + _usage_first_int(tiers, ('ephemeral_5m_input_tokens',))
+        )
+        or _usage_first_int(usage, ('cacheWriteInputTokens',))
+        or bedrock_1h + bedrock_5m
+    )
+    written_inclusive_flat = _usage_first_int(usage, ('cache_write_input_tokens',))
+    # Both Anthropic and Orq v3 report a pre-summed total, so the tier sum is only a last-resort
+    # fallback for a payload that carries the split alone.
+    written = written_nested or written_exclusive_flat or written_inclusive_flat or written_1h + written_5m
+    written_exclusive = 0 if details_present or written_nested or written_inclusive_flat else written_exclusive_flat
+    written_1h = min(written_1h, written)
+    written_5m = min(written_5m, written - written_1h)
+    return _CacheCounts(
+        cached=cached,
+        written=written,
+        written_1h=written_1h,
+        written_5m=written_5m,
+        exclusive=cached_exclusive + written_exclusive,
+    )
+
+
 def _usage_first_float(usage: Any, keys: tuple[str, ...]) -> float | None:
     """First numeric value across ``keys`` coerced to float, or None if absent.
 
@@ -601,7 +716,7 @@ class Usage(BaseModel):
         default=0,
         ge=0,
         validation_alias=AliasChoices('input_tokens', 'prompt_tokens'),
-        description='Input/prompt tokens (includes cached_tokens)',
+        description='Input/prompt tokens (includes cached_tokens and cache_creation_tokens, for every provider shape)',
     )
     output_tokens: int = Field(
         default=0,
@@ -614,7 +729,7 @@ class Usage(BaseModel):
     cache_creation_tokens: int = Field(
         default=0,
         ge=0,
-        description='Cache-write input tokens (subset of input_tokens for OpenAI-shaped payloads; reported separately by Anthropic)',
+        description='Cache-write input tokens (subset of input_tokens; Usage.extract folds Anthropic-shaped payloads, which report them outside input_tokens, into input_tokens)',
     )
     cache_creation_1h_tokens: int = Field(
         default=0, ge=0, description='Cache-write tokens at the 1h TTL tier (subset of cache_creation_tokens)'
@@ -622,6 +737,7 @@ class Usage(BaseModel):
     cache_creation_5m_tokens: int = Field(
         default=0, ge=0, description='Cache-write tokens at the 5m TTL tier (subset of cache_creation_tokens)'
     )
+    audio_input_tokens: int = Field(default=0, ge=0, description='Audio input tokens (subset of input_tokens)')
     reasoning_tokens: int = Field(default=0, ge=0, description='Reasoning output tokens (subset of output_tokens)')
     input_cost: float | None = Field(
         default=None,
@@ -666,6 +782,7 @@ class Usage(BaseModel):
             cache_creation_tokens: int = 0,
             cache_creation_1h_tokens: int = 0,
             cache_creation_5m_tokens: int = 0,
+            audio_input_tokens: int = 0,
             reasoning_tokens: int = 0,
             input_cost: float | None = None,
             prompt_cost: float | None = None,
@@ -751,45 +868,26 @@ class Usage(BaseModel):
         """
         if usage is None:
             return None
-        inp = _usage_first_int(usage, ('input_tokens', 'prompt_tokens', 'promptTokens', 'prompt'))
-        out = _usage_first_int(usage, ('output_tokens', 'completion_tokens', 'completionTokens', 'completion'))
-        # Provider total is trusted only when > 0; otherwise fall back to input+output.
+        inp = _usage_first_int(usage, ('input_tokens', 'prompt_tokens', 'promptTokens', 'inputTokens', 'prompt'))
+        out = _usage_first_int(
+            usage, ('output_tokens', 'completion_tokens', 'completionTokens', 'outputTokens', 'completion')
+        )
         reported_total = _usage_first_int(usage, ('total_tokens', 'totalTokens', 'total'))
-        total = reported_total if reported_total > 0 else inp + out
-        # Anthropic reports cache reads as a flat top-level `cache_read_input_tokens`
-        # (anthropic.types.Usage), not nested in a details object like Orq/OpenAI.
-        # Codex CLI is flat too (`cached_input_tokens`).
-        cached = _usage_detail_int(
+        counts = _cache_counts(usage)
+        cached = counts.cached
+        cache_creation = counts.written
+        cache_creation_1h = counts.written_1h
+        cache_creation_5m = counts.written_5m
+        # Exclusive shapes (native Anthropic, Bedrock) report input without the cache counters;
+        # fold them in so every Usage honours the subset contract.
+        inp += counts.exclusive
+        # A provider total for an exclusive shape may or may not include the cache counters, so never
+        # let it fall below the folded input + output.
+        total = max(reported_total, inp + out) if counts.exclusive else (reported_total or inp + out)
+        audio_input = _usage_detail_int(
             usage,
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
-            ('cached_tokens', 'cache_read'),
-        ) or _usage_first_int(usage, ('cache_read_input_tokens', 'cached_input_tokens'))
-        # Anthropic prices a 1h cache write above a 5m one, so the tier split is
-        # billing-relevant even though Orq folds both into the flat input_cost.
-        # Orq nests the tiers under input_tokens_details; Anthropic puts them in a
-        # `cache_creation` object under its own `ephemeral_*` names
-        # (anthropic.types.CacheCreation).
-        cache_creation_1h = _usage_detail_int(
-            usage,
-            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details', 'cache_creation'),
-            ('cache_creation_1h_tokens', 'ephemeral_1h_input_tokens'),
-        ) or _usage_first_int(usage, ('cache_creation_1h_tokens',))
-        cache_creation_5m = _usage_detail_int(
-            usage,
-            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details', 'cache_creation'),
-            ('cache_creation_5m_tokens', 'ephemeral_5m_input_tokens'),
-        ) or _usage_first_int(usage, ('cache_creation_5m_tokens',))
-        # Both Anthropic and Orq v3 do report a pre-summed total, so the tier sum is
-        # only a last-resort fallback for a payload that carries the split alone —
-        # without it those cache-write tokens would vanish from cache_creation_tokens.
-        cache_creation = (
-            _usage_detail_int(
-                usage,
-                ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
-                ('cache_creation_tokens', 'cache_creation_input_tokens'),
-            )
-            or _usage_first_int(usage, ('cache_creation_input_tokens', 'cache_write_input_tokens'))
-            or cache_creation_1h + cache_creation_5m
+            ('audio_tokens', 'audio'),
         )
         # Codex CLI reports reasoning flat as `reasoning_output_tokens`.
         reasoning = _usage_detail_int(
@@ -829,6 +927,7 @@ class Usage(BaseModel):
             cache_creation_tokens=cache_creation,
             cache_creation_1h_tokens=cache_creation_1h,
             cache_creation_5m_tokens=cache_creation_5m,
+            audio_input_tokens=audio_input,
             reasoning_tokens=reasoning,
             input_cost=input_cost,
             output_cost=output_cost,
@@ -863,6 +962,7 @@ class Usage(BaseModel):
             cache_creation_tokens=self.cache_creation_tokens + other.cache_creation_tokens,
             cache_creation_1h_tokens=self.cache_creation_1h_tokens + other.cache_creation_1h_tokens,
             cache_creation_5m_tokens=self.cache_creation_5m_tokens + other.cache_creation_5m_tokens,
+            audio_input_tokens=self.audio_input_tokens + other.audio_input_tokens,
             reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
             input_cost=self._combine_cost(self.input_cost, other.input_cost),
             output_cost=self._combine_cost(self.output_cost, other.output_cost),
@@ -891,6 +991,7 @@ class Usage(BaseModel):
             cache_creation_tokens=max(self.cache_creation_tokens - other.cache_creation_tokens, 0),
             cache_creation_1h_tokens=max(self.cache_creation_1h_tokens - other.cache_creation_1h_tokens, 0),
             cache_creation_5m_tokens=max(self.cache_creation_5m_tokens - other.cache_creation_5m_tokens, 0),
+            audio_input_tokens=max(self.audio_input_tokens - other.audio_input_tokens, 0),
             reasoning_tokens=max(self.reasoning_tokens - other.reasoning_tokens, 0),
             input_cost=self._combine_cost(self.input_cost, other.input_cost, sign=-1),
             output_cost=self._combine_cost(self.output_cost, other.output_cost, sign=-1),
@@ -942,6 +1043,11 @@ class JuryRepetition(BaseModel):
         default=None,
         description='Validated structured judge output for this pass; None when the judge exposes no structured detail.',
     )
+    verdict_coerced: bool = Field(
+        default=False,
+        description='True when the judge sent abstain=True with a value on this pass, which common/judge.py coerced '
+        'to an abstention. Tells a coerced verdict from a clean abstention.',
+    )
 
 
 class JuryVote(BaseModel):
@@ -988,6 +1094,12 @@ class JuryVote(BaseModel):
         'non-abstained pass (RES-1251). A clean abstention is not counted. Independent of the aggregate '
         'success/abstained.',
     )
+    repetitions_coerced: int = Field(
+        default=0,
+        ge=0,
+        description='Count of repetitions flagged verdict_coerced. Also stamped on the orq.judge span as '
+        'judge.repetitions_coerced. No report renders it yet.',
+    )
 
     @model_validator(mode='after')
     def _check_vote_consistency(self) -> JuryVote:
@@ -1004,6 +1116,8 @@ class JuryVote(BaseModel):
             raise ValueError('failed JuryVote must have a null value')
         if not self.success and self.abstained:
             raise ValueError('failed JuryVote cannot also be abstained')
+        if self.repetitions and self.repetitions_coerced != sum(r.verdict_coerced for r in self.repetitions):
+            raise ValueError('repetitions_coerced must equal the repetitions flagged verdict_coerced')
         return self
 
 

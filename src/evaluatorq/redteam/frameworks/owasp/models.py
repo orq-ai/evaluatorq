@@ -62,7 +62,12 @@ class LlmEvaluatorEntity(BaseModel):
     model: EvaluatorModelConfig
     prompt: str
     output_type: LlmEvaluatorOutputFormat
-    temperature: float = 0.1
+    temperature: float | None = None
+    """Not read by the evaluator run path, which takes its sampling from the call config.
+
+    ``None`` (the default) means no sampling value is set on the entity. The field is kept
+    so the public model shape does not change.
+    """
     requires_reference: bool = False
     guardrail_config: dict[str, Any] | None = None
     categorical_labels: list[dict[str, Any]] | None = None

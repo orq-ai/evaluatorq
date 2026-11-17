@@ -333,7 +333,7 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 }
 
 .app-sidebar {
-    width: 232px;
+    width: var(--sidebar-w, 232px);
     flex-shrink: 0;
     background: var(--app-gray-100);
     border-right: 1px solid var(--border-subtle);
@@ -368,6 +368,12 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     border-radius: 5px; padding: 2px 7px; line-height: 1.5;
 }
 html.sidebar-collapsed .app-sidebar { width: 60px; padding: 16px 8px; }
+/* Resize handle on the sidebar's right edge; the width lives in --sidebar-w on <html>, saved by shell.py. */
+.sidebar-resizer { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; touch-action: none; }
+.sidebar-resizer:hover, .sidebar-resizer:focus-visible, html.sidebar-resizing .sidebar-resizer { background: var(--border-default); outline: none; }
+html.sidebar-resizing, html.sidebar-resizing * { cursor: col-resize; user-select: none; }
+html.sidebar-resizing .app-sidebar { transition: none; }
+html.sidebar-collapsed .sidebar-resizer { display: none; }
 html.sidebar-collapsed .app-brand { justify-content: center; padding: 4px 0 18px; }
 html.sidebar-collapsed .app-brand .brand-name { display: none; }
 html.sidebar-collapsed .nav-item { justify-content: center; padding: 8px; }
@@ -1247,7 +1253,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     padding-top: 10px;
     border-top: 1px solid var(--border-subtle);
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-faint);
 }
 /* "More filters" toggle rides at the very bottom, just under the counter. */
@@ -1757,7 +1763,7 @@ _SIM_TRANSCRIPT_CSS = """
     font-family: var(--font-mono); font-size: 11px; font-weight: 600;
     text-transform: uppercase; color: var(--teal-600); display: block;
 }
-.sim-report .sim-judge-reason { font-size: 13px; line-height: 1.55; margin: 4px 0 0; color: var(--text-body); }
+.sim-report .sim-judge-reason { font-size: 13px; line-height: 1.55; margin: 4px 0 0; color: var(--text-body); max-width: 72ch; }
 .sim-report .sim-transcript-error {
     background: var(--red-100); color: var(--red-600); border-radius: 4px;
     padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
@@ -3050,7 +3056,7 @@ _RT_REPORT_CSS = """
 # Side-by-side sim run comparison page. The hero reuses the shared .report-hero
 # classes; this block only carries compare-specific rules, on the editorial
 # theme tokens. Kept with the other dashboard CSS blocks rather than inlined
-# per-request in sim_compare.py.
+# per-request in the sim_compare package.
 _SIM_COMPARE_CSS = """
 /* Hero action row: trace-link button + the on-report compare control */
 .report-hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
@@ -3069,35 +3075,182 @@ _SIM_COMPARE_CSS = """
 .cmp-bar select:hover { background: var(--app-gray-50); }
 .cmp-bar select:focus-visible { outline: none; box-shadow: var(--ring); }
 .cmp-bar .btn-secondary { font-size: 12.5px; }
-.cmp-bar-vs { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
 
 .report-hero-title .cmp-vs { color: var(--orange-500); }
 .cmp-note { font-size: 12px; color: var(--text-muted); margin: 0 0 12px; }
 .cmp-warn { color: var(--orange-700); font-weight: 600; }
-.cmp-body { display: flex; flex-direction: column; gap: 24px; }
-.cmp-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 24px; }
-.cmp-charts .panel { margin: 0; }
-/* Vega SVGs carry a viewBox, so max-width:100% + height:auto scales them DOWN to
-   fit their column and keeps aspect ratio — never upscaling past native size
-   (which made full-width charts oversized). Centered for the odd/full-width one. */
-.cmp-body svg.marks { max-width: 100%; height: auto; display: block; margin: 0 auto; }
-/* The full-width charts (direct children of cmp-body, not in the 2-up grid) fill
-   their panel instead of sitting capped-and-centered with whitespace either side. */
-.cmp-body > .panel svg.marks { width: 100%; }
-.cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.cmp-table th { font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint);
-  text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); }
-.cmp-table td { padding: 7px 10px; border-bottom: 1px solid var(--border-subtle); color: var(--text-body); }
-.cmp-diff-row:hover { background: var(--app-gray-50); }
-.cmp-delta { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
-.cmp-up { color: var(--green-600); } .cmp-down { color: var(--red-700); } .cmp-flat { color: var(--text-faint); }
-.cmp-flip { color: var(--red-700); font-weight: 600; font-size: 11px; margin-left: 6px; font-family: var(--font-mono); }
+
+/* ---- Agent sim run comparison (.cmp-report). Run identity is grey (A, the
+   baseline) and ink (B); green/red stay reserved for better/worse, because the
+   palette's orange tokens equal its red and amber outcome colours. ---- */
+.cmp-report { --cmp-a: var(--text-muted); --cmp-b: var(--ink-900); }
+.cmp-report .report-hero-title .cmp-vs { color: var(--text-faint); font-weight: 500; }
+.cmp-key { display: inline-block; width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.cmp-key--a { background: var(--cmp-a); }
+.cmp-key--b { background: var(--cmp-b); }
+.cmp-key-letter { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--text-strong); margin: 0 6px 0 5px; }
+
+/* Status line under the hero (Insights run header) */
+.cmp-status { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; margin: -4px 0 18px; font-size: 12.5px; }
+.cmp-run { display: inline-flex; align-items: center; min-width: 0; }
+.cmp-run-name { font-weight: 600; color: var(--text-strong); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-run-meta { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); margin-left: 8px; }
+.cmp-chip { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); background: var(--surface-sunken); border-radius: 999px; padding: 2px 9px; }
+.cmp-chip--warn { background: var(--amber-100); color: var(--amber-ink); font-weight: 600; cursor: help; }
+
+/* "What changed" rows and the filter bar share static/review-kit.css (rk-*) with the Insights page; only the comparison extras live here. */
+.cmp-heads { --rk-head-cols: 132px minmax(0, 1fr) auto; }
+.rk-head:has(.cmp-head-btn:focus-visible) { box-shadow: inset 0 0 0 2px var(--teal-600); }
+/* The action button stretches over the whole row; the scenario link sits above it. */
+.cmp-head-btn { border: 0; background: none; padding: 0; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-align: right; }
+.cmp-head-btn:focus-visible { outline: 2px solid var(--teal-600); outline-offset: 2px; }
+.rk-head:has(.cmp-head-btn:focus-visible) .cmp-head-btn:focus-visible { outline: none; }
+.cmp-head-btn::after { content: ''; position: absolute; inset: 0; }
+.cmp-head-scn { position: relative; z-index: 1; color: var(--text-link); text-decoration: underline; text-underline-offset: 2px; }
+.cmp-head-scn:hover { color: var(--text-link); }
+.cmp-head-scn:focus-visible { outline: none; box-shadow: var(--ring); border-radius: 3px; }
+.cmp-fchip-dim { color: var(--text-muted); }
+.rk-fchip-x:focus-visible, .rk-fbar-clear:focus-visible, .cmp-fbar-copy:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-fbar-rule { flex-basis: 100%; font-size: 11.5px; color: var(--text-muted); }
+.cmp-empty { padding: 8px 0 4px; }
+.cmp-empty-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.cmp-empty-btn { border: 1px solid var(--border-default); border-radius: 7px; background: var(--surface-card); padding: 4px 10px; font: 500 12px var(--font-sans); color: var(--text-body); cursor: pointer; text-decoration: none; }
+.cmp-empty-btn:hover { border-color: var(--border-strong); color: var(--text-strong); }
+.cmp-empty-btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-fbar-copy { margin-left: auto; border: 1px solid var(--border-default); border-radius: 7px; background: var(--surface-card);
+  padding: 4px 10px; font: 500 12px var(--font-sans); color: var(--text-body); cursor: pointer; }
+.cmp-fbar-copy:hover { border-color: var(--border-strong); color: var(--text-strong); }
+
+/* Number tiles: B large, then A -> B and the delta pill. Wrap on the space the tiles get,
+   not the viewport: the sidebar and filter rail take ~470px of it. */
+.cmp-report .kpi-band--cmp { margin: 0 0 16px; grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+@media (max-width: 760px) {
+  .cmp-report .filter-swap-container .filter-form { order: -1; }
+  .cmp-status { font-size: 12px; }
+  .cmp-fbar-copy { margin-left: 0; }
+}
+.kpi-band--cmp .kpi-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.cmp-tile-ab { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
+.cmp-tile-note { font-size: 12px; color: var(--text-muted); line-height: 1.35; }
+
+.cmp-scores-note { margin: -4px 0 16px; }
+.cmp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 16px; margin: 0 0 16px; }
+.cmp-report .cmp-grid > .rk-panel { margin: 0; }
+.cmp-subhead { font-size: 12px; font-weight: 600; color: var(--text-muted); margin: 14px 0 8px; }
+.cmp-subhead:first-child { margin-top: 2px; }
+
+/* Stacked 100% bars, one per run (Insights "at a glance") */
+.cmp-stack { display: grid; gap: 6px; }
+.cmp-stack-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) 34px; align-items: center; gap: 8px; }
+.cmp-stack-key { display: inline-flex; align-items: center; }
+.cmp-stack-bar { display: flex; gap: 2px; height: 22px; border-radius: 4px; overflow: hidden; background: var(--chart-track); }
+.cmp-stack-bar i, .cmp-stack-bar a { display: block; min-width: 3px; flex-basis: 0; }
+.cmp-heat-scroll { overflow-x: auto; max-width: 100%; }
+.cmp-report .cmp-heat-scroll + .cmp-note { margin-top: 8px; }
+/* report.css stacks every table under 760px except .heatmap-table; keep this one a grid that scrolls inside .cmp-heat-scroll. */
+@media (max-width: 760px) {
+  .cmp-report .cmp-heat-scroll .rk-heatmap tr { display: table-row; margin: 0; border: 0; border-radius: 0; }
+  .cmp-report .cmp-heat-scroll .rk-heatmap th, .cmp-report .cmp-heat-scroll .rk-heatmap td { display: table-cell; }
+  .cmp-report .cmp-heat-scroll .rk-heat-row { max-width: 120px; white-space: normal; }
+}
+.cmp-report .rk-heat-row { position: sticky; left: 0; background: var(--surface-card); }
+.cmp-report .rk-heat-col { min-width: 88px; overflow-wrap: anywhere; }
+/* Outranks .report-aligned's right-aligned numeric columns: heatmap names and empty cells centre like the filled ones. */
+.cmp-report .rk-heatmap thead th.rk-heat-col, .cmp-report .rk-heatmap tbody td.rk-heat-empty { text-align: center; }
+.cmp-report .cmp-heat-cell { padding: 0; font-size: 13px; font-weight: 600; }
+.cmp-heat-link { display: flex; align-items: center; justify-content: center; height: 100%; min-height: 34px; color: inherit; text-decoration: none; border-radius: 5px; font-variant-numeric: tabular-nums; }
+.cmp-heat-link:hover, .cmp-heat-link:visited { color: inherit; }
+.cmp-heat-link:hover { filter: brightness(.94); }
+.cmp-heat-link:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-heat-cell.is-on .cmp-heat-link { box-shadow: inset 0 0 0 2px var(--ink-900); }
+.cmp-seg-link:hover { filter: brightness(.9); }
+.cmp-seg-link.is-on { box-shadow: inset 0 0 0 2px var(--surface-card); }
+.cmp-seg-link:focus-visible, .cmp-legend-link:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-legend-link { display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px; margin: 0 -6px; border-radius: 6px; color: inherit; text-decoration: none; }
+.cmp-legend-link:hover, .cmp-legend-link:visited { color: inherit; }
+.cmp-legend-link:hover { background: var(--surface-sunken); }
+.cmp-legend-link.is-on { background: var(--teal-50); box-shadow: inset 0 0 0 1px var(--teal-600); color: var(--text-strong); }
+.cmp-stack-empty { font-size: 11.5px; color: var(--text-faint); align-self: center; padding: 0 8px; }
+.cmp-stack-total { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); text-align: right; }
+.cmp-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 11.5px; color: var(--text-muted); }
+.cmp-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.cmp-legend > span > i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.cmp-legend .cmp-key-letter { margin: 0; }
+.cmp-legend-n { font-family: var(--font-mono); font-weight: 600; color: var(--text-strong); margin-left: 2px; }
+
+/* Scores: A and B on a shared 0..1 track */
+.cmp-scores { display: grid; margin-top: 6px; }
+.cmp-score-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 96px 78px; gap: 12px; align-items: center;
+  padding: 9px 0; border-top: 1px solid var(--border-subtle); }
+.cmp-score-label { font-size: 12.5px; color: var(--text-strong); min-width: 0; overflow-wrap: anywhere; }
+.cmp-score-hint { display: block; font-size: 10.5px; color: var(--text-faint); }
+.cmp-score-tracks { display: grid; gap: 3px; }
+.cmp-track { position: relative; height: 6px; border-radius: 3px; background: var(--chart-track); }
+.cmp-track-fill { position: absolute; inset: 0 auto 0 0; border-radius: 3px; }
+.cmp-track-fill--a { background: var(--cmp-a); }
+.cmp-track-fill--b { background: var(--cmp-b); }
+.cmp-track-na { position: absolute; top: -4px; left: 4px; font: 9.5px/1 var(--font-mono); color: var(--text-faint); }
+.cmp-score-failed { color: var(--red-700); font-weight: 600; }
+.cmp-score-ab { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
+
+/* Conversation table */
+.cmp-report .cmp-conversations { margin: 0 0 16px; }
+.sim-report.cmp-report table.cmp-conv-table thead th:not(:first-child),
+.sim-report.cmp-report table.cmp-conv-table tbody td:not(:first-child) { text-align: left; vertical-align: middle; }
+.sim-report.cmp-report table.cmp-conv-table tbody td { padding: 10px; }
+.sim-report.cmp-report .cmp-conv-row { box-shadow: none; }
+.sim-report.cmp-report table.cmp-conv-table .sim-th-sort { padding: 10px; }
+.cmp-conv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.cmp-seg { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--surface-sunken); }
+.cmp-seg-btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 7px;
+  background: none; font: 500 12px var(--font-sans); color: var(--text-muted); cursor: pointer; }
+.cmp-seg-btn:hover { color: var(--text-strong); }
+.cmp-seg-btn[aria-pressed="true"] { background: var(--surface-card); color: var(--text-strong); box-shadow: 0 1px 2px rgb(20 18 30 / .08); cursor: default; }
+.cmp-seg-btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-seg-n { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-faint); }
+.cmp-num { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; color: var(--text-body); }
+.cmp-num-d { margin-left: 4px; }
+.cmp-num-d--good { color: var(--teal-600); }
+.cmp-num-d--bad { color: var(--red-700); }
+.cmp-num-d--flat { color: var(--text-faint); }
+.sim-report .sim-th-caret-word { font: 500 10.5px var(--font-sans); text-transform: none; letter-spacing: 0; margin-left: 6px; color: var(--text-muted); }
+.cmp-outcome { white-space: nowrap; }
+.cmp-arrow { color: var(--text-faint); margin: 0 6px; }
 .cmp-unmatched { margin-top: 12px; font-size: 12px; color: var(--text-muted); }
-.cmp-unmatched ul { margin: 4px 0 0; padding-left: 18px; }
-.cmp-transcript-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
-.cmp-side-title { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin: 0 0 8px; }
+.cmp-unmatched summary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--text-muted); }
+.cmp-unmatched ul { margin: 6px 0 0; padding-left: 22px; columns: 2; }
+
+/* Filter rail footer note */
+.filter-rail-note { display: block; margin-top: 3px; color: var(--text-faint); font-size: 11px; }
+
+/* Paired transcripts in the drawer; Close / prev / next sit at the top */
+.sim-report .sim-entity-dialog--wide { width: min(1280px, 92vw); }
+.sim-report .sim-entity-dialog--wide .sim-entity-modal-actions { order: -1; border-top: 0; border-bottom: 1px solid var(--border-subtle); }
+.cmp-pair-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; }
+.cmp-pair-title { font-size: 16px; font-weight: 600; color: var(--text-strong); text-wrap: balance; }
+.cmp-pair-sep { color: var(--text-faint); }
+.cmp-side-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-right: 8px; }
+.cmp-diff { border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--surface-card); padding: 14px 16px; margin: 0 0 18px; }
+.cmp-diff-list { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px 16px; margin: 0; align-items: baseline; }
+.cmp-diff-list dt { font-size: 12px; color: var(--text-muted); }
+.cmp-diff-list dd { margin: 0; font-size: 12.5px; color: var(--text-strong); }
+.cmp-diff-ab { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+.cmp-diff-same { color: var(--text-muted); }
+.cmp-diff-crits { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.cmp-diff-crits li { display: flex; align-items: baseline; gap: 0; line-height: 1.4; }
+.cmp-diff-crits li > span:last-child { margin-left: 10px; }
+.cmp-diff-crit { font-family: var(--font-mono); font-weight: 700; width: 12px; text-align: center; color: var(--text-muted); }
+.cmp-diff-crit--pass { color: var(--teal-600); }
+.cmp-diff-crit--fail { color: var(--red-700); }
+.cmp-diff-crits .cmp-arrow { margin: 0 4px; }
+.cmp-transcript-grid .sim-msg--marked { position: relative; margin-top: 26px; outline: 2px dashed var(--amber-600); outline-offset: 4px; border-radius: 8px; }
+.cmp-transcript-grid .sim-msg--marked::before { content: "First difference"; position: absolute; top: -24px; left: 0; font: 600 10.5px/1 var(--font-mono); color: var(--amber-ink); }
+@media (max-width: 900px) { .cmp-diff-list { grid-template-columns: 1fr; gap: 2px; } .cmp-diff-list dd { margin-bottom: 8px; } }
+.cmp-transcript-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.cmp-side { min-width: 0; }
+.cmp-side-title { display: flex; align-items: center; gap: 2px; margin: 0 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle); }
+.cmp-side-name { font-size: 12.5px; font-weight: 600; color: var(--text-strong); margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 900px) { .cmp-transcript-grid { grid-template-columns: 1fr; } }
 """
 
 # Keeps the wireframe's class names; its mock state-switcher rules are omitted because HTMX fragments drive state.
@@ -3784,6 +3937,7 @@ _INSIGHTS_CSS = """
 @media (max-width:550px) { .insights-overview-columns,.insights-overview-row { grid-template-columns:minmax(120px,1fr) 90px 20px; gap:8px; padding-left:9px; padding-right:9px; }.insights-overview-columns span:nth-child(2) { display:none; }.insights-overview-row { grid-template-areas:'name status arrow' 'stages stages stages'; }.insights-overview-name { grid-area:name; }.insights-overview-stage-wrap,.insights-overview-no-stages { grid-area:stages; margin:3px 0 2px; }.insights-overview-stage-wrap > span:first-child { display:inline; }.insights-overview-status { grid-area:status; }.insights-overview-arrow { grid-area:arrow; }.insights-overview-head { align-items:start; }.insights-header h2 { font-size:19px; }.insights-group-label { min-width:100%; }.insights-models { margin-left:0; } }
 @media (max-width:600px) {
   body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-shell { flex-direction:column; }
+  body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .sidebar-resizer { display:none; }
   body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-sidebar,html.sidebar-collapsed body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-sidebar { position:static; width:auto; height:auto; padding:8px 12px 0; overflow:visible; }
   body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-brand,html.sidebar-collapsed body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-brand { justify-content:flex-start; padding:4px 6px 8px; }
   html.sidebar-collapsed body.eq-dashboard:has(:is(.insights-layout,.dash-wrap)) .app-brand .brand-name { display:inline; }

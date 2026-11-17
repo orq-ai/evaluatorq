@@ -576,3 +576,64 @@ def test_store_upload_does_not_clean_foreign_files_when_private_storage_is_rejec
         with pytest.raises(OSError):
             store_upload(runs_dir=tmp_path, contents=contents, kind='snapshot')
     assert protected.read_bytes() == contents
+
+
+@pytest.mark.usefixtures('group_writable_umask')
+def test_finder_export_saved_under_a_group_writable_umask_is_listed(tmp_path: Path, monkeypatch) -> None:
+    from evaluatorq.dashboard.insights_launch import get_finder_exports_dir
+    from evaluatorq.dashboard.insights_uploads import recent_trace_files
+    from evaluatorq.dashboard.trace_finder.routes import _save_finder_export
+    from evaluatorq.insights.store import get_insights_runs_dir
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = get_finder_exports_dir()
+    _save_finder_export(export_dir, 'trace-finder-1.json', _run_export(['a', 'b']).model_dump_json())
+
+    entries = recent_trace_files(runs_dir=get_insights_runs_dir(), finder_dir=export_dir)
+
+    assert [(entry.display_name, entry.trace_count) for entry in entries] == [('trace-finder-1.json', 2)]
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX permission bits do not control access on Windows')
+def test_group_writable_finder_folder_is_left_out_with_one_warning(tmp_path: Path) -> None:
+    from loguru import logger
+
+    from evaluatorq.dashboard.insights_uploads import recent_trace_files
+
+    finder_dir = tmp_path / 'finder-exports'
+    finder_dir.mkdir()
+    for name in ('trace-finder-1.json', 'trace-finder-2.json'):
+        (finder_dir / name).write_text(_run_export(['a']).model_dump_json(), encoding='utf-8')
+        (finder_dir / name).chmod(0o600)
+    finder_dir.chmod(0o775)
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
+    try:
+        entries = recent_trace_files(runs_dir=tmp_path / 'insights-runs', finder_dir=finder_dir)
+    finally:
+        logger.remove(sink)
+
+    assert entries == []
+    assert len(warnings) == 1
+    assert str(finder_dir) in warnings[0]
+    assert 'writable by group or others (mode 0o775)' in warnings[0]
+
+
+def test_unreadable_finder_export_is_left_out_with_a_warning_naming_it(tmp_path: Path) -> None:
+    from loguru import logger
+
+    from evaluatorq.dashboard.insights_uploads import recent_trace_files
+
+    finder_dir = tmp_path / 'finder-exports'
+    finder_dir.mkdir(mode=0o700)
+    finder_dir.chmod(0o700)
+    (finder_dir / 'trace-finder-broken.json').write_text('not json', encoding='utf-8')
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
+    try:
+        entries = recent_trace_files(runs_dir=tmp_path / 'insights-runs', finder_dir=finder_dir)
+    finally:
+        logger.remove(sink)
+
+    assert entries == []
+    assert any('trace-finder-broken.json' in warning for warning in warnings)

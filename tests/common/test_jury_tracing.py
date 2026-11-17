@@ -186,6 +186,18 @@ async def test_inconclusive_jury_marks_span(span_collector) -> None:
 
 
 @pytest.mark.asyncio
+async def test_judge_span_stamps_the_coerced_count(span_collector) -> None:
+    async def judge_fn(model: str) -> Prediction:
+        return Prediction(abstained=True, verdict_coerced=model == 'gpt-a', explanation='declined')
+
+    await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b'])
+
+    spans = {_attrs(s)['judge.model']: s for s in _by_name(span_collector, 'orq.judge')}
+    assert _attrs(spans['gpt-a'])['judge.repetitions_coerced'] == 1
+    assert _attrs(spans['gpt-b'])['judge.repetitions_coerced'] == 0
+
+
+@pytest.mark.asyncio
 async def test_failed_judge_span_is_error_status(span_collector) -> None:
     exporter = span_collector
     judge_fn = _make_judge_fn({'gpt-b': 'yes'}, fail={'gpt-a'})

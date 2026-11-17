@@ -49,11 +49,11 @@ Avoid `uv tool install evaluatorq`: it builds an isolated environment that expos
 
 ### Do I need an Orq account or an OpenAI key?
 
-You need an LLM key wherever a simulator, attacker, or judge LLM runs — `OPENAI_API_KEY` for direct OpenAI, or `ORQ_API_KEY` to route through the Orq router. Plain evaluations with only deterministic evaluators need no key; any LLM-judged flow (jury, simulation, red teaming) does — including red teaming's **static mode**, where the target replays fixed attacks but the judge still scores each outcome with an LLM.
+You need an LLM key wherever a simulator, attacker, or judge LLM runs — `OPENAI_API_KEY` for direct OpenAI, `ANTHROPIC_API_KEY` for Claude directly (see [Anthropic SDK clients](anthropic.md)), or `ORQ_API_KEY` to route through the Orq router. Plain evaluations with only deterministic evaluators need no key; any LLM-judged flow (jury, simulation, red teaming) does — including red teaming's **static mode**, where the target replays fixed attacks but the judge still scores each outcome with an LLM.
 
 ### Which models run the simulator / attacker / judge — can I change them?
 
-They default to model roles: the attacker and every judge run on the `smart` role (`openai/gpt-6-sol`), the simulated user on the `fast` role (`openai/gpt-6-luna`), routed via `OPENAI_API_KEY` or `ORQ_API_KEY`. Change a role for every surface at once with `EVALUATORQ_SMART_MODEL` or `EVALUATORQ_FAST_MODEL` (see [Configuration › Models](configuration.md#models)), or override per surface: red teaming takes `llm_config=LLMConfig(attacker=..., evaluator=...)`, and simulation takes `llm_config=LLMCallConfig(...)` — one config for the user simulator, the judge, the generators, the recommendations pass and the executive summary. The CLI spells the model-only case as `--sim-model`.
+They default to model roles: the attacker and every judge run on the `smart` role (`openai/gpt-6-sol`), the simulated user on the `fast` role (`openai/gpt-6-luna`), routed via `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (with Claude ids set on the roles) or `ORQ_API_KEY`. Change a role for every surface at once with `EVALUATORQ_SMART_MODEL` or `EVALUATORQ_FAST_MODEL` (see [Configuration › Models](configuration.md#models)), or override per surface: red teaming takes `llm_config=LLMConfig(attacker=..., evaluator=...)`, and simulation takes `llm_config=LLMCallConfig(...)` — one config for the user simulator, the judge, the generators, the recommendations pass and the executive summary. The CLI spells the model-only case as `--sim-model`.
 
 ```python
 from evaluatorq.redteam import LLMConfig, LLMCallConfig
@@ -130,11 +130,10 @@ Red teaming generates multi-turn attacks by default (`max_turns=`) precisely so 
 
 ### What does red teaming actually test?
 
-Attacks and LLM-judge evaluators mapped to three frameworks:
+Attacks and LLM-judge evaluators mapped to two frameworks:
 
 - **OWASP LLM Top 10** — prompt injection, system-prompt leakage, and the rest.
 - **OWASP Agentic Top 10 (ASI)** — agent-specific risks: tool abuse, excessive agency, trust exploitation.
-- **Responsible AI** — fairness/bias, liability (legal, medical), content policy, harmful content.
 
 Pass the ones you care about via `categories=["LLM01", "ASI01", ...]`. The full list of codes is in the [redteam API reference](reference/evaluatorq/redteam.md).
 

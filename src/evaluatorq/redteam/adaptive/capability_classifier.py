@@ -9,10 +9,11 @@ agent configuration (memory tools / knowledge bases).
 from typing import Any
 
 from loguru import logger
-from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.llm_call import execute_chat_parse
+from evaluatorq.common.llm_errors import CONNECTION_ERRORS, STATUS_ERRORS
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AgentCapability,
@@ -254,7 +255,7 @@ async def _infer_resource_capabilities(
             if parsed is None:
                 raise ValueError('Resource capability inference returned no parsed content')
             return parsed
-    except (APIConnectionError, APIStatusError):
+    except CONNECTION_ERRORS + STATUS_ERRORS:
         raise
     except Exception as e:  # noqa: BLE001
         # is_multi_agent defaults False here, so multi-agent-only attacks (ASI07/08) are
@@ -335,7 +336,7 @@ async def _classify_tools(
             logger.debug(f'LLM classified {len(capabilities)}/{len(agent_context.tools)} tools with capabilities')
             return capabilities, True
 
-    except (APIConnectionError, APIStatusError):
+    except CONNECTION_ERRORS + STATUS_ERRORS:
         raise
     except Exception as e:  # noqa: BLE001
         logger.error(f'Tool classification failed, strategies will be included optimistically: {e}')

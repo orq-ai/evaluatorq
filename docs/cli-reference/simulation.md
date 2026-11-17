@@ -25,7 +25,7 @@ Targets — provide **exactly one**:
 | `--target` | `agent:<key>` or `deployment:<key>`. Bare values default to `agent:<key>`. |
 | `--memory-entity` | Memory `entity_id` sent with every `agent:<key>` (or bare `<key>`) target call, for agents with a memory store attached. Omit to mint a fresh id per conversation (parallel conversations never share memory); pass one to reuse a specific (e.g. seeded) entity, shared across the run. |
 | `--vercel-url` | Vercel AI SDK HTTP endpoint URL. |
-| `--openai-model` | OpenAI-compatible model name. Provider resolved from env: `ORQ_API_KEY` → Orq AI Router; `OPENAI_API_KEY` → OpenAI-compatible. |
+| `--openai-model` | OpenAI-compatible model name. Provider resolved from env: `ORQ_API_KEY` → Orq AI Router; `OPENAI_API_KEY` → OpenAI-compatible; `ANTHROPIC_API_KEY` → Anthropic. |
 
 | Flag | Type / Default | Description |
 |---|---|---|

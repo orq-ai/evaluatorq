@@ -525,6 +525,7 @@ def heatmap(
     value_key: str = 'success_rate',
     color_scale: Sequence[tuple[float, str]] | None = None,
     render_value: Callable[[dict, str], str] | None = None,
+    render_cell: Callable[[dict], str] | None = None,
 ) -> str:
     """HTML-table row x column heatmap (spec §Breakdown.1). Missing cells render sunken with "—".
 
@@ -532,6 +533,8 @@ def heatmap(
     ``value_key='success_rate'``, ``color_scale=None``) keep existing sim
     call sites and rendering unchanged. ``render_value(cell, text)`` returns the
     inner HTML of a non-empty cell, e.g. to make it a drill-down trigger.
+    ``render_cell(cell)`` replaces the whole non-empty ``<td>`` (fill, title and
+    all) for a grid whose colour is not a 0-1 rate; missing cells still render here.
     """
     value_html = render_value or (lambda _cell, text: text)
     lookup = {(c[row_key], c[col_key]): c for c in cells}
@@ -543,6 +546,9 @@ def heatmap(
             cell = lookup.get((p, s))
             if cell is None:
                 tds.append('<td class="rk-heat-cell rk-heat-empty">—</td>')
+                continue
+            if render_cell is not None:
+                tds.append(render_cell(cell))
                 continue
             rate = cell.get(value_key, 0.0)
             no_completed = cell.get('completed_conversations') == 0 and cell.get('errored_conversations', 0) > 0

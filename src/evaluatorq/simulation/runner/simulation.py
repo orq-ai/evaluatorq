@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.common.llm_client import as_llm_client
 from evaluatorq.common.messages import pair_tool_rows, tool_call_text
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from opentelemetry.trace import Span
 
+    from evaluatorq.common.llm_client import LLMClient
     from evaluatorq.contracts import AgentResponse
     from evaluatorq.integrations.callable_integration.target import AgentCallable
     from evaluatorq.simulation.agents.base import BaseAgent
@@ -657,7 +659,7 @@ class SimulationRunner:
         user_simulator: BaseAgent | None = None,
         judge: BaseAgent | None = None,
         hooks: SimulationHooks | None = None,
-        llm_client: AsyncOpenAI | None = None,
+        llm_client: LLMClient | None = None,
         llm_config: LLMCallConfig | None = None,
     ) -> None:
         if not target_agent and not target:
@@ -722,7 +724,7 @@ class SimulationRunner:
         self.model = self._model
         """Resolved user-simulator model. NEVER the target's — see `_new_conversation_target`."""
         self._max_turns = max_turns
-        self._shared_client: AsyncOpenAI | None = llm_client
+        self._shared_client: AsyncOpenAI | None = as_llm_client(llm_client)
         self._client_owned: bool = False
         # Injected agents (may be None; resolved lazily in run() when None)
         self._injected_user_simulator = cast('UserSimulatorAgent | None', user_simulator)

@@ -222,7 +222,7 @@ def _assert_ci_test_contract(workflow: str) -> None:
         if (command := _run_command(step)) is not None
         and command[:5] == ['uv', 'run', 'pytest', '-m', 'not integration']
     ]
-    bare = ('uv', 'run', 'pytest', '-m', 'not integration')
+    bare = ('uv', 'run', 'pytest', '-m', 'not integration', '-n', 'auto')
     coverage = (*bare, '--cov', '--cov-report=term')
     assert len(matching_steps) == 2
     test_steps = dict(matching_steps)
@@ -299,7 +299,15 @@ def test_ty_is_the_only_locked_typechecker() -> None:
     assert '[tool.basedpyright]' not in pyproject
 
     lockfile = (REPO_ROOT / 'uv.lock').read_text()
-    assert not re.search(r'(?m)^name = "(?:basedpyright|pytest-xdist)"$', lockfile)
+    assert not re.search(r'(?m)^name = "basedpyright"$', lockfile)
+
+
+def test_local_pytest_stays_serial() -> None:
+    """CI passes `-n auto` itself. Plain `uv run pytest` stays serial: PR #272 dropped xdist from
+    the default run because spawning workers cost more collection CPU and memory than local runs gained."""
+    addopts = _array(_table((REPO_ROOT / 'pyproject.toml').read_text(), 'tool.pytest.ini_options'), 'addopts')
+
+    assert not any(option == '-n' or option.startswith(('-n', '--numprocesses', '--dist')) for option in addopts), addopts
 
 
 def test_ty_migration_audit_matches_effective_offline_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -565,7 +573,7 @@ def test_ci_test_contract_rejects_failure_suppression(old: str, new: str) -> Non
 
 def test_ci_test_contract_rejects_commands_outside_check_job() -> None:
     workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
-    command = "        run: uv run pytest -m 'not integration'"
+    command = "        run: uv run pytest -m 'not integration' -n auto"
     mutated = workflow.replace(command, '        run: uv run python -V', 1)
     mutated += "\n  decoy:\n    steps:\n      - run: uv run pytest -m 'not integration'\n"
 

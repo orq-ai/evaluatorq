@@ -1,5 +1,7 @@
 # Run-id invocation metadata — design
 
+> Superseded in part by RES-1873: request `metadata` is sent only on Orq-routed calls and on Responses calls whose `store` is on, and every LLM span now carries `orq.evaluatorq_run_id` and `orq.evaluatorq_pipeline`.
+
 **Date:** 2026-07-23 **Status:** approved for planning (revised after hate-review)
 
 ## Goal

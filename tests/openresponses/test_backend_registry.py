@@ -286,3 +286,29 @@ class TestCallResponsesApiTokenUsage:
         _, kwargs = client.responses.create.call_args
         assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation', 'evaluatorq_run_id': 'run-1'}
         assert kwargs['extra_body']['thread'] == {'id': 'thread-1'}
+
+
+class TestAnthropicKeyOnlyEnvironment:
+    """With only ``ANTHROPIC_API_KEY`` set, an Orq-agent target must not take the Anthropic step (RES-1875)."""
+
+    def test_require_orq_fails_with_the_missing_credentials_message(self, monkeypatch):
+        from evaluatorq.common.llm_client import MissingLLMCredentialsError
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        with pytest.raises(MissingLLMCredentialsError, match="ORQ_API_KEY"):
+            OrqResponsesTarget(LLMCallConfig(model="agent/my-agent"), require_orq=True)
+
+    def test_the_openresponses_backend_target_requires_orq_by_default(self, monkeypatch):
+        from evaluatorq.common.llm_client import MissingLLMCredentialsError
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        backend = resolve_backend("openresponses")
+        with pytest.raises(MissingLLMCredentialsError, match="ORQ_API_KEY"):
+            backend.create_target("my-agent")
+
+    def test_a_plain_target_without_require_orq_builds_the_adapter(self, monkeypatch):
+        from evaluatorq.anthropic import AnthropicLLMClient
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        target = OrqResponsesTarget(LLMCallConfig(model="claude-sonnet-5-5"))
+        assert isinstance(target._client, AnthropicLLMClient)

@@ -58,6 +58,7 @@ Model IDs are passed to the endpoint unchanged — there is no automatic prefixi
 | 07 | `07_report_inspection.py` | Parse reports, filter results, export JSON |
 | 08 | `08_quick_smoke_test.py` | Fast CI-friendly run with exit code gating |
 | 09 | `09_custom_hooks.py` | Custom `PipelineHooks` for logging and control |
+| 21 | `21_anthropic_client.py` | Run attacker, evaluator and target on an Anthropic SDK client; needs `evaluatorq[anthropic,redteam]` and `ANTHROPIC_API_KEY` |
 
 ### ORQ Platform
 

@@ -20,7 +20,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 from loguru import logger
-from openai import APIConnectionError, APIStatusError
+
+from evaluatorq.common.llm_errors import CONNECTION_ERRORS, STATUS_ERRORS, error_body
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -37,13 +38,14 @@ def is_content_filter_error(exc: BaseException) -> bool:
     """Return True if ``exc`` is a provider content-filter block surfaced as an error.
 
     Keys on the structured error ``code`` (exposed by the OpenAI SDK as ``exc.code`` and
-    mirrored in the JSON body), NOT on message prose, so it stays provider-agnostic for
-    any block the router normalizes to that code.
+    present in the JSON error body of either SDK), NOT on message prose, so it recognises
+    any block the router normalizes to that code. The body is read through
+    `llm_errors.error_body`, because Anthropic keeps the code one level deeper than OpenAI.
     """
     if getattr(exc, 'code', None) == 'content_filter':
         return True
-    body = getattr(exc, 'body', None)
-    return isinstance(body, dict) and body.get('code') == 'content_filter'
+    body = error_body(exc)
+    return body is not None and body.get('code') == 'content_filter'
 
 
 async def regenerate_on_content_filter(
@@ -68,7 +70,7 @@ async def regenerate_on_content_filter(
     for attempt in range(attempts):
         try:
             response = await call(attempt)
-        except (APIConnectionError, APIStatusError) as e:
+        except CONNECTION_ERRORS + STATUS_ERRORS as e:
             if is_content_filter_error(e) and attempt < attempts - 1:
                 logger.warning(f'{label} content-filtered (error form); regenerating ({attempt + 1}/{attempts - 1})')
                 continue

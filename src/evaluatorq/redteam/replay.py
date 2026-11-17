@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.replay import ReplayError, load_run_payload
-from evaluatorq.redteam.contracts import Pipeline
+from evaluatorq.redteam.contracts import Pipeline, Vulnerability
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -49,6 +49,9 @@ class RedTeamReplay:
     the 5-turn default would not be the same run."""
     attacker_instructions: str | None = None
     """Domain steering the original run used, restored for the same reason."""
+    max_backtracks: int | None = None
+    """Erasures per attack the original run allowed, restored so a before/after
+    comparison does not change the attack behaviour along with the agent."""
 
 
 def _looks_like_a_simulation_run(payload: dict[str, Any], rows: list[Any]) -> bool:
@@ -68,8 +71,17 @@ def _validate_datapoint(inputs: dict[str, Any], index: int, run_name: str) -> No
 
     A dynamic case needs its ``strategy``; a static one needs its ``messages``.
     Without one of the two the run would reach the orchestrator and die per-row
-    on a KeyError, long after the confirm prompt.
+    on a KeyError, long after the confirm prompt. An unknown ``vulnerability``
+    (accepted by runs saved before RES-1868) would pass the attacks and then fail
+    report conversion, so it is rejected here too.
     """
+    vulnerability = inputs.get('vulnerability')
+    if vulnerability and vulnerability not in {v.value for v in Vulnerability}:
+        raise ReplayError(
+            f'Previous red team run {run_name}: datapoint {index} ({inputs.get("id", "unnamed")!r}) has '
+            f'unknown vulnerability {vulnerability!r}, so it cannot be replayed. '
+            f'Valid vulnerabilities: {sorted(v.value for v in Vulnerability)}.'
+        )
     if 'strategy' in inputs or inputs.get('messages'):
         return
     raise ReplayError(
@@ -143,6 +155,7 @@ def load_redteam_replay(reference: str, runs_dir: Path) -> RedTeamReplay:
     config = stored_config if isinstance(stored_config, dict) else {}
     max_turns = config.get('max_turns')
     instructions = config.get('attacker_instructions')
+    max_backtracks = config.get('max_backtracks')
 
     return RedTeamReplay(
         datapoints=datapoints,
@@ -152,4 +165,5 @@ def load_redteam_replay(reference: str, runs_dir: Path) -> RedTeamReplay:
         path=path,
         max_turns=max_turns if isinstance(max_turns, int) else None,
         attacker_instructions=instructions if isinstance(instructions, str) else None,
+        max_backtracks=max_backtracks if isinstance(max_backtracks, int) else None,
     )

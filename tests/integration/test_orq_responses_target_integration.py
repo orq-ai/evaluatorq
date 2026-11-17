@@ -11,6 +11,7 @@ turn.
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 
@@ -18,15 +19,15 @@ from evaluatorq.contracts import AgentResponse, FunctionCall, LLMCallConfig, Mes
 from evaluatorq.openresponses.convert_models import InputImageContent, InputTextContent
 from evaluatorq.openresponses.target import OrqResponsesTarget
 
-# 1x1 solid-color PNGs as base64 data URLs. Self-contained so the tests do not
+# 64x64 solid-color PNGs as base64 data URLs. Self-contained so the tests do not
 # depend on any live external URL (which could rate-limit, move, or change).
-_RED_PIXEL_DATA_URL = (
+_RED_IMAGE_DATA_URL = (
     "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAATElEQVR42u3PQQ0AAAgEoNP+nTWCbzdoQE1+6wgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHBZShQF/CY4YrwAAAABJRU5ErkJggg=="
 )
-_GREEN_PIXEL_DATA_URL = (
+_GREEN_IMAGE_DATA_URL = (
     "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC"
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAX0lEQVR4nO3PQQ0AIBDAsAP/nkEEj4ZkVbCtOfO1rQNeNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaBdUYYBf0t7CUEAAAAASUVORK5CYII="
 )
 
 
@@ -88,7 +89,7 @@ class TestOrqResponsesTargetIntegration:
                             type="input_text",
                             text="What color is this image? Reply with just the color name.",
                         ),
-                        InputImageContent(type="input_image", image_url=_RED_PIXEL_DATA_URL),
+                        InputImageContent(type="input_image", image_url=_RED_IMAGE_DATA_URL),
                     ],
                 )
             ]
@@ -118,7 +119,7 @@ class TestOrqResponsesTargetIntegration:
                             type="input_text",
                             text="What color is this image? Reply with just the color name.",
                         ),
-                        InputImageContent(type="input_image", image_url=_GREEN_PIXEL_DATA_URL),
+                        InputImageContent(type="input_image", image_url=_GREEN_IMAGE_DATA_URL),
                     ],
                 )
             ]
@@ -163,7 +164,7 @@ class TestOrqResponsesTargetIntegration:
             ]
         )
         assert isinstance(r, AgentResponse)
-        assert "1234" in r.text
+        assert re.search(r"(?<!\d)1[,. ]?234(?!\d)", r.text)
 
     @pytest.mark.asyncio
     async def test_tool_result_multipart_output_reaches_the_model(self):
@@ -201,4 +202,4 @@ class TestOrqResponsesTargetIntegration:
             ]
         )
         assert isinstance(r, AgentResponse)
-        assert "4321" in r.text
+        assert re.search(r"(?<!\d)4[,. ]?321(?!\d)", r.text)

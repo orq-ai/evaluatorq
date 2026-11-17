@@ -13,9 +13,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal, cast
 
+from loguru import logger
 from pydantic import BaseModel, Field, ValidationError
 
-from evaluatorq.common.private_files import write_private_atomic
+from evaluatorq.common.private_files import ensure_private_directory, write_private_atomic
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import Snapshot
 
@@ -65,7 +66,7 @@ def cleanup_expired_uploads(runs_dir: Path, *, now: float | None = None) -> int:
     directory = uploads_dir(runs_dir)
     if directory.is_symlink() or not directory.exists():
         return 0
-    _ensure_private_directory(directory)
+    ensure_private_directory(directory)
     cutoff = (time.time() if now is None else now) - UPLOAD_RETENTION_SECONDS
     removed = 0
     for path in directory.iterdir():
@@ -117,16 +118,6 @@ def limit_request_body(request: Request) -> None:
         return message
 
     request._receive = limited_receive  # noqa: SLF001 — install the bounded ASGI receive wrapper.
-
-
-def _ensure_private_directory(path: Path) -> None:
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = path.lstat()
-    if path.is_symlink() or not stat.S_ISDIR(info.st_mode):
-        raise OSError('Insights upload storage must be a real directory.')
-    if hasattr(os, 'getuid') and info.st_uid != os.getuid():
-        raise OSError('Insights upload storage has unexpected ownership.')
-    path.chmod(0o700)
 
 
 def upload_size_error(kind: UploadKind, size: int) -> str | None:
@@ -359,7 +350,8 @@ def _recent_upload_entry(runs_dir: Path, path: Path, kind: UploadKind) -> tuple[
             trace_count=metadata.trace_count,
             kind=kind,
         )
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError) as exc:
+        logger.warning('Leaving Insights upload {} out of recent trace files: {}', path.name, exc)
         return None
 
 
@@ -377,8 +369,19 @@ def _recent_finder_entry(finder_dir: Path, path: Path) -> tuple[float, RecentTra
             trace_count=_trace_count(contents, 'finder'),
             kind='finder',
         )
-    except (OSError, ValueError, RuntimeError):
+    except (OSError, ValueError, RuntimeError) as exc:
+        logger.warning('Leaving Finder export {} out of recent trace files: {}', path.name, exc)
         return None
+
+
+def _finder_dir_rejection(finder_dir: Path) -> str | None:
+    """Why no export in `finder_dir` can be listed, checked once so the reason is logged once."""
+    from evaluatorq.dashboard.insights_launch import finder_export_dir_problem
+
+    info = finder_dir.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        return 'is a symlink'
+    return finder_export_dir_problem(info) if os.name != 'nt' else None
 
 
 def recent_trace_files(runs_dir: Path, finder_dir: Path) -> list[RecentTraceFile]:
@@ -394,7 +397,10 @@ def recent_trace_files(runs_dir: Path, finder_dir: Path) -> list[RecentTraceFile
             entry = _recent_upload_entry(runs_dir, path, kind)
             if entry is not None:
                 entries.append(entry)
-    if finder_dir.exists() and not finder_dir.is_symlink():
+    finder_rejection = _finder_dir_rejection(finder_dir) if finder_dir.exists() or finder_dir.is_symlink() else None
+    if finder_rejection is not None:
+        logger.warning('Leaving every Finder export out of recent trace files: {} {}', finder_dir, finder_rejection)
+    elif finder_dir.exists():
         for path in finder_dir.glob('*.json'):
             entry = _recent_finder_entry(finder_dir, path)
             if entry is not None:

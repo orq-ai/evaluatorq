@@ -152,28 +152,40 @@ Everything else — voice nits, a clunky sentence, a suggested extra example —
 
 #### Reporting the review in the PR
 
-The review is only useful to the human if they can read it in under a minute. One table, one line per finding, plain words — no lens jargon, no severity codes, no paragraphs. A finding whose line needs a second sentence gets a link to where the detail lives, not the detail.
+The review is only useful to the human if they can read it in under a minute. One table, one line per finding, plain words — no lens jargon, no paragraphs. Severity is a plain-word `Impact` column, never a code. A finding whose line needs a second sentence gets a link to where the detail lives, not the detail.
 
 ```markdown
-## Review
+## Open decisions
 
-| Finding | Raised by | What happened |
-|---|---|---|
-| The install command fails on a fresh machine without `uv init` first | reader | Fixed — added the caveat under the command |
-| Page never says what happens when the key is missing | conformance | Fixed — named the failure mode |
-| Wants a second example for the async path | cutter | Left out — one example is enough for this page |
-
-**Open decisions** — these need a human, they are not defects:
+These need a human, they are not defects:
 
 - Should this page live under Guides or Reference? Currently Guides, because the reader arrives with a task. Lean: keep it.
+
+## Review
+
+| Impact | Finding | Raised by | What happened |
+|---|---|---|---|
+| High | Wants a second example for the async path | cutter | Left out — one example is enough for this page |
+
+<details>
+<summary>2 fixed</summary>
+
+| Impact | Finding | Raised by | What happened |
+|---|---|---|---|
+| High | The install command fails on a fresh machine without `uv init` first | reader | Fixed — added the caveat under the command |
+| Medium | Page never says what happens when the key is missing | conformance | Fixed — named the failure mode |
+
+</details>
 ```
 
 Rules for the table:
 
+- **`Impact` is one of `High`, `Medium`, `Low`, judged by what happens to a reader.** `High`: a reader fails the task, or is told something false. `Medium`: a reader stumbles, guesses, or has to leave the page. `Low`: polish. Sort the table High first.
+- **Show what needs a human, fold the rest.** The visible table holds every `Left out` and `Open` row, whatever its impact. `Fixed` rows go in a `<details>` block headed `N fixed`, same columns, so no finding disappears.
 - **Say what a reader would notice, not what the reviewer called it.** "The command fails without `uv init`", not "install prerequisite unstated".
 - **`What happened` is one of three**: `Fixed — <what changed>`, `Left out — <why>`, or `Open — <what it needs>`. Nothing else.
 - **Every finding appears exactly once**, including the ones you dropped as invalid after checking them; say `Left out — checked, the page already says this` rather than deleting the row. A finding that vanishes looks like a finding nobody read.
-- **Open decisions go under the table as prose, with a Lean.** A decision is a choice only the human can make; a defect is not a decision.
+- **Open decisions go above the table as prose, with a Lean.** A decision is a choice only the human can make; a defect is not a decision.
 
 **Maximum three iterations.** A blocker surviving three rounds means the page has a design problem underneath it — a missing prerequisite, an undocumented feature it stands on — and a fourth round will not find it. Stop; the page is still worth keeping, and the judgement about it is not yours.
 

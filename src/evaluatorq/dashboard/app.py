@@ -38,7 +38,6 @@ from typing import TYPE_CHECKING, Any, Literal
 import httpx
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
-from openai import APIError, APIStatusError
 from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import JSONResponse, RedirectResponse, Response
@@ -47,6 +46,8 @@ from evaluatorq.common.cli_oauth import OrqCLIError, list_oauth_sessions
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, mask_secret
 from evaluatorq.common.env_config import report as env_report
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
+from evaluatorq.common.llm_errors import API_ERRORS, STATUS_ERRORS
+from evaluatorq.common.llm_errors import status_code as sdk_status_code
 from evaluatorq.common.orq_client import OrqProfile, close_orq_client, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
@@ -60,7 +61,13 @@ from evaluatorq.dashboard.pairwise_compare import register_pairwise_compare_rout
 from evaluatorq.dashboard.pairwise_views import register_pairwise_view_routes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import CSRF_FIELD, request_rejected
-from evaluatorq.dashboard.shell import current_sidebar_html, dashboard_css, dashboard_css_version, page
+from evaluatorq.dashboard.shell import (
+    WORKSPACE_PENDING_ROUTE,
+    current_sidebar_html,
+    dashboard_css,
+    dashboard_css_version,
+    page,
+)
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
@@ -182,7 +189,11 @@ def _settings_config(
             ('Selected profile host', profile.server or DEFAULT_ORQ_BASE_URL),
         ))
     env = {row.name: row for row in env_report()}
-    for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
+    for label, var in (
+        ('ORQ API key', 'ORQ_API_KEY'),
+        ('OpenAI API key', 'OPENAI_API_KEY'),
+        ('Anthropic API key', 'ANTHROPIC_API_KEY'),
+    ):
         config.append((label, env[var].value or 'not set'))
     # Runs with an experiment URL supply their own link scope. Otherwise use
     # the selected OAuth workspace or the environment/CLI fallback.
@@ -235,6 +246,17 @@ def _dashboard_css(v: str = '') -> Response:
     return Response(dashboard_css(), media_type='text/css', headers={'Cache-Control': cache})
 
 
+def _workspace_pending() -> Response:
+    """204 while the lookup runs; then reload the page if it found a workspace, else stop polling (286)."""
+    from evaluatorq.dashboard.orq_workspace import resolve_slug, slug_lookup_pending
+
+    if slug_lookup_pending():
+        return Response(status_code=204)
+    if resolve_slug() is not None:
+        return Response('', headers={'HX-Refresh': 'true'})
+    return Response('', status_code=286)
+
+
 async def _auth_status(req: Request) -> JSONResponse:
     """Verify the selected dashboard credential for the startup toast."""
 
@@ -282,7 +304,7 @@ async def _auth_status(req: Request) -> JSONResponse:
                 'method': auth.method,
                 'message': f'{auth.label} was rejected. Open Settings to choose or renew a credential.',
             })
-        expected_provider_failure = status_code is not None or isinstance(exc, (httpx.HTTPError, APIError))
+        expected_provider_failure = status_code is not None or isinstance(exc, (httpx.HTTPError, *API_ERRORS))
         if not expected_provider_failure:
             logger.opt(exception=True).error(
                 'Unexpected dashboard auth status probe failure for {}: {}', auth.label, exc
@@ -430,7 +452,7 @@ async def _settings_models(req: Request) -> NotStr:
         try:
             async with model_choices.catalogue_client(auth) as client:
                 groups = await model_choices.models_by_provider(client, kind=kind, strict=True)
-        except (ImportError, OSError, RuntimeError, ValueError, APIError, httpx.HTTPError) as exc:
+        except (ImportError, OSError, RuntimeError, ValueError, *API_ERRORS, httpx.HTTPError) as exc:
             groups = {}
             logger.warning('Could not load the model catalogue for {}: {}', field, exc)
             note = ''
@@ -450,8 +472,8 @@ def _settings_model_auth_failure(exc: Exception) -> bool:
     """Whether a catalogue error clearly means the selected credential needs attention."""
     if isinstance(exc, MissingLLMCredentialsError):
         return True
-    if isinstance(exc, APIStatusError):
-        return exc.status_code in (401, 403)
+    if isinstance(exc, STATUS_ERRORS):
+        return sdk_status_code(exc) in (401, 403)
     if getattr(exc, 'status_code', None) in (401, 403):
         return True
     return isinstance(exc, OrqCLIError) and exc.failure_kind in ('authentication', 'setup')
@@ -902,35 +924,33 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
 
     # Tabbed body for the known surfaces; the interactive panels live inside
     # their tabs, so they are no longer appended separately.
-    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-    with cli_slug_render_scope():
-        if surface == 'sim':
-            from evaluatorq.dashboard.view import run_compare_control
+    if surface == 'sim':
+        from evaluatorq.dashboard.view import run_compare_control
 
-            # Same choice list as the overview picker (sim only, no error runs,
-            # capped); the control itself drops the current run from the options.
-            choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-            body_html = report_tabs.sim_report_tabs(
-                rid, report_obj, compare_html=run_compare_control(rid, choices, '/compare/sim')
-            )
-        elif surface == 'redteam':
-            body_html = report_tabs.redteam_report_tabs(rid, report_obj)
-        elif surface == 'pairwise':
-            from evaluatorq.dashboard import pairwise_tabs
+        # Same choice list as the overview picker (sim only, no error runs,
+        # capped); the control itself drops the current run from the options.
+        choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
+        body_html = report_tabs.sim_report_tabs(
+            rid, report_obj, compare_html=run_compare_control(rid, choices, '/compare/sim')
+        )
+    elif surface == 'redteam':
+        body_html = report_tabs.redteam_report_tabs(rid, report_obj)
+    elif surface == 'pairwise':
+        from evaluatorq.dashboard import pairwise_tabs
 
-            try:
-                focus: int | None = int(req.query_params.get('cmp', ''))
-            except ValueError:
-                focus = None
-            body_html = pairwise_tabs.pairwise_report_tabs(
-                rid,
-                report_obj,
-                hero_actions_html=_pairwise_hero_actions(rid, roots),
-                focus=focus,
-            )
-        else:
-            body_html = adapter.body(report_obj)
+        try:
+            focus: int | None = int(req.query_params.get('cmp', ''))
+        except ValueError:
+            focus = None
+        body_html = pairwise_tabs.pairwise_report_tabs(
+            rid,
+            report_obj,
+            hero_actions_html=_pairwise_hero_actions(rid, roots),
+            focus=focus,
+        )
+    else:
+        body_html = adapter.body(report_obj)
 
     opts = filter_def.options(report_obj)
     total_results = len(filter_def.results(report_obj))
@@ -1002,28 +1022,26 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
 
     # Render the tabbed body from the filtered results so the static tab
     # content (tables, charts) tracks the filter, not just the HTMX panels.
-    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-    with cli_slug_render_scope():
-        if surface == 'sim':
-            body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered)
-        elif surface == 'redteam':
-            from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+    if surface == 'sim':
+        body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered)
+    elif surface == 'redteam':
+        from evaluatorq.redteam.reports.converters import rebuild_filtered_report
 
-            filtered_report = rebuild_filtered_report(report_obj, filtered)
-            body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
-        elif surface == 'pairwise':
-            from evaluatorq.dashboard import pairwise_tabs
+        filtered_report = rebuild_filtered_report(report_obj, filtered)
+        body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
+    elif surface == 'pairwise':
+        from evaluatorq.dashboard import pairwise_tabs
 
-            body_html = await asyncio.to_thread(
-                pairwise_tabs.pairwise_report_tabs,
-                rid,
-                report_obj,
-                filtered,
-                hero_actions_html=_pairwise_hero_actions(rid, roots),
-            )
-        else:
-            body_html = adapter.body_from_results(report_obj, filtered)
+        body_html = await asyncio.to_thread(
+            pairwise_tabs.pairwise_report_tabs,
+            rid,
+            report_obj,
+            filtered,
+            hero_actions_html=_pairwise_hero_actions(rid, roots),
+        )
+    else:
+        body_html = adapter.body_from_results(report_obj, filtered)
 
     form_html = render_filter_form(
         rid, surface or '', new_opts, selections, shown=len(filtered), total=len(filter_def.results(report_obj))
@@ -1252,6 +1270,9 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     """
 
     async def lifespan(runtime: FastHTML) -> AsyncIterator[None]:
+        from evaluatorq.dashboard.orq_workspace import resolve_slug
+
+        resolve_slug()
         try:
             yield
         finally:
@@ -1278,6 +1299,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     initialize_finder_settings(app)
     app.add_middleware(TraceSessionMiddleware, app_state=app.state)
     app.get('/auth/status')(_auth_status)
+    app.get(WORKSPACE_PENDING_ROUTE)(_workspace_pending)
     app.get('/static/dashboard.css')(_dashboard_css)
     # NOTE: static_route_exts is registered AFTER all custom routes so that
     # its catch-all /{fname:path}.{ext:static} does not steal requests for

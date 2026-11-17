@@ -34,8 +34,35 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT" || exit 1
 
 RECEIPT="$ROOT/.context/receipt.txt"
+OUT_LINES="${RECEIPT_OUT_LINES:-40}"
+# Validated here, before any block runs, because the script is deliberately not
+# `set -e`: an unvalidated value reaches `head -<value>`, which rejects it as an
+# option, writes nothing, and leaves the run to print RESULT: OK over an empty
+# output section. That is the exact failure this cap was raised to prevent.
+case "$OUT_LINES" in
+  '' | *[!0-9]*)
+    printf 'RECEIPT_OUT_LINES must be a non-negative integer, got %s\n' "$OUT_LINES" >&2
+    exit 2
+    ;;
+esac
+# Decimal syntax is not enough. A value the shell accepts can still overflow this
+# platform's `head`, which rejects it ("Value too large for defined data type"),
+# writes nothing, and leaves the run reporting success over an empty output
+# section — the same hole as an unvalidated value. Ask `head` whether it can use
+# the number instead of guessing where its limit is.
+# Two probes, no magic numbers: `head` must accept the count, and `test` must be
+# able to compare it. They have different ranges — `head` takes unsigned values
+# past what `[ -gt ]` parses — and both are used below, so both get asked.
+if ! printf '' | head -n "$OUT_LINES" >/dev/null 2>&1 || ! [ "$OUT_LINES" -ge 0 ] 2>/dev/null; then
+  printf 'RECEIPT_OUT_LINES=%s is not a line count this shell can use\n' "$OUT_LINES" >&2
+  exit 2
+fi
+SUMMARY_FILE="$ROOT/.context/receipt-summary.txt"
 WORK="$(mktemp -d)"
+ROWS="$WORK/rows.txt"   # per-block rows; assembled under the RESULT line at the end
+: >"$ROWS"
 mkdir -p "$ROOT/.context"
+rm -f "$SUMMARY_FILE"  # an interrupted run must not leave the last run's status to be pasted
 
 EVALUATORQ_DIR="$(mktemp -d)"
 export EVALUATORQ_DIR
@@ -58,7 +85,9 @@ trap 'rm -rf "$WORK" "$EVALUATORQ_DIR"' EXIT
 
 # Bail out with a receipt that says why, rather than a silent green one.
 die() {
-  printf 'RESULT: FAILED — %s\n' "$1" >>"$RECEIPT"
+  printf 'FAILED — %s\n%s\n' "$1" "$1" >"$SUMMARY_FILE"
+  printf 'RESULT: FAILED — %s\n\n' "$1" >>"$RECEIPT"
+  cat "$ROWS" >>"$RECEIPT"
   cat "$RECEIPT"
   exit 1
 }
@@ -148,11 +177,14 @@ STATE="$WORK/state.sh"   # carries exports between bash blocks (one logical shel
 : >"$STATE"
 FAILED=0
 SEEN=0
+RAN=0
+ILLUSTRATIVE=0
+NONZERO=0
 
 while IFS=$'\t' read -r idx lang start_line; do
   body="$WORK/$idx.body"
   SEEN=$((SEEN + 1))
-  printf -- '--- block %s (%s, %s:%s)\n' "$idx" "$lang" "$PAGE" "$start_line" >>"$RECEIPT"
+  row="--- block $idx ($lang, $PAGE:$start_line)"
 
   case "$lang" in
     python)
@@ -168,7 +200,8 @@ while IFS=$'\t' read -r idx lang start_line; do
       # "..." for every later block in the shared shell. These lines are
       # instructions for the reader's own project, not claims about this repo.
       if ! grep -qvE '^\s*(#|$|uv (add|pip install)\b|pip install\b|export [A-Z_0-9]+=(\.\.\.|<[^>]*>|"?your[^"]*"?)\s*(#.*)?$)' "$body"; then
-        printf 'command: —\nexit: — illustrative (environment setup for the reader'"'"'s project; not executed against this repo)\n\n' >>"$RECEIPT"
+        printf '%s — illustrative (environment setup for the reader'"'"'s project; not executed against this repo)\n' "$row" >>"$ROWS"
+        ILLUSTRATIVE=$((ILLUSTRATIVE + 1))
         continue
       fi
       # `set -e` so a failing command fails the block: without it `rc=$?` sees
@@ -189,28 +222,52 @@ while IFS=$'\t' read -r idx lang start_line; do
       # "not run by this runner" — never "not executable by nature". Whether a
       # console or yaml block could have been executed is a claim for the
       # reviewer to make, not one this script is in a position to assert.
-      printf 'command: —\nexit: — illustrative (%s block, not run by this runner)\n\n' "$lang" >>"$RECEIPT"
+      printf '%s — illustrative (%s block, not run by this runner)\n' "$row" "$lang" >>"$ROWS"
+      ILLUSTRATIVE=$((ILLUSTRATIVE + 1))
       continue
       ;;
   esac
 
-  printf 'command: %s\nexit: %s\n' "$lang" "$code" >>"$RECEIPT"
-  printf 'output (first 5 lines):\n' >>"$RECEIPT"
-  printf '%s\n' "$out" | head -5 >>"$RECEIPT"
-  printf '\n' >>"$RECEIPT"
-  [ "$code" -ne 0 ] && FAILED=1
+  RAN=$((RAN + 1))
+  printf '%s exit %s\n' "$row" "$code" >>"$ROWS"
+  # Up to OUT_LINES, not 5: the receipt is the evidence for what the prose claims,
+  # and a block whose measurements run past the cap evidences nothing below it. A
+  # 5-line cap on one page's clustering block hid three rows, and two false
+  # z-score claims rode through review behind the truncation.
+  # A block that printed nothing adds no lines.
+  if [ -n "${out//[[:space:]]/}" ]; then
+    printf '%s\n' "$out" | head -n "$OUT_LINES" | sed 's/^/    /' >>"$ROWS"
+    # `printf '%s\n' ""` still feeds one newline to wc, so gate on there being output.
+    if [ "$(printf '%s\n' "$out" | wc -l)" -gt "$OUT_LINES" ]; then
+      printf '    [output truncated at %s lines]\n' "$OUT_LINES" >>"$ROWS"
+    fi
+  fi
+  if [ "$code" -ne 0 ]; then
+    FAILED=1
+    NONZERO=$((NONZERO + 1))
+  fi
 done <"$WORK/index.tsv"
 
 [ "$SEEN" -eq "$EXTRACTED" ] || die "accounted for $SEEN of $EXTRACTED extracted blocks"
 
+# RESULT goes above the rows: it is the line the PR body's folded summary copies.
+scope=""
+[ -n "$BASE" ] && scope="added "
+counts="$EXTRACTED ${scope}blocks: $RAN ran, $ILLUSTRATIVE illustrative"
 if [ "$FAILED" -ne 0 ]; then
-  echo "RESULT: FAILED — at least one block exited nonzero" >>"$RECEIPT"
+  echo "RESULT: FAILED — $counts; at least one block exited nonzero" >>"$RECEIPT"
 else
-  if [ -n "$BASE" ]; then
-    echo "RESULT: OK — $EXTRACTED added blocks accounted for, every executable one exited 0" >>"$RECEIPT"
-  else
-    echo "RESULT: OK — $EXTRACTED blocks accounted for, every executable one exited 0" >>"$RECEIPT"
-  fi
+  echo "RESULT: OK — $counts; every block that ran exited 0" >>"$RECEIPT"
+fi
+echo >>"$RECEIPT"
+cat "$ROWS" >>"$RECEIPT"
+
+# Line 1 is the PR body's folded <summary> text, line 2 the status-line fragment:
+# the agent pastes them instead of re-deriving counts from the RESULT line.
+if [ "$FAILED" -ne 0 ]; then
+  printf 'FAILED — %s of %s blocks that ran exited nonzero\n%s of %s blocks that ran exited nonzero\n' "$NONZERO" "$RAN" "$NONZERO" "$RAN" >"$SUMMARY_FILE"
+else
+  printf '%s of %s %sblocks ran, all exit 0, %s illustrative\n%s of %s %sblocks ran, all exit 0\n' "$RAN" "$EXTRACTED" "$scope" "$ILLUSTRATIVE" "$RAN" "$EXTRACTED" "$scope" >"$SUMMARY_FILE"
 fi
 
 cat "$RECEIPT"

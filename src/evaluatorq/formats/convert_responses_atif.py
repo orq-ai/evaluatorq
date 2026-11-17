@@ -32,6 +32,7 @@ from evaluatorq.contracts import (
 from evaluatorq.formats._ids import content_seed, stable_hex
 from evaluatorq.formats._shared import (
     COMPACTION_EXTRA_KEY,
+    CUSTOM_TOOL_INPUT_ARGUMENT,
     RAW_ARGUMENTS_EXTRA_KEY,
     atif_content_text,
     atif_tool_arguments,
@@ -73,6 +74,8 @@ _UNMAPPED_OUTPUTS_KEY = 'evaluatorq.responses_output_items'
 _UNMAPPED_RESULTS_KEY = 'evaluatorq.responses_result_items'
 _RESULT_ORDER_KEY = 'evaluatorq.responses_result_order'
 _RESPONSE_TOOLS_KEY = 'evaluatorq.responses_tools'
+# Marks an AtifToolCall made from a Responses `custom_tool_call`; the value keeps the item's other fields.
+_CUSTOM_TOOL_KEY = 'evaluatorq.responses_custom_tool'
 _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'image/webp']] = {
     'image/jpeg': 'image/jpeg',
     'image/png': 'image/png',
@@ -163,7 +166,7 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
 
     def custom_call(index: int, item: dict[str, Any]) -> None:
         if isinstance(item.get('call_id'), str) and item['call_id']:
-            current_agent(index).unmapped_outputs.append(item)
+            current_agent(index).calls.append(item)
         else:
             logger.warning('Responses custom_tool_call {!r} has no call_id; skipping it.', item.get('name'))
 
@@ -192,11 +195,15 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
     return drafts
 
 
+def _last_agent_draft(drafts: list[_Draft]) -> _Draft:
+    if not drafts or drafts[-1].source != 'agent':
+        drafts.append(_Draft(source='agent'))
+    return drafts[-1]
+
+
 def _attach_builtin_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
     """Keep unsupported built-in tool results as raw activity and close their agent turn."""
-    last = drafts[-1] if drafts and drafts[-1].source == 'agent' else _Draft(source='agent')
-    if not drafts or last is not drafts[-1]:
-        drafts.append(last)
+    last = _last_agent_draft(drafts)
     last.unmapped_results.append(item)
     last.result_order.append({
         'type': 'builtin',
@@ -214,24 +221,27 @@ def _is_builtin_result(item: Any) -> bool:
     )
 
 
-def _attach_custom_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
+def _attach_matched_output(item: dict[str, Any], drafts: list[_Draft]) -> bool:
+    """Attach a tool result to the open agent step holding its call; False when no call matches."""
     call_id = item.get('call_id')
+    kind = 'custom_tool_call' if item.get('type') == 'custom_tool_call_output' else 'function_call'
     for draft in reversed(drafts):
         if draft.source != 'agent':
             break
-        if any(call.get('call_id') == call_id for call in draft.unmapped_outputs):
-            draft.unmapped_results.append(item)
-            draft.result_order.append({
-                'type': 'custom',
-                'index': sum(1 for result in draft.unmapped_results if result.get('type') == 'custom_tool_call_output')
-                - 1,
-            })
+        if any(call.get('call_id') == call_id and call.get('type', 'function_call') == kind for call in draft.calls):
+            draft.results.append({'source_call_id': call_id, 'content': _tool_output_content(item.get('output'))})
+            draft.result_order.append({'type': 'function', 'index': len(draft.results) - 1})
             draft.seen_result = True
-            return
+            return True
+    return False
+
+
+def _attach_custom_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
+    if _attach_matched_output(item, drafts):
+        return
+    call_id = item.get('call_id')
     logger.warning('custom_tool_call_output for call_id {!r} matches no custom_tool_call; preserving it.', call_id)
-    last = drafts[-1] if drafts and drafts[-1].source == 'agent' else _Draft(source='agent')
-    if not drafts or last is not drafts[-1]:
-        drafts.append(last)
+    last = _last_agent_draft(drafts)
     last.unmapped_results.append(item)
     last.result_order.append({
         'type': 'custom',
@@ -241,17 +251,10 @@ def _attach_custom_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
 
 
 def _attach_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
+    if _attach_matched_output(item, drafts):
+        return
     call_id = item.get('call_id')
-    output = item.get('output')
-    content = _tool_output_content(output)
-    for draft in reversed(drafts):
-        if draft.source != 'agent':
-            break
-        if any(c.get('call_id') == call_id for c in draft.calls):
-            draft.results.append({'source_call_id': call_id, 'content': content})
-            draft.result_order.append({'type': 'function', 'index': len(draft.results) - 1})
-            draft.seen_result = True
-            return
+    content = _tool_output_content(item.get('output'))
     last = drafts[-1] if drafts else None
     if last is None or last.source != 'agent':
         logger.warning(
@@ -404,6 +407,14 @@ def _agent_step(draft: _Draft, step_id: int) -> AtifStep:
 
 
 def _tool_call(call: dict[str, Any]) -> AtifToolCall:
+    if call.get('type') == 'custom_tool_call':
+        rest = {key: value for key, value in call.items() if key not in ('type', 'call_id', 'name', 'input', 'id')}
+        return AtifToolCall(
+            tool_call_id=call['call_id'],
+            function_name=str(call.get('name') or ''),
+            arguments={CUSTOM_TOOL_INPUT_ARGUMENT: call.get('input')},
+            extra={_CUSTOM_TOOL_KEY: rest},
+        )
     arguments, raw_arguments = atif_tool_arguments(call.get('arguments'), call.get('name'))
     return AtifToolCall(
         tool_call_id=call['call_id'],
@@ -641,7 +652,9 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
             function=FunctionCall(
                 name=call.function_name,
                 arguments=(
-                    call.extra[RAW_ARGUMENTS_EXTRA_KEY]
+                    ''
+                    if _is_custom_call(call)
+                    else call.extra[RAW_ARGUMENTS_EXTRA_KEY]
                     if isinstance(call.extra, dict) and isinstance(call.extra.get(RAW_ARGUMENTS_EXTRA_KEY), str)
                     else json_arguments_text(call.arguments)
                 ),
@@ -713,7 +726,41 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
         builtin_results.extend(item for item in results if _is_builtin_result(item))
         results = [item for item in results if not _is_builtin_result(item)]
     _order_result_items(items, results, builtin_results, (step.extra or {}).get(_RESULT_ORDER_KEY))
+    if any(_is_custom_call(call) for call in step.tool_calls or []):
+        items[:] = _restore_custom_items(items, step.tool_calls or [], fc_item_ids)
     return items
+
+
+def _is_custom_call(call: AtifToolCall) -> bool:
+    return isinstance(call.extra, dict) and isinstance(call.extra.get(_CUSTOM_TOOL_KEY), dict)
+
+
+def _restore_custom_items(
+    items: list[dict[str, Any]], tool_calls: list[AtifToolCall], item_ids: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Turn the function items rendered for custom calls back into custom items.
+
+    Rendered `function_call` items follow `tool_calls` order, so calls are matched by position; a result is custom
+    only when no function call shares its `call_id`.
+    """
+    calls = iter(tool_calls)
+    function_ids = {call.tool_call_id for call in tool_calls if not _is_custom_call(call)}
+    custom_ids = {call.tool_call_id for call in tool_calls if _is_custom_call(call)} - function_ids
+    restored: list[dict[str, Any]] = []
+    for item in items:
+        if item.get('type') == 'function_call' and (call := next(calls, None)) is not None and _is_custom_call(call):
+            item = {
+                **cast('dict[str, Any]', (call.extra or {})[_CUSTOM_TOOL_KEY]),
+                'type': 'custom_tool_call',
+                'call_id': call.tool_call_id,
+                'name': call.function_name,
+                'input': call.arguments.get(CUSTOM_TOOL_INPUT_ARGUMENT),
+                **({'id': item_id} if isinstance(item_id := item_ids.get(call.tool_call_id), str) else {}),
+            }
+        elif item.get('type') == 'function_call_output' and item.get('call_id') in custom_ids:
+            item = {'type': 'custom_tool_call_output', 'call_id': item['call_id'], 'output': item.get('output')}
+        restored.append(item)
+    return restored
 
 
 def _is_restorable_raw_output(item: Any) -> bool:

@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from openai import APIConnectionError, APIStatusError
 from pydantic import BaseModel, Field
+
+from evaluatorq.common.llm_errors import CONNECTION_ERRORS, STATUS_ERRORS
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -232,7 +233,7 @@ async def adapt_prompt_to_tools(
         logger.debug(f'Tool adaptation: {len(relevant)}/{len(agent_context.tools)} tools relevant for {strategy.name}')
         return base_prompt + tool_reference
 
-    except (APIConnectionError, APIStatusError):
+    except CONNECTION_ERRORS + STATUS_ERRORS:
         raise
     except Exception as e:  # noqa: BLE001
         logger.error(f'Tool adaptation failed, using generic prompt without tool-specific targeting: {e}')

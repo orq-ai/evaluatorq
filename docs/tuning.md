@@ -107,7 +107,7 @@ Only the fields you set take effect. `LLMCallConfig(model="...")` alone leaves `
 
 The same `llm_config=` is on `summarize_conversations()`, `datapoints_from_traces()`, `extend_from_traces()` and `extend_from_experiment()` for the trace- and experiment-derived generation paths, with the same precedence: those four still take a bare `model=` beside the config, the config's model wins over it, and the contradiction is logged.
 
-`llm_config.client` is honoured everywhere too: pass your own `AsyncOpenAI` and no credentials need to be in the environment at all. Precedence is the same on every path — an explicitly passed client argument, then the config's, then `ORQ_API_KEY` / `OPENAI_API_KEY`.
+`llm_config.client` is honoured everywhere too: pass your own `AsyncOpenAI` and no credentials need to be in the environment at all. Precedence is the same on every path — an explicitly passed client argument, then the config's, then `ORQ_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`.
 
 Simulation's own calls default to the **Responses API**, even though `LLMCallConfig.api` itself defaults to `chat_completions`: the judge sends function tools and `reasoning_effort` together, which chat completions rejects with a 400 on models like `gpt-5.4-mini`, and one endpoint per run keeps the trace UI from typing the spans two different ways. Set `LLMCallConfig(api="chat_completions")` to opt out for the user simulator, whose request is a plain completion either endpoint accepts. The judge is not covered by that opt-out: it pins itself to Responses via `JudgeAgent.REQUIRED_API` and logs that your `api` did not apply to it, because the setting is one knob for both roles and only one of them can honour it. The default lives on `BaseAgent.DEFAULT_API`, not in an environment variable — it is a per-call setting, so it is on the config.
 
@@ -203,10 +203,11 @@ These bound evaluatorq's own LLM calls, not the target's.
 
     What you configure instead is the evaluatorq layer: `LLMConfig.retry_count` and `LLMConfig.retry_on_codes` in the table above.
 
-Two knobs govern cost rather than reliability, because each unit is a live call:
+Three knobs govern cost rather than reliability, because each unit is a live call:
 
 - `LLMConfig.max_objectives_per_llm_call` (default `8`) — objectives requested per attacker call before the generator batches into multiple calls. Raising it asks for more output tokens per call; roughly 150 tokens per objective is what keeps the default from truncating.
 - `LLMConfig.max_probe_turns` (default `8`) — probe turns the black-box classifier may send before giving up on capability inference. Each turn is a live call **against the target**.
+- `LLMConfig.max_backtracks` (default `0`, off) — turns a Crescendo attack may erase. Each erasure is one more call **against the target** on top of the turn budget, and every reply on a turn where an erasure is available, and that called no tool, costs one attacker-model call to decide whether to keep it, and that call resends the attack conversation so far, so it grows with the turns.
 
 ## Provider options: `extra_kwargs` vs `extra_body`
 

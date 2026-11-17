@@ -487,3 +487,34 @@ async def test_no_cleaning_drop_warning_when_all_rows_survive() -> None:
     finally:
         _logger.remove(handler_id)
     assert not [ln for ln in lines if "had no real output and were dropped" in ln]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_url", "expected_key"),
+    [
+        ("https://my.staging.orq.ai/v3/router", "staging-key"),  # Orq-routed: the client's key matches its host
+        ("https://api.openai.com/v1", "env-orq-key"),  # direct provider: its key never reaches Orq
+    ],
+)
+async def test_upload_key_belongs_to_the_upload_host(base_url: str, expected_key: str) -> None:
+    from types import SimpleNamespace
+    from typing import cast
+
+    spy = AsyncMock(return_value=None)
+    client_key = "staging-key" if base_url.endswith("/v3/router") else "sk-openai"
+    client = cast("AsyncOpenAI", cast(object, SimpleNamespace(base_url=base_url, api_key=client_key)))
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "env-orq-key"}),
+        patch("evaluatorq.redteam.runner.send_results_to_orq", spy),
+    ):
+        await _send_cleaned_results(
+            results=[_make_result()],
+            name="n",
+            description="d",
+            start_time=datetime.now(tz=timezone.utc),
+            report=_make_report(),
+            inference_client=client,
+        )
+    assert spy.await_args is not None
+    assert spy.await_args.kwargs["api_key"] == expected_key

@@ -24,7 +24,7 @@ DYNAMIC_INPUTS = {
 }
 STATIC_INPUTS = {
     'id': 'OWASP-ASI03-0001',
-    'vulnerability': 'privilege_compromise',
+    'vulnerability': 'identity_privilege_abuse',
     'category': 'ASI03',
     'messages': [{'role': 'user', 'content': 'escalate me'}],
 }
@@ -182,13 +182,14 @@ def test_run_config_is_persisted_and_restored(tmp_path: Path, monkeypatch: pytes
         _minimal_report(),
         name='rt',
         datapoints=[DYNAMIC_INPUTS],
-        run_config={'max_turns': 9, 'attacker_instructions': 'financial agent'},
+        run_config={'max_turns': 9, 'attacker_instructions': 'financial agent', 'max_backtracks': 4},
     )
     assert path is not None
 
     replay = load_redteam_replay('latest', runner_mod.get_runs_dir())
     assert replay.max_turns == 9
     assert replay.attacker_instructions == 'financial agent'
+    assert replay.max_backtracks == 4
 
 
 def test_run_config_absent_leaves_the_defaults_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,6 +199,7 @@ def test_run_config_absent_leaves_the_defaults_alone(tmp_path: Path, monkeypatch
     replay = load_redteam_replay('latest', runs)
     assert replay.max_turns is None
     assert replay.attacker_instructions is None
+    assert replay.max_backtracks is None
 
 
 def test_a_simulation_run_is_rejected_with_a_pointer_to_the_right_command(tmp_path: Path) -> None:
@@ -222,6 +224,16 @@ def test_datapoint_without_strategy_or_messages_is_rejected(tmp_path: Path) -> N
     _save_run(runs, 'rt_20260101_000000', {'pipeline': 'dynamic', 'datapoints': [{'id': 'x', 'category': 'ASI01'}]})
 
     with pytest.raises(ReplayError, match="neither a 'strategy'"):
+        load_redteam_replay('latest', runs)
+
+
+def test_datapoint_with_unknown_vulnerability_is_rejected_before_the_run(tmp_path: Path) -> None:
+    """A row saved before RES-1868 with an unknown vulnerability fails up front, not after the attacks."""
+    runs = tmp_path / 'runs'
+    row = {**STATIC_INPUTS, 'vulnerability': 'privilege_compromise'}
+    _save_run(runs, 'rt_20260101_000000', {'pipeline': 'static', 'datapoints': [row]})
+
+    with pytest.raises(ReplayError, match="unknown vulnerability 'privilege_compromise'"):
         load_redteam_replay('latest', runs)
 
 

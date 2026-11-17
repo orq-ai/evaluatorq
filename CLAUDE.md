@@ -112,6 +112,8 @@ uv run pytest -m 'not integration'
 
 **Do not scope `ty` to a path.** The configured bare check covers `tests/`, `src/`, root Python files, and docs Python files. A scoped run can pass while CI fails on a type error elsewhere. CI runs the bare check once, on Ubuntu with Python 3.10.
 
+CI adds `-n auto` to the pytest step, which runs the same tests on every core through `pytest-xdist`. Adding it locally is optional. Serial stays the default because each worker collects the whole suite, so on a laptop running several worktrees it multiplies CPU and memory.
+
 Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **ty** is not scoped. Match CI, not intuition.
 
 CI does not run integration tests. Real-API coverage runs weekly via `.github/workflows/examples-weekly.yml`, which opens an issue on failure rather than blocking a PR.
@@ -153,7 +155,9 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Computing trace signals | `evaluatorq.signals.compute_signals` | ad-hoc counting over trajectories |
 | Classifying agent simulation results as errored across saved reports and typed reports | `simulation.metrics.is_errored_result` | per-surface error checks |
 | Representing an Insights conversation with trace metadata | `common.trace_document.TraceDocument`; convert with `ensure_trace_document`, render with `to_chat_messages`, persist coverage with `source_coverage` | a second stored message list beside the ATIF trajectory, or unrestricted capture payloads in saved review data |
+| Accepting an injected LLM client at a public entry point | `common.llm_client.as_llm_client` | wrapping or type-checking a provider client at the call site |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
+| Catching or classifying an LLM SDK error | `common.llm_errors` (`STATUS_ERRORS`, `CONNECTION_ERRORS`, `BAD_REQUEST_ERRORS`, `status_code`), which covers the OpenAI and Anthropic SDKs | `except openai.APIStatusError` and friends: an Anthropic client's errors slip past them (ruff TID251 bans these names outside `llm_errors.py`) |
 | Untrusted trace text (a shell command, tool arguments or output) going to an external classifier | `common.redact.scrub_known_secrets` (local, pure, no network) before the text is rendered or sent | an ad-hoc credential regex, or sending the raw text |
 | Rendering a transcript as Responses `input` | `openresponses.input_items.messages_to_responses_input` | a hand-built `{'role', 'content'}` list — an assistant turn needs `output_text` parts or the Orq router **silently drops it** |
 

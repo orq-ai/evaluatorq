@@ -14,6 +14,9 @@ from .types import DataPointResult, EvaluatorqResult
 # endpoint allows fails anyway, and the largest reported upload (27 MB) took ~58 s.
 UPLOAD_TIMEOUT_S = 120.0
 
+# Experiments API route that receives evaluation results (Orq 4.18 and later).
+RESULTS_RECEIVE_PATH = '/v3/experiments/evaluations/receive'
+
 
 class SendResultsPayload(BaseModel):
     """The payload format expected by the Orq API."""
@@ -184,7 +187,7 @@ async def send_results_to_orq(
                     es.setdefault('error', '')
 
         response = await _post_results(
-            f'{resolved_base_url}/v2/spreadsheets/evaluations/receive',
+            f'{resolved_base_url}{RESULTS_RECEIVE_PATH}',
             api_key,
             payload_dict,
             raise_on_error=raise_on_error,

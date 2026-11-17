@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.llm_client import client_routes_through_orq, is_anthropic_client
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -78,7 +78,10 @@ _MARKABLE_ROLES = frozenset({'system', 'user'})
 def caching_applies(client: AsyncOpenAI | None, model: str) -> bool:
     """True when a breakpoint on this ``client``/``model`` can pay off.
 
-    The **router** is required: ``cache_control`` inside a content part is outside
+    An Anthropic SDK client (`is_anthropic_client`) always qualifies, whatever the model id: Anthropic is the provider that
+    asks for breakpoints, and the adapter forwards them.
+
+    Otherwise the **router** is required: ``cache_control`` inside a content part is outside
     the direct OpenAI schema, and a self-hosted OpenAI-compatible server may
     reject the whole request rather than ignore the key. Orq's own docs are
     explicit that on the router it is safe either way — *"``cache_control`` on a
@@ -98,6 +101,9 @@ def caching_applies(client: AsyncOpenAI | None, model: str) -> bool:
     call lands on Anthropic is not knowable when the breakpoint is placed; a
     router seating an Anthropic model today may not next week.
     """
+    if is_anthropic_client(client):
+        # The adapter passes ``cache_control`` through to the Messages API, which caches on any Claude model.
+        return True
     if not client_routes_through_orq(client):
         return False
     name = model.lower()

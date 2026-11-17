@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_valid
 from typing_extensions import Self
 
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
-from evaluatorq.common.private_files import write_private_atomic
+from evaluatorq.common.private_files import ensure_private_directory, write_private_atomic
 from evaluatorq.common.run_manifest import fail_if_running, start_manifest
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import ManifestStatus, RunManifest
@@ -705,6 +705,20 @@ def _open_windows_approved_regular_file(
         close_handle(directory_handle)
 
 
+def finder_export_dir_problem(info: os.stat_result) -> str | None:
+    """Why Insights refuses to read Finder exports from a directory with this stat, or `None` when it is safe.
+
+    POSIX only: Windows access control comes from inherited ACLs, not these bits.
+    """
+    if not stat.S_ISDIR(info.st_mode):
+        return 'is not a directory'
+    if info.st_uid != os.getuid():
+        return f'is owned by uid {info.st_uid}, not this user (uid {os.getuid()})'
+    if stat.S_IMODE(info.st_mode) & 0o022:
+        return f'is writable by group or others (mode {stat.S_IMODE(info.st_mode):#o})'
+    return None
+
+
 def _read_approved_finder_export(root: Path, path: Path) -> bytes:
     """Read a bounded export from the opened approved directory and file descriptors."""
     directory_fd: int | None = None
@@ -715,13 +729,9 @@ def _read_approved_finder_export(root: Path, path: Path) -> bytes:
             if not hasattr(os, 'O_DIRECTORY') or not hasattr(os, 'O_NOFOLLOW'):
                 raise ValueError('Safe Finder export file opening is unavailable on this platform.')
             directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            directory = os.fstat(directory_fd)
-            if (
-                not stat.S_ISDIR(directory.st_mode)
-                or directory.st_uid != os.getuid()
-                or stat.S_IMODE(directory.st_mode) & 0o022
-            ):
-                raise ValueError('Finder export directory has unsafe ownership or permissions.')
+            problem = finder_export_dir_problem(os.fstat(directory_fd))
+            if problem is not None:
+                raise ValueError(f'Finder export directory {problem}.')
             # O_NONBLOCK keeps a FIFO named *.json from blocking this open until a writer appears;
             # the S_ISREG check below then rejects it.
             descriptor = os.open(
@@ -763,8 +773,13 @@ def finder_export_reference_path(runs_dir: Path, run_id: str) -> Path:
 
 
 def ensure_private_finder_reference_dir(path: Path) -> None:
-    """Create or validate the private Finder lease directory."""
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    """Make the Finder lease directory and the runs folder that holds it owner-only (0o700), then validate both.
+
+    Either folder may already exist with a looser mode, from `start_manifest`'s plain mkdir or an
+    earlier version, so both are chmodded rather than only created.
+    """
+    ensure_private_directory(path.parent)
+    ensure_private_directory(path)
     validate_private_finder_reference_dir(path)
 
 

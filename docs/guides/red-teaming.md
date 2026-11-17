@@ -18,7 +18,7 @@ flowchart LR
 ## Modes
 
 - **dynamic** — an LLM generates attacks; run the categories you pick.
-- **static** — replays a fixed dataset of known attacks instead of generating them. Deterministic, cheap, good for CI. Runs Orq's public [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities) dataset by default; pass `dataset=` to run your own. The [static dataset cookbook](../examples/redteam/02_static_dataset.md) shows the reproducible version end to end.
+- **static** — replays a fixed dataset of known attacks instead of generating them. Deterministic, cheap, good for CI. Runs Orq's public [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities) dataset by default; pass `dataset=` to run your own — [Your Own Attack Dataset](red-team-datasets.md) is the file format and the field reference. The [static dataset cookbook](../examples/redteam/02_static_dataset.md) shows the reproducible version end to end.
 - **hybrid** — static seeds plus dynamic expansion; see the [hybrid mode cookbook](../examples/redteam/03_hybrid_mode.md) when you want both known attacks and generated coverage.
 
 In dynamic and hybrid mode each attack is a conversation, not a single prompt. An attacker LLM writes the next message from the target's last reply, for up to `max_turns` turns, and stops early when it judges the objective met. That self-report never decides the outcome: the judge reads the whole transcript afterwards and returns the verdict.
@@ -64,6 +64,38 @@ Replay is not a separate mode. It re-runs a previous run's exact attacks against
     report = await red_team(target="agent:my-agent", mode="static", dataset="./my_attacks.json")
     report = await red_team(target="agent:my-agent", mode="static", dataset="hf:my-org/my-attacks")
     ```
+
+### Backtracking
+
+**Backtracking** erases a turn the attacker judges a dead end, usually a refusal, so the attacker tries again in a conversation where that exchange never happened. It is off by default and applies only to attacks that use the Crescendo delivery method. Reach for it when a target's refusals end attacks that a different opening might have got past.
+
+```python
+from evaluatorq.redteam import red_team
+from evaluatorq.redteam.contracts import LLMConfig
+
+report = await red_team(
+    'agent:my-agent',
+    mode='dynamic',
+    delivery_methods=['crescendo'],
+    llm_config=LLMConfig(max_backtracks=3),
+)
+```
+
+The CLI equivalent is `--max-backtracks 3`. The value is the number of erasures allowed per attack, from 0 to 10, and an erased attempt does not use up a turn. The target's next call leaves the exchange out, while the attacker still sees it so it can change technique. Erased exchanges are kept in `execution.backtracked_turns` on each result, and the judge never sees them.
+
+After each reply the attacker model decides, in one extra call, whether to keep the turn or erase it. It is told to erase a reply that would make the target more likely to keep refusing, and to keep one, even a refusal, that leaves context useful to later turns. The erasures are released across the attack rather than all at once: by the end of turn t, counting from 0, an attack may have used at most ceil(budget × (t + 1) / max_turns) of them. With `max_backtracks=3` and 8 turns, that is one erasure in turns 0 and 1, two by turn 2 and all three by turn 5, so a target that refuses the opening message cannot drain the budget on it. No decision call is made on a turn where no erasure is available. It is also told to always keep a reply that reveals or does any part of what the attack asks for, even inside a refusal, because erased replies stay in `execution.backtracked_turns`, which the judge does not score. This is an instruction to the attacker, not a check, so a model that ignores it can still erase such a reply.
+
+A turn is always kept, and the run reports no error for it, when one of these holds:
+
+- The attacker has already declared the objective achieved.
+- The decision call fails or gives no usable answer. The turn is kept, the run continues, and the report's `pipeline_warnings` says how many turns this affected.
+- The target called a tool during the turn and the call shows in the reply. Erasing the text would not undo the tool's effect.
+
+Backtracking needs a target that receives the full conversation on every call, which includes `agent:<key>` strings. `ORQAgentTarget`, `LangGraphTarget` and `PydanticAITarget` keep the history themselves, so a turn cannot be erased from them, and the run raises `RedTeamError` before any attack starts. A `mode="static"` run skips this check because no static attack can backtrack.
+
+An erasure removes the exchange from the conversation sent to the target, nothing else. Anything the target stored outside that conversation during the turn, such as a memory written without a tool call showing in the reply, stays where it is.
+
+A run with no dynamic Crescendo attack, such as `mode="static"`, gets a `pipeline_warnings` entry saying the setting had no effect. A saved run stores the value and [replay](#replay-a-previous-run) restores it, unless you set `max_backtracks` yourself.
 
 ## Seed a dynamic attack from a trace
 
@@ -314,33 +346,29 @@ The two tabs above are the two most common targets. For the full set — includi
 
 ## Coverage
 
-19 framework categories map onto 18 vulnerabilities. Every vulnerability has a judge written for it. Categories with a **curated strategy count** ship hand-written attack strategies; the rest are marked *generated* — in dynamic and hybrid mode the strategy planner writes strategies for them per run, against the target's actual tools, memory and system prompt. Pass `generate_strategies=False` to run curated strategies only.
+Every vulnerability has a judge written for it. Categories with a **curated strategy count** ship hand-written attack strategies; the rest are marked *generated* — in dynamic and hybrid mode the strategy planner writes strategies for them per run, against the target's actual tools, memory and system prompt. Pass `generate_strategies=False` to run curated strategies only.
 
-| Category | Vulnerability | Curated strategies | Judge |
-|---|---|---|---|
-| `ASI01` | Agent Goal Hijacking | 5 | ✅ |
-| `ASI02` | Tool Misuse & Exploitation | 4 | ✅ |
-| `ASI03` | Identity & Privilege Abuse | generated | ✅ |
-| `ASI04` | Supply Chain Vulnerabilities | generated | ✅ |
-| `ASI05` | Unexpected Code Execution | 4 | ✅ |
-| `ASI06` | Memory & Context Poisoning | 4 | ✅ |
-| `ASI07` | Insecure Inter-Agent Communication | generated | ✅ |
-| `ASI08` | Cascading Failures | generated | ✅ |
-| `ASI09` | Human-Agent Trust Exploitation | 5 | ✅ |
-| `ASI10` | Rogue Agents | generated | ✅ |
-| `LLM01` | Prompt Injection | 4 | ✅ |
-| `LLM02` | Sensitive Information Disclosure | 4 | ✅ |
-| `LLM03` | Supply Chain Vulnerabilities | generated | ✅ |
-| `LLM04` | Data and Model Poisoning | generated | ✅ |
-| `LLM05` | Improper Output Handling | 5 | ✅ |
-| `LLM06` | Excessive Agency | generated | ✅ |
-| `LLM07` | System Prompt Leakage | 5 | ✅ |
-| `LLM08` | Vector and Embedding Weaknesses | generated | ✅ |
-| `LLM09` | Misinformation | 5 | ✅ |
+<!-- coverage-table -->
 
-See [Vulnerabilities & Frameworks](vulnerabilities-and-frameworks.md) for how these 19 category codes map onto the 18 vulnerabilities behind them, and how a vulnerability mapped into more than one framework is labelled in reports.
+See [Vulnerabilities & Frameworks](vulnerabilities-and-frameworks.md) for how these category codes map onto the vulnerabilities behind them, and how a vulnerability mapped into more than one framework is labelled in reports.
 
-45 curated strategies in total, delivered through 16 delivery methods (`direct-request`, `tool-response`, `role-play`, `crescendo`, `many-shot`, `base64`, `leetspeak`, `multilingual`, `refusal-suppression`, and more). Add your own vulnerabilities, strategies and judges — see [Custom Evaluators & Frameworks](../custom-evaluators-and-frameworks.md).
+The [CLI reference](../cli-reference/redteam.md) lists every delivery method. Add your own vulnerabilities, strategies and judges — see [Custom Evaluators & Frameworks](../custom-evaluators-and-frameworks.md).
+
+### Curated strategies by category
+
+An **attack strategy** is one hand-written attack recipe: an objective, a delivery method and, for single-turn attacks, a prompt template. The table lists every curated strategy and the category it is filed under. Pass a name from the `Strategy` column to `--strategy` on the CLI, or `strategies=` in Python, to run only that strategy. The filter does not apply to static dataset rows, so a hybrid run still runs every dataset row next to the selected strategies. Categories marked *generated* in the coverage table have no rows here.
+
+<!-- curated-strategies -->
+
+A strategy is skipped when the target does not meet its **Needs** column: `tools` means the target must declare at least one tool in its agent context, and `a` or `b` means it must have at least one of those capabilities. `tools + a` needs both. Both skips are logged only at debug level. A target that hides its tools or memory therefore runs fewer attacks than this table suggests, with no warning; the run plan shows the real count. When the target's capabilities could not be classified, because no classifier model was available or the classifier failed, a coarser check stands in: memory capabilities pass if the target has memory, knowledge retrieval passes if it has knowledge bases, and every other capability passes if it has any tool. To print the strategies per vulnerability from the installed version:
+
+```bash
+uv run python -c "
+from evaluatorq.redteam.adaptive.strategy_registry import VULNERABILITY_STRATEGY_REGISTRY
+for vulnerability, strategies in VULNERABILITY_STRATEGY_REGISTRY.items():
+    print(vulnerability.value, [s.name for s in strategies])
+"
+```
 
 ## Inspect results in Python
 
@@ -518,7 +546,7 @@ Three numbers describe a run: how many setup calls it makes before attacking, ho
     <label>
       Attacks
       <input type="number" name="attacks" min="0" step="1" value="10">
-      <small>≤ 65 for a full sweep of one target</small>
+      <small>≤ <!-- full-sweep-total --> for a full sweep of one target</small>
     </label>
     <label>
       Turns per attack
@@ -553,7 +581,7 @@ Three numbers describe a run: how many setup calls it makes before attacking, ho
 
 Call count is **setup calls + attacks × (turns × 2 + 1)**: each turn is one adversarial generation plus one target call, and the judge runs once after the turn loop, not per turn.
 
-**One attack is one strategy against one vulnerability**, not one category — a category contributes several. The count for a run is the sum, over each selected category, of the registry strategies that apply to the target plus `generated_strategy_count` (default 2), then capped by `max_per_category` and `max_dynamic_datapoints`. A full dynamic sweep of one target therefore tops out at **65**: 45 registry strategies across 10 categories, plus 2 generated each. Capability filtering only removes strategies, so 65 is a ceiling; multiple targets multiply it. The run plan shown before datapoint generation carries the exact count, so you never have to guess for a run you are about to start.
+**One attack is one strategy against one vulnerability**, not one category — a category contributes several. The count for a run is the sum, over each selected vulnerability, of the registry strategies that apply to the target plus `generated_strategy_count` (default 2), then capped by `max_per_category` and `max_dynamic_datapoints`. A full dynamic sweep of one target therefore tops out at <!-- full-sweep-ceiling -->. Capability filtering only removes strategies, so that is a ceiling; multiple targets multiply it. The run plan shown before datapoint generation carries the exact count, so you never have to guess for a run you are about to start.
 
 **Setup calls** are the ones that happen before and after the attack loop. The default of 7 is a dynamic run against one tool-bearing target with the standard report options on:
 

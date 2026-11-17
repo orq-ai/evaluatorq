@@ -136,15 +136,10 @@ async def test_respond_preserves_tool_calls_in_replayed_transcript():
 
 
 @pytest.mark.asyncio
-async def test_respond_prices_unpriced_usage_from_catalogue(monkeypatch: pytest.MonkeyPatch):
+async def test_respond_prices_unpriced_usage_from_catalogue(fake_catalogue):
     """RES-1295: an unpriced Chat Completions usage comes back priced, with
     priced_calls == calls, once a catalogue entry exists for the model."""
-    model_catalogue.reset_catalogue_cache()
-
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {"gpt-4o-mini": model_catalogue.ModelInfo(0.00025, 0.002, "openai", supports_responses=True)}
-
-    monkeypatch.setattr(model_catalogue, "_load_catalogue", fake_load)
+    fake_catalogue({"gpt-4o-mini": model_catalogue.ModelInfo(0.00025, 0.002, "openai", supports_responses=True)})
 
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=_make_openai_response())
@@ -201,8 +196,8 @@ async def test_reasoning_effort_switches_the_token_budget_field():
 
 
 @pytest.mark.asyncio
-async def test_without_reasoning_effort_the_token_budget_stays_max_tokens():
-    """The non-reasoning path is unchanged — older models only accept `max_tokens`."""
+async def test_without_reasoning_effort_the_token_budget_is_max_completion_tokens():
+    """gpt-5.x rejects `max_tokens`, so the budget is `max_completion_tokens` with or without an effort."""
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=_make_openai_response())
     target = _make_target(client)
@@ -211,6 +206,31 @@ async def test_without_reasoning_effort_the_token_budget_stays_max_tokens():
         await target.respond([Message(role="user", content="hello")])
 
     sent = client.chat.completions.create.call_args.kwargs
-    assert sent["max_tokens"] == target.max_tokens
-    assert "max_completion_tokens" not in sent
+    assert sent["max_completion_tokens"] == target.max_tokens
+    assert "max_tokens" not in sent
     assert "reasoning_effort" not in sent
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_off_orq_sends_no_metadata_and_no_max_tokens():
+    from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
+
+    client = MagicMock()
+    client.base_url = "https://api.openai.com/v1"
+    client.chat.completions.create = AsyncMock(return_value=_make_openai_response())
+    target = OpenAIModelTarget(
+        model="gpt-5.1", system_prompt="SYS", client=client, reasoning_effort="high"
+    )
+
+    with (
+        patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
+        evaluatorq_pipeline("red_teaming"),
+        evaluatorq_run_id("r1"),
+    ):
+        await target.respond([Message(role="user", content="hello")])
+
+    sent = client.chat.completions.create.call_args.kwargs
+    assert sent["reasoning_effort"] == "high"
+    assert sent["max_completion_tokens"] == target.max_tokens
+    assert "max_tokens" not in sent
+    assert "metadata" not in sent

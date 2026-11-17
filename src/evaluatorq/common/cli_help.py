@@ -8,6 +8,7 @@ CONTEXT_SETTINGS: dict[str, list[str]] = {'help_option_names': ['-h', '--help']}
 
 MODEL_OPTION_NOTE: str = (
     'Provider resolved from env: ORQ_API_KEY -> Orq router, else OPENAI_API_KEY '
-    '(+ OPENAI_BASE_URL) -> OpenAI-compatible endpoint. The role defaults are '
-    'provider-prefixed for the router; going OpenAI-direct means passing the bare id.'
+    '(+ OPENAI_BASE_URL) -> OpenAI-compatible endpoint, else ANTHROPIC_API_KEY -> Anthropic. '
+    'The role defaults are provider-prefixed for the router; going OpenAI-direct or '
+    'Anthropic-direct means passing the bare id.'
 )
