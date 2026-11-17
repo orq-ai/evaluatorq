@@ -220,7 +220,7 @@ Set the embedding role with `EVALUATORQ_EMBEDDING_MODEL`, `--embedding-model`, t
 | `EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY` | Off macOS, to store an API key | unset | Fernet key that encrypts an API key entered on the dashboard Settings page before it is saved to the settings file. When set, it is used on every platform, macOS included. When unset, macOS keeps the encryption key in Keychain and other platforms cannot save a key. An invalid Fernet key raises an error. Generate one with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. |
 | `EVALUATORQ_FINDER_WINDOW_DAYS` | No | `7` | Default number of recent days searched by the trace finder. Valid values are `1` through `90`. |
 | `EVALUATORQ_FINDER_LIMIT` | No | `500` | Default maximum number of traces selected for trace-finder classification. Valid values are `1` through `5000`. |
-| `EVALUATORQ_FINDER_PARALLELISM` | No | `100` | Default number of concurrent per-trace classify calls. Valid values are `1` through `200`. |
+| `EVALUATORQ_FINDER_PARALLELISM` | No | `100` | Default number of concurrent per-trace classify calls. Valid values are `1` through `200`. Despite the name it also supplies the default for `eq insights --parallelism` — see [Pace a run against a rate limit](insights.md#pace-a-run-against-a-rate-limit). |
 | `EVALUATORQ_DASHBOARD_ROOTS` | No | unset | Internal. A JSON array of run-store roots, set by `eq dashboard` for its reloader subprocess and parsed back with `json.loads`. Pass extra stores as positional CLI paths rather than setting this by hand. |
 
 ### Tracing
