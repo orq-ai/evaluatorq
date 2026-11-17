@@ -16,6 +16,7 @@ from evaluatorq.common.model_input import (
     JevOptions,
     cap_text,
     classifier_question_wire_payloads,
+    fit_classifier_input,
     fit_jev_state,
     is_jev_model,
     jev_state,
@@ -733,3 +734,48 @@ def test_a_text_too_small_for_its_marker_is_dropped_not_emptied(step: int, count
     texts = [entry['text'] for entry in state['messages'] if entry['type'] == 'message']
     assert texts and all(texts), 'no message is kept with its text cut to nothing'
     assert len(_kept_indexes(state)) + state_omitted_messages(state) == len(messages)
+
+
+@pytest.mark.parametrize('pairs', [384, *range(370, 400, 3)])
+def test_a_turn_is_kept_whole_or_left_out_whole(pairs: int) -> None:
+    messages = _long_tool_chat(pairs)
+    state = jev_state(messages, global_char_cap=500_000)
+    kinds: dict[int, list[str]] = {}
+    for entry in state['messages']:
+        if entry['type'] != 'omission':
+            kinds.setdefault(entry['index'], []).append(entry['type'])
+    with_calls = {index for index, message in enumerate(messages) if message.get('tool_calls')}
+    assert with_calls & set(kinds), 'some assistant turns with a tool call are kept'
+    for index in with_calls & set(kinds):
+        assert sorted(kinds[index]) == ['message', 'tool_call'], f'turn {index} kept its text and its call together'
+    assert len(_kept_indexes(state)) + state_omitted_messages(state) == len(messages)
+
+
+@pytest.mark.parametrize('cap', range(900, 2_400, 60))
+def test_a_tool_result_too_small_for_its_marker_is_dropped_not_emptied(cap: int) -> None:
+    messages: list[dict[str, Any]] = [{'role': 'user', 'content': 'go'}]
+    for index in range(12):
+        call = {'id': f'c{index}', 'type': 'function', 'function': {'name': 'Bash', 'arguments': '{}'}}
+        messages.append({'role': 'assistant', 'content': '', 'tool_calls': [call]})
+        messages.append({'role': 'tool', 'tool_call_id': f'c{index}', 'content': 'R' * (300 + 37 * index)})
+    state = jev_state(messages, global_char_cap=cap)
+    assert serialized_chars(state) <= cap
+    results = [result for entry in state['messages'] if entry['type'] == 'tool_call' for result in entry['results']]
+    assert all(result['text'] for result in results), 'no tool result is kept with its text cut to nothing'
+    assert len(_kept_indexes(state)) + state_omitted_messages(state) == len(messages)
+
+
+@pytest.mark.parametrize('length', [5_000, 120_000])
+def test_a_conversation_is_fitted_without_probing_below_its_marker(length: int) -> None:
+    state = {'conversation': 'x' * length}
+    for cap in range(30, 70):
+        try:
+            fitted = fit_classifier_input(state, model='openai/gpt-5.4-mini', questions=[], global_char_cap=cap)
+        except ValueError as error:
+            assert 'cannot fit' in str(error), 'a cap with no room says so; it is not a marker-size crash'
+            continue
+        assert isinstance(fitted, dict)
+        assert serialized_chars(fitted) <= cap
+        assert 'chars left out' in fitted['conversation']
+    roomy = fit_classifier_input(state, model='openai/gpt-5.4-mini', questions=[], global_char_cap=200)
+    assert isinstance(roomy, dict) and 'chars left out' in roomy['conversation']

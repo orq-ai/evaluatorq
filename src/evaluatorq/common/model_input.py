@@ -649,7 +649,12 @@ def _fit_conversation_payload(state: dict[str, Any], limit: int) -> dict[str, An
     best: dict[str, Any] | None = None
     while low <= high:
         text_limit = (low + high) // 2
-        candidate = {**state, 'conversation': cap_text(conversation, text_limit)[0]}
+        capped = _cut_text(conversation, text_limit)
+        if capped is None:
+            # Too small to hold the marker; only a larger cap can work.
+            low = text_limit + 1
+            continue
+        candidate = {**state, 'conversation': capped}
         if serialized_chars(candidate) <= limit:
             best = candidate
             low = text_limit + 1
@@ -798,21 +803,36 @@ def _cap_messages(
 
     fill_unused_budget()
 
-    omitted = omitted_before + len(source_indexes) - selection.selected_unique
-    bounded = _state_payload(selection.left + selection.right, omitted, fixed)
+    kept = _whole_turns(selection.left + selection.right, entries)
+    kept_unique = len(_represented_indexes(kept))
+    omitted = omitted_before + len(source_indexes) - kept_unique
+    bounded = _state_payload(kept, omitted, fixed)
     if serialized_chars(bounded) > cap:
-        omitted += selection.selected_unique
+        omitted += kept_unique
         bounded = _state_payload([], omitted, fixed)
         if serialized_chars(bounded) > cap:
             raise ValueError('model input character cap cannot fit Jev state metadata and its omission marker')
     return bounded
 
 
+def _whole_turns(kept: list[dict[str, Any]], entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop the kept entries of a source message that lost one of its entries.
+
+    An assistant message with tool calls becomes a `message` entry and one
+    `tool_call` entry per call, all under the message's index. The omission
+    count is by index, so keeping the text while dropping a call would show a
+    turn with no call and count nothing as left out.
+    """
+    total = Counter(entry.get('index') for entry in entries)
+    present = Counter(entry.get('index') for entry in kept)
+    return [entry for entry in kept if present[entry.get('index')] == total[entry.get('index')]]
+
+
 def _fit_entry(entry: dict[str, Any], char_budget: int) -> dict[str, Any] | None:
     """The entry with its texts cut to the largest cap that fits `char_budget`, or `None` when no cap does.
 
-    `None` means the entry is dropped. The caller leaves its indexes out of the
-    selection, so it is counted in the omission marker.
+    `None` means the entry is dropped. `_whole_turns` then drops the other
+    entries of the same source message, so the message is counted as left out.
     """
     if char_budget < 1:
         return None
@@ -835,16 +855,15 @@ def _fit_entry(entry: dict[str, Any], char_budget: int) -> dict[str, Any] | None
 def _cut_text(text: str, limit: int) -> str | None:
     """`text` within `limit`, cut with its omission marker. `None` when `limit` cannot hold that marker.
 
-    The marker carries the omitted count, so its length depends on the text. A
-    text cut to nothing has the longest one, and that is the smallest limit
-    `cap_text` can meet.
+    `cap_text` owns the marker and decides whether it fits; this only turns its
+    refusal into a value, so a caller searching for a cap can try a larger one.
     """
     if len(text) <= limit:
         return text
-    source = text.source_text if isinstance(text, _CappedText) else text
-    if limit < len(f'[... {len(source)} chars left out ...]'):
+    try:
+        return cap_text(text, limit)[0]
+    except ValueError:
         return None
-    return cap_text(text, limit)[0]
 
 
 def _entry_with_text_cap(entry: dict[str, Any], limit: int) -> dict[str, Any] | None:
