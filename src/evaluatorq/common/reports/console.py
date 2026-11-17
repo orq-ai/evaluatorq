@@ -47,6 +47,49 @@ def render_plan_table(
     console.print(table)
 
 
+def render_grouped_entries(
+    console: Console,
+    *,
+    title: str,
+    groups: list[tuple[str, list[tuple[str, list[str]]]]],
+    footer: list[str] | None = None,
+) -> None:
+    """Print ``title``, each group's heading and entries (a cyan name with indented detail lines), then ``footer``.
+
+    Detail and footer lines wrap at the console width without trailing padding, so a listing stays readable
+    on an 80-column terminal where a wide table of long identifiers would not.
+
+    Args:
+        console: Rich Console to print to.
+        title: Heading printed first.
+        groups: ``(heading, entries)`` pairs; each entry is ``(name, detail_lines)``.
+        footer: Lines printed after a blank line, below the last group.
+    """
+    from rich.text import Text
+
+    console.print(Text(title, style='bold'))
+    for heading, entries in groups:
+        console.print()
+        console.print(Text(heading, style='bold'))
+        for name, detail_lines in entries:
+            console.print(Text('  ' + name, style='cyan'))
+            for line in detail_lines:
+                _print_wrapped(console, line, indent='    ')
+    if footer:
+        console.print()
+        for line in footer:
+            _print_wrapped(console, line, indent='')
+
+
+def _print_wrapped(console: Console, line: str, *, indent: str) -> None:
+    import textwrap
+
+    from rich.text import Text
+
+    for wrapped in textwrap.wrap(line, width=max(console.width, 20), initial_indent=indent, subsequent_indent=indent):
+        console.print(Text(wrapped), soft_wrap=True)
+
+
 async def ask_confirm(prompt: str) -> bool:
     """Ask ``typer.confirm(prompt, default=True)`` without pinning the event loop.
 

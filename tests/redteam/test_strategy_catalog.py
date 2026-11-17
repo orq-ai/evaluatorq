@@ -122,9 +122,10 @@ def test_hook_renders_every_generated_block(hooks) -> None:  # noqa: ANN001
     single = hooks._full_sweep(multi_agent=False)
     assert f'{single} ({hooks._full_sweep(multi_agent=True)} multi-agent)' in rendered
     assert '| `ASI03` | Identity & Privilege Abuse (`identity_privilege_abuse`) | generated |' in rendered
+    assert rendered.endswith(str(hooks._generated_per_vulnerability()))
 
 
-@pytest.mark.parametrize('missing', ['coverage-table', 'curated-strategies', 'full-sweep-ceiling', 'full-sweep-total'])
+@pytest.mark.parametrize('missing', ['coverage-table', 'curated-strategies', 'full-sweep-ceiling', 'full-sweep-total', 'generated-per-vulnerability'])
 def test_hook_fails_the_build_when_a_marker_is_gone(hooks, missing: str) -> None:  # noqa: ANN001
     from mkdocs.exceptions import PluginError
 
