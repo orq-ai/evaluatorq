@@ -40,6 +40,7 @@ class _SharedRunConfig(BaseModel):
     target: str | None = None
     memory_entity_id: str | None = None
     max_turns: int | None = Field(default=None, ge=1)
+    repetitions: int = Field(default=1, ge=1, strict=True)
     llm_config: LLMCallConfig | None = None
     evaluator_names: list[str] | None = None
     scoring: SimulationScoringConfig | None = None

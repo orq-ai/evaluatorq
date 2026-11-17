@@ -696,6 +696,9 @@ class SimulationRun(BaseModel):
     # Configured turn cap for the run. Optional for back-compat with runs saved
     # before this field existed (older reports simply omit the Config row).
     max_turns: int | None = None
+    # Separate conversations run per case. `datapoints` holds the cases once each;
+    # `results` holds every conversation. 1 for runs saved before this field existed.
+    repetitions: int = 1
     # Snapshot of the ORQ agent's configuration at run time (orq_agent targets
     # only; None for other target kinds, fetch failures, and pre-existing runs).
     # Deliberately excludes the system prompt / instructions.

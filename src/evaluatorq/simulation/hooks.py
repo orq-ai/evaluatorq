@@ -21,9 +21,10 @@ blocking hook stalls every concurrent simulation; offload blocking work with
 from __future__ import annotations
 
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from loguru import logger
+from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.async_utils import combine_confirm, fan_out
 
@@ -78,12 +79,24 @@ class SimulationRunMeta(TypedDict):
     """
 
     num_datapoints: int
+    """Conversations the run will execute: cases times ``repetitions``."""
+    repetitions: NotRequired[int]
+    """Separate conversations per case. Absent means 1."""
     model: str
     max_turns: int
     datapoint_parallelism: int
     evaluation_name: str
     evaluator_names: list[str]
     target: str
+
+
+def _conversation_plan(meta: SimulationRunMeta) -> str:
+    """The planned workload in words. With repetitions it names both the cases and the conversations."""
+    total = meta['num_datapoints']
+    repetitions = meta.get('repetitions', 1)
+    if repetitions == 1:
+        return f'{total} datapoints'
+    return f'{total // repetitions} datapoints x {repetitions} repetitions = {total} conversations'
 
 
 @runtime_checkable
@@ -166,7 +179,7 @@ class DefaultHooks:
     async def on_confirm(self, meta: SimulationRunMeta) -> bool:
         logger.info(
             f'[simulation] Run plan: target={meta.get("target", "?")} | '
-            f'{meta["num_datapoints"]} datapoints | model={meta["model"]!r} | '
+            f'{_conversation_plan(meta)} | model={meta["model"]!r} | '
             f'max_turns={meta["max_turns"]} | datapoint_parallelism={meta["datapoint_parallelism"]} | '
             f'evaluators={meta["evaluator_names"]}'
         )
@@ -174,7 +187,7 @@ class DefaultHooks:
 
     async def on_run_start(self, meta: SimulationRunMeta) -> None:
         logger.info(
-            f'[simulation] Run start: {meta["num_datapoints"]} datapoints | '
+            f'[simulation] Run start: {_conversation_plan(meta)} | '
             f'model={meta["model"]!r} | max_turns={meta["max_turns"]} | '
             f'datapoint_parallelism={meta["datapoint_parallelism"]} | '
             f'evaluators={meta["evaluator_names"]}'
@@ -282,7 +295,7 @@ class RichHooks:
         rows = [
             ('Target', str(meta.get('target', '?'))),
             ('Model', str(meta['model'])),
-            ('Datapoints', str(meta['num_datapoints'])),
+            ('Datapoints', _conversation_plan(meta)),
             ('Max Turns', str(meta['max_turns'])),
             ('Parallelism', str(meta['datapoint_parallelism'])),
             ('Evaluators', ', '.join(meta['evaluator_names'])),
@@ -291,7 +304,9 @@ class RichHooks:
             self._console,
             title='Run Plan',
             rows=rows,
-            prompt=f'Simulate {meta["num_datapoints"]} datapoints?',
+            prompt=f'Simulate {meta["num_datapoints"]} conversations?'
+            if meta.get('repetitions', 1) > 1
+            else f'Simulate {meta["num_datapoints"]} datapoints?',
             skip_confirm=self._skip_confirm,
         )
 

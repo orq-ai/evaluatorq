@@ -33,6 +33,7 @@ Targets — provide **exactly one**:
 | `--name` / `-n` | `str \| None` / unset | Run name. Unset unless passed: the SDK then saves the run as `sim` and names an uploaded experiment `simulation-<timestamp>-<id>`. |
 | `--sim-model` | `str \| None` / unset | Model for the user-simulator, the judge, persona/scenario/first-message generation, the recommendations pass and the executive summary. Unset, the simulated user, recommendations, executive summary and persona/scenario/first-message generation run on the `fast` role (`openai/gpt-6-luna` by default) and the judge runs on the `smart` role (`openai/gpt-6-sol` by default); a value here applies to all of them. Sets `llm_config.model`. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. Unset unless passed; the SDK default is `10`. |
+| `--repetitions` | `int` / `1` | Separate conversations to run for each case. Each is a fresh conversation with the same persona, scenario and opening message. Repeats the conversation, not the judge call. |
 | `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. Unset unless passed; the SDK default is `10`. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |
 | `--num-personas` | `int` / `5` | Number of personas to generate. |
@@ -82,6 +83,7 @@ Targets — same three flags as `eq sim run`. Provide exactly one input source: 
 | `--name` / `-n` | `str \| None` / unset | Run name. Unset unless passed: the SDK then saves the run as `sim` and names an uploaded experiment `simulation-<timestamp>-<id>`. |
 | `--sim-model` | `str \| None` / unset | Model for the user-simulator, the judge, the recommendations pass and the executive summary. Unset, the simulated user, recommendations and executive summary run on the `fast` role (`openai/gpt-6-luna` by default) and the judge runs on the `smart` role (`openai/gpt-6-sol` by default); a value here applies to all of them. Sets `llm_config.model`. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. Unset unless passed; the SDK uses the replayed run's cap with `--from-run`, else `10`. |
+| `--repetitions` | `int` / `1` | Separate conversations to run for each case. Each is a fresh conversation with the same persona, scenario and opening message. Repeats the conversation, not the judge call. |
 | `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. Unset unless passed; the SDK default is `10`. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
