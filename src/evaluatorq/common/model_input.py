@@ -809,6 +809,11 @@ def _cap_messages(
 
 
 def _fit_entry(entry: dict[str, Any], char_budget: int) -> dict[str, Any] | None:
+    """The entry with its texts cut to the largest cap that fits `char_budget`, or `None` when no cap does.
+
+    `None` means the entry is dropped. The caller leaves its indexes out of the
+    selection, so it is counted in the omission marker.
+    """
     if char_budget < 1:
         return None
     low, high = 0, char_budget
@@ -816,7 +821,10 @@ def _fit_entry(entry: dict[str, Any], char_budget: int) -> dict[str, Any] | None
     while low <= high:
         text_cap = (low + high) // 2
         candidate = _entry_with_text_cap(entry, text_cap)
-        if serialized_chars(candidate) <= char_budget:
+        if candidate is None:
+            # Too small to hold a marker; only a larger cap can work.
+            low = text_cap + 1
+        elif serialized_chars(candidate) <= char_budget:
             best = candidate
             low = text_cap + 1
         else:
@@ -824,26 +832,42 @@ def _fit_entry(entry: dict[str, Any], char_budget: int) -> dict[str, Any] | None
     return best
 
 
-def _entry_with_text_cap(entry: dict[str, Any], limit: int) -> dict[str, Any]:
+def _cut_text(text: str, limit: int) -> str | None:
+    """`text` within `limit`, cut with its omission marker. `None` when `limit` cannot hold that marker.
+
+    The marker carries the omitted count, so its length depends on the text. A
+    text cut to nothing has the longest one, and that is the smallest limit
+    `cap_text` can meet.
+    """
+    if len(text) <= limit:
+        return text
+    source = text.source_text if isinstance(text, _CappedText) else text
+    if limit < len(f'[... {len(source)} chars left out ...]'):
+        return None
+    return cap_text(text, limit)[0]
+
+
+def _entry_with_text_cap(entry: dict[str, Any], limit: int) -> dict[str, Any] | None:
+    """The entry with every text cut to `limit`. `None` when a text that must be cut cannot hold its marker."""
     bounded = dict(entry)
-    marker_length = len('[... 0 chars left out ...]')
-    if isinstance(bounded.get('text'), str):
-        bounded['text'] = cap_text(bounded['text'], limit)[0] if limit >= marker_length else ''
-    if isinstance(bounded.get('input'), str):
-        bounded['input'] = cap_text(bounded['input'], limit)[0] if limit >= marker_length else ''
+    for key in ('text', 'input'):
+        if isinstance(bounded.get(key), str):
+            cut = _cut_text(bounded[key], limit)
+            if cut is None:
+                return None
+            bounded[key] = cut
     results = bounded.get('results')
     if isinstance(results, list):
-        bounded['results'] = [
-            {
-                **result,
-                'text': cap_text(result['text'], limit)[0]
-                if isinstance(result, dict) and isinstance(result.get('text'), str) and limit >= marker_length
-                else '',
-            }
-            if isinstance(result, dict)
-            else result
-            for result in results
-        ]
+        cut_results: list[Any] = []
+        for result in results:
+            if not isinstance(result, dict):
+                cut_results.append(result)
+                continue
+            cut = _cut_text(result['text'], limit) if isinstance(result.get('text'), str) else ''
+            if cut is None:
+                return None
+            cut_results.append({**result, 'text': cut})
+        bounded['results'] = cut_results
     return bounded
 
 
