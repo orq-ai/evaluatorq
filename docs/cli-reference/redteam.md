@@ -19,7 +19,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--mode` | `str` / `dynamic` | Execution mode: `dynamic`, `static`, or `hybrid`. |
 | `--category` / `-c` | `str` (repeatable) | OWASP categories to test (e.g. `ASI01`). Repeatable and/or comma-separated. Defaults to all. |
 | `--vulnerability` / `-V` | `str` (repeatable) | Vulnerability IDs to test (e.g. `goal_hijacking`). Repeatable and/or comma-separated. Also accepts OWASP codes. Takes precedence over `--category`. |
-| `--strategy` / `-s` | `str` (repeatable) | Restrict to named attack strategies. Repeatable and/or comma-separated. Unknown registry names are rejected. The names are listed in [Curated strategies by category](../guides/red-teaming.md#curated-strategies-by-category). |
+| `--strategy` / `-s` | `str` (repeatable) | Restrict to named attack strategies. Repeatable and/or comma-separated. Unknown registry names are rejected. `eq redteam strategies` lists the valid names. |
 | `--delivery-method` / `-d` | `str` (repeatable) | Restrict to one or more delivery methods. Repeatable and/or comma-separated. |
 | `--max-turns` | `int` / `5` | Maximum conversation turns for multi-turn attacks. |
 | `--max-backtracks` | `int` (0 to 10) / `0` | Turns a Crescendo attack may erase and retry without using up a turn, released across the attack. See [Backtracking](../guides/red-teaming.md#backtracking). |
@@ -132,6 +132,18 @@ eq redteam validate-dataset [DATASET]
 | `DATASET` | `str \| None` / `None` | Local path, `hf:org/repo`, or `hf:org/repo/file.json`. Defaults to the official `orq/redteam-vulnerabilities` HuggingFace dataset. Unlike `eq redteam run --dataset`, this command has no `orq:` form — an `orq:` argument is read as a file path. |
 
 ---
+
+## `eq redteam strategies`
+
+List the curated attack strategies, grouped by category and vulnerability, with what each attempts, its turn type and what the target needs, then the categories that have no curated strategies. The names are the values `--strategy` accepts; the [red teaming guide](../guides/red-teaming.md#curated-strategies-by-category) explains each column.
+
+```bash
+eq redteam strategies [--json]
+```
+
+| Flag / Argument | Type / Default | Description |
+|---|---|---|
+| `--json` | `bool` / `False` | Emit strategies as a JSON array on stdout (machine-readable), one object per strategy that also carries its technique, delivery methods and a `needs` summary. |
 
 ## `eq redteam runs`
 

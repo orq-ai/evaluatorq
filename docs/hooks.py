@@ -193,6 +193,7 @@ _GENERATED = {
     '<!-- curated-strategies -->': _strategy_table,
     '<!-- full-sweep-ceiling -->': _full_sweep_ceiling,
     '<!-- full-sweep-total -->': _full_sweep_total,
+    '<!-- generated-per-vulnerability -->': lambda: str(_generated_per_vulnerability()),
 }
 
 

@@ -1015,6 +1015,53 @@ def _fmt_asr(asr: Any) -> str:
 
 
 @app.command()
+def strategies(
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help='Emit strategies as a JSON array on stdout (machine-readable).'),
+    ] = False,
+) -> None:
+    """List the curated attack strategies; the names are what --strategy accepts."""
+    from itertools import groupby
+    from operator import itemgetter
+
+    from rich.console import Console
+
+    from evaluatorq.common.reports.console import render_grouped_entries
+    from evaluatorq.redteam.adaptive.strategy_registry import strategy_catalog
+    from evaluatorq.redteam.vulnerability_registry import FRAMEWORK_TO_VULNERABILITIES
+
+    rows = strategy_catalog()
+    if json_output:
+        echo_json(rows)
+        return
+
+    groups = [
+        (
+            f'{category}  {vulnerability}',
+            [
+                (row['name'], [f'{row["turn_type"]} · needs: {row["needs"] or "nothing"}', row['description']])
+                for row in group
+            ],
+        )
+        for (category, vulnerability), group in groupby(rows, key=itemgetter('category', 'vulnerability'))
+    ]
+    curated = {row['category'] for row in rows}
+    generated_only = sorted(
+        code for codes in FRAMEWORK_TO_VULNERABILITIES.values() for code in codes if code not in curated
+    )
+    render_grouped_entries(
+        Console(),
+        title=f'Curated attack strategies ({len(rows)})',
+        groups=groups,
+        footer=[
+            f'No curated strategies, generated per run instead: {", ".join(generated_only)}',
+            "needs: what the target must have for the strategy to run; '+' means both, 'or' means either.",
+        ],
+    )
+
+
+@app.command()
 def runs(
     path: Annotated[
         Path | None,
