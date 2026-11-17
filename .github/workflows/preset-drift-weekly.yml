@@ -97,7 +97,7 @@ jobs:
 
       - name: Set up Node for the agent
         if: steps.drift.outcome == 'failure' && steps.existing.outputs.open == ''
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 

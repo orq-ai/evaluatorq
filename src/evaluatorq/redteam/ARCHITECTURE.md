@@ -92,7 +92,7 @@ from evaluatorq.openresponses import (
 ```
 
 - `build_openresponses_request(model=..., prompt=..., conversation=...)` — assemble the wire payload.
-- `load_openresponses_dataset(path)` — load a JSON / JSONL static redteam dataset authored as OpenResponses input arrays.
+- `load_openresponses_dataset(path)` — load a JSON / JSONL static redteam dataset authored as OpenResponses input arrays. Returns a `StaticDataset`, which `red_team(dataset=...)` accepts directly.
 - `turns_to_openresponses_input(orchestrator_result.turns)` — convert an executed attack back into the OpenResponses input array (useful for replay, dataset capture, debugging).
 - `redteam_sample_from_openresponses(input=..., openresponses_input=...)` — load datasets authored in OpenResponses format into the existing `RedTeamSample` schema.
 
