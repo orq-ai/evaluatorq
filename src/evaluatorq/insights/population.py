@@ -32,16 +32,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
 
 from evaluatorq.common.model_input import (
+    DECISION_STATE_FORMAT,
     fit_classifier_input,
     has_truncated_source_text,
-    is_jev_model,
+    is_decision_state_format,
     serialized_chars,
     serialized_question_chars,
+    uses_decision_state,
 )
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, to_chat_messages
@@ -54,7 +56,7 @@ from evaluatorq.trace_finder.orq_source import OrqTraceSource, require_complete_
 from evaluatorq.trace_finder.planner import plan_query
 from evaluatorq.trace_finder.projection import serialize_projection
 from evaluatorq.trace_finder.run_store import merge_facets, merge_numeric
-from evaluatorq.trace_finder.settings import effective_settings
+from evaluatorq.trace_finder.settings import effective_settings, normalize_filter_selection
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -93,7 +95,7 @@ def projection_coverage(
     settings = effective_settings()
     cap = trace_input_chars if trace_input_chars is not None else settings.trace_input_chars
     model = classifier_model or role_model('classifier', task='insights.labels')
-    state_format = 'jev' if is_jev_model(model) else 'text'
+    state_format = DECISION_STATE_FORMAT if uses_decision_state(model) else 'text'
     reserve = 'applied' if classifier_questions is not None else 'not_available'
     coverage: dict[str, Any] = {
         'n_traces': len(traces),
@@ -165,9 +167,9 @@ def describe_projection_coverage(coverage: dict[str, Any]) -> str:
     avg_classifier_request = int(coverage.get('classifier_request_chars', 0)) // max(traces, 1)
     detail = (
         f'{int(coverage.get("n_omitted_messages", 0)):,} of {int(coverage.get("n_source_messages", 0)):,} '
-        'source messages were omitted from the Jev classifier state.'
-        if coverage.get('classifier_state_format') == 'jev'
-        else 'The non-Jev classifier receives a readable transcript shortened as needed to fit its questions.'
+        'source messages were omitted from the decision state.'
+        if is_decision_state_format(coverage.get('classifier_state_format'))
+        else 'The plain-text classifier receives a readable transcript shortened as needed to fit its questions.'
     )
     return (
         f'{affected:,} of {traces:,} traces hit a summary or classifier input cap of {input_cap:,} characters. '
@@ -331,7 +333,7 @@ async def _resolve_from_query(
     compiler_model: str,
     classifier_model: str,
     fast_filter_model: str,
-    filter_selection: Literal['llm', 'llm+jev'],
+    filter_selection: Literal['llm', 'llm+decision'],
     usage: UsageLedger | None = None,
 ) -> ResolvedPopulation:
     assert pop.query is not None  # noqa: S101 - guarded by the caller's dispatch before this is reached
@@ -523,7 +525,7 @@ async def resolve_population(
     compiler_model: str,
     classifier_model: str,
     fast_filter_model: str | None = None,
-    filter_selection: Literal['llm', 'llm+jev'] | None = None,
+    filter_selection: Literal['llm', 'llm+decision'] | None = None,
     trace_input_chars: int | None = None,
     label_classifier_model: str | None = None,
     classifier_questions: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
@@ -545,7 +547,10 @@ async def resolve_population(
         if client is None:
             raise PopulationError('a query population requires an LLM client')
         settings = effective_settings()
-        selected_mode = pop.filter_selection or filter_selection or settings.filter_selection
+        selected_mode = cast(
+            "Literal['llm', 'llm+decision']",
+            normalize_filter_selection(pop.filter_selection or filter_selection or settings.filter_selection),
+        )
         resolved = await _resolve_from_query(
             pop,
             orq=orq,

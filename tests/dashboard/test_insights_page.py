@@ -224,7 +224,7 @@ def test_run_page_shows_character_input_coverage_for_loaded_traces(minimal_run: 
     notice = failures(run)
 
     assert '1 of 2 traces hit a summary or classifier input cap of 500,000 characters.' in notice
-    assert '3 of 10 source messages were omitted from the Jev classifier state.' in notice
+    assert '3 of 10 source messages were omitted from the decision state.' in notice
 
 
 def test_saved_run_uses_redesign_and_python_owned_actions(tmp_path, minimal_run, monkeypatch):

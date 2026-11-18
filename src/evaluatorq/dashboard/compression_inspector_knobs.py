@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from evaluatorq.dashboard.compression_inspector_data import (
-    JEV_EDGE_FIELDS,
-    JEV_FLAGS,
-    JEV_FORMAT_FLAGS,
+    DECISION_EDGE_FIELDS,
+    DECISION_FLAGS,
+    DECISION_FORMAT_FLAGS,
     MAX_KNOB_CHARS,
     READABLE_STYLE_FLAGS,
     VIEW_CAP_FIELDS,
@@ -24,14 +24,14 @@ _RESET_SCRIPT = (
 )
 _WRAP_SCRIPT = "document.getElementById('compression-output').classList.toggle('is-wrapped',this.checked)"
 
-_JEV_EDGE_LABELS = {
+_DECISION_EDGE_LABELS = {
     'assistant': 'Assistant messages',
     'user': 'User messages',
     'system': 'System and developer messages',
     'tool_input': 'Tool call input',
     'tool_result': 'Tool results',
 }
-_JEV_FLAG_LABELS = {
+_DECISION_FLAG_LABELS = {
     'system': 'System',
     'developer': 'Developer',
     'user': 'User',
@@ -55,7 +55,7 @@ _VIEW_CAP_LABELS = {
     'view_tool_input_chars': 'Tool input limit',
     'view_tool_max_chars': 'Tool result limit',
 }
-_JEV_FORMAT_LABELS = {
+_DECISION_FORMAT_LABELS = {
     'located_omission': 'Mark omitted messages at each source gap',
     'field_order': 'Identifiers and status before text',
     'drop_empty': 'Leave out empty fields',
@@ -129,28 +129,33 @@ def _display_group(values: Values, defaults: Values, *, has_source: bool) -> str
     )
 
 
-def _jev_group(values: Values, defaults: Values) -> str:
+def _decision_group(values: Values, defaults: Values) -> str:
     limits = ''.join(
         '<div class="compression-knob-pair">'
-        f'{_number(total, _JEV_EDGE_LABELS[part] + ", whole up to", values, defaults)}'
-        f'{_number(edge, _JEV_EDGE_LABELS[part] + ", edge kept", values, defaults)}'
+        f'{_number(total, _DECISION_EDGE_LABELS[part] + ", whole up to", values, defaults)}'
+        f'{_number(edge, _DECISION_EDGE_LABELS[part] + ", edge kept", values, defaults)}'
         '</div>'
-        for part, (total, edge) in JEV_EDGE_FIELDS.items()
+        for part, (total, edge) in DECISION_EDGE_FIELDS.items()
     )
-    flags = ''.join(_check(f'jev_include_{flag}', _JEV_FLAG_LABELS[flag], values, defaults) for flag in JEV_FLAGS)
+    flags = ''.join(
+        _check(f'decision_include_{flag}', _DECISION_FLAG_LABELS[flag], values, defaults) for flag in DECISION_FLAGS
+    )
     return (
         '<fieldset class="compression-knob-group">'
-        '<legend>Output (Jev state)</legend>'
+        '<legend>Output (decision state)</legend>'
         '<div class="compression-knob-grid">'
         f'{_number("global_char_cap", "Global character cap", values, defaults)}'
-        f'{_number("jev_state_chars", "Jev state limit", values, defaults)}'
+        f'{_number("decision_state_chars", "Decision state limit", values, defaults)}'
         '</div>'
         f'<div class="compression-knob-grid">{limits}</div>'
         '<p class="compression-knob-title">Include</p>'
         f'<div class="compression-checks">{flags}</div>'
         '<p class="compression-knob-title">Format</p>'
         '<div class="compression-checks">'
-        + ''.join(_check(f'jev_{flag}', _JEV_FORMAT_LABELS[flag], values, defaults) for flag in JEV_FORMAT_FLAGS)
+        + ''.join(
+            _check(f'decision_{flag}', _DECISION_FORMAT_LABELS[flag], values, defaults)
+            for flag in DECISION_FORMAT_FLAGS
+        )
         + '</div>'
         '<p class="compression-count-note">A text longer than its whole-up-to limit keeps that many characters at '
         'each edge, so an edge may be at most half of it. Turning off tool calls drops their results as well; '
@@ -201,15 +206,15 @@ def knobs_form_html(knobs: CompressionKnobs, defaults: CompressionKnobs, token: 
         f'{csrf_field()}<input type="hidden" name="token" value="{token}">'
         f'{_display_group(values, default_values, has_source=has_source)}'
         '<div class="compression-knobs-groups">'
-        f'{_view_group(values, default_values)}{_jev_group(values, default_values)}'
+        f'{_view_group(values, default_values)}{_decision_group(values, default_values)}'
         '</div>'
         '<div class="compression-knobs-footer">'
         f'<button type="button" class="compression-reset" onclick="{_RESET_SCRIPT}">Reset to defaults</button>'
         '<p class="compression-count-note">The Original is the canonical ATIF JSON, the raw session file or the readable '
-        'text, which uses the Insights full_conversation_view options. The Output uses the classifier Jev limits. '
+        'text, which uses the Insights full_conversation_view options. The Output uses the decision-state limits of the classifier. '
         'Every original is scrubbed of known secrets and cut to 2,000,000 characters, and a raw session file is read '
         'up to 5,000,000 bytes; a note says when anything is cut. Coverage is added to the readable '
-        'text and Jev state, not ATIF or raw-source originals. Format switches start on here only; production '
+        'text and decision state, not ATIF or raw-source originals. Format switches start on here only; production '
         'Insights and classifier defaults are unchanged. Changes update the preview as you make them.</p>'
         '</div></form>'
     )

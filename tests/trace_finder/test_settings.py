@@ -80,9 +80,21 @@ def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
     assert json.loads(path.read_text()) == settings.model_dump()
 
 def test_filter_selection_defaults_and_rejects_unknown_mode() -> None:
-    assert DashboardSettings().filter_selection == 'llm+jev'
+    assert DashboardSettings().filter_selection == 'llm+decision'
     with pytest.raises(ValueError):
         DashboardSettings.model_validate({'filter_selection': 'merged'})
+
+
+def test_a_settings_file_saved_with_the_old_filter_mode_name_keeps_loading(tmp_path: Path) -> None:
+    path = tmp_path / 'dashboard-settings.json'
+    path.write_text(json.dumps({'filter_selection': 'llm+jev'}), encoding='utf-8')
+
+    loaded = load_settings(path)
+    assert loaded.filter_selection == 'llm+decision'
+
+    # Saving an unchanged setting leaves the file as it was, so the old name must load every time, not once.
+    save_settings(loaded, path)
+    assert load_settings(path).filter_selection == 'llm+decision'
 
 
 def test_older_settings_files_inherit_default_trace_input_cap(tmp_path: Path) -> None:
