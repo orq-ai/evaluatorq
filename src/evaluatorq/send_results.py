@@ -21,7 +21,7 @@ RESULTS_RECEIVE_PATH = '/v3/experiments/evaluations/receive'
 class SendResultsPayload(BaseModel):
     """The payload format expected by the Orq API."""
 
-    model_config: dict[str, bool] = {'populate_by_name': True}  # ty: ignore[invalid-attribute-override]
+    model_config: dict[str, bool] = {'populate_by_name': True}  # ty: ignore[incompatible-attribute-override]
 
     name: str = Field(serialization_alias='_name')
     description: str | None = Field(default=None, serialization_alias='_description')

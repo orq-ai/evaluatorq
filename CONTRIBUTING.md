@@ -119,6 +119,6 @@ Add integration modules under `src/evaluatorq/integrations/`. Add the dependency
 
 - Branch from `main`
 - Run the complete `uv run pytest -m 'not integration'` profile and `uv run ty check` before pushing; the bare local pytest command also excludes deliberately slow tests, while CI runs the complete non-integration profile and runs the configured source, test, root, and docs ty check once on Ubuntu with Python 3.10
-- When changing the exact ty pin, update `scripts/data/ty_migration_audit.json` and the expected classifications in `scripts/audit_ty_migration.py` from that pinned release, then run `uv run python scripts/audit_ty_migration.py --refresh` and `uv run python scripts/audit_ty_migration.py`
+- When changing the exact ty pin, update `scripts/data/ty_migration_audit.json` and the expected classifications in `scripts/audit_ty_migration.py` from that pinned release, then run `uv run python scripts/audit_ty_migration.py --refresh` and `uv run python scripts/audit_ty_migration.py`. Point the snapshot at the release tag's commit. ty's migration guide can keep a rule name that the rule reference has renamed or split, so list each such old name with its current rules under `ty.rule_successors`, taken from the reference's "Migrating from" notes. Then rename the same rules in `pyproject.toml` and in `ty: ignore` comments, because an old name can stop covering a split-off rule.
 - Use conventional commit format for commit messages (e.g., `feat(redteam): ...`, `fix(evaluatorq): ...`)
 - Keep PRs focused — one feature or fix per PR when possible
