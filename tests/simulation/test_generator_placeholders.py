@@ -217,3 +217,41 @@ async def test_real_scenarios_in_the_second_runs_text_replace_a_stub(monkeypatch
     scenarios = await ScenarioGenerator(model='openai/gpt-6-luna').generate_security_scenarios(agent_description='A bookshop agent', num_scenarios=4)
 
     assert [scenario.name for scenario in scenarios] == [f'Scenario {index}' for index in range(4)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('method', 'count_kwarg'),
+    [
+        ('generate_edge_cases', 'num_edge_cases'),
+        ('generate_boundary_scenarios', 'num_scenarios'),
+        ('generate_security_scenarios', 'num_scenarios'),
+    ],
+)
+async def test_scenarios_taken_from_the_second_runs_text_are_still_marked_as_edge_cases(
+    monkeypatch: pytest.MonkeyPatch, method: str, count_kwarg: str
+) -> None:
+    raw = json.dumps([{**_scenario(name=f'Scenario {index}'), 'is_edge_case': False} for index in range(4)])
+    _install(monkeypatch, lambda model: StructuredResult(model.model_validate({'scenarios': [_scenario(name='x', goal='x')]}), raw, None))
+
+    scenarios = await getattr(ScenarioGenerator(model='openai/gpt-6-luna'), method)(agent_description='A bookshop agent', **{count_kwarg: 4})
+
+    assert [scenario.name for scenario in scenarios] == [f'Scenario {index}' for index in range(4)]
+    assert [scenario.is_edge_case for scenario in scenarios] == [True] * 4
+
+
+@pytest.mark.asyncio
+async def test_scenarios_taken_from_the_second_runs_text_still_go_through_coverage_and_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = json.dumps([_scenario(name=f'Scenario {index}') for index in range(6)])
+    _install(monkeypatch, lambda model: StructuredResult(model.model_validate({'scenarios': [_scenario(name='x', goal='x')]}), raw, None))
+    generator = ScenarioGenerator(model='openai/gpt-6-luna')
+
+    from_text = await generator.generate_with_coverage(agent_description='A bookshop agent', num_scenarios=3)
+
+    # The same six items arriving as a parsed answer give the same result: the text took the method's usual path.
+    six = [_scenario(name=f'Scenario {index}') for index in range(6)]
+    _install(monkeypatch, lambda model: StructuredResult(model.model_validate({'scenarios': six}), '', None))
+    from_parsed = await ScenarioGenerator(model='openai/gpt-6-luna').generate_with_coverage(agent_description='A bookshop agent', num_scenarios=3)
+
+    assert from_text
+    assert [scenario.model_dump() for scenario in from_text] == [scenario.model_dump() for scenario in from_parsed]
