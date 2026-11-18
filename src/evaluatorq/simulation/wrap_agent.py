@@ -69,7 +69,7 @@ def wrap_simulation_agent(
         # scoring would be worse than a TypeError.
         raise TypeError(
             "wrap_simulation_agent() no longer accepts 'evaluators='. Pass your "
-            'evaluator list to evaluatorq(..., evaluators=...) instead. See CHANGELOG.'
+            'evaluator list to evaluatorq(..., evaluators=...) instead.'
         )
     if deprecated_kwargs:
         raise TypeError(

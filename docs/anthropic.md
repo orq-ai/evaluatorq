@@ -151,7 +151,7 @@ llm_config = LLMConfig(
 )
 ```
 
-evaluatorq sends the request to the beta Messages endpoint with the header `server-side-fallback-2026-07-01`. evaluatorq's tests check the request it sends and how a reply is read, not a fallback on the live API. Fallbacks run on the Claude API itself: through the Orq router the field is ignored, see [Through the Orq router](#through-the-orq-router). The adapter sends fallbacks only for `AsyncAnthropic`. It rejects Bedrock and Vertex clients with a `ValueError` before sending, and it cannot tell an Anthropic-managed Google Cloud deployment from one you manage yourself, so every `AsyncAnthropicVertex` client is rejected. Use `AsyncAnthropic` to reach the Claude API when you want fallbacks. Haiku 5.5 has no fallback model, so do not set `fallbacks` on a role that runs it.
+evaluatorq sends the request to the beta Messages endpoint with the header `server-side-fallback-2026-07-01`. evaluatorq's tests check the request it sends and how a reply is read, not a fallback on the live API. Fallbacks run on the Claude API itself: through the Orq router the field is ignored, see [Through the Orq router](#through-the-orq-router). The adapter sends fallbacks only for `AsyncAnthropic`. It rejects Bedrock, Vertex and Foundry clients with a `ValueError` before sending (Anthropic's Foundry guide lists server-side fallback as not supported there), and it cannot tell an Anthropic-managed Google Cloud deployment from one you manage yourself, so every `AsyncAnthropicVertex` client is rejected. Use `AsyncAnthropic` to reach the Claude API when you want fallbacks. Haiku 5.5 has no fallback model, so do not set `fallbacks` on a role that runs it.
 
 ## Through the Orq router
 

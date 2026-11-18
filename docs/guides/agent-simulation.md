@@ -246,6 +246,56 @@ The middle ground between "just give me five" and specifying every trait: name t
 
 Batch forms `generate_personas([...])` / `generate_scenarios([...])` take a list of seeds and return one object each.
 
+### Check that generated items fit the agent
+
+A **fit check** asks a judge model whether each generated persona or scenario fits the agent and its seed, and regenerates the ones that do not. Reach for it when the generated set feeds a run you will trust as a gate; skip it for a quick exploratory run, because it adds model calls.
+
+`generate_checked_personas()` and `generate_checked_scenarios()` take the same seeds as the batch forms above and return a `FitReport`: the items, one outcome per item, and what the check cost.
+
+```python
+import asyncio
+
+from evaluatorq.simulation import generate_checked_personas
+
+
+async def main():
+    report = await generate_checked_personas(
+        ["angry customer", "first-time user"],
+        agent_description="A customer support agent for a retail bank.",
+    )
+    for persona, outcome in zip(report.items, report.outcomes):
+        print(f"{outcome.status:9s} attempts={outcome.attempts} {persona.name}")
+    print(f"unresolved: {report.unresolved}, judge calls: {report.judge_calls}, tokens: {report.usage.total_tokens}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+The judge answers one question per item: does it fit? For a persona that means it is a plausible user of the agent, it embodies its seed, and its numeric traits agree with its background. For a scenario it means the goal is something a user would bring to the agent, it is built around its seed, and its criteria are about that goal, do not contradict each other and can be observed in a conversation. A short item that passes those checks fits, and a seed counts when its meaning is there, whatever the wording.
+
+Difficult users and deliberate probes fit. A hostile or derailing persona is a valid user to test against. A scenario whose goal is out of scope on purpose, or a misuse or manipulation attempt, fits when the seed asks for it, the scenario is marked `is_edge_case`, or its criteria expect the agent to decline or resist. An unrelated goal with none of those signals is rejected.
+
+A rejected item goes back to the generator with the judge's explanation, up to `max_rounds` times (default `2`). An approved item is never regenerated. Pass `max_rounds=0` to judge once and regenerate nothing.
+
+| Outcome `status` | Meaning | Counts as a pass |
+|---|---|---|
+| `approved` | The judge said the item fits. | Yes |
+| `rejected` | The judge still said no after the last round, or the regeneration failed or returned nothing. `explanation` holds the reason. | No |
+| `unchecked` | There is no verdict: the judge call failed, the judge abstained, or its answer was not true or false. `explanation` says which. | No |
+
+**Read `report.unresolved` before you use the items.** `report.items` always holds one item per seed, including the rejected and unchecked ones, so passing it straight to `simulate()` runs them without a word. `report.all_approved` is the one-line gate.
+
+A judge model id that does not exist makes every item `unchecked`: each judge call fails on its own, so the report comes back complete and nothing in it is approved.
+
+Pass `agent_description`. Without it the judge checks fit against "a general-purpose conversational assistant", which almost any item fits, and a warning is logged. `outcome.attempts` counts the items generated for a seed, so a regeneration that failed does not add one. `report.usage` includes a regeneration that failed after the provider billed it.
+
+The judge runs on the `sim.judge` model role, so it is not the generator's model by default. Setting `llm_config.model` applies one model to every simulation-side call, the judge included. Pass `judge_client=` to send the judge calls through a different client than generation.
+
+Cost is one judge call per pending item per round, plus one generator call per regenerated item. `report.usage` covers the judge and the regenerations, not the first generation. As a reference point, judging four generated personas with `openai/gpt-6-sol` through the Orq router took 4 calls, 2,790 tokens and $0.0078 in one run on 2026-11-17.
+
+To judge personas or scenarios you already have, without regenerating anything, call `check_personas(personas, agent_description=..., seeds=[...])` or `check_scenarios(...)`. `seeds` is optional and takes one entry per item.
+
 ## Full control: hand-build personas
 
 When you want exact personas and pass/fail criteria, build them yourself and call `simulate()`. A **persona** is *who* is talking (patience, assertiveness, tone); a **scenario** is *what they want* plus the **criteria** the agent must (or must not) satisfy.

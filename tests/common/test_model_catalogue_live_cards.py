@@ -13,12 +13,13 @@ schema changes.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from evaluatorq.common import model_catalogue as catalogue
-from evaluatorq.common.model_catalogue import ModelInfo, cost_of
+from evaluatorq.common.model_catalogue import ModelInfo, Pricing, cost_of
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'v2_models_pricing_cards.json'
 
@@ -27,14 +28,14 @@ NO_TIER = 'orq-research@orq/autorouter-anthropic-cost'
 ANTHROPIC = 'anthropic/claude-sonnet-5-5'
 AUDIO = 'google-ai/gemini-3.5-transcribe-live'
 
-# metadata key -> ModelInfo field, all USD per 1M published and per 1k parsed.
-RATE_FIELDS = {
-    'million_tokens_cache_read_cost': 'cache_read_cost_per_1k',
-    'million_tokens_cache_write_cost': 'cache_write_cost_per_1k',
-    'million_tokens_audio_input_cost': 'audio_input_cost_per_1k',
-    'million_tokens_above_200k_input_cost': 'above_threshold_input_cost_per_1k',
-    'million_tokens_above_200k_output_cost': 'above_threshold_output_cost_per_1k',
-    'million_tokens_above_200k_cache_read_cost': 'above_threshold_cache_read_cost_per_1k',
+# metadata key -> getter on `Pricing`, all USD per 1M published and per 1k parsed.
+RATE_FIELDS: dict[str, Callable[[Pricing], float | None]] = {
+    'million_tokens_cache_read_cost': lambda p: p.cache_read,
+    'million_tokens_cache_write_cost': lambda p: p.cache_write,
+    'million_tokens_audio_input_cost': lambda p: p.audio_input,
+    'million_tokens_above_200k_input_cost': lambda p: p.tier.input if p.tier else None,
+    'million_tokens_above_200k_output_cost': lambda p: p.tier.output if p.tier else None,
+    'million_tokens_above_200k_cache_read_cost': lambda p: p.tier.cache_read if p.tier else None,
 }
 
 
@@ -59,42 +60,39 @@ def test_each_rate_is_the_published_per_million_over_1000(
 ):
     metadata = cards[ref]['metadata']
     assert isinstance(metadata, dict)
-    for key, field in RATE_FIELDS.items():
+    for key, get in RATE_FIELDS.items():
         published = metadata.get(key)
         if published is None:
-            assert getattr(parsed[ref], field) is None, (ref, field)
+            assert get(parsed[ref].pricing) is None, (ref, key)
         else:
-            assert getattr(parsed[ref], field) == pytest.approx(published / 1000), (ref, field)
+            assert get(parsed[ref].pricing) == pytest.approx(published / 1000), (ref, key)
 
 
 def test_the_audio_card_is_the_only_one_with_an_audio_rate(parsed: dict[str, ModelInfo]):
-    assert [ref for ref, info in parsed.items() if info.audio_input_cost_per_1k is not None] == [AUDIO]
-    assert parsed[AUDIO].audio_input_cost_per_1k == pytest.approx(0.0035)
+    assert [ref for ref, info in parsed.items() if info.pricing.audio_input is not None] == [AUDIO]
+    assert parsed[AUDIO].pricing.audio_input == pytest.approx(0.0035)
 
 
 def test_anthropic_card_has_cache_rates_and_no_tier(parsed: dict[str, ModelInfo]):
     info = parsed[ANTHROPIC]
-    assert info.cache_read_cost_per_1k == pytest.approx(0.0001)
-    assert info.cache_write_cost_per_1k == pytest.approx(0.0025)
-    assert info.extended_context_threshold is None
-    assert info.above_threshold_input_cost_per_1k is None
+    assert info.pricing.cache_read == pytest.approx(0.0001)
+    assert info.pricing.cache_write == pytest.approx(0.0025)
+    assert info.pricing.tier is None
 
 
 def test_tiered_gemini_card_parses_its_tier(parsed: dict[str, ModelInfo]):
     info = parsed[GEMINI]
-    assert info.extended_context_threshold == 200000
-    assert info.extended_context_mode == 'all_tokens'
-    assert info.above_threshold_input_cost_per_1k == pytest.approx(0.0025)
-    assert info.above_threshold_output_cost_per_1k == pytest.approx(0.015)
-    assert info.above_threshold_cache_read_cost_per_1k == pytest.approx(0.00025)
+    tier = info.pricing.tier
+    assert tier is not None
+    assert tier.threshold == 200000
+    assert tier.input == pytest.approx(0.0025)
+    assert tier.output == pytest.approx(0.015)
+    assert tier.cache_read == pytest.approx(0.00025)
 
 
 def test_mode_none_card_has_no_tier_rates(parsed: dict[str, ModelInfo]):
     info = parsed[NO_TIER]
-    assert info.extended_context_mode == 'none'
-    assert info.above_threshold_input_cost_per_1k is None
-    assert info.above_threshold_output_cost_per_1k is None
-    assert info.above_threshold_cache_read_cost_per_1k is None
+    assert info.pricing.tier is None
 
 
 def test_cost_of_below_the_gemini_threshold_bills_standard_rates(parsed: dict[str, ModelInfo]):

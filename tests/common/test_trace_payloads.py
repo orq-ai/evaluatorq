@@ -125,6 +125,8 @@ async def test_custom_evaluator_records_input_and_classifies_result(spans: InMem
     assert _payload(span, 'orq.evaluation.output') == {
         'passed': False, 'value': False, 'type': 'python_eval', 'reason': 'The answer differs',
     }
+    assert _payload(span, 'gen_ai.input') == _payload(span, 'orq.evaluation.input')
+    assert _payload(span, 'gen_ai.output') == _payload(span, 'orq.evaluation.output')
     assert (span.attributes or {})['orq.span_type'] == 'span.evaluator'
 
 
@@ -194,6 +196,7 @@ async def test_scorer_failure_retains_input(spans: InMemorySpanExporter) -> None
     assert result.error == 'judge unavailable'
     assert _payload(span, 'orq.evaluation.input')['output'] == 'reply'
     assert _payload(span, 'orq.evaluation.output') == {'error': 'judge unavailable'}
+    assert _payload(span, 'gen_ai.output') == {'error': 'judge unavailable'}
     assert span.status.status_code == StatusCode.ERROR
     assert (span.attributes or {})['orq.span_type'] == 'span.evaluator'
 
