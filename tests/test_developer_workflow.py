@@ -741,6 +741,15 @@ def test_ty_config_names_no_renamed_rule() -> None:
     assert configured & renamed == set()
 
 
+@pytest.mark.parametrize('workflow', ['ci.yml', 'docs.yml'])
+def test_ci_installs_fail_when_the_lock_disagrees_with_pyproject(workflow: str) -> None:
+    # --frozen skips the check, so a dependency bump that missed uv.lock tested the old version (#423).
+    text = (REPO_ROOT / '.github/workflows' / workflow).read_text()
+
+    assert 'uv sync --frozen' not in text
+    assert 'uv sync --locked' in text
+
+
 def test_ty_dashboard_overrides_match_the_diagnostic_baseline() -> None:
     pyproject = (REPO_ROOT / 'pyproject.toml').read_text()
     expected = '''[[tool.ty.overrides]]
