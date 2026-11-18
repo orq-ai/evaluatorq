@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+from typing_extensions import Self
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import token_budget_for_items
@@ -17,6 +18,7 @@ from evaluatorq.simulation.contracts import (
     Scenario,
     StartingEmotion,
 )
+from evaluatorq.simulation.generators._placeholders import expecting, is_stub_text, too_few
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 if TYPE_CHECKING:
@@ -106,7 +108,25 @@ Return a JSON array of scenario objects."""
 class ScenarioListResponse(BaseModel):
     """Wrapper for structured output parsing."""
 
+    # The docstring above is sent to the provider as the schema description, so it stays as it was.
+    # `expecting` sets this to the number of items asked for; 0 means not stated.
+    expected: ClassVar[int] = 0
     scenarios: list[Scenario]
+
+    @model_validator(mode='after')
+    def reject_stub_answer(self) -> Self:
+        """Refuse the stub described in `_placeholders`, so the caller asks again another way."""
+        if too_few(len(self.scenarios), self.expected):
+            raise ValueError(f'{len(self.scenarios)} scenario(s) returned for {self.expected} asked')
+        stubs = [index for index, scenario in enumerate(self.scenarios) if is_placeholder_scenario(scenario)]
+        if stubs:
+            raise ValueError(f'scenario(s) at index {stubs} have a placeholder name or goal')
+        return self
+
+
+def is_placeholder_scenario(scenario: Scenario) -> bool:
+    """A name or a goal too short to be real."""
+    return is_stub_text(scenario.name, scenario.goal)
 
 
 _SECURITY_SCENARIO_PROMPT = """You are an expert security test scenario designer for AI agents. Create adversarial scenarios based on the OWASP Agentic Security Initiative (ASI) framework.
@@ -182,9 +202,14 @@ def _parse_scenarios(scenario_dicts: list[dict[str, Any]]) -> list[Scenario]:
     scenarios: list[Scenario] = []
     for s_dict in scenario_dicts:
         try:
-            scenarios.append(Scenario.model_validate(s_dict))
-        except Exception as e:  # noqa: PERF203
+            scenario = Scenario.model_validate(s_dict)
+        except Exception as e:
             logger.warning('Failed to parse scenario: %s', e)
+            continue
+        if is_placeholder_scenario(scenario):
+            logger.warning('Dropped a placeholder scenario with no real name or goal')
+            continue
+        scenarios.append(scenario)
     return scenarios
 
 
@@ -311,11 +336,12 @@ Return ONLY a JSON array, no other text."""
                     self._client,
                     model=self._model,
                     messages=messages,
-                    response_format=ScenarioListResponse,
+                    response_format=expecting(ScenarioListResponse, num_scenarios),
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate',
                     api='responses',
                     config=self._config,
+                    tool_fallback_on_invalid=True,
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -391,11 +417,12 @@ Return ONLY a JSON array, no other text."""
                     self._client,
                     model=self._model,
                     messages=messages,
-                    response_format=ScenarioListResponse,
+                    response_format=expecting(ScenarioListResponse, num_scenarios),
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_with_coverage',
                     api='responses',
                     config=self._config,
+                    tool_fallback_on_invalid=True,
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -469,11 +496,12 @@ Return ONLY a JSON array, no other text."""
                     self._client,
                     model=self._model,
                     messages=messages,
-                    response_format=ScenarioListResponse,
+                    response_format=expecting(ScenarioListResponse, num_edge_cases),
                     max_tokens=_scenario_token_budget(num_edge_cases),
                     label='ScenarioGenerator.generate_edge_cases',
                     api='responses',
                     config=self._config,
+                    tool_fallback_on_invalid=True,
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -538,11 +566,12 @@ Return ONLY a JSON array, no other text."""
                     self._client,
                     model=self._model,
                     messages=messages,
-                    response_format=ScenarioListResponse,
+                    response_format=expecting(ScenarioListResponse, num_scenarios),
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_boundary_scenarios',
                     api='responses',
                     config=self._config,
+                    tool_fallback_on_invalid=True,
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -620,11 +649,12 @@ Return ONLY a JSON array, no other text."""
                     self._client,
                     model=self._model,
                     messages=messages,
-                    response_format=ScenarioListResponse,
+                    response_format=expecting(ScenarioListResponse, num_scenarios),
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_security_scenarios',
                     api='responses',
                     config=self._config,
+                    tool_fallback_on_invalid=True,
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw

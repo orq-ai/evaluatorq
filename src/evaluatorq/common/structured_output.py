@@ -114,6 +114,13 @@ class StructuredGenerationError(RuntimeError):
         self.usage = usage
 
 
+class StructuredValidationError(StructuredGenerationError):
+    """The provider answered, and the answer did not validate against the response model.
+
+    Its own class so a caller can tell it from a truncation or a refusal, which must not be asked again.
+    """
+
+
 def _attach_usage(exc: BaseException, usage: TokenUsage | None) -> None:
     """Tag ``exc`` with the usage billed before it was raised, keeping its own type."""
     if usage is None:
@@ -534,7 +541,7 @@ async def _generate_structured_via_responses(
             )
         except ValidationError as exc:
             logger.exception('%s: Responses output did not validate against %s', label, response_format.__name__)
-            raise StructuredGenerationError(
+            raise StructuredValidationError(
                 f'{label}: the Responses output did not validate against {response_format.__name__}.',
                 usage=usage,
             ) from exc
@@ -859,8 +866,17 @@ async def generate_structured(
     extra_body: dict[str, Any] | Unset | None = UNSET,
     config: LLMCallConfig | None = None,
     max_attempts: int = MAX_RETRY_ATTEMPTS,
+    tool_fallback_on_invalid: bool = False,
+    _skip_schema_rungs: bool = False,
 ) -> StructuredResult[T]:
     """Generate structured output, degrading through the rungs in the module docstring.
+
+    ``tool_fallback_on_invalid`` asks once more when the answer does not validate against ``response_format``,
+    this time starting at the forced tool call and skipping every rung that sends the JSON schema as a response
+    format. It is for a response model that checks content as well as shape: some models (Claude Sonnet 5.5 and
+    Opus 5.5 at the time of writing) often answer a JSON-schema format with one schema-valid placeholder, and
+    asking the same way again mostly returns another. Off by default, where an invalid answer raises as before.
+    The returned usage covers both attempts.
 
     ``api`` selects the endpoint tried first; ``responses`` puts a Responses call
     in front of the chat ladder and falls through to it. On the ``responses``
@@ -909,6 +925,38 @@ async def generate_structured(
     provider or endpoint. A config carrying a different ``model`` is logged
     rather than obeyed; the caller resolves ``client`` before calling.
     """
+    if tool_fallback_on_invalid:
+        request: dict[str, Any] = {
+            'model': model,
+            'messages': messages,
+            'response_format': response_format,
+            'max_tokens': max_tokens,
+            'label': label,
+            'temperature': temperature,
+            'extra_kwargs': extra_kwargs,
+            'reasoning_effort': reasoning_effort,
+            'timeout_s': timeout_s,
+            'extra_body': extra_body,
+            'config': config,
+            'max_attempts': max_attempts,
+        }
+        try:
+            return await generate_structured(client, api=api, **request)
+        except (StructuredValidationError, ValidationError) as exc:
+            spent = usage_from_exception(exc)
+            logger.warning(
+                '%s: the answer did not validate against %s; asking once more through a tool call',
+                label,
+                response_format.__name__,
+            )
+        try:
+            retry: StructuredResult[T] = await generate_structured(client, _skip_schema_rungs=True, **request)
+        except Exception as retry_exc:
+            # The first attempt billed too; keep it on whatever the second one raises.
+            _attach_usage(retry_exc, sum_structured_usage([spent, usage_from_exception(retry_exc)]))
+            raise
+        return StructuredResult(retry.parsed, retry.raw, sum_structured_usage([spent, retry.usage]))
+
     temperature, extra_kwargs, extra_body, reasoning_effort, timeout_s = _fold_config(
         config=config,
         model=model,
@@ -929,7 +977,7 @@ async def generate_structured(
     # into extra_kwargs here would trip the reserved-key guard on every call.
     usages: list[TokenUsage | None] = []
     try:
-        if api == 'responses':
+        if api == 'responses' and not _skip_schema_rungs:
             via_responses = await _generate_structured_via_responses(
                 client,
                 model=model,
@@ -973,14 +1021,15 @@ async def generate_structured(
                 max_attempts=max_attempts,
             )
             last_raw = ''
-            for leg in (_leg_strict_parse, _leg_json_schema, _leg_forced_tool, _leg_json_object):
+            legs = (_leg_strict_parse, _leg_json_schema, _leg_forced_tool, _leg_json_object)
+            for leg in legs[2:] if _skip_schema_rungs else legs:
                 result = await leg(call, response_format=response_format)
                 usages.append(result.usage)
                 last_raw = result.raw or last_raw
                 if result.parsed is not None:
                     return StructuredResult(result.parsed, result.raw, sum_structured_usage(usages))
             logger.warning(
-                '%s: all four chat rungs ran and none produced output validating against %s '
+                '%s: every chat rung tried ran and none produced output validating against %s '
                 '(%d provider call(s) billed); returning the last raw text for salvage',
                 label,
                 response_format.__name__,

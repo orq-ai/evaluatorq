@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+from typing_extensions import Self
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import token_budget_for_items
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.contracts import CommunicationStyle, Persona
+from evaluatorq.simulation.generators._placeholders import expecting, is_stub_text, too_few
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 if TYPE_CHECKING:
@@ -85,7 +87,25 @@ Return a JSON array of persona objects."""
 class PersonaListResponse(BaseModel):
     """Wrapper for structured output parsing."""
 
+    # The docstring above is sent to the provider as the schema description, so it stays as it was.
+    # `expecting` sets this to the number of items asked for; 0 means not stated.
+    expected: ClassVar[int] = 0
     personas: list[Persona]
+
+    @model_validator(mode='after')
+    def reject_stub_answer(self) -> Self:
+        """Refuse the stub described in `_placeholders`, so the caller asks again another way."""
+        if too_few(len(self.personas), self.expected):
+            raise ValueError(f'{len(self.personas)} persona(s) returned for {self.expected} asked')
+        stubs = [index for index, persona in enumerate(self.personas) if is_placeholder_persona(persona)]
+        if stubs:
+            raise ValueError(f'persona(s) at index {stubs} have a placeholder name or background')
+        return self
+
+
+def is_placeholder_persona(persona: Persona) -> bool:
+    """A name or a background too short to be real."""
+    return is_stub_text(persona.name, persona.background)
 
 
 class PersonaGenerator(UsageTracking):
@@ -148,9 +168,14 @@ class PersonaGenerator(UsageTracking):
         personas: list[Persona] = []
         for item in items:
             try:
-                personas.append(Persona.model_validate(item))
-            except Exception as e:  # noqa: PERF203
+                persona = Persona.model_validate(item)
+            except Exception as e:
                 logger.warning('Failed to parse persona: %s', e)
+                continue
+            if is_placeholder_persona(persona):
+                logger.warning('Dropped a placeholder persona with no real name or background')
+                continue
+            personas.append(persona)
         return personas
 
     async def generate(
@@ -237,11 +262,12 @@ Return ONLY a JSON array, no other text."""
                 self._client,
                 model=self._model,
                 messages=messages,
-                response_format=PersonaListResponse,
+                response_format=expecting(PersonaListResponse, num_personas),
                 max_tokens=_persona_token_budget(num_personas),
                 label='PersonaGenerator.generate',
                 api='responses',
                 config=self._config,
+                tool_fallback_on_invalid=True,
             )
             self._accumulate(result.usage)
             personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
@@ -364,11 +390,12 @@ Return ONLY a JSON array, no other text."""
                 self._client,
                 model=self._model,
                 messages=messages,
-                response_format=PersonaListResponse,
+                response_format=expecting(PersonaListResponse, num_personas),
                 max_tokens=_persona_token_budget(num_personas),
                 label='PersonaGenerator.generate_with_coverage',
                 api='responses',
                 config=self._config,
+                tool_fallback_on_invalid=True,
             )
             self._accumulate(result.usage)
             personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')

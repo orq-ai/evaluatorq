@@ -1157,3 +1157,121 @@ async def test_a_client_without_an_integer_retry_budget_is_left_alone() -> None:
 
     client.with_options.assert_not_called()
     client.chat.completions.parse.assert_awaited_once()
+
+
+# --- tool_fallback_on_invalid: one more attempt, starting at the tool call ---
+
+
+def _invalid_responses_answer() -> MagicMock:
+    """A complete Responses answer whose JSON does not validate against SampleResponse."""
+    response = _responses_result(None)
+    _set_response_output(response, '{"other": "stub"}')
+    response.stop_reason = 'stop'
+    return response
+
+
+@pytest.mark.asyncio
+async def test_tool_fallback_asks_again_through_the_tool_call_and_skips_the_schema_rungs() -> None:
+    client = _responses_client(_invalid_responses_answer())
+    client.chat.completions.parse = AsyncMock(return_value=_tool_completion('{"value": "from the tool"}'))
+
+    parsed, _ = await _generate_via_responses(client, tool_fallback_on_invalid=True)
+
+    assert parsed.value == 'from the tool'
+    assert client.responses.create.await_count == 1
+    # One chat request, and it is the forced tool call: no strict parse before it, no json_schema or json_object.
+    assert client.chat.completions.parse.await_count == 1
+    tool_call = client.chat.completions.parse.await_args
+    assert tool_call is not None
+    assert tool_call.kwargs['tool_choice']['type'] == 'function'
+    client.chat.completions.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_without_the_flag_an_invalid_answer_raises_its_own_error_type() -> None:
+    from evaluatorq.common.structured_output import StructuredGenerationError, StructuredValidationError
+
+    client = _responses_client(_invalid_responses_answer())
+
+    with pytest.raises(StructuredValidationError) as error:
+        await _generate_via_responses(client)
+
+    assert isinstance(error.value, StructuredGenerationError)
+    client.chat.completions.parse.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['refusal', 'truncation'])
+async def test_tool_fallback_does_not_ask_again_after_a_refusal_or_a_truncation(kind: str) -> None:
+    from evaluatorq.common.structured_output import StructuredValidationError
+
+    response = (
+        _responses_refusal('safety refusal')
+        if kind == 'refusal'
+        else _responses_result(None, incomplete_reason='max_output_tokens')
+    )
+    client = _responses_client(response)
+    client.chat.completions.parse = AsyncMock(return_value=_tool_completion('{"value": "must not be used"}'))
+
+    with pytest.raises(RuntimeError) as error:
+        await _generate_via_responses(client, tool_fallback_on_invalid=True)
+
+    assert not isinstance(error.value, StructuredValidationError)
+    client.chat.completions.parse.assert_not_awaited()
+    client.chat.completions.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tool_fallback_passes_a_valid_first_answer_straight_through() -> None:
+    client = _responses_client(_responses_result(SampleResponse(value='first')))
+
+    parsed, _ = await _generate_via_responses(client, tool_fallback_on_invalid=True)
+
+    assert parsed.value == 'first'
+    client.chat.completions.parse.assert_not_awaited()
+    client.chat.completions.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('second_attempt_fails', [False, True])
+async def test_tool_fallback_reports_what_both_attempts_cost(
+    monkeypatch: pytest.MonkeyPatch, second_attempt_fails: bool
+) -> None:
+    from evaluatorq.common import structured_output
+    from evaluatorq.common.structured_output import StructuredResult, StructuredValidationError, usage_from_exception
+    from evaluatorq.contracts import TokenUsage
+
+    first = TokenUsage(input_tokens=100, output_tokens=10, total_tokens=110, calls=1)
+    second = TokenUsage(input_tokens=200, output_tokens=40, total_tokens=240, calls=1)
+
+    async def invalid_responses(*_args: Any, **_kwargs: Any) -> Any:
+        raise StructuredValidationError('Sample.generate: did not validate', usage=first)
+
+    async def tool_rung(*_args: Any, **_kwargs: Any) -> Any:
+        if second_attempt_fails:
+            raise StructuredValidationError('tool arguments did not validate', usage=second)
+        return StructuredResult(SampleResponse(value='from the tool'), '', second)
+
+    monkeypatch.setattr(structured_output, '_generate_structured_via_responses', invalid_responses)
+    monkeypatch.setattr(structured_output, '_leg_forced_tool', tool_rung)
+    client = _responses_client(_responses_result(None))
+
+    if second_attempt_fails:
+        with pytest.raises(StructuredValidationError) as error:
+            await _generate_via_responses(client, tool_fallback_on_invalid=True)
+        spent = usage_from_exception(error.value)
+    else:
+        result = await generate_structured(
+            client,
+            model='local-model',
+            messages=[{'role': 'user', 'content': 'return json'}],
+            response_format=SampleResponse,
+            max_tokens=64,
+            label='Sample.generate',
+            api='responses',
+            tool_fallback_on_invalid=True,
+        )
+        spent = result.usage
+
+    assert spent is not None
+    assert (spent.input_tokens, spent.output_tokens, spent.calls) == (300, 50, 2)
