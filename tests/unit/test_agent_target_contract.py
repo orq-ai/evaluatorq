@@ -23,6 +23,13 @@ def test_langgraph_target_owns_its_history() -> None:
     assert LangGraphTarget.history_mode is ConversationHistoryMode.TARGET
 
 
+def test_claude_agent_sdk_target_owns_its_history() -> None:
+    pytest.importorskip('claude_agent_sdk')
+    from evaluatorq.integrations.claude_agent_sdk_integration.target import ClaudeAgentSDKTarget
+
+    assert ClaudeAgentSDKTarget.history_mode is ConversationHistoryMode.TARGET
+
+
 def test_pydantic_ai_target_owns_its_history() -> None:
     pytest.importorskip('pydantic_ai')
     from evaluatorq.integrations.pydantic_ai_integration.target import PydanticAITarget

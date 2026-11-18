@@ -91,7 +91,7 @@ A turn is always kept, and the run reports no error for it, when one of these ho
 - The decision call fails or gives no usable answer. The turn is kept, the run continues, and the report's `pipeline_warnings` says how many turns this affected.
 - The target called a tool during the turn and the call shows in the reply. Erasing the text would not undo the tool's effect.
 
-Backtracking needs a target that receives the full conversation on every call, which includes `agent:<key>` strings. `ORQAgentTarget`, `LangGraphTarget` and `PydanticAITarget` keep the history themselves, so a turn cannot be erased from them, and the run raises `RedTeamError` before any attack starts. A `mode="static"` run skips this check because no static attack can backtrack.
+Backtracking needs a target that receives the full conversation on every call, which includes `agent:<key>` strings. `ORQAgentTarget`, `LangGraphTarget`, `PydanticAITarget` and `ClaudeAgentSDKTarget` keep the history themselves, so a turn cannot be erased from them, and the run raises `RedTeamError` before any attack starts. A `mode="static"` run skips this check because no static attack can backtrack.
 
 An erasure removes the exchange from the conversation sent to the target, nothing else. Anything the target stored outside that conversation during the turn, such as a memory written without a tool call showing in the reply, stays where it is.
 
