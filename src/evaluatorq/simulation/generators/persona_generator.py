@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, model_validator
-from typing_extensions import Self
+from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import token_budget_for_items
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.contracts import CommunicationStyle, Persona
-from evaluatorq.simulation.generators._placeholders import expecting, is_stub_text, too_few
+from evaluatorq.simulation.generators._placeholders import is_stub_item, too_few
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
@@ -87,25 +88,26 @@ Return a JSON array of persona objects."""
 class PersonaListResponse(BaseModel):
     """Wrapper for structured output parsing."""
 
-    # The docstring above is sent to the provider as the schema description, so it stays as it was.
-    # `expecting` sets this to the number of items asked for; 0 means not stated.
-    expected: ClassVar[int] = 0
     personas: list[Persona]
 
-    @model_validator(mode='after')
-    def reject_stub_answer(self) -> Self:
-        """Refuse the stub described in `_placeholders`, so the caller asks again another way."""
-        if too_few(len(self.personas), self.expected):
-            raise ValueError(f'{len(self.personas)} persona(s) returned for {self.expected} asked')
-        stubs = [index for index, persona in enumerate(self.personas) if is_placeholder_persona(persona)]
-        if stubs:
-            raise ValueError(f'persona(s) at index {stubs} have a placeholder name or background')
-        return self
+
+def _real_personas(personas: list[Persona]) -> list[Persona]:
+    """Drop the stub items a model can return in place of personas; see `_placeholders`."""
+    real = [persona for persona in personas if not is_stub_item(persona.name, persona.background)]
+    if len(real) < len(personas):
+        logger.warning('PersonaGenerator: dropped %d placeholder persona(s)', len(personas) - len(real))
+    return real
 
 
-def is_placeholder_persona(persona: Persona) -> bool:
-    """A name or a background too short to be real."""
-    return is_stub_text(persona.name, persona.background)
+def _accepts_personas(expected: int) -> Callable[[PersonaListResponse], bool]:
+    """The content check for `generate_structured`: enough personas for ``expected`` asked, and no stub among them."""
+
+    def accept(response: PersonaListResponse) -> bool:
+        personas = response.personas
+        stubs = any(is_stub_item(persona.name, persona.background) for persona in personas)
+        return not stubs and not too_few(len(personas), expected)
+
+    return accept
 
 
 class PersonaGenerator(UsageTracking):
@@ -168,14 +170,9 @@ class PersonaGenerator(UsageTracking):
         personas: list[Persona] = []
         for item in items:
             try:
-                persona = Persona.model_validate(item)
-            except Exception as e:
+                personas.append(Persona.model_validate(item))
+            except Exception as e:  # noqa: PERF203
                 logger.warning('Failed to parse persona: %s', e)
-                continue
-            if is_placeholder_persona(persona):
-                logger.warning('Dropped a placeholder persona with no real name or background')
-                continue
-            personas.append(persona)
         return personas
 
     async def generate(
@@ -262,15 +259,16 @@ Return ONLY a JSON array, no other text."""
                 self._client,
                 model=self._model,
                 messages=messages,
-                response_format=expecting(PersonaListResponse, num_personas),
+                response_format=PersonaListResponse,
                 max_tokens=_persona_token_budget(num_personas),
                 label='PersonaGenerator.generate',
                 api='responses',
                 config=self._config,
-                tool_fallback_on_invalid=True,
+                accept=_accepts_personas(num_personas),
             )
             self._accumulate(result.usage)
             personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
+            personas = _real_personas(personas)
 
             if len(personas) < num_personas:
                 logger.warning(
@@ -390,15 +388,16 @@ Return ONLY a JSON array, no other text."""
                 self._client,
                 model=self._model,
                 messages=messages,
-                response_format=expecting(PersonaListResponse, num_personas),
+                response_format=PersonaListResponse,
                 max_tokens=_persona_token_budget(num_personas),
                 label='PersonaGenerator.generate_with_coverage',
                 api='responses',
                 config=self._config,
-                tool_fallback_on_invalid=True,
+                accept=_accepts_personas(num_personas),
             )
             self._accumulate(result.usage)
             personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
+            personas = _real_personas(personas)
 
             # Validate coverage and fill gaps
             personas = self._ensure_style_coverage(personas, [CommunicationStyle(s) for s in styles])

@@ -1,4 +1,4 @@
-"""The generators refuse the stub some models return under a JSON-schema format, and ask again another way."""
+"""The generators spot the stub some models return under a JSON-schema format, ask again, and never return it."""
 
 from __future__ import annotations
 
@@ -6,12 +6,19 @@ import json
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
 from evaluatorq.common.structured_output import StructuredResult
-from evaluatorq.simulation.generators._placeholders import expecting, is_stub_text, too_few
-from evaluatorq.simulation.generators.persona_generator import PersonaGenerator, PersonaListResponse
-from evaluatorq.simulation.generators.scenario_generator import ScenarioGenerator, ScenarioListResponse, _parse_scenarios
+from evaluatorq.simulation.generators._placeholders import is_stub_item, too_few
+from evaluatorq.simulation.generators.persona_generator import (
+    PersonaGenerator,
+    PersonaListResponse,
+    _accepts_personas,
+)
+from evaluatorq.simulation.generators.scenario_generator import (
+    ScenarioGenerator,
+    ScenarioListResponse,
+    _accepts_scenarios,
+)
 
 
 def _persona(name: str = 'Anxious First-Time Buyer', background: str = 'Ordered a gift that has not arrived.') -> dict[str, Any]:
@@ -30,6 +37,14 @@ def _scenario(name: str = 'Late delivery', goal: str = 'Get a delivery date or a
     return {'name': name, 'goal': goal}
 
 
+def _personas(*items: dict[str, Any]) -> PersonaListResponse:
+    return PersonaListResponse.model_validate({'personas': list(items)})
+
+
+def _scenarios(*items: dict[str, Any]) -> ScenarioListResponse:
+    return ScenarioListResponse.model_validate({'scenarios': list(items)})
+
+
 @pytest.mark.parametrize(
     ('returned', 'expected', 'verdict'),
     [(1, 5, True), (2, 5, True), (3, 5, False), (4, 5, False), (5, 5, False), (0, 5, False), (1, 2, False), (0, 2, False), (1, 1, False), (0, 1, False), (0, 0, False), (1, 0, False), (4, 10, True), (5, 10, False)],
@@ -38,102 +53,131 @@ def test_some_items_but_fewer_than_half_of_those_asked_for_is_too_few(returned: 
     assert too_few(returned, expected) is verdict
 
 
-@pytest.mark.parametrize(('text', 'verdict'), [('', True), ('   ', True), ('x', True), (' ab ', True), ('abc', False), ('Buyer', False)])
-def test_text_under_three_characters_is_a_stub(text: str, verdict: bool) -> None:
-    assert is_stub_text('A real name', text) is verdict
-    assert is_stub_text(text, 'A real background') is verdict
-
-
-@pytest.mark.parametrize('model', [PersonaListResponse, ScenarioListResponse])
-def test_expecting_changes_the_count_and_nothing_the_provider_sees(model: Any) -> None:
-    five = expecting(model, 5)
-
-    assert (five.expected, model.expected) == (5, 0)
-    assert five.__name__ == model.__name__
-    assert five.model_json_schema() == model.model_json_schema()
+@pytest.mark.parametrize(
+    ('name', 'body', 'verdict'),
+    [
+        ('', 'A real background', True),
+        ('   ', 'A real background', True),
+        ('A real name', '', True),
+        ('x', 'x', True),
+        ('ab', ' y ', True),
+        ('Li', 'A retired teacher ordering a gift.', False),
+        ('QA', 'Check the refund flow end to end.', False),
+        ('A real name', 'ok', False),
+        ('placeholder', 'placeholder', False),
+    ],
+)
+def test_an_item_is_a_stub_when_a_text_is_blank_or_both_are_too_short(name: str, body: str, verdict: bool) -> None:
+    assert is_stub_item(name, body) is verdict
 
 
 @pytest.mark.parametrize(
-    ('personas', 'message'),
+    ('response', 'verdict'),
     [
-        ([_persona(name='', background='')], '1 persona\\(s\\) returned for 5 asked'),
-        ([_persona(name='placeholder', background='placeholder')], '1 persona\\(s\\) returned for 5 asked'),
-        ([_persona(), _persona(), _persona(name='x')], 'index \\[2\\] have a placeholder name or background'),
-        ([_persona(), _persona(), _persona(background=' ')], 'index \\[2\\] have a placeholder name or background'),
+        (_personas(_persona(name='', background='')), False),
+        (_personas(_persona(name='placeholder', background='placeholder')), False),  # one item for five
+        (_personas(_persona(), _persona(), _persona(name='x', background='x')), False),
+        (_personas(_persona(), _persona(), _persona(background=' ')), False),
+        (_personas(_persona(), _persona(), _persona(), _persona()), True),  # one short is a miscount
+        (_personas(_persona(name='Li'), _persona(), _persona()), True),
+        (_personas(), True),  # an empty list is not the stub; the generator warns about it as before
     ],
 )
-def test_a_stub_persona_answer_is_refused(personas: list[dict[str, Any]], message: str) -> None:
-    with pytest.raises(ValidationError, match=message):
-        expecting(PersonaListResponse, 5).model_validate_json(json.dumps({'personas': personas}))
+def test_which_persona_answers_are_accepted_for_five_asked(response: PersonaListResponse, verdict: bool) -> None:
+    assert _accepts_personas(5)(response) is verdict
 
 
 @pytest.mark.parametrize(
-    ('scenarios', 'message'),
+    ('response', 'verdict'),
     [
-        ([_scenario(name='x', goal='x')], '1 scenario\\(s\\) returned for 5 asked'),
-        ([_scenario(), _scenario(), _scenario(goal='')], 'index \\[2\\] have a placeholder name or goal'),
+        (_scenarios(_scenario(name='x', goal='x')), False),
+        (_scenarios(_scenario(), _scenario()), False),  # two for five
+        (_scenarios(_scenario(), _scenario(), _scenario(goal='')), False),
+        (_scenarios(_scenario(name='QA'), _scenario(), _scenario()), True),
     ],
 )
-def test_a_stub_scenario_answer_is_refused(scenarios: list[dict[str, Any]], message: str) -> None:
-    with pytest.raises(ValidationError, match=message):
-        expecting(ScenarioListResponse, 5).model_validate_json(json.dumps({'scenarios': scenarios}))
+def test_which_scenario_answers_are_accepted_for_five_asked(response: ScenarioListResponse, verdict: bool) -> None:
+    assert _accepts_scenarios(5)(response) is verdict
 
 
-def test_an_honest_answer_that_is_one_short_is_kept() -> None:
-    four = expecting(PersonaListResponse, 5).model_validate({'personas': [_persona()] * 4})
-    assert len(four.personas) == 4
-    assert len(expecting(ScenarioListResponse, 5).model_validate({'scenarios': [_scenario()] * 4}).scenarios) == 4
-    # Without a stated count only the text is checked.
-    assert len(PersonaListResponse.model_validate({'personas': [_persona(name='placeholder')]}).personas) == 1
+def test_a_request_for_one_item_is_judged_on_its_text_alone() -> None:
+    assert _accepts_personas(1)(_personas(_persona())) is True
+    assert _accepts_personas(1)(_personas(_persona(name=''))) is False
+    assert _accepts_scenarios(0)(_scenarios(_scenario())) is True
 
 
-def test_the_salvage_path_drops_stubs_too() -> None:
-    kept = PersonaGenerator._parse_personas(json.dumps([_persona(name=''), _persona(), _persona(background='x')]))
-    assert [persona.name for persona in kept] == ['Anxious First-Time Buyer']
-    assert [s.name for s in _parse_scenarios([_scenario(name='x'), _scenario(), _scenario(goal='')])] == ['Late delivery']
+class _Fake:
+    """Stands in for ``generate_structured`` in both generator modules and records how it was called."""
+
+    def __init__(self, answer: Any) -> None:
+        self.answer = answer
+        self.calls: list[dict[str, Any]] = []
+
+    async def __call__(self, _client: object, **kwargs: Any) -> StructuredResult[Any]:
+        self.calls.append(kwargs)
+        return self.answer(kwargs['response_format'])
 
 
-@pytest.fixture
-def recorded(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    calls: list[dict[str, Any]] = []
-
-    async def generate(_client: object, **kwargs: Any) -> StructuredResult[Any]:
-        calls.append(kwargs)
-        model = kwargs['response_format']
-        if model.__name__ == 'PersonaListResponse':
-            return StructuredResult(model(personas=[_persona()] * model.expected), '', None)
-        return StructuredResult(model(scenarios=[_scenario()] * model.expected), '', None)
-
+def _install(monkeypatch: pytest.MonkeyPatch, answer: Any) -> _Fake:
+    fake = _Fake(answer)
     monkeypatch.setattr('evaluatorq.openresponses.client.build_simulation_client', lambda _c=None, **_kw: (object(), False))
-    monkeypatch.setattr('evaluatorq.simulation.generators.persona_generator.generate_structured', generate)
-    monkeypatch.setattr('evaluatorq.simulation.generators.scenario_generator.generate_structured', generate)
-    return calls
+    monkeypatch.setattr('evaluatorq.simulation.generators.persona_generator.generate_structured', fake)
+    monkeypatch.setattr('evaluatorq.simulation.generators.scenario_generator.generate_structured', fake)
+    return fake
 
 
 @pytest.mark.asyncio
-async def test_every_generator_call_states_its_count_and_turns_the_tool_fallback_on(recorded: list[dict[str, Any]]) -> None:
+async def test_every_generator_method_hands_over_a_content_check_for_its_own_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install(monkeypatch, lambda model: StructuredResult(model.model_validate({next(iter(model.model_fields)): []}), '', None))
     personas = PersonaGenerator(model='openai/gpt-6-luna')
     scenarios = ScenarioGenerator(model='openai/gpt-6-luna')
 
-    assert len(await personas.generate(agent_description='A bookshop agent', num_personas=4)) == 4
-    assert len(await scenarios.generate(agent_description='A bookshop agent', num_scenarios=6)) == 6
+    await personas.generate(agent_description='A bookshop agent', num_personas=6)
+    await personas.generate_with_coverage(agent_description='A bookshop agent', num_personas=6)
+    await scenarios.generate(agent_description='A bookshop agent', num_scenarios=6)
+    await scenarios.generate_with_coverage(agent_description='A bookshop agent', num_scenarios=6)
+    await scenarios.generate_edge_cases(agent_description='A bookshop agent', num_edge_cases=6)
+    await scenarios.generate_boundary_scenarios(agent_description='A bookshop agent', num_scenarios=6)
+    await scenarios.generate_security_scenarios(agent_description='A bookshop agent', num_scenarios=6)
 
-    assert [(call['response_format'].__name__, call['response_format'].expected) for call in recorded] == [
-        ('PersonaListResponse', 4),
-        ('ScenarioListResponse', 6),
-    ]
-    assert [call['tool_fallback_on_invalid'] for call in recorded] == [True, True]
+    assert len(fake.calls) == 7
+    for call in fake.calls:
+        accept, model = call['accept'], call['response_format']
+        key = next(iter(model.model_fields))
+        item = _persona() if key == 'personas' else _scenario()
+        # Asked for six: two real items are refused as too few, three are accepted.
+        assert accept(model.model_validate({key: [item] * 2})) is False
+        assert accept(model.model_validate({key: [item] * 3})) is True
 
 
-@pytest.mark.parametrize('module', ['persona_generator', 'scenario_generator'])
-def test_no_generator_call_site_is_left_without_the_guard(module: str) -> None:
-    """Seven call sites share one pattern; a new one written without the count or the fallback would bring the bug back."""
-    from pathlib import Path
+@pytest.mark.asyncio
+async def test_a_stub_that_still_comes_back_is_dropped_not_returned(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    stub = _persona(name='', background='')
+    _install(monkeypatch, lambda model: StructuredResult(model.model_validate({'personas': [stub, _persona()]}), '', None))
 
-    import evaluatorq.simulation.generators as generators
+    with caplog.at_level('WARNING'):
+        personas = await PersonaGenerator(model='openai/gpt-6-luna').generate(agent_description='A bookshop agent', num_personas=5)
 
-    source = (Path(generators.__file__).parent / f'{module}.py').read_text(encoding='utf-8')
-    calls = source.count('await generate_structured(')
-    assert calls >= 2
-    assert source.count('tool_fallback_on_invalid=True') == calls
-    assert source.count('response_format=expecting(') == calls
+    assert [persona.name for persona in personas] == ['Anxious First-Time Buyer']
+    assert 'dropped 1 placeholder persona(s)' in caplog.text
+    assert 'requested 5 personas but only 1 were successfully parsed' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_the_salvage_path_drops_stubs_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = json.dumps({'scenarios': [_scenario(name='x', goal='x'), _scenario(), _scenario(goal='')]})
+    _install(monkeypatch, lambda _model: StructuredResult(None, raw, None))
+
+    scenarios = await ScenarioGenerator(model='openai/gpt-6-luna').generate(agent_description='A bookshop agent', num_scenarios=3)
+
+    assert [scenario.name for scenario in scenarios] == ['Late delivery']
+
+
+@pytest.mark.asyncio
+async def test_a_short_real_name_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(monkeypatch, lambda model: StructuredResult(model.model_validate({'personas': [_persona(name='Li'), _persona(), _persona()]}), '', None))
+
+    personas = await PersonaGenerator(model='openai/gpt-6-luna').generate(agent_description='A bookshop agent', num_personas=3)
+
+    assert [persona.name for persona in personas][0] == 'Li'
+    assert len(personas) == 3

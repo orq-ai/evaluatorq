@@ -37,8 +37,13 @@ drop-and-retry-once). ``with_retry`` around each rung is the only retry layer;
 the client's SDK budget is disarmed once at the top of ``generate_structured``.
 Only the fallback policy lives here.
 
-One call can bill up to five provider requests, so `StructuredResult.usage` is
-the **sum** over every rung that reached the provider, and a call that raises
+``accept=`` adds one thing on top of the ladder: when a parsed answer fails the
+caller's content check, the ladder runs once more from rung 3. That is a single
+re-ask on content, not a retry of a failed request, so it does not multiply with
+``with_retry``.
+
+One call can bill up to five provider requests, seven with ``accept=``, so
+`StructuredResult.usage` is the **sum** over every rung that reached the provider, and a call that raises
 carries the same total on the exception (`StructuredGenerationError`,
 `usage_from_exception`). A rung whose usage block cannot be read counts as one
 unpriced call after a warning, never as zero.
@@ -70,7 +75,7 @@ from evaluatorq.contracts import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from opentelemetry.trace import Span
 
@@ -112,13 +117,6 @@ class StructuredGenerationError(RuntimeError):
     def __init__(self, message: str, *, usage: TokenUsage | None = None) -> None:
         super().__init__(message)
         self.usage = usage
-
-
-class StructuredValidationError(StructuredGenerationError):
-    """The provider answered, and the answer did not validate against the response model.
-
-    Its own class so a caller can tell it from a truncation or a refusal, which must not be asked again.
-    """
 
 
 def _attach_usage(exc: BaseException, usage: TokenUsage | None) -> None:
@@ -541,7 +539,7 @@ async def _generate_structured_via_responses(
             )
         except ValidationError as exc:
             logger.exception('%s: Responses output did not validate against %s', label, response_format.__name__)
-            raise StructuredValidationError(
+            raise StructuredGenerationError(
                 f'{label}: the Responses output did not validate against {response_format.__name__}.',
                 usage=usage,
             ) from exc
@@ -866,17 +864,19 @@ async def generate_structured(
     extra_body: dict[str, Any] | Unset | None = UNSET,
     config: LLMCallConfig | None = None,
     max_attempts: int = MAX_RETRY_ATTEMPTS,
-    tool_fallback_on_invalid: bool = False,
+    accept: Callable[[T], bool] | None = None,
     _skip_schema_rungs: bool = False,
 ) -> StructuredResult[T]:
     """Generate structured output, degrading through the rungs in the module docstring.
 
-    ``tool_fallback_on_invalid`` asks once more when the answer does not validate against ``response_format``,
-    this time starting at the forced tool call and skipping every rung that sends the JSON schema as a response
-    format. It is for a response model that checks content as well as shape: some models (Claude Sonnet 5.5 and
-    Opus 5.5 at the time of writing) often answer a JSON-schema format with one schema-valid placeholder, and
-    asking the same way again mostly returns another. Off by default, where an invalid answer raises as before.
-    The returned usage covers both attempts.
+    ``accept`` is a check on the *content* of a parsed answer, for a caller whose schema a model can satisfy with
+    an empty stub. When it returns ``False`` the ladder is run once more, starting at the forced tool call and
+    skipping every rung that sends the JSON schema as a response format: some models (Claude Sonnet 5.5 and Opus 5.5
+    at the time of writing) often answer a JSON-schema format with one schema-valid placeholder, and asking the same
+    way again mostly returns another. What comes back, in order: the second answer when ``accept`` passes it; the
+    second run's raw text with ``parsed=None`` when it produced text that did not validate, for the caller's own
+    salvage; otherwise, and when the second run raises, the first answer. The returned usage covers both runs. It is one re-ask on content, outside the
+    per-rung ``with_retry``: it adds at most the tool and ``json_object`` rungs to the worst case below.
 
     ``api`` selects the endpoint tried first; ``responses`` puts a Responses call
     in front of the chat ladder and falls through to it. On the ``responses``
@@ -925,7 +925,7 @@ async def generate_structured(
     provider or endpoint. A config carrying a different ``model`` is logged
     rather than obeyed; the caller resolves ``client`` before calling.
     """
-    if tool_fallback_on_invalid:
+    if accept is not None:
         request: dict[str, Any] = {
             'model': model,
             'messages': messages,
@@ -940,22 +940,30 @@ async def generate_structured(
             'config': config,
             'max_attempts': max_attempts,
         }
+        first: StructuredResult[T] = await generate_structured(client, api=api, **request)
+        if first.parsed is None or accept(first.parsed):
+            return first
+        logger.warning(
+            '%s: the answer parsed as %s but its content was not accepted; asking once more through a tool call',
+            label,
+            response_format.__name__,
+        )
         try:
-            return await generate_structured(client, api=api, **request)
-        except (StructuredValidationError, ValidationError) as exc:
-            spent = usage_from_exception(exc)
-            logger.warning(
-                '%s: the answer did not validate against %s; asking once more through a tool call',
-                label,
-                response_format.__name__,
+            second: StructuredResult[T] = await generate_structured(client, _skip_schema_rungs=True, **request)
+        except Exception as exc:  # noqa: BLE001 - whatever the optional second run raises, the first answer stands
+            # Keep the first answer, and keep what the failed second run billed.
+            logger.warning('%s: the second run failed (%s); keeping the first answer', label, exc)
+            return StructuredResult(
+                first.parsed, first.raw, sum_structured_usage([first.usage, usage_from_exception(exc)])
             )
-        try:
-            retry: StructuredResult[T] = await generate_structured(client, _skip_schema_rungs=True, **request)
-        except Exception as retry_exc:
-            # The first attempt billed too; keep it on whatever the second one raises.
-            _attach_usage(retry_exc, sum_structured_usage([spent, usage_from_exception(retry_exc)]))
-            raise
-        return StructuredResult(retry.parsed, retry.raw, sum_structured_usage([spent, retry.usage]))
+        usage = sum_structured_usage([first.usage, second.usage])
+        if second.parsed is not None and accept(second.parsed):
+            return StructuredResult(second.parsed, second.raw, usage)
+        if second.parsed is None and second.raw:
+            # The second run answered in a shape that did not validate (a bare array for a wrapper object, say).
+            # Hand its text back for the caller's own salvage, as an unparsed answer is handed back without `accept`.
+            return StructuredResult(None, second.raw, usage)
+        return StructuredResult(first.parsed, first.raw, usage)
 
     temperature, extra_kwargs, extra_body, reasoning_effort, timeout_s = _fold_config(
         config=config,

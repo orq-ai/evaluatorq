@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, model_validator
-from typing_extensions import Self
+from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import token_budget_for_items
@@ -18,10 +17,12 @@ from evaluatorq.simulation.contracts import (
     Scenario,
     StartingEmotion,
 )
-from evaluatorq.simulation.generators._placeholders import expecting, is_stub_text, too_few
+from evaluatorq.simulation.generators._placeholders import is_stub_item, too_few
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
@@ -108,25 +109,7 @@ Return a JSON array of scenario objects."""
 class ScenarioListResponse(BaseModel):
     """Wrapper for structured output parsing."""
 
-    # The docstring above is sent to the provider as the schema description, so it stays as it was.
-    # `expecting` sets this to the number of items asked for; 0 means not stated.
-    expected: ClassVar[int] = 0
     scenarios: list[Scenario]
-
-    @model_validator(mode='after')
-    def reject_stub_answer(self) -> Self:
-        """Refuse the stub described in `_placeholders`, so the caller asks again another way."""
-        if too_few(len(self.scenarios), self.expected):
-            raise ValueError(f'{len(self.scenarios)} scenario(s) returned for {self.expected} asked')
-        stubs = [index for index, scenario in enumerate(self.scenarios) if is_placeholder_scenario(scenario)]
-        if stubs:
-            raise ValueError(f'scenario(s) at index {stubs} have a placeholder name or goal')
-        return self
-
-
-def is_placeholder_scenario(scenario: Scenario) -> bool:
-    """A name or a goal too short to be real."""
-    return is_stub_text(scenario.name, scenario.goal)
 
 
 _SECURITY_SCENARIO_PROMPT = """You are an expert security test scenario designer for AI agents. Create adversarial scenarios based on the OWASP Agentic Security Initiative (ASI) framework.
@@ -202,15 +185,29 @@ def _parse_scenarios(scenario_dicts: list[dict[str, Any]]) -> list[Scenario]:
     scenarios: list[Scenario] = []
     for s_dict in scenario_dicts:
         try:
-            scenario = Scenario.model_validate(s_dict)
-        except Exception as e:
+            scenarios.append(Scenario.model_validate(s_dict))
+        except Exception as e:  # noqa: PERF203
             logger.warning('Failed to parse scenario: %s', e)
-            continue
-        if is_placeholder_scenario(scenario):
-            logger.warning('Dropped a placeholder scenario with no real name or goal')
-            continue
-        scenarios.append(scenario)
     return scenarios
+
+
+def _real_scenarios(scenarios: list[Scenario]) -> list[Scenario]:
+    """Drop the stub items a model can return in place of scenarios; see `_placeholders`."""
+    real = [scenario for scenario in scenarios if not is_stub_item(scenario.name, scenario.goal)]
+    if len(real) < len(scenarios):
+        logger.warning('ScenarioGenerator: dropped %d placeholder scenario(s)', len(scenarios) - len(real))
+    return real
+
+
+def _accepts_scenarios(expected: int) -> Callable[[ScenarioListResponse], bool]:
+    """The content check for `generate_structured`: enough scenarios for ``expected`` asked, and no stub among them."""
+
+    def accept(response: ScenarioListResponse) -> bool:
+        scenarios = response.scenarios
+        stubs = any(is_stub_item(scenario.name, scenario.goal) for scenario in scenarios)
+        return not stubs and not too_few(len(scenarios), expected)
+
+    return accept
 
 
 class ScenarioGenerator(UsageTracking):
@@ -336,12 +333,12 @@ Return ONLY a JSON array, no other text."""
                     self._client,
                     model=self._model,
                     messages=messages,
-                    response_format=expecting(ScenarioListResponse, num_scenarios),
+                    response_format=ScenarioListResponse,
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate',
                     api='responses',
                     config=self._config,
-                    tool_fallback_on_invalid=True,
+                    accept=_accepts_scenarios(num_scenarios),
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -352,6 +349,7 @@ Return ONLY a JSON array, no other text."""
                     scenario_dicts = _parse_json_list(raw or '[]')
                     scenarios = _parse_scenarios(scenario_dicts)
 
+                scenarios = _real_scenarios(scenarios)
                 if len(scenarios) < num_scenarios:
                     logger.warning(
                         'ScenarioGenerator: requested %d scenarios but only %d were successfully parsed',
@@ -417,12 +415,12 @@ Return ONLY a JSON array, no other text."""
                     self._client,
                     model=self._model,
                     messages=messages,
-                    response_format=expecting(ScenarioListResponse, num_scenarios),
+                    response_format=ScenarioListResponse,
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_with_coverage',
                     api='responses',
                     config=self._config,
-                    tool_fallback_on_invalid=True,
+                    accept=_accepts_scenarios(num_scenarios),
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -440,6 +438,7 @@ Return ONLY a JSON array, no other text."""
                 if len(scenarios) > num_scenarios:
                     scenarios = scenarios[:num_scenarios]
 
+                scenarios = _real_scenarios(scenarios)
                 if len(scenarios) < num_scenarios:
                     logger.warning(
                         'ScenarioGenerator: requested %d scenarios (with coverage) but only %d parsed',
@@ -496,12 +495,12 @@ Return ONLY a JSON array, no other text."""
                     self._client,
                     model=self._model,
                     messages=messages,
-                    response_format=expecting(ScenarioListResponse, num_edge_cases),
+                    response_format=ScenarioListResponse,
                     max_tokens=_scenario_token_budget(num_edge_cases),
                     label='ScenarioGenerator.generate_edge_cases',
                     api='responses',
                     config=self._config,
-                    tool_fallback_on_invalid=True,
+                    accept=_accepts_scenarios(num_edge_cases),
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -514,6 +513,7 @@ Return ONLY a JSON array, no other text."""
                         s_dict['is_edge_case'] = True
                     scenarios = _parse_scenarios(scenario_dicts)
 
+                scenarios = _real_scenarios(scenarios)
                 if len(scenarios) < num_edge_cases:
                     logger.warning(
                         'ScenarioGenerator: requested %d edge cases but only %d parsed',
@@ -566,12 +566,12 @@ Return ONLY a JSON array, no other text."""
                     self._client,
                     model=self._model,
                     messages=messages,
-                    response_format=expecting(ScenarioListResponse, num_scenarios),
+                    response_format=ScenarioListResponse,
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_boundary_scenarios',
                     api='responses',
                     config=self._config,
-                    tool_fallback_on_invalid=True,
+                    accept=_accepts_scenarios(num_scenarios),
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -584,6 +584,7 @@ Return ONLY a JSON array, no other text."""
                         s_dict['is_edge_case'] = True
                     scenarios = _parse_scenarios(scenario_dicts)
 
+                scenarios = _real_scenarios(scenarios)
                 if len(scenarios) < num_scenarios:
                     logger.warning(
                         'ScenarioGenerator: requested %d boundary scenarios but only %d parsed',
@@ -649,12 +650,12 @@ Return ONLY a JSON array, no other text."""
                     self._client,
                     model=self._model,
                     messages=messages,
-                    response_format=expecting(ScenarioListResponse, num_scenarios),
+                    response_format=ScenarioListResponse,
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_security_scenarios',
                     api='responses',
                     config=self._config,
-                    tool_fallback_on_invalid=True,
+                    accept=_accepts_scenarios(num_scenarios),
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -667,6 +668,7 @@ Return ONLY a JSON array, no other text."""
                         s_dict['is_edge_case'] = True
                     scenarios = _parse_scenarios(scenario_dicts)
 
+                scenarios = _real_scenarios(scenarios)
                 if len(scenarios) < num_scenarios:
                     logger.warning(
                         'ScenarioGenerator: requested %d security scenarios but only %d parsed',
