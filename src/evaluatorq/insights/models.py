@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+import warnings
 from datetime import datetime  # noqa: TC003
 from pathlib import Path  # noqa: TC003
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.judge import ClassifyQuestion
@@ -26,6 +27,7 @@ from evaluatorq.trace_finder.settings import (
     MAX_TRACE_INPUT_CHARS,
     MIN_TRACE_INPUT_CHARS,
     effective_settings,
+    normalize_filter_selection,
 )
 
 if TYPE_CHECKING:
@@ -140,11 +142,22 @@ class InsightsPopulation(BaseModel):
     end: datetime | None = None
     time_origin: Literal['default', 'explicit'] = 'default'
     window_days: int = Field(default=7, ge=1, le=90)
-    filter_selection: Literal['llm', 'llm+jev'] | None = None
+    filter_selection: Literal['llm', 'llm+decision'] | None = None
     limit: int = Field(default=500, ge=1, le=5000)
     finder_export: Path | None = None
     snapshot_path: Path | None = None
     _finder_export_snapshot: RunExport | None = PrivateAttr(default=None)
+
+    @field_validator('filter_selection', mode='before')
+    @classmethod
+    def accept_legacy_filter_selection(cls, value: object) -> object:
+        """Accept the old ``llm+jev`` name for ``llm+decision``, with a deprecation warning."""
+        normalized = normalize_filter_selection(value)
+        if normalized != value:
+            warnings.warn(
+                "filter_selection='llm+jev' is deprecated; use 'llm+decision'.", DeprecationWarning, stacklevel=2
+            )
+        return normalized
 
     @model_validator(mode='before')
     @classmethod

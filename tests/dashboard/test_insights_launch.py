@@ -999,7 +999,7 @@ def test_local_snapshot_preview_reports_character_coverage_before_start(tmp_path
     assert preview.status_code == 200
     assert 'Model input coverage' in preview.text
     assert '1 of 1 traces hit a summary or classifier input cap of 500,000 characters.' in preview.text
-    assert '1 of 3 source messages were omitted from the Jev classifier state.' in preview.text
+    assert '1 of 3 source messages were omitted from the decision state.' in preview.text
     assert 'Serialized source:' not in preview.text
 
     invalid_custom_labels = client.post(

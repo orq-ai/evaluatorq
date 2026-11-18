@@ -63,7 +63,7 @@ class SimulationScoringConfig(BaseModel):
     that carry over the previously hardcoded cliffs verbatim. The one deliberate
     difference is the tail past the last cliff, which now decays from that cliff's score
     instead of restarting from ``1.0`` — the old curve scored 7 turns higher than 6, so a
-    run past the last cliff scores lower than it used to. See ``CHANGELOG.md``. Pass an
+    run past the last cliff scores lower than it used to. Pass an
     instance as ``simulate(scoring=...)`` /
     ``generate_and_simulate(scoring=...)``, or to ``get_evaluator`` /
     ``get_all_evaluators`` when driving the scorers directly.
@@ -327,7 +327,7 @@ class ConversationQualityScore(float):
         super().__init__()
         self.breakdown: dict[str, dict[str, float]] = breakdown
 
-    def __getnewargs__(self) -> tuple[float, dict[str, dict[str, float]]]:  # ty: ignore[invalid-method-override]
+    def __getnewargs__(self) -> tuple[float, dict[str, dict[str, float]]]:  # ty: ignore[incompatible-method-override]
         return (float(self), self.breakdown)
 
 

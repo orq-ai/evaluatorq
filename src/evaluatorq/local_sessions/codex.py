@@ -210,9 +210,13 @@ def _map_item(payload: dict[str, Any], out: list[dict[str, Any]], skipped_types:
     elif kind == 'function_call' and isinstance(call_id, str) and isinstance(name, str):
         out.append(items.function_call(call_id=call_id, name=name, arguments=payload.get('arguments')))
     elif kind == 'custom_tool_call' and isinstance(call_id, str) and isinstance(name, str):
-        out.append(items.function_call(call_id=call_id, name=name, arguments={'input': payload.get('input')}))
+        out.append(items.custom_tool_call(call_id=call_id, name=name, input=payload.get('input')))
     elif kind in ('function_call_output', 'custom_tool_call_output') and isinstance(call_id, str):
         text = _output_text(payload.get('output'))
-        out.append(items.function_call_output(call_id=call_id, output=text, is_error=_failed(text)))
+        out.append(
+            items.function_call_output(
+                call_id=call_id, output=text, is_error=_failed(text), custom=kind == 'custom_tool_call_output'
+            )
+        )
     else:
         skipped_types[kind if isinstance(kind, str) else 'unknown'] += 1

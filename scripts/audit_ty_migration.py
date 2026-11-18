@@ -72,6 +72,7 @@ EXPECTED = {
         'reportDuplicateImport',
         'reportFunctionMemberAccess',
         'reportInvalidTypeForm',
+        'reportInvalidTypeVarUse',
         'reportOptionalIterable',
         'reportOptionalMemberAccess',
         'reportTypedDictNotRequiredAccess',
@@ -88,7 +89,6 @@ EXPECTED = {
         'reportInconsistentConstructor',
         'reportInvalidAbstractMethod',
         'reportInvalidCast',
-        'reportInvalidTypeVarUse',
         'reportMatchNotExhaustive',
         'reportMissingModuleSource',
         'reportMissingSuperCall',
@@ -169,6 +169,28 @@ def _rule_defaults(rules: str, required: set[str]) -> dict[str, str]:
     return parsed
 
 
+def _mapped_ty_rules(replacements: list[str], ty: dict[str, Any]) -> set[str]:
+    """Return the current ty rules behind a mapping cell, expanding renamed or split rule names.
+
+    ty's migration guide can lag its rule reference and keep an old rule name. ty accepts the
+    old name as an alias, but configuration and default levels use the successors.
+    """
+    successors: dict[str, list[str]] = ty.get('rule_successors', {})
+    named = {rule for replacement in replacements for rule in re.findall(r'\[`([^`]+)`\]\[ty-', replacement)}
+    return {current for rule in named for current in successors.get(rule, [rule])}
+
+
+def _verify_successors(rules: str, successors: dict[str, list[str]]) -> None:
+    sections = set(re.findall(r'(?m)^## `([^`]+)`$', rules))
+    for old, current in successors.items():
+        _require(old not in sections, f'{old} is a current ty rule, not a renamed one')
+        _require(
+            f'<a id="{old}"></a>' in rules or f'**Migrating from `{old}`**' in rules,
+            f'ty rule reference no longer documents the rename of {old}',
+        )
+        _require(set(current) <= sections, f'successors of {old} are not all current ty rules')
+
+
 def verify_upstream(baseline: dict[str, Any]) -> None:
     """Fetch pinned primary sources and prove the committed derivation still matches."""
     ty = baseline['ty']
@@ -186,12 +208,8 @@ def verify_upstream(baseline: dict[str, Any]) -> None:
     _require(active == set(based['active_diagnostics']), 'BasedPyright active-rule snapshot drifted')
     cells = _mapping_cells(mapping, active)
     _require(cells == baseline['mapping_cells'], 'ty migration mapping snapshot drifted')
-    required = {
-        rule
-        for replacements in cells.values()
-        for replacement in replacements
-        for rule in re.findall(r'\[`([^`]+)`\]\[ty-', replacement)
-    }
+    _verify_successors(rules, ty.get('rule_successors', {}))
+    required = {rule for replacements in cells.values() for rule in _mapped_ty_rules(replacements, ty)}
     _require(_rule_defaults(rules, required) == ty['rule_defaults'], 'ty default-level snapshot drifted')
 
 
@@ -238,7 +256,7 @@ def _based_active(diagnostic: str, surface: str, baseline: dict[str, Any]) -> bo
 def _classification_and_surface(
     diagnostic: str, replacements: list[str], baseline: dict[str, Any], config: dict[str, Any]
 ) -> tuple[str, str]:
-    ty_rules = {rule for replacement in replacements for rule in re.findall(r'\[`([^`]+)`\]\[ty-', replacement)}
+    ty_rules = _mapped_ty_rules(replacements, baseline['ty'])
     ruff_codes = {code for replacement in replacements for code in re.findall(r'Ruff `([A-Z]+\d+)`', replacement)}
     applicable = [surface for surface in SURFACES if _based_active(diagnostic, surface, baseline)]
     covered: list[str] = []

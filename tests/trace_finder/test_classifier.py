@@ -611,3 +611,47 @@ async def test_run_classifier_with_no_dimensions_matches_every_trace_without_any
     assert completed == classifications
     assert evaluator_calls == []
     assert evaluatorq_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failing', ['parser', 'on_complete'])
+async def test_run_classifier_fails_the_run_when_a_classification_is_lost(
+    monkeypatch: pytest.MonkeyPatch, failing: str
+) -> None:
+    from evaluatorq.evaluatorq import _notify_datapoint_complete
+
+    dimensions = (_compiled(),)
+    result = _result(dimensions=dimensions, raw_answers=[{'choice': 'frustrated'}])
+    failure = KeyError('lost')
+
+    if failing == 'parser':
+
+        def broken_parse(*_: object) -> TraceClassification:
+            raise failure
+
+        monkeypatch.setattr(classifier, 'parse_datapoint_result', broken_parse)
+
+    async def on_complete(_classification: object) -> None:
+        if failing == 'on_complete':
+            raise failure
+
+    async def fake_evaluatorq(_name: str, **kwargs: Any) -> list[DataPointResult]:
+        # The real per-row boundary, which logs and skips any plain exception.
+        await _notify_datapoint_complete(kwargs['on_datapoint_complete'], [result])
+        return [result]
+
+    monkeypatch.setattr(classifier, 'build_classifier_evaluator', lambda *_, **__: {'name': 'classifier'})
+    monkeypatch.setattr(classifier, 'evaluatorq', fake_evaluatorq)
+
+    with pytest.raises(KeyError) as caught:
+        await run_classifier(
+            (_trace(),),
+            {'trace-1': _projection()},
+            dimensions,
+            model='typesafe/jev-latest',
+            client=cast(Any, 'client'),
+            parallelism=1,
+            on_complete=on_complete,
+        )
+
+    assert caught.value is failure

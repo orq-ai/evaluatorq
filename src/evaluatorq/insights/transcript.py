@@ -2,10 +2,10 @@
 
 Three views, each for one `/decisions` call:
 
-- `full_conversation_view`: the source messages, numbered by message index, for non-Jev classifiers and summaries. Each message type has its own cap (`-1` keeps it whole) and can be included or excluded, with reasoning left out by default; tool calls are either one collapsed line per run or one line per call with a status flag. The whole view is capped to the configured trace-input budget.
-- `full_conversation_view`: the source messages as `#<index> <kind>:` entries, for non-Jev classifiers, summaries and Trace Finder. `ConversationViewOptions` and its presets `COMPACT`, `DETAILED` and `WHOLE` choose the message types and each type's cap; the trace-input budget then drops whole entries from the middle.
+- `full_conversation_view`: the source messages, numbered by message index, for plain-text classifiers and summaries. Each message type has its own cap (`-1` keeps it whole) and can be included or excluded, with reasoning left out by default; tool calls are either one collapsed line per run or one line per call with a status flag. The whole view is capped to the configured trace-input budget.
+- `full_conversation_view`: the source messages as `#<index> <kind>:` entries, for plain-text classifiers, summaries and Trace Finder. `ConversationViewOptions` and its presets `COMPACT`, `DETAILED` and `WHOLE` choose the message types and each type's cap; the trace-input budget then drops whole entries from the middle.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.
-- `tool_activity_chunks`: user context and paired tool activity for coding-tool questions. Non-Jev traces keep their question-specific command excerpts; Jev traces use filtered structured state, 100-character input/result edges, and complete-record chunks that fit the exact question reserve and Jev state-plus-question ceilings.
+- `tool_activity_chunks`: user context and paired tool activity for coding-tool questions. Plain-text traces keep their question-specific command excerpts; decision-state traces use filtered structured state, 100-character input/result edges, and complete-record chunks that fit the exact question reserve and decision-state and question ceilings.
 
 Nothing here calls a model or any other service. A shell output excerpt is scrubbed of credentials with
 `common.redact.scrub_known_secrets` over the whole output before it is cut to its start and end, so a secret across
@@ -30,19 +30,20 @@ from evaluatorq.common.messages import coerce_content_text, contains_media_conte
 from evaluatorq.common.model_input import (
     cap_text,
     clean_model_text,
+    decision_state,
+    decision_state_char_limit,
     effective_trace_input_chars,
-    is_jev_model,
-    jev_state,
-    jev_state_char_limit,
     message_lines,
     pair_tool_call_results,
     serialized_chars,
     serialized_question_chars,
     tool_result_metadata,
+    uses_decision_state,
 )
 from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.trace_document import TraceDocument, to_chat_messages
 from evaluatorq.contracts import tool_result_to_text
+from evaluatorq.formats._shared import CUSTOM_TOOL_INPUT_ARGUMENT
 from evaluatorq.insights.readable_style import (
     MIN_REFERENCED_RESULT_CHARS,
     ReadableStyle,
@@ -941,16 +942,16 @@ def tool_activity_chunks(
     if request_budget < 1:
         raise ValueError('trace input character cap must be positive')
     questions = question_payloads or []
-    jev = is_jev_model(model) if model is not None else False
+    decision = uses_decision_state(model) if model is not None else False
     messages = to_chat_messages(trace)
-    if jev:
-        units = _jev_activity_units(messages)
-        state_budget = jev_state_char_limit(questions, global_char_cap=request_budget)
+    if decision:
+        units = _decision_activity_units(messages)
+        state_budget = decision_state_char_limit(questions, global_char_cap=request_budget)
         if not units:
             if len('No tool calls.') > state_budget:
-                raise ValueError('classifier questions leave no Jev state budget for tool activity')
+                raise ValueError('classifier questions leave no decision state budget for tool activity')
             return ['No tool calls.']
-        return _jev_tool_activity_chunks(messages, state_budget=state_budget, units=units)
+        return _decision_tool_activity_chunks(messages, state_budget=state_budget, units=units)
 
     chunk_budget = request_budget - serialized_question_chars(questions)
     if chunk_budget <= 0:
@@ -975,10 +976,10 @@ def tool_activity_chunks(
             )
     call_lines = [line for line in lines if line.startswith('CALL')]
     if any(len(line) + 1 > chunk_budget for line in call_lines):
-        raise ValueError('one non-Jev tool-activity record exceeds the question-reserved state budget')
+        raise ValueError('one plain-text tool-activity record exceeds the question-reserved state budget')
     if not call_lines:
         if len('No tool calls.') > chunk_budget:
-            raise ValueError('classifier questions leave no non-Jev state budget for tool activity')
+            raise ValueError('classifier questions leave no plain-text state budget for tool activity')
         return ['No tool calls.']
     full_view_chars = sum(len(line) for line in lines) + len(lines) - 1
     if full_view_chars <= chunk_budget:
@@ -986,31 +987,31 @@ def tool_activity_chunks(
     return _chunk(lines, chunk_budget)
 
 
-def _jev_tool_activity_chunks(
+def _decision_tool_activity_chunks(
     messages: list[dict[str, Any]], *, state_budget: int, units: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Split paired tool activity into Jev states without dropping complete call records."""
+    """Split paired tool activity into decision states without dropping complete call records."""
     if not units:
         return []
     context = [message for message in messages if message.get('role') == 'user']
-    groups = _jev_group_activity_units(context, units, state_budget)
+    groups = _decision_group_activity_units(context, units, state_budget)
     chunks = []
     for number, group in enumerate(groups, start=1):
-        state = _jev_activity_state(context, group, state_budget, part=number, total=len(groups))
+        state = _decision_activity_state(context, group, state_budget, part=number, total=len(groups))
         if state is None:
-            raise ValueError('Jev tool-activity chunk exceeded its reserved classifier state budget')
+            raise ValueError('decision-state tool-activity chunk exceeded its reserved classifier state budget')
         chunks.append(state)
     return chunks
 
 
-def _jev_activity_units(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _decision_activity_units(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     call_records, orphan_records = pair_tool_call_results(messages)
     units = [
         {
             'kind': 'call',
             'index': record['index'],
             'order': record['call_index'],
-            'record': {**record, 'call': _jev_activity_call(record['call'])},
+            'record': {**record, 'call': _decision_activity_call(record['call'])},
         }
         for record in call_records
     ]
@@ -1019,28 +1020,28 @@ def _jev_activity_units(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return units
 
 
-def _jev_group_activity_units(
+def _decision_group_activity_units(
     context: list[dict[str, Any]], units: list[dict[str, Any]], state_budget: int
 ) -> list[list[dict[str, Any]]]:
     groups: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
     for unit in units:
         candidate = [*current, unit]
-        if _jev_activity_state(context, candidate, state_budget, part=999_999_999, total=999_999_999) is not None:
+        if _decision_activity_state(context, candidate, state_budget, part=999_999_999, total=999_999_999) is not None:
             current = candidate
             continue
         if not current:
-            raise ValueError('one Jev tool-activity record exceeds the reserved classifier state budget')
+            raise ValueError('one decision-state tool-activity record exceeds the reserved classifier state budget')
         groups.append(current)
         current = [unit]
-        if _jev_activity_state(context, current, state_budget, part=999_999_999, total=999_999_999) is None:
-            raise ValueError('one Jev tool-activity record exceeds the reserved classifier state budget')
+        if _decision_activity_state(context, current, state_budget, part=999_999_999, total=999_999_999) is None:
+            raise ValueError('one decision-state tool-activity record exceeds the reserved classifier state budget')
     if current:
         groups.append(current)
     return groups
 
 
-def _jev_activity_call(call: dict[str, Any]) -> dict[str, Any]:
+def _decision_activity_call(call: dict[str, Any]) -> dict[str, Any]:
     """Keep the coding command itself as the bounded input for shell tools."""
     if _call_name(call) not in SHELL_TOOLS:
         return call
@@ -1051,7 +1052,7 @@ def _jev_activity_call(call: dict[str, Any]) -> dict[str, Any]:
     return {**call, 'arguments': _shell_command(arguments)}
 
 
-def _jev_activity_source(
+def _decision_activity_source(
     context: list[dict[str, Any]], units: list[dict[str, Any]]
 ) -> tuple[
     list[dict[str, Any]],
@@ -1105,7 +1106,7 @@ def _jev_activity_source(
     return source, call_metadata, result_metadata, expected_calls, expected_results
 
 
-def _annotate_jev_activity_state(
+def _annotate_decision_activity_state(
     state: dict[str, Any],
     call_metadata: dict[tuple[int, int], dict[str, Any]],
     result_metadata: dict[int, dict[str, Any]],
@@ -1141,7 +1142,7 @@ def _clean_result_codes(result: dict[str, Any]) -> None:
             result[key] = clean_model_text(str(result[key]))
 
 
-def _jev_activity_state(
+def _decision_activity_state(
     context: list[dict[str, Any]],
     units: list[dict[str, Any]],
     state_budget: int,
@@ -1149,10 +1150,10 @@ def _jev_activity_state(
     part: int,
     total: int,
 ) -> dict[str, Any] | None:
-    source, call_metadata, result_metadata, expected_calls, expected_results = _jev_activity_source(context, units)
-    state = jev_state(source, global_char_cap=state_budget)
+    source, call_metadata, result_metadata, expected_calls, expected_results = _decision_activity_source(context, units)
+    state = decision_state(source, global_char_cap=state_budget)
     state['activity_chunk'] = {'part': part, 'total': total}
-    visible_calls, visible_results = _annotate_jev_activity_state(state, call_metadata, result_metadata)
+    visible_calls, visible_results = _annotate_decision_activity_state(state, call_metadata, result_metadata)
     if visible_calls != expected_calls or visible_results != expected_results:
         return None
     return state if serialized_chars(state) <= state_budget else None
@@ -1170,18 +1171,18 @@ def _chunk(lines: list[str], budget: int) -> list[str]:
         index += 1
     body = lines[index:]
     if not body:
-        raise ValueError('non-Jev tool activity has no call records to chunk')
+        raise ValueError('plain-text tool activity has no call records to chunk')
 
     opening = '\n'.join(lines[:index])
     largest_record = max(len(line) + 1 for line in body)
     context_budget = budget - largest_record - 80
     if context_budget < len('[... 0 chars left out ...]'):
-        raise ValueError('one non-Jev tool-activity record cannot fit with its chunk header')
+        raise ValueError('one plain-text tool-activity record cannot fit with its chunk header')
     if len(opening) > context_budget:
         opening = cap_text(opening, context_budget)[0]
     capacity = budget - len(opening) - 80
     if capacity < largest_record:
-        raise ValueError('one non-Jev tool-activity record cannot fit with its chunk context and header')
+        raise ValueError('one plain-text tool-activity record cannot fit with its chunk context and header')
 
     groups: list[list[str]] = [[]]
     used = 0
@@ -1196,7 +1197,7 @@ def _chunk(lines: list[str], budget: int) -> list[str]:
         for number, group in enumerate(groups, start=1)
     ]
     if any(len(chunk) > budget for chunk in chunks):
-        raise ValueError('non-Jev tool-activity chunk exceeded its question-reserved state budget')
+        raise ValueError('plain-text tool-activity chunk exceeded its question-reserved state budget')
     return chunks
 
 
@@ -1297,18 +1298,28 @@ def _call_arguments(call: dict[str, Any]) -> dict[str, Any]:
     try:
         parsed = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
-        unescape = {'n': '\n', 't': '\t'}
-        return {
-            key: re.sub(r'\\(.)', lambda escape: unescape.get(escape[1], escape[1]), value)
-            for key, value in _STRING_FIELD.findall(raw)
-        }
+        return _string_fields(raw)
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _string_fields(raw: str) -> dict[str, str]:
+    unescape = {'n': '\n', 't': '\t'}
+    return {
+        key: re.sub(r'\\(.)', lambda escape: unescape.get(escape[1], escape[1]), value)
+        for key, value in _STRING_FIELD.findall(raw)
+    }
 
 
 def _shell_command(arguments: dict[str, Any]) -> str:
     """The shell line a call runs, scrubbed of credentials so no view derived from it can carry one."""
-    for key in ('command', 'cmd', 'script'):
+    for key in ('command', 'cmd', 'script', CUSTOM_TOOL_INPUT_ARGUMENT):
         value = arguments.get(key)
+        if (
+            key == CUSTOM_TOOL_INPUT_ARGUMENT
+            and isinstance(value, str)
+            and (inner := _shell_command(_string_fields(value)))
+        ):
+            return inner  # a Codex exec script: the shell line is its `cmd` field
         if isinstance(value, str):
             return scrub_known_secrets(value)
         if isinstance(value, list):

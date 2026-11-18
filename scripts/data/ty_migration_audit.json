@@ -128,7 +128,7 @@
   "mapping_cells": {
     "reportAbstractUsage": [
       " [`call-abstract-method`][ty-call-abstract-method]                                                                            ",
-      " None yet for instantiating abstract classes                                                                                  ",
+      " [`call-non-callable`][ty-call-non-callable] (abstract class instantiation only)                                              ",
       " None yet for calling abstract methods through `super()`                                                                      "
     ],
     "reportArgumentType": [
@@ -153,7 +153,8 @@
     "reportAttributeAccessIssue": [
       " [`invalid-assignment`][ty-invalid-assignment] (incompatible method replacements only)                                        ",
       " [`invalid-attribute-access`][ty-invalid-attribute-access]                                                                    ",
-      " [`unresolved-attribute`][ty-unresolved-attribute]                                                                            "
+      " [`unresolved-attribute`][ty-unresolved-attribute]                                                                            ",
+      " [`unresolved-attribute`][ty-unresolved-attribute], [`unresolved-import`][ty-unresolved-import] (stub names not re-exported)  "
     ],
     "reportCallInDefaultInitializer": [
       " [Ruff `B006`][ruff-b006]<br>[Ruff `B008`][ruff-b008] (partial coverage; immutable annotations and calls are excluded)        "
@@ -181,8 +182,10 @@
       " [`abstract-method-in-final-class`][ty-abstract-method-in-final-class]                                                        ",
       " [`conflicting-metaclass`][ty-conflicting-metaclass]                                                                          ",
       " [`cyclic-class-definition`][ty-cyclic-class-definition]                                                                      ",
+      " [`cyclic-type-alias-definition`][ty-cyclic-type-alias-definition]                                                            ",
       " [`dataclass-field-order`][ty-dataclass-field-order]                                                                          ",
       " [`duplicate-base`][ty-duplicate-base]                                                                                        ",
+      " [`duplicate-kw-only`][ty-duplicate-kw-only]                                                                                  ",
       " [`final-on-non-method`][ty-final-on-non-method]                                                                              ",
       " [`final-without-value`][ty-final-without-value]                                                                              ",
       " [`inconsistent-mro`][ty-inconsistent-mro]                                                                                    ",
@@ -191,11 +194,15 @@
       " [`invalid-await`][ty-invalid-await]                                                                                          ",
       " [`invalid-base`][ty-invalid-base]                                                                                            ",
       " [`invalid-context-manager`][ty-invalid-context-manager]                                                                      ",
+      " [`invalid-dataclass`][ty-invalid-dataclass]                                                                                  ",
       " [`invalid-exception-caught`][ty-invalid-exception-caught]                                                                    ",
       " [`invalid-explicit-override`][ty-invalid-explicit-override]                                                                  ",
       " [`invalid-frozen-dataclass-subclass`][ty-invalid-frozen-dataclass-subclass]                                                  ",
+      " [`invalid-generic-class`][ty-invalid-generic-class] (type-variable variance in methods)                                      ",
       " [`invalid-key`][ty-invalid-key]                                                                                              ",
       " [`invalid-legacy-type-variable`][ty-invalid-legacy-type-variable]                                                            ",
+      " [`invalid-match-pattern`][ty-invalid-match-pattern] (class-pattern positional argument count only)                           ",
+      " [`invalid-named-tuple`][ty-invalid-named-tuple] (field names starting with an underscore only)                               ",
       " [`invalid-newtype`][ty-invalid-newtype]                                                                                      ",
       " [`invalid-protocol`][ty-invalid-protocol]                                                                                    ",
       " [`invalid-raise`][ty-invalid-raise]                                                                                          ",
@@ -204,6 +211,8 @@
       " [`invalid-type-variable-bound`][ty-invalid-type-variable-bound]                                                              ",
       " [`invalid-type-variable-constraints`][ty-invalid-type-variable-constraints]                                                  ",
       " [`invalid-type-variable-default`][ty-invalid-type-variable-default]                                                          ",
+      " [`invalid-typed-dict-header`][ty-invalid-typed-dict-header] (custom metaclasses only)                                        ",
+      " [`invalid-typed-dict-statement`][ty-invalid-typed-dict-statement] (methods in a TypedDict body only)                         ",
       " [`isinstance-against-protocol`][ty-isinstance-against-protocol]                                                              ",
       " [`isinstance-against-typed-dict`][ty-isinstance-against-typed-dict]                                                          ",
       " [`mismatched-type-name`][ty-mismatched-type-name]                                                                            ",
@@ -251,7 +260,8 @@
       " [`invalid-type-form`][ty-invalid-type-form]                                                                                  "
     ],
     "reportInvalidTypeVarUse": [
-      " None yet (tracked in [#1017][ty-1017], [#3636][ty-3636], [#3637][ty-3637])                                                   "
+      " [`invalid-init-type-variable`][ty-invalid-init-type-variable]                                                                ",
+      " None yet for other cases (tracked in [#1017][ty-1017], [#3636][ty-3636], [#3637][ty-3637])                                   "
     ],
     "reportMatchNotExhaustive": [
       " None yet (tracked in [#1060][ty-1060])                                                                                       "
@@ -296,7 +306,7 @@
       " [`possibly-unresolved-reference`][ty-possibly-unresolved-reference]                                                          "
     ],
     "reportPrivateImportUsage": [
-      " None yet (tracked in [#200][ty-200])                                                                                         "
+      " None yet for non-re-exported names in runtime files (tracked in [#200][ty-200])                                              "
     ],
     "reportPropertyTypeMismatch": [
       " None yet (tracked in [#3633][ty-3633])                                                                                       "
@@ -337,7 +347,8 @@
     ],
     "reportUnnecessaryComparison": [
       " [`redundant-condition`][ty-redundant-condition] (function objects only)                                                      ",
-      " [`redundant-condition`][ty-redundant-condition], [`redundant-condition-strict`][ty-redundant-condition-strict]               "
+      " [`redundant-condition`][ty-redundant-condition], [`redundant-condition-strict`][ty-redundant-condition-strict]               ",
+      " [`truthiness-test-of-callable`][ty-truthiness-test-of-callable]                                                              "
     ],
     "reportUnnecessaryContains": [
       " [`redundant-condition`][ty-redundant-condition], [`redundant-condition-strict`][ty-redundant-condition-strict]               "
@@ -370,9 +381,9 @@
   },
   "schema": 1,
   "ty": {
-    "mapping_commit": "8dd9a7f7fa35a18275d82117e6593ba45507065f",
-    "mapping_sha256": "2052f813e0a6013e47d50ccdabc3dca1b9be0433bccd293faf4cc09187a177bd",
-    "mapping_url": "https://raw.githubusercontent.com/astral-sh/ty/8dd9a7f7fa35a18275d82117e6593ba45507065f/docs/coming-from-mypy-or-pyright.md",
+    "mapping_commit": "6c90fe0aff166318cf13fc18fd797f91a5d5d552",
+    "mapping_sha256": "2fcc0db7015f948f6e4ac1b1d68ce3fb8475dd765597482caa23160f71bc675a",
+    "mapping_url": "https://raw.githubusercontent.com/astral-sh/ty/6c90fe0aff166318cf13fc18fd797f91a5d5d552/docs/coming-from-mypy-or-pyright.md",
     "rule_defaults": {
       "abstract-method-in-final-class": "error",
       "blanket-ignore-comment": "ignore",
@@ -381,13 +392,19 @@
       "conflicting-declarations": "error",
       "conflicting-metaclass": "error",
       "cyclic-class-definition": "error",
+      "cyclic-type-alias-definition": "error",
       "dataclass-field-order": "error",
       "disjoint-cast": "ignore",
       "duplicate-base": "error",
+      "duplicate-kw-only": "error",
       "empty-body": "error",
       "final-on-non-method": "error",
       "final-without-value": "error",
+      "import-not-found": "error",
+      "incompatible-method-override": "error",
       "inconsistent-mro": "error",
+      "inconsistent-overload-decorator": "error",
+      "inconsistent-overload-implementation": "error",
       "index-out-of-bounds": "error",
       "invalid-argument-type": "error",
       "invalid-assignment": "error",
@@ -395,14 +412,16 @@
       "invalid-await": "error",
       "invalid-base": "error",
       "invalid-context-manager": "error",
+      "invalid-dataclass": "error",
       "invalid-exception-caught": "error",
       "invalid-explicit-override": "error",
       "invalid-frozen-dataclass-subclass": "error",
-      "invalid-key": "error",
+      "invalid-generic-class": "error",
+      "invalid-init-type-variable": "error",
       "invalid-legacy-type-variable": "error",
-      "invalid-method-override": "error",
+      "invalid-match-pattern": "error",
+      "invalid-named-tuple": "error",
       "invalid-newtype": "error",
-      "invalid-overload": "error",
       "invalid-parameter-default": "error",
       "invalid-protocol": "error",
       "invalid-raise": "error",
@@ -413,14 +432,23 @@
       "invalid-type-variable-bound": "error",
       "invalid-type-variable-constraints": "error",
       "invalid-type-variable-default": "error",
+      "invalid-typed-dict-header": "error",
+      "invalid-typed-dict-key": "error",
+      "invalid-typed-dict-statement": "error",
       "invalid-yield": "error",
       "isinstance-against-protocol": "error",
       "isinstance-against-typed-dict": "error",
+      "lost-keyword-for-regular-parameter": "error",
       "mismatched-type-name": "warn",
+      "misplaced-overload-decorator": "error",
       "missing-argument": "error",
+      "missing-attribute": "error",
+      "missing-overload-implementation": "error",
       "missing-type-argument": "ignore",
       "missing-typed-dict-key": "error",
+      "missing-union-attribute": "error",
       "no-matching-overload": "error",
+      "non-literal-typed-dict-key": "error",
       "not-iterable": "error",
       "not-subscriptable": "error",
       "override-of-final-method": "error",
@@ -431,18 +459,45 @@
       "redundant-cast": "warn",
       "redundant-condition": "warn",
       "redundant-condition-strict": "ignore",
+      "single-overload": "error",
       "subclass-of-final-class": "error",
       "too-many-positional-arguments": "error",
+      "truthiness-test-of-callable": "warn",
       "type-assertion-failure": "error",
       "unbound-type-variable": "error",
       "unknown-argument": "error",
-      "unresolved-attribute": "error",
+      "unknown-typed-dict-constructor-key": "error",
       "unresolved-reference": "error",
       "unsupported-operator": "error",
       "unused-awaitable": "warn"
     },
-    "rules_sha256": "0fdc0b6923ae6bae2b073d70460026740d5c4775789b9938b6d997519af7b543",
-    "rules_url": "https://raw.githubusercontent.com/astral-sh/ty/8dd9a7f7fa35a18275d82117e6593ba45507065f/docs/reference/rules.md",
-    "version": "0.0.84"
+    "rule_successors": {
+      "invalid-key": [
+        "invalid-typed-dict-key",
+        "non-literal-typed-dict-key",
+        "unknown-typed-dict-constructor-key"
+      ],
+      "invalid-method-override": [
+        "incompatible-method-override",
+        "lost-keyword-for-regular-parameter"
+      ],
+      "invalid-overload": [
+        "inconsistent-overload-decorator",
+        "inconsistent-overload-implementation",
+        "misplaced-overload-decorator",
+        "missing-overload-implementation",
+        "single-overload"
+      ],
+      "unresolved-attribute": [
+        "missing-attribute",
+        "missing-union-attribute"
+      ],
+      "unresolved-import": [
+        "import-not-found"
+      ]
+    },
+    "rules_sha256": "0b9ff4208f390e6e8f302ed4d6cb96a96c0945cd1dfe79336ba5fd63a388a7ca",
+    "rules_url": "https://raw.githubusercontent.com/astral-sh/ty/6c90fe0aff166318cf13fc18fd797f91a5d5d552/docs/reference/rules.md",
+    "version": "0.0.100"
   }
 }

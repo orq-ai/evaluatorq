@@ -6,7 +6,7 @@ The red team runs on **vulnerabilities**. OWASP category codes like `ASI01` and 
 
 `Vulnerability` is the atomic primitive. Everything that decides what an attack does binds to it:
 
-- **Attack strategies** are keyed by vulnerability. Pick a vulnerability and you pick the curated strategies. In dynamic and hybrid mode you also pick what the planner generates.
+- **Attack strategies** are keyed by vulnerability. Pick a vulnerability and you pick the curated strategies, listed by name in [Curated strategies by category](red-teaming.md#curated-strategies-by-category). In dynamic and hybrid mode you also pick what the planner generates.
 - **The judge** is keyed by vulnerability. One LLM-as-judge rubric per vulnerability decides RESISTANT or VULNERABLE.
 
 Each vulnerability has a `VulnerabilityDef` in `src/evaluatorq/redteam/vulnerability_registry.py`. Its `framework_mappings` field projects the vulnerability onto framework category codes. That projection is a labelling layer on top of the primitive — it feeds reporting and compliance views, and it lets you name a vulnerability by a code your security team already uses.

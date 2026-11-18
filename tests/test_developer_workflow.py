@@ -321,8 +321,8 @@ def test_ty_migration_audit_matches_effective_offline_coverage(monkeypatch: pyte
     assert {name: len(diagnostics) for name, diagnostics in classified.items()} == {
         'ty-backed': 22,
         'ruff-only': 8,
-        'partial': 14,
-        'absent': 21,
+        'partial': 15,
+        'absent': 20,
     }
 
 
@@ -700,7 +700,8 @@ include = [ "src/evaluatorq/dashboard" ]
   invalid-return-type = "ignore"
   invalid-type-form = "ignore"
   missing-type-argument = "ignore"
-  unresolved-attribute = "ignore"
+  missing-attribute = "ignore"
+  missing-union-attribute = "ignore"
 
 [[tool.ty.overrides]]
 include = [ "tests/dashboard" ]
@@ -710,7 +711,8 @@ include = [ "tests/dashboard" ]
   invalid-return-type = "ignore"
   missing-type-argument = "ignore"
   not-iterable = "ignore"
-  unresolved-attribute = "ignore"'''
+  missing-attribute = "ignore"
+  missing-union-attribute = "ignore"'''
 
     assert pyproject.count('[[tool.ty.overrides]]') == 2
     assert expected in pyproject

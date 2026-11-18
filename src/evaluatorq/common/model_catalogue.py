@@ -36,6 +36,7 @@ import asyncio
 import hashlib
 import inspect
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import httpx
@@ -54,6 +55,37 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
     from evaluatorq.contracts import Usage
+
+
+@dataclass(frozen=True)
+class ContextTier:
+    """Extended-context rates, USD per 1k tokens; exists only when the card's tier is complete.
+
+    Applies to the whole call once ``input_tokens`` is strictly greater than ``threshold``.
+    ``cache_read`` is always set when `Pricing.cache_read` is. When it is ``None``, cached tokens
+    bill at the tier ``input`` rate.
+    """
+
+    threshold: int
+    input: float
+    output: float
+    cache_read: float | None
+
+
+@dataclass(frozen=True)
+class Pricing:
+    """Cache, audio and extended-context rates of a card, USD per 1k tokens (the ``million_tokens_*`` metadata).
+
+    ``tier`` is set only when the card publishes a complete ``all_tokens`` tier at 200k. A card
+    that advertises such a tier but cannot yield one (a missing above-threshold rate, or a
+    threshold other than the 200k its ``above_200k`` keys are named for) has ``tier=None``, so
+    `cost_of` bills every call at the standard rates. Cache writes and audio never use the tier.
+    """
+
+    cache_read: float | None = None
+    cache_write: float | None = None
+    audio_input: float | None = None
+    tier: ContextTier | None = None
 
 
 class _ModelInfoFields(NamedTuple):
@@ -75,6 +107,8 @@ class _ModelInfoFields(NamedTuple):
     # The effort the provider applies when none is sent. ``None`` when the
     # catalogue names no default.
     default_reasoning_effort: str | None = None
+    # Cache, audio and extended-context rates from the card's ``metadata``; see `Pricing`.
+    pricing: Pricing = Pricing()
 
 
 class ModelInfo(_ModelInfoFields):
@@ -101,6 +135,7 @@ class ModelInfo(_ModelInfoFields):
         supports_classify: bool = False,  # noqa: FBT001, FBT002 — positional to match the tuple field order
         model_type: str = '',
         default_reasoning_effort: str | None = None,
+        pricing: Pricing | None = None,
     ) -> ModelInfo:
         """Normalize an empty ``reasoning_efforts`` to ``None``.
 
@@ -126,6 +161,7 @@ class ModelInfo(_ModelInfoFields):
             supports_classify,
             model_type,
             default_reasoning_effort,
+            Pricing() if pricing is None else pricing,
         )
 
 
@@ -274,17 +310,27 @@ async def get_model_info(model: str, client: AsyncOpenAI | None = None) -> Model
     return await _lookup(model, client)
 
 
-def _usd_price(entry: dict[str, object], side: str) -> float | None:
-    """The entry's ``<side>_cost`` per 1k tokens in USD, or ``None`` when it has no usable one."""
-    cost = entry.get(f'{side}_cost')
-    # bool is an int subclass: `input_cost: true` would otherwise price at $1.00/1k.
-    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+def _finite_nonneg(raw: object) -> float | None:
+    """``raw`` as a finite, non-negative float, or ``None`` for anything else.
+
+    Rejects bool (an int subclass: ``input_cost: true`` would otherwise price at
+    $1.00/1k), non-numbers, JSON integers too large for a float, NaN/inf and negatives.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
     try:
-        price = float(cost)
-    except OverflowError:  # a JSON integer too large for a float
+        value = float(raw)
+    except OverflowError:
         return None
-    if not math.isfinite(price) or price < 0:
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value
+
+
+def _usd_price(entry: dict[str, object], side: str) -> float | None:
+    """The entry's ``<side>_cost`` per 1k tokens in USD, or ``None`` when it has no usable one."""
+    price = _finite_nonneg(entry.get(f'{side}_cost'))
+    if price is None:
         return None
     # Currency is '' on most entries and 'usd' on the rest; only a stated non-USD
     # price is refused, so the common empty case still prices.
@@ -302,6 +348,32 @@ def _entry_metadata(entry: dict[str, object]) -> dict[str, object]:
     """
     metadata = entry.get('metadata')
     return metadata if isinstance(metadata, dict) else {}
+
+
+def _metadata_price_per_1k(metadata: dict[str, object], key: str) -> float | None:
+    """``metadata[key]`` (USD per 1M tokens) as USD per 1k, or ``None`` when absent or unusable.
+
+    Same rules as `_usd_price`: bool, non-numeric, non-finite and negative values are
+    dropped. A bad field costs only itself, never the card.
+    """
+    per_million = _finite_nonneg(metadata.get(key))
+    return None if per_million is None else per_million / 1000
+
+
+def _metadata_threshold(metadata: dict[str, object]) -> int | None:
+    """``extended_context_threshold`` as a positive token count, or ``None``."""
+    raw = metadata.get('extended_context_threshold')
+    value = _finite_nonneg(raw)
+    # A fractional threshold is a malformed card, not a count to truncate.
+    if value is None or value <= 0 or (isinstance(raw, float) and not raw.is_integer()):
+        return None
+    return raw if isinstance(raw, int) else int(value)
+
+
+def _metadata_mode(metadata: dict[str, object]) -> str | None:
+    """``extended_context_pricing_mode`` as a non-empty string, or ``None``."""
+    raw = metadata.get('extended_context_pricing_mode')
+    return raw.strip() or None if isinstance(raw, str) else None
 
 
 def _reasoning_effort_config(entry: dict[str, object]) -> dict[str, object] | None:
@@ -341,6 +413,63 @@ def _parse_default_reasoning_effort(entry: dict[str, object]) -> str | None:
     return default if isinstance(default, str) and default else None
 
 
+_ABOVE_THRESHOLD_TOKENS = 200_000
+_ABOVE_TIER = ('input', 'output', 'cache_read')
+
+
+def _parse_context_tier(
+    provider: str, model_id: str, metadata: dict[str, object], cache_read: float | None
+) -> ContextTier | None:
+    """The card's complete ``all_tokens`` tier, or ``None``; long-context rates it cannot use bill at standard rates."""
+    mode = _metadata_mode(metadata)
+    threshold = _metadata_threshold(metadata)
+    above_input, above_output, above_cache = (
+        _metadata_price_per_1k(metadata, f'million_tokens_above_200k_{name}_cost') for name in _ABOVE_TIER
+    )
+    if mode == 'all_tokens':
+        if threshold is None:
+            reason = 'it publishes no usable extended_context_threshold'
+        # The rate keys are literally named `above_200k`; under any other threshold they are mislabelled.
+        elif threshold != _ABOVE_THRESHOLD_TOKENS:
+            reason = f'its extended_context_threshold is {threshold}, not {_ABOVE_THRESHOLD_TOKENS}'
+        elif above_input is not None and above_output is not None and (cache_read is None or above_cache is not None):
+            return ContextTier(threshold, above_input, above_output, above_cache)
+        else:
+            needed = (('input', above_input), ('output', above_output), ('cache_read', above_cache))
+            missing = [
+                name for name, rate in needed if rate is None and (name != 'cache_read' or cache_read is not None)
+            ]
+            reason = f'it publishes no usable above_200k {"/".join(missing)} rate'
+    elif any(rate is not None for rate in (above_input, above_output, above_cache)):
+        reason = (
+            'it publishes no usable extended_context_pricing_mode'
+            if mode is None
+            else f'its extended_context_pricing_mode is {mode!r}, not all_tokens'
+        )
+    else:
+        if mode not in (None, 'none'):
+            logger.debug('Unknown extended_context_pricing_mode {!r}; billing the call at flat rates', mode)
+        return None
+    logger.warning(
+        'Model catalogue entry {}/{} has long-context pricing it cannot use: {}; long calls bill at the standard rates',
+        provider,
+        model_id,
+        reason,
+    )
+    return None
+
+
+def _parse_pricing(provider: str, model_id: str, metadata: dict[str, object]) -> Pricing:
+    """Build a card's `Pricing`; a `ContextTier` only when the card publishes a complete one."""
+    cache_read = _metadata_price_per_1k(metadata, 'million_tokens_cache_read_cost')
+    return Pricing(
+        cache_read=cache_read,
+        cache_write=_metadata_price_per_1k(metadata, 'million_tokens_cache_write_cost'),
+        audio_input=_metadata_price_per_1k(metadata, 'million_tokens_audio_input_cost'),
+        tier=_parse_context_tier(provider, model_id, metadata, cache_read),
+    )
+
+
 def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
     """Build the model table from a ``/v2/models`` payload.
 
@@ -378,6 +507,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
                 model_id,
                 classify_flag,
             )
+        pricing = _parse_pricing(provider, model_id, metadata)
         info = ModelInfo(
             input_cost_per_1k=inp,
             output_cost_per_1k=out,
@@ -389,6 +519,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
             supports_classify=classify_flag is True,
             model_type=str(entry.get('model_type') or ''),
             default_reasoning_effort=_parse_default_reasoning_effort(entry),
+            pricing=pricing,
         )
         models[f'{provider}/{model_id}'] = info
         existing = models.get(model_id)
@@ -687,6 +818,68 @@ async def validate_reasoning_effort(effort: str, model: str, client: AsyncOpenAI
         )
 
 
+class CallCost(NamedTuple):
+    """Absolute USD cost of one call, split by side. Unpacks as ``(input, output)``."""
+
+    input: float
+    output: float
+
+
+def cost_of(
+    info: ModelInfo,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cached_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+    audio_input_tokens: int = 0,
+) -> CallCost | None:
+    """Price one call as a `CallCost` (``.input``, ``.output``; unpacks as a pair) in absolute USD, or ``None`` without flat rates.
+
+    ``cached_tokens``, ``cache_creation_tokens`` and ``audio_input_tokens`` are subsets
+    of ``input_tokens`` (as in `Usage`) and are clamped to what is left, in that order.
+    Each bills at its own rate when the card has one: cache reads at the cache-read
+    rate, cache writes at the cache-write rate, audio at the audio-input rate. The
+    rest of the input, and any subset whose rate is missing, bills at the input rate.
+    1h and 5m cache writes are both billed at the card's single
+    ``million_tokens_cache_write_cost``, because ``/v2/models`` publishes no 1h write rate
+    (checked across all 187 live cards on 2026-11-12); `Usage` keeps the 1h/5m split for
+    when a rate appears.
+
+    The extended-context tier (`Pricing.tier`) applies when ``input_tokens`` is strictly greater
+    than its threshold (the usual provider rule: a prompt of exactly the threshold is still
+    standard). The whole call is repriced: input and output at the tier rates, cache reads at the
+    tier cache-read rate. Cache writes and audio always use the standard `Pricing` rates. A card
+    whose advertised tier could not be built has no `Pricing.tier` and bills at the standard
+    rates at any length.
+    """
+    if info.input_cost_per_1k is None or info.output_cost_per_1k is None:
+        return None
+    pricing = info.pricing
+    tier = pricing.tier
+    input_rate = standard_input_rate = info.input_cost_per_1k
+    output_rate = info.output_cost_per_1k
+    cache_read_rate = pricing.cache_read
+    if tier is not None and input_tokens > tier.threshold:
+        input_rate, output_rate, cache_read_rate = tier.input, tier.output, tier.cache_read
+    remaining = max(input_tokens, 0)
+    cached = min(max(cached_tokens, 0), remaining)
+    remaining -= cached
+    written = min(max(cache_creation_tokens, 0), remaining)
+    remaining -= written
+    audio = min(max(audio_input_tokens, 0), remaining)
+    remaining -= audio
+    cache_write_rate = standard_input_rate if pricing.cache_write is None else pricing.cache_write
+    audio_rate = standard_input_rate if pricing.audio_input is None else pricing.audio_input
+    input_cost = (
+        remaining * input_rate
+        + cached * (input_rate if cache_read_rate is None else cache_read_rate)
+        + written * cache_write_rate
+        + audio * audio_rate
+    ) / 1000
+    return CallCost(input_cost, max(output_tokens, 0) / 1000 * output_rate)
+
+
 async def price_usage(
     usage: Usage | None,
     model: str,
@@ -743,14 +936,18 @@ async def price_usage(
             return usage
         if served is not None:
             logger.debug('Pricing the call at the requested {}; {} served it but has no model price', model, served)
-    # ponytail: flat input rate — cached-read and cache-write tokens are billed at a
-    # discount/premium the catalogue does not expose, so a cache-heavy call reads
-    # slightly high. Split the rate here if /v2/models ever publishes the tiers.
-    if info.input_cost_per_1k is None or info.output_cost_per_1k is None:
+    costs = cost_of(
+        info,
+        usage.input_tokens,
+        usage.output_tokens,
+        cached_tokens=usage.cached_tokens,
+        cache_creation_tokens=usage.cache_creation_tokens,
+        audio_input_tokens=usage.audio_input_tokens,
+    )
+    if costs is None:
         logger.debug('Model {} is listed without a USD price; call stays unpriced', model)
         return usage
-    input_cost = usage.input_tokens / 1000 * info.input_cost_per_1k
-    output_cost = usage.output_tokens / 1000 * info.output_cost_per_1k
+    input_cost, output_cost = costs
     return usage.model_copy(
         update={
             'input_cost': input_cost,
@@ -763,8 +960,12 @@ async def price_usage(
 
 __all__ = [
     'KNOWN_CLASSIFY_MODELS',
+    'CallCost',
+    'ContextTier',
     'ModelInfo',
+    'Pricing',
     'clear_model_overrides',
+    'cost_of',
     'get_model_info',
     'is_known_classify_model',
     'model_cards',

@@ -215,7 +215,7 @@ def set_evaluation_attributes(
             When ``None`` (the default), only the legacy orq.score/explanation/pass
             attributes are written, so red-team spans are unchanged.
     """
-    from evaluatorq.common.tracing import record_span_payload
+    from evaluatorq.common.tracing import EVALUATION_OUTPUT_KEYS, record_span_payload
 
     if span is None:
         return
@@ -285,7 +285,7 @@ def set_evaluation_attributes(
         verdict['reason'] = full_explanation
     record_span_payload(
         span,
-        key='orq.evaluation.output',
+        key=EVALUATION_OUTPUT_KEYS,
         payload=verdict,
         optional_fields={'raw_output': raw_output} if raw_output is not None else None,
     )

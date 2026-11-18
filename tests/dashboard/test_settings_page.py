@@ -232,7 +232,7 @@ def test_ai_limits_are_per_run_trace_search_controls(client: TestClient) -> None
     assert 'name="parallelism"' in search_html
     assert '<option value="immediate" selected>Just proceed</option>' in settings_html
     assert 'name="filter_selection"' in settings_html
-    assert '<option value="llm+jev" selected>LLM + Jev</option>' in settings_html
+    assert '<option value="llm+decision" selected>LLM + decision model</option>' in settings_html
 
 
 def test_settings_ignores_per_run_ai_limits(client: TestClient, settings_file: Path) -> None:
@@ -2183,7 +2183,7 @@ def test_non_fast_model_failure_does_not_duplicate_the_footer_notice(
 
 
 @pytest.mark.asyncio
-async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_models_by_provider_groups_chat_and_classify_models(fake_catalogue) -> None:
     from evaluatorq.common import model_catalogue
 
     payload = [
@@ -2194,10 +2194,7 @@ async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: p
         {'model_id': 'jev-latest', 'provider': 'typesafe', 'model_type': 'classify', 'input_cost': 1, 'output_cost': 1, 'metadata': {'supports_classify': True}},
     ]
 
-    async def load(_client: object = None) -> dict[str, object]:
-        return model_catalogue._parse_catalogue(payload)
-
-    monkeypatch.setattr(model_catalogue, '_load_catalogue', load)
+    fake_catalogue(model_catalogue._parse_catalogue(payload))
 
     assert await model_catalogue.models_by_provider() == {
         'azure': ['azure/gpt-5.6-luna'],

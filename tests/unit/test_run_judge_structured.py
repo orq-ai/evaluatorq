@@ -27,7 +27,7 @@ def _parsed_completion(value, explanation, refusal=None):
     msg.refusal = refusal
     # The SDK sets `content` to the verbatim wire body alongside `parsed`; a bare
     # MagicMock would hand `run_judge` a mock where it expects that string.
-    msg.content = None if refusal else msg.parsed.model_dump_json()  # ty: ignore[unresolved-attribute]
+    msg.content = None if refusal else msg.parsed.model_dump_json()  # ty: ignore[missing-union-attribute]
     choice = MagicMock(); choice.message = msg
     comp = MagicMock(); comp.choices = [choice]; comp.usage = None
     return comp

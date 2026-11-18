@@ -233,7 +233,11 @@ def load_openresponses_dataset(path: str | Path) -> StaticDataset:
             rt_input = RedTeamInput(**meta)
         except Exception as exc:
             raise ValueError(f"Dataset row {idx}: 'input' metadata failed validation: {exc}") from exc
-        samples.append(redteam_sample_from_openresponses(input=rt_input, openresponses_input=conv))
+        try:
+            sample = redteam_sample_from_openresponses(input=rt_input, openresponses_input=conv)
+        except ValueError as exc:
+            raise ValueError(f'Dataset row {idx}: {exc}') from exc
+        samples.append(sample)
     return StaticDataset(samples=samples)
 
 

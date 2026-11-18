@@ -136,15 +136,10 @@ async def test_respond_preserves_tool_calls_in_replayed_transcript():
 
 
 @pytest.mark.asyncio
-async def test_respond_prices_unpriced_usage_from_catalogue(monkeypatch: pytest.MonkeyPatch):
+async def test_respond_prices_unpriced_usage_from_catalogue(fake_catalogue):
     """RES-1295: an unpriced Chat Completions usage comes back priced, with
     priced_calls == calls, once a catalogue entry exists for the model."""
-    model_catalogue.reset_catalogue_cache()
-
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {"gpt-4o-mini": model_catalogue.ModelInfo(0.00025, 0.002, "openai", supports_responses=True)}
-
-    monkeypatch.setattr(model_catalogue, "_load_catalogue", fake_load)
+    fake_catalogue({"gpt-4o-mini": model_catalogue.ModelInfo(0.00025, 0.002, "openai", supports_responses=True)})
 
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=_make_openai_response())

@@ -98,6 +98,7 @@ def test_as_llm_client_wraps_the_real_sdk_classes() -> None:
         anthropic.AsyncAnthropic(api_key='k'),
         anthropic.AsyncAnthropicBedrock(aws_region='eu-west-1', aws_access_key='a', aws_secret_key='b'),
         anthropic.AsyncAnthropicVertex(region='europe-west1', project_id='p', access_token='t'),
+        anthropic.AsyncAnthropicFoundry(api_key='k', resource='r'),
     )
     for client in clients:
         assert is_anthropic_client(as_llm_client(client)), type(client).__name__

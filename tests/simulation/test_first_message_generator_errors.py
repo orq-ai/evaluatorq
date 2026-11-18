@@ -201,7 +201,7 @@ async def test_datapoint_generator_drops_only_the_failed_pair(caplog):
             raise FirstMessageGenerationError("empty content")
         return f"hello from {scenario.name}"
 
-    gen._first_message_generator.generate = fake_generate  # ty: ignore[invalid-assignment]
+    gen._first_message_generator.generate = fake_generate
     scenarios = [Scenario(name="good", goal="g"), Scenario(name="bad", goal="b")]
 
     with caplog.at_level(logging.WARNING):
@@ -250,7 +250,7 @@ async def test_datapoint_generator_drops_transient_provider_failure() -> None:
             raise _api_error(429)
         return 'hello'
 
-    gen._first_message_generator.generate = fake_generate  # ty: ignore[invalid-assignment]
+    gen._first_message_generator.generate = fake_generate
     datapoints = await gen.generate_from_combinations([_persona()], [Scenario(name='bad', goal='b'), _scenario()])
     assert [datapoint.first_message for datapoint in datapoints] == ['hello']
 
@@ -360,7 +360,7 @@ async def test_direct_datapoint_generator_limits_pending_tasks() -> None:
         live -= 1
         return 'hello'
 
-    gen._first_message_generator.generate = fake_generate  # ty: ignore[invalid-assignment]
+    gen._first_message_generator.generate = fake_generate
     async with llm_concurrency_limit(2):
         datapoints = await gen.generate_from_combinations([_persona()], [_scenario(f'goal-{i}') for i in range(30)])
     assert len(datapoints) == 30

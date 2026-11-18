@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.common.model_input import cap_text, jev_state, serialized_chars
+from evaluatorq.common.model_input import cap_text, decision_state, serialized_chars
 from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, to_chat_messages
 from evaluatorq.dashboard import compression_inspector_data as inspector_data
 from evaluatorq.dashboard.auth import DashboardAuth
@@ -144,22 +144,22 @@ def test_preview_renders_media_markers_without_fetching_urls() -> None:
     assert image_url not in str(preview.compressed)
 
 
-def test_preview_document_uses_whole_transcript_budget_beside_one_jev_state(
+def test_preview_document_uses_whole_transcript_budget_beside_one_decision_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state_calls: list[tuple[list[dict[str, Any]], int]] = []
-    build_state = inspector_data.jev_state
+    build_state = inspector_data.decision_state
 
     def counted_state(messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         state_calls.append((messages, kwargs['global_char_cap']))
         return build_state(messages, **kwargs)
 
-    monkeypatch.setattr(inspector_data, 'jev_state', counted_state)
+    monkeypatch.setattr(inspector_data, 'decision_state', counted_state)
     document = _document_with_messages(['detail ' * 100 for _ in range(20)])
     original_document = document.model_dump(mode='python')
     messages = to_chat_messages(document)
     original, _, source_message_count = full_conversation_view_with_message_spans(document)
-    expected_state = jev_state(messages, global_char_cap=4096)
+    expected_state = decision_state(messages, global_char_cap=4096)
 
     preview = inspector_data.preview_document(document, knobs=CompressionKnobs(global_char_cap=4096, budget=4096))
 
@@ -413,14 +413,14 @@ def test_reduction_uses_full_json_independent_of_display_and_compression_caps(
     initial = inspector_data.preview_document(document, knobs=knobs)
     reduced = inspector_data.preview_document(
         document, knobs=replace(knobs, original_view='readable', budget=1_000,
-                                jev=replace(knobs.jev, state_chars=1_500)),
+                                decision=replace(knobs.decision, state_chars=1_500)),
     )
     assert initial.original_chars <= 100
     assert initial.full_json_chars == reduced.full_json_chars == baseline
     assert reduced.readable_reduction_percent > initial.readable_reduction_percent
-    assert reduced.jev_reduction_percent > initial.jev_reduction_percent
+    assert reduced.decision_reduction_percent > initial.decision_reduction_percent
     assert reduced.readable_reduction_percent == pytest.approx(100 * (baseline - reduced.readable_chars) / baseline)
-    assert reduced.jev_reduction_percent == pytest.approx(100 * (baseline - reduced.compressed_chars) / baseline)
+    assert reduced.decision_reduction_percent == pytest.approx(100 * (baseline - reduced.compressed_chars) / baseline)
 
 
 def test_reduction_can_be_negative_when_formatting_expands_the_trace() -> None:
@@ -429,4 +429,4 @@ def test_reduction_can_be_negative_when_formatting_expands_the_trace() -> None:
     expanded = replace(preview, readable_chars=preview.full_json_chars * 2,
                        compressed_chars=preview.full_json_chars * 3)
     assert expanded.readable_reduction_percent == -100
-    assert expanded.jev_reduction_percent == -200
+    assert expanded.decision_reduction_percent == -200

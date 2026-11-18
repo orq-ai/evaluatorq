@@ -14,11 +14,12 @@ from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
+from evaluatorq.common.model_catalogue import cost_of
 from evaluatorq.common.model_input import (
     CHARS_PER_ESTIMATED_TOKEN,
-    JEV_STATE_ALL_QUESTIONS_CHARS,
+    DECISION_STATE_ALL_QUESTIONS_CHARS,
     effective_trace_input_chars,
-    is_jev_model,
+    uses_decision_state,
 )
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.contracts import ManifestStatus
@@ -183,10 +184,11 @@ def stage_seconds(directory: Path) -> Mapping[str, StageTiming]:
 
 
 def _price(info: ModelInfo | None, tokens_in: int, tokens_out: int) -> float | None:
-    """USD for one trace at the model's per-1k prices; None when a needed price is missing."""
-    if info is None or info.input_cost_per_1k is None or info.output_cost_per_1k is None:
+    """USD for one trace via `cost_of` (so the extended-context tier applies); None when it cannot be priced."""
+    if info is None:
         return None
-    return (info.input_cost_per_1k * tokens_in + info.output_cost_per_1k * tokens_out) / 1000
+    cost = cost_of(info, tokens_in, tokens_out)
+    return None if cost is None else cost.input + cost.output
 
 
 def estimate_run(
@@ -225,7 +227,9 @@ def estimate_run(
     later_low = 0 if query else high
 
     label_chars = (
-        min(trace_input_chars, JEV_STATE_ALL_QUESTIONS_CHARS) if is_jev_model(models.classifier) else trace_input_chars
+        min(trace_input_chars, DECISION_STATE_ALL_QUESTIONS_CHARS)
+        if uses_decision_state(models.classifier)
+        else trace_input_chars
     )
     label_in = label_chars // CHARS_PER_TOKEN
     label_answer = LABEL_ANSWER_TOKENS
