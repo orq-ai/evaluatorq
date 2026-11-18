@@ -179,8 +179,8 @@ async def test_generation_instructions_reach_both_prompts(captured):
         generation_client=typing.cast(typing.Any, object()),
         generation_instructions="all replying in German",
     )
-    # Two prompts (one persona, one scenario); the steer must be in each.
-    assert len(captured["prompts"]) == 2
+    # Two distinct prompts (one persona, one scenario; a re-ask repeats one); the steer must be in each.
+    assert len(set(captured["prompts"])) == 2
     assert all("all replying in German" in p for p in captured["prompts"])
 
 

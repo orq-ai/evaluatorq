@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
+import functools
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -18,15 +18,11 @@ from evaluatorq.simulation.contracts import (
     Scenario,
     StartingEmotion,
 )
-from evaluatorq.simulation.generators._placeholders import is_stub_item, too_few
+from evaluatorq.simulation.generators._placeholders import generate_real_items
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from openai import AsyncOpenAI
-
-    from evaluatorq.common.structured_output import StructuredResult
 
 logger = logging.getLogger(__name__)
 
@@ -194,42 +190,6 @@ def _parse_scenarios(scenario_dicts: list[dict[str, Any]]) -> list[Scenario]:
     return scenarios
 
 
-def _real_scenarios(scenarios: list[Scenario]) -> list[Scenario]:
-    """Drop the stub items a model can return in place of scenarios; see `_placeholders`."""
-    real = [scenario for scenario in scenarios if not is_stub_item(scenario.name, scenario.goal)]
-    if len(real) < len(scenarios):
-        logger.warning('ScenarioGenerator: dropped %d placeholder scenario(s)', len(scenarios) - len(real))
-    return real
-
-
-def _scenarios_from(result: StructuredResult[ScenarioListResponse]) -> list[Scenario]:
-    """The real scenarios in a result, before a method applies its own coverage or edge-case marking.
-
-    Taken from whichever answer holds the most: the parsed answer, the other parsed answer when ``accept=`` made
-    `generate_structured` ask twice, or the raw text of a second run that did not validate. A tie keeps the earlier
-    one in that order. With no parsed answer at all this is the salvage path the generator always had, and bad JSON
-    raises as before.
-    """
-    if result.parsed is None and result.other is None:
-        return _real_scenarios(_parse_scenarios(_parse_json_list(result.raw or '[]')))
-    candidates = [_real_scenarios(answer.scenarios) for answer in (result.parsed, result.other) if answer is not None]
-    if result.raw:
-        with contextlib.suppress(json.JSONDecodeError):
-            candidates.append(_real_scenarios(_parse_scenarios(_parse_json_list(result.raw))))
-    return max(candidates, key=len)
-
-
-def _accepts_scenarios(expected: int) -> Callable[[ScenarioListResponse], bool]:
-    """The content check for `generate_structured`: enough scenarios for ``expected`` asked, and no stub among them."""
-
-    def accept(response: ScenarioListResponse) -> bool:
-        scenarios = response.scenarios
-        stubs = any(is_stub_item(scenario.name, scenario.goal) for scenario in scenarios)
-        return not stubs and not too_few(len(scenarios), expected)
-
-    return accept
-
-
 class ScenarioGenerator(UsageTracking):
     """Generates scenarios from agent descriptions."""
 
@@ -349,19 +309,7 @@ Return ONLY a JSON array, no other text."""
                     {'role': 'user', 'content': user_prompt},
                 ]
 
-                result = await generate_structured(
-                    self._client,
-                    model=self._model,
-                    messages=messages,
-                    response_format=ScenarioListResponse,
-                    max_tokens=_scenario_token_budget(num_scenarios),
-                    label='ScenarioGenerator.generate',
-                    api='responses',
-                    config=self._config,
-                    accept=_accepts_scenarios(num_scenarios),
-                )
-                self._accumulate(result.usage)
-                scenarios = _scenarios_from(result)
+                scenarios = await self._generate(messages, expected=num_scenarios, label='ScenarioGenerator.generate')
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(
@@ -424,19 +372,9 @@ Return ONLY a JSON array, no other text."""
                     'orq.simulation.model': self._model,
                 },
             ):
-                result = await generate_structured(
-                    self._client,
-                    model=self._model,
-                    messages=messages,
-                    response_format=ScenarioListResponse,
-                    max_tokens=_scenario_token_budget(num_scenarios),
-                    label='ScenarioGenerator.generate_with_coverage',
-                    api='responses',
-                    config=self._config,
-                    accept=_accepts_scenarios(num_scenarios),
+                scenarios = await self._generate(
+                    messages, expected=num_scenarios, label='ScenarioGenerator.generate_with_coverage'
                 )
-                self._accumulate(result.usage)
-                scenarios = _scenarios_from(result)
 
                 # Validate coverage
                 scenarios = self._ensure_emotion_coverage(scenarios, [StartingEmotion(e) for e in emotions])
@@ -497,19 +435,10 @@ Return ONLY a JSON array, no other text."""
                     'orq.simulation.model': self._model,
                 },
             ):
-                result = await generate_structured(
-                    self._client,
-                    model=self._model,
-                    messages=messages,
-                    response_format=ScenarioListResponse,
-                    max_tokens=_scenario_token_budget(num_edge_cases),
-                    label='ScenarioGenerator.generate_edge_cases',
-                    api='responses',
-                    config=self._config,
-                    accept=_accepts_scenarios(num_edge_cases),
+                scenarios = await self._generate(
+                    messages, expected=num_edge_cases, label='ScenarioGenerator.generate_edge_cases'
                 )
-                self._accumulate(result.usage)
-                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in _scenarios_from(result)]
+                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in scenarios]
 
                 if len(scenarios) < num_edge_cases:
                     logger.warning(
@@ -559,19 +488,10 @@ Return ONLY a JSON array, no other text."""
                     'orq.simulation.model': self._model,
                 },
             ):
-                result = await generate_structured(
-                    self._client,
-                    model=self._model,
-                    messages=messages,
-                    response_format=ScenarioListResponse,
-                    max_tokens=_scenario_token_budget(num_scenarios),
-                    label='ScenarioGenerator.generate_boundary_scenarios',
-                    api='responses',
-                    config=self._config,
-                    accept=_accepts_scenarios(num_scenarios),
+                scenarios = await self._generate(
+                    messages, expected=num_scenarios, label='ScenarioGenerator.generate_boundary_scenarios'
                 )
-                self._accumulate(result.usage)
-                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in _scenarios_from(result)]
+                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in scenarios]
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(
@@ -634,19 +554,10 @@ Return ONLY a JSON array, no other text."""
                     'orq.simulation.model': self._model,
                 },
             ):
-                result = await generate_structured(
-                    self._client,
-                    model=self._model,
-                    messages=messages,
-                    response_format=ScenarioListResponse,
-                    max_tokens=_scenario_token_budget(num_scenarios),
-                    label='ScenarioGenerator.generate_security_scenarios',
-                    api='responses',
-                    config=self._config,
-                    accept=_accepts_scenarios(num_scenarios),
+                scenarios = await self._generate(
+                    messages, expected=num_scenarios, label='ScenarioGenerator.generate_security_scenarios'
                 )
-                self._accumulate(result.usage)
-                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in _scenarios_from(result)]
+                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in scenarios]
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(
@@ -662,6 +573,27 @@ Return ONLY a JSON array, no other text."""
     # ---------------------------------------------------------------------------
     # Private helpers
     # ---------------------------------------------------------------------------
+
+    async def _generate(self, messages: list[dict[str, Any]], *, expected: int, label: str) -> list[Scenario]:
+        return await generate_real_items(
+            functools.partial(
+                generate_structured,
+                self._client,
+                model=self._model,
+                messages=messages,
+                response_format=ScenarioListResponse,
+                max_tokens=_scenario_token_budget(expected),
+                label=label,
+                api='responses',
+                config=self._config,
+            ),
+            items_of=lambda answer: answer.scenarios,
+            texts_of=lambda scenario: (scenario.name, scenario.goal),
+            salvage=lambda raw: _parse_scenarios(_parse_json_list(raw)),
+            expected=expected,
+            label=label,
+            record_usage=self._accumulate,
+        )
 
     @staticmethod
     def _ensure_emotion_coverage(scenarios: list[Scenario], required_emotions: list[StartingEmotion]) -> list[Scenario]:

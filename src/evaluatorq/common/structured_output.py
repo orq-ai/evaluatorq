@@ -37,13 +37,8 @@ drop-and-retry-once). ``with_retry`` around each rung is the only retry layer;
 the client's SDK budget is disarmed once at the top of ``generate_structured``.
 Only the fallback policy lives here.
 
-``accept=`` adds one thing on top of the ladder: when a parsed answer fails the
-caller's content check, the ladder runs once more from rung 3. That is a single
-re-ask on content, not a retry of a failed request, so it does not multiply with
-``with_retry``.
-
-One call can bill up to five provider requests, seven with ``accept=``, so
-`StructuredResult.usage` is the **sum** over every rung that reached the provider, and a call that raises
+One call can bill up to five provider requests, so `StructuredResult.usage` is
+the **sum** over every rung that reached the provider, and a call that raises
 carries the same total on the exception (`StructuredGenerationError`,
 `usage_from_exception`). A rung whose usage block cannot be read counts as one
 unpriced call after a warning, never as zero.
@@ -75,7 +70,7 @@ from evaluatorq.contracts import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
     from opentelemetry.trace import Span
 
@@ -99,17 +94,11 @@ class StructuredResult(Generic[T]):
     ``raw`` is then the last non-empty text seen, for a caller with its own
     salvage. ``usage`` is the sum over every rung that reached the provider;
     ``None`` means no rung ever reached one.
-
-    ``other`` is set only when ``accept=`` made the call ask twice and both runs
-    parsed: it is the answer that is not in ``parsed``. A caller that can measure
-    its answers (count the real items, say) compares the two; one that cannot
-    ignores it.
     """
 
     parsed: T | None
     raw: str
     usage: TokenUsage | None = None
-    other: T | None = None
 
 
 class StructuredGenerationError(RuntimeError):
@@ -870,21 +859,12 @@ async def generate_structured(
     extra_body: dict[str, Any] | Unset | None = UNSET,
     config: LLMCallConfig | None = None,
     max_attempts: int = MAX_RETRY_ATTEMPTS,
-    accept: Callable[[T], bool] | None = None,
-    _skip_schema_rungs: bool = False,
+    skip_schema_rungs: bool = False,
 ) -> StructuredResult[T]:
     """Generate structured output, degrading through the rungs in the module docstring.
 
-    ``accept`` is a check on the *content* of a parsed answer, for a caller whose schema a model can satisfy with
-    an empty stub. When it returns ``False`` the ladder is run once more, starting at the forced tool call and
-    skipping every rung that sends the JSON schema as a response format: some models (Claude Sonnet 5.5 and Opus 5.5
-    at the time of writing) often answer a JSON-schema format with one schema-valid placeholder, and asking the same
-    way again mostly returns another. ``parsed`` is the second answer when ``accept`` passes it; otherwise, and when
-    the second run raises, it is the first. The answer not chosen comes back in `StructuredResult.other`, because
-    accepted does not mean better: a caller that can measure its answers compares the two, and then never has less
-    than without ``accept``. ``raw`` is the second run's text when it produced any that did not validate, for the
-    caller's own salvage. The returned usage covers both runs. It is one re-ask on content, outside the
-    per-rung ``with_retry``: it adds at most the tool and ``json_object`` rungs to the worst case below.
+    ``skip_schema_rungs`` starts the ladder at the forced tool call, skipping every rung that sends the JSON schema as
+    a response format, for a caller re-asking after a schema-valid placeholder answer.
 
     ``api`` selects the endpoint tried first; ``responses`` puts a Responses call
     in front of the chat ladder and falls through to it. On the ``responses``
@@ -933,47 +913,6 @@ async def generate_structured(
     provider or endpoint. A config carrying a different ``model`` is logged
     rather than obeyed; the caller resolves ``client`` before calling.
     """
-    if accept is not None:
-        request: dict[str, Any] = {
-            'model': model,
-            'messages': messages,
-            'response_format': response_format,
-            'max_tokens': max_tokens,
-            'label': label,
-            'temperature': temperature,
-            'extra_kwargs': extra_kwargs,
-            'reasoning_effort': reasoning_effort,
-            'timeout_s': timeout_s,
-            'extra_body': extra_body,
-            'config': config,
-            'max_attempts': max_attempts,
-        }
-        first: StructuredResult[T] = await generate_structured(client, api=api, **request)
-        if first.parsed is None or accept(first.parsed):
-            return first
-        logger.warning(
-            '%s: the answer parsed as %s but its content was not accepted; asking once more through a tool call',
-            label,
-            response_format.__name__,
-        )
-        try:
-            second: StructuredResult[T] = await generate_structured(client, _skip_schema_rungs=True, **request)
-        except Exception as exc:  # noqa: BLE001 - whatever the optional second run raises, the first answer stands
-            # Keep the first answer, and keep what the failed second run billed.
-            logger.warning('%s: the second run failed (%s); keeping the first answer', label, exc)
-            return StructuredResult(
-                first.parsed, first.raw, sum_structured_usage([first.usage, usage_from_exception(exc)])
-            )
-        usage = sum_structured_usage([first.usage, second.usage])
-        if second.parsed is not None and accept(second.parsed):
-            # Accepted is not the same as better: the first answer may hold more of what the caller wanted (four
-            # real items and a stub against three real items). It goes back in ``other`` so the caller can compare.
-            return StructuredResult(second.parsed, second.raw, usage, other=first.parsed)
-        # Neither run was accepted: the first answer stands, and the second goes back in ``other``. When the second
-        # run answered in a shape that did not validate (a bare array for a wrapper object, say), its text rides
-        # along in ``raw`` for the caller's own salvage.
-        return StructuredResult(first.parsed, second.raw or first.raw, usage, other=second.parsed)
-
     temperature, extra_kwargs, extra_body, reasoning_effort, timeout_s = _fold_config(
         config=config,
         model=model,
@@ -994,7 +933,7 @@ async def generate_structured(
     # into extra_kwargs here would trip the reserved-key guard on every call.
     usages: list[TokenUsage | None] = []
     try:
-        if api == 'responses' and not _skip_schema_rungs:
+        if api == 'responses' and not skip_schema_rungs:
             via_responses = await _generate_structured_via_responses(
                 client,
                 model=model,
@@ -1039,7 +978,7 @@ async def generate_structured(
             )
             last_raw = ''
             legs = (_leg_strict_parse, _leg_json_schema, _leg_forced_tool, _leg_json_object)
-            for leg in legs[2:] if _skip_schema_rungs else legs:
+            for leg in legs[2:] if skip_schema_rungs else legs:
                 result = await leg(call, response_format=response_format)
                 usages.append(result.usage)
                 last_raw = result.raw or last_raw

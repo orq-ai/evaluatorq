@@ -1158,8 +1158,7 @@ async def test_a_client_without_an_integer_retry_budget_is_left_alone() -> None:
     client.with_options.assert_not_called()
     client.chat.completions.parse.assert_awaited_once()
 
-
-# --- accept=: one re-ask on content, starting at the tool call ---
+# --- skip_schema_rungs: start the ladder at the forced tool call ---
 
 
 def _usage(tokens: int) -> Any:
@@ -1168,19 +1167,15 @@ def _usage(tokens: int) -> Any:
     return TokenUsage(input_tokens=tokens, output_tokens=1, total_tokens=tokens + 1, calls=1)
 
 
-def _not_a_stub(response: SampleResponse) -> bool:
-    return not response.value.startswith('stub')
-
-
 @pytest.mark.asyncio
-async def test_a_refused_answer_is_asked_again_through_the_tool_call_and_skips_the_schema_rungs() -> None:
-    client = _responses_client(_responses_result(SampleResponse(value='stub')))
+async def test_skip_schema_rungs_goes_straight_to_the_forced_tool_call() -> None:
+    client = _responses_client(_responses_result(SampleResponse(value='from responses')))
     client.chat.completions.parse = AsyncMock(return_value=_tool_completion('{"value": "from the tool"}'))
 
-    parsed, _ = await _generate_via_responses(client, accept=_not_a_stub)
+    parsed, _ = await _generate_via_responses(client, skip_schema_rungs=True)
 
     assert parsed.value == 'from the tool'
-    assert client.responses.create.await_count == 1
+    client.responses.create.assert_not_awaited()
     # One chat request, and it is the forced tool call: no strict parse before it, no json_schema or json_object.
     assert client.chat.completions.parse.await_count == 1
     tool_call = client.chat.completions.parse.await_args
@@ -1190,18 +1185,7 @@ async def test_a_refused_answer_is_asked_again_through_the_tool_call_and_skips_t
 
 
 @pytest.mark.asyncio
-async def test_an_accepted_first_answer_is_returned_without_a_second_request() -> None:
-    client = _responses_client(_responses_result(SampleResponse(value='first')))
-
-    parsed, _ = await _generate_via_responses(client, accept=_not_a_stub)
-
-    assert parsed.value == 'first'
-    client.chat.completions.parse.assert_not_awaited()
-    client.chat.completions.create.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_without_accept_a_stub_is_returned_as_before() -> None:
+async def test_without_skip_schema_rungs_the_responses_answer_is_returned() -> None:
     client = _responses_client(_responses_result(SampleResponse(value='stub')))
 
     parsed, _ = await _generate_via_responses(client)
@@ -1211,55 +1195,12 @@ async def test_without_accept_a_stub_is_returned_as_before() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('second', ['also a stub', 'nothing', 'raises'])
-async def test_when_the_second_run_is_no_better_the_first_answer_is_kept_with_both_costs(
-    monkeypatch: pytest.MonkeyPatch, second: str
-) -> None:
-    from evaluatorq.common import structured_output
-    from evaluatorq.common.structured_output import StructuredGenerationError, StructuredResult
-
-    async def responses_leg(*_args: Any, **_kwargs: Any) -> Any:
-        return StructuredResult(SampleResponse(value='stub'), '', _usage(100))
-
-    async def tool_rung(*_args: Any, **_kwargs: Any) -> Any:
-        if second == 'raises':
-            raise StructuredGenerationError('model refused to generate', usage=_usage(200))
-        return StructuredResult(SampleResponse(value='stub from the tool') if second == 'also a stub' else None, '', _usage(200))
-
-    async def json_object_rung(*_args: Any, **_kwargs: Any) -> Any:
-        return StructuredResult(None, '', _usage(50))
-
-    monkeypatch.setattr(structured_output, '_generate_structured_via_responses', responses_leg)
-    monkeypatch.setattr(structured_output, '_leg_forced_tool', tool_rung)
-    monkeypatch.setattr(structured_output, '_leg_json_object', json_object_rung)
-
-    result = await generate_structured(
-        _responses_client(_responses_result(None)),
-        model='local-model',
-        messages=[{'role': 'user', 'content': 'return json'}],
-        response_format=SampleResponse,
-        max_tokens=64,
-        label='Sample.generate',
-        api='responses',
-        accept=_not_a_stub,
-    )
-
-    assert result.parsed is not None
-    # The first answer, not the second run's equally unaccepted one, which goes back beside it.
-    assert result.parsed.value == 'stub'
-    assert (result.other.value if result.other else None) == ('stub from the tool' if second == 'also a stub' else None)
-    assert result.usage is not None
-    # 100 for the first run; 200 for the tool rung; 50 more when the tool rung parsed nothing and json_object ran.
-    assert result.usage.input_tokens == {'also a stub': 300, 'nothing': 350, 'raises': 300}[second]
-
-
-@pytest.mark.asyncio
-async def test_text_the_second_run_could_not_validate_rides_along_with_the_first_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_skip_schema_rungs_falls_through_to_json_object_and_sums_both_rungs(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.common import structured_output
     from evaluatorq.common.structured_output import StructuredResult
 
-    async def responses_leg(*_args: Any, **_kwargs: Any) -> Any:
-        return StructuredResult(SampleResponse(value='stub'), '', _usage(100))
+    async def unexpected(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError('a schema rung ran')
 
     async def tool_rung(*_args: Any, **_kwargs: Any) -> Any:
         return StructuredResult(None, '', _usage(200))
@@ -1267,7 +1208,9 @@ async def test_text_the_second_run_could_not_validate_rides_along_with_the_first
     async def json_object_rung(*_args: Any, **_kwargs: Any) -> Any:
         return StructuredResult(None, '[{"value": "a bare array"}]', _usage(50))
 
-    monkeypatch.setattr(structured_output, '_generate_structured_via_responses', responses_leg)
+    monkeypatch.setattr(structured_output, '_generate_structured_via_responses', unexpected)
+    monkeypatch.setattr(structured_output, '_leg_strict_parse', unexpected)
+    monkeypatch.setattr(structured_output, '_leg_json_schema', unexpected)
     monkeypatch.setattr(structured_output, '_leg_forced_tool', tool_rung)
     monkeypatch.setattr(structured_output, '_leg_json_object', json_object_rung)
 
@@ -1279,63 +1222,9 @@ async def test_text_the_second_run_could_not_validate_rides_along_with_the_first
         max_tokens=64,
         label='Sample.generate',
         api='responses',
-        accept=_not_a_stub,
+        skip_schema_rungs=True,
     )
 
-    assert result.parsed is not None
-    assert (result.parsed.value, result.raw, result.other) == ('stub', '[{"value": "a bare array"}]', None)
+    assert (result.parsed, result.raw) == (None, '[{"value": "a bare array"}]')
     assert result.usage is not None
-    assert result.usage.input_tokens == 350
-
-
-@pytest.mark.asyncio
-async def test_an_accepted_second_answer_carries_what_both_runs_cost(monkeypatch: pytest.MonkeyPatch) -> None:
-    from evaluatorq.common import structured_output
-    from evaluatorq.common.structured_output import StructuredResult
-
-    async def responses_leg(*_args: Any, **_kwargs: Any) -> Any:
-        return StructuredResult(SampleResponse(value='stub'), '', _usage(100))
-
-    async def tool_rung(*_args: Any, **_kwargs: Any) -> Any:
-        return StructuredResult(SampleResponse(value='real'), '', _usage(200))
-
-    monkeypatch.setattr(structured_output, '_generate_structured_via_responses', responses_leg)
-    monkeypatch.setattr(structured_output, '_leg_forced_tool', tool_rung)
-
-    result = await generate_structured(
-        _responses_client(_responses_result(None)),
-        model='local-model',
-        messages=[{'role': 'user', 'content': 'return json'}],
-        response_format=SampleResponse,
-        max_tokens=64,
-        label='Sample.generate',
-        api='responses',
-        accept=_not_a_stub,
-    )
-
-    assert result.parsed is not None
-    assert (result.parsed.value, result.usage.input_tokens if result.usage else None) == ('real', 300)
-    # Accepted is not the same as better, so the first answer comes back too for a caller that can compare.
-    assert result.other is not None
-    assert result.other.value == 'stub'
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('kind', ['refusal', 'truncation', 'invalid'])
-async def test_accept_does_not_ask_again_when_the_first_run_raises(kind: str) -> None:
-    if kind == 'refusal':
-        response = _responses_refusal('safety refusal')
-    elif kind == 'truncation':
-        response = _responses_result(None, incomplete_reason='max_output_tokens')
-    else:
-        response = _responses_result(None)
-        _set_response_output(response, '{"other": "ok"}')
-        response.stop_reason = 'stop'
-    client = _responses_client(response)
-    client.chat.completions.parse = AsyncMock(return_value=_tool_completion('{"value": "must not be used"}'))
-
-    with pytest.raises(RuntimeError):
-        await _generate_via_responses(client, accept=_not_a_stub)
-
-    client.chat.completions.parse.assert_not_awaited()
-    client.chat.completions.create.assert_not_awaited()
+    assert result.usage.input_tokens == 250
