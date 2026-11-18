@@ -169,26 +169,53 @@ def _rule_defaults(rules: str, required: set[str]) -> dict[str, str]:
     return parsed
 
 
+def _mapped_rule_names(replacements: list[str]) -> set[str]:
+    return {rule for replacement in replacements for rule in re.findall(r'\[`([^`]+)`\]\[ty-', replacement)}
+
+
 def _mapped_ty_rules(replacements: list[str], ty: dict[str, Any]) -> set[str]:
     """Return the current ty rules behind a mapping cell, expanding renamed or split rule names.
 
     ty's migration guide can lag its rule reference and keep an old rule name. ty accepts the
     old name as an alias, but configuration and default levels use the successors.
     """
-    successors: dict[str, list[str]] = ty.get('rule_successors', {})
-    named = {rule for replacement in replacements for rule in re.findall(r'\[`([^`]+)`\]\[ty-', replacement)}
+    successors: dict[str, list[str]] = ty['rule_successors']
+    named = _mapped_rule_names(replacements)
     return {current for rule in named for current in successors.get(rule, [rule])}
 
 
-def _verify_successors(rules: str, successors: dict[str, list[str]]) -> None:
-    sections = set(re.findall(r'(?m)^## `([^`]+)`$', rules))
-    for old, current in successors.items():
-        _require(old not in sections, f'{old} is a current ty rule, not a renamed one')
-        _require(
-            f'<a id="{old}"></a>' in rules or f'**Migrating from `{old}`**' in rules,
-            f'ty rule reference no longer documents the rename of {old}',
-        )
-        _require(set(current) <= sections, f'successors of {old} are not all current ty rules')
+def _rule_successors(rules: str, names: set[str]) -> dict[str, list[str]]:
+    """Derive the current ty rules behind each renamed or split rule name from ty's rule reference.
+
+    A name that is already a `## ` section is current and is left out. For any other name the
+    successors are the section it is anchored to or renamed into, the section holding its
+    "Migrating from" note, and every current rule linked from that note. A name the reference does
+    not explain raises, because trusting it as current would hide a rename.
+    """
+    parts = re.split(r'(?m)^## `([^`]+)`\n', rules)
+    sections = {parts[i]: parts[i + 1] for i in range(1, len(parts), 2)}
+    anchored: dict[str, set[str]] = {}
+    for i in range(1, len(parts), 2):
+        for old in re.findall(r'<a id="([^"]+)"></a>\s*$', parts[i - 1]):
+            anchored.setdefault(old, set()).add(parts[i])
+    derived: dict[str, list[str]] = {}
+    unexplained: list[str] = []
+    for old in sorted(names - sections.keys()):
+        successors = set(anchored.get(old, ()))
+        for section, body in sections.items():
+            if re.search(rf'Renamed from \[`{re.escape(old)}`\]', body):
+                successors.add(section)
+            note = re.search(rf'\*\*Migrating from `{re.escape(old)}`\*\*\n(.*?)(?=\n\*\*|\Z)', body, re.S)
+            if note:
+                successors.add(section)
+                successors.update(link for link in re.findall(r'\[`([^`]+)`\]\(#', note[1]) if link in sections)
+        successors.discard(old)
+        if successors:
+            derived[old] = sorted(successors)
+        else:
+            unexplained.append(old)
+    _require(not unexplained, f'ty rule reference does not explain {", ".join(unexplained)}; it is not a current rule')
+    return derived
 
 
 def verify_upstream(baseline: dict[str, Any]) -> None:
@@ -208,7 +235,8 @@ def verify_upstream(baseline: dict[str, Any]) -> None:
     _require(active == set(based['active_diagnostics']), 'BasedPyright active-rule snapshot drifted')
     cells = _mapping_cells(mapping, active)
     _require(cells == baseline['mapping_cells'], 'ty migration mapping snapshot drifted')
-    _verify_successors(rules, ty.get('rule_successors', {}))
+    names = {rule for replacements in cells.values() for rule in _mapped_rule_names(replacements)}
+    _require(_rule_successors(rules, names) == ty['rule_successors'], 'ty rule successor snapshot drifted')
     required = {rule for replacements in cells.values() for rule in _mapped_ty_rules(replacements, ty)}
     _require(_rule_defaults(rules, required) == ty['rule_defaults'], 'ty default-level snapshot drifted')
 
