@@ -174,6 +174,27 @@ def test_a_red_team_role_is_checked_against_its_own_client_before_the_shared_one
     assert 'redteam.evaluator' not in str(info.value)
 
 
+def test_the_evaluator_model_shorthand_is_checked_as_the_first_judge() -> None:
+    from evaluatorq.redteam.contracts import EvaluatorConfig, LLMConfig
+
+    # `EvaluatorConfig(model=...)` is folded into `judges[0]`, which is what the run calls and what the check reads.
+    config = LLMConfig(evaluator=EvaluatorConfig(model='openai/some-judge', client=cast('Any', RawAnthropic())))
+    with pytest.raises(ModelClientMismatchError, match=r'judges\[0\] \(--evaluator-model\)=openai/some-judge'):
+        _red_team_pre_flight(config, mode='static')
+
+
+def test_a_simulation_on_a_passed_client_ignores_a_stray_anthropic_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.simulation._config import require_sim_models_served
+
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-test')
+    # The run is served by the OpenAI client that was passed in, whichever way it was passed.
+    require_sim_models_served(None, generation_client=_openai())
+    require_sim_models_served(LLMCallConfig(client=_openai()), generation_client=None)
+    # With no client passed in, the same environment is the serving side and is checked.
+    with pytest.raises(ModelClientMismatchError, match='ANTHROPIC_API_KEY is the only LLM key set'):
+        require_sim_models_served(None, generation_client=None)
+
+
 def test_a_static_red_team_run_does_not_check_the_attacker_it_never_calls() -> None:
     from evaluatorq.redteam.contracts import LLMConfig
 
