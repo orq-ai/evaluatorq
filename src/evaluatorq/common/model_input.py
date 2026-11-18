@@ -19,9 +19,13 @@ from evaluatorq.common.redact import scrub_known_secrets
 CHARS_PER_ESTIMATED_TOKEN = 4
 # The decision-state ceilings are the input limits of the ``typesafe/jev`` models, the only models that take a
 # decision state today (`uses_decision_state`). A second decision model needs its own limits, not these.
-DECISION_STATE_CHARS = 28_000 * CHARS_PER_ESTIMATED_TOKEN
-DECISION_STATE_QUESTION_CHARS = 32_000 * CHARS_PER_ESTIMATED_TOKEN
-DECISION_STATE_ALL_QUESTIONS_CHARS = 64_000 * CHARS_PER_ESTIMATED_TOKEN
+# A decision state is JSON with tool output, which tokenizes denser than prose. On 98 Claude Code sessions the
+# decider-4b (Qwen3.5) tokenizer measured 3.1 characters per token pooled, 3.0 median near the state cap and 2.75 at
+# the lowest (RES-1882). 3 is a typical figure, not a bound: at 2.75 a full state is about 30,500 tokens.
+DECISION_STATE_CHARS_PER_TOKEN = 3
+DECISION_STATE_CHARS = 28_000 * DECISION_STATE_CHARS_PER_TOKEN
+DECISION_STATE_QUESTION_CHARS = 32_000 * DECISION_STATE_CHARS_PER_TOKEN
+DECISION_STATE_ALL_QUESTIONS_CHARS = 64_000 * DECISION_STATE_CHARS_PER_TOKEN
 _REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.DOTALL)
 _REASONING = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 
@@ -235,6 +239,11 @@ def serialized_question_chars(questions: Sequence[Any] | Mapping[str, Any]) -> i
 def uses_decision_state(model: str) -> bool:
     """Select only the Jev family for its structured state format."""
     return model.casefold().startswith('typesafe/jev')
+
+
+def chars_per_token(model: str) -> int:
+    """Characters per estimated token for `model`: denser for a decision state than for prose."""
+    return DECISION_STATE_CHARS_PER_TOKEN if uses_decision_state(model) else CHARS_PER_ESTIMATED_TOKEN
 
 
 def effective_trace_input_chars() -> int:
@@ -587,7 +596,9 @@ def decision_state_char_limit(
     longest = max((serialized_chars(question) for question in values), default=0)
     all_question_chars = serialized_chars(question_payloads) if values else 0
     if all_question_chars > DECISION_STATE_ALL_QUESTIONS_CHARS:
-        raise ValueError('classification questions alone exceed the 256000-character limit')
+        raise ValueError(
+            f'classification questions alone exceed the {DECISION_STATE_ALL_QUESTIONS_CHARS}-character limit'
+        )
     limit = min(
         DECISION_STATE_CHARS,
         global_char_cap - all_question_chars,

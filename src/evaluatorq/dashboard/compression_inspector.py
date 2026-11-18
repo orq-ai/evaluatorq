@@ -16,6 +16,11 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import Response
 from starlette.routing import Route
 
+from evaluatorq.common.model_input import (
+    DECISION_STATE_ALL_QUESTIONS_CHARS,
+    DECISION_STATE_CHARS,
+    DECISION_STATE_QUESTION_CHARS,
+)
 from evaluatorq.dashboard.compression_inspector_data import (
     ORIGINAL_VIEW_LABELS,
     CompressionKnobs,
@@ -279,8 +284,8 @@ def _body_html(
         '<h3 id="compression-limits-title">Character limits</h3>'
         f'<p>Global cap: <strong>{effective_settings().trace_input_chars:,}</strong> '
         'characters (500,000 by default). '
-        'The decision state is capped at 112,000 characters; question-aware ceilings are '
-        '128,000 or 256,000 characters. '
+        f'The decision state is capped at {DECISION_STATE_CHARS:,} characters; question-aware ceilings are '
+        f'{DECISION_STATE_QUESTION_CHARS:,} or {DECISION_STATE_ALL_QUESTIONS_CHARS:,} characters. '
         'This preview includes no question, so its state count is not fitted to a question payload.</p>'
         '</section>'
         f'{preview_html}'

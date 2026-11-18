@@ -158,3 +158,8 @@ def test_plain_text_projection_fits_state_and_selected_questions_under_global_ca
 
 def test_token_estimate_uses_four_characters_per_estimated_token() -> None:
     assert estimate_tokens('a' * 4_001) == 1_001
+
+
+def test_token_estimate_uses_three_characters_per_token_for_jev() -> None:
+    assert estimate_tokens('a' * 3_001, model='typesafe/jev-latest') == 1_001
+    assert estimate_tokens('a' * 3_001, model='openai/gpt-5.6-luna') == 751
