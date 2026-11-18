@@ -189,6 +189,58 @@ async def test_a_streamed_dataset_stops_on_the_first_configuration_error_and_rai
     assert max(started) < 4, 'the second batch never started'
 
 
+@pytest.mark.asyncio
+async def test_a_streamed_run_logs_the_other_errors_it_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import asyncio
+    import importlib
+
+    from evaluatorq.fetch_data import DataPointBatch
+    from evaluatorq.types import DatasetIdInput
+
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+
+    async def one_batch_then_a_fetch_failure(*_args: object, **_kwargs: object) -> Any:
+        yield DataPointBatch(datapoints=[DataPoint(inputs={'row': i}) for i in range(3)], has_more=True, batch_number=1)
+        await asyncio.sleep(0.05)
+        raise ConnectionError('dataset page 2 unavailable')
+
+    async def processing(_data: object, row: int, *_args: object, **_kwargs: object) -> list[object]:
+        if row == 0:
+            raise RuntimeError('row 0 broke for another reason')
+        if row == 1:
+            await asyncio.sleep(0.01)
+            raise WRONG_MODEL
+        await asyncio.sleep(0.3)
+        return []
+
+    async def job(_data: DataPoint, _row: int) -> dict[str, Any]:
+        return {'name': 'job', 'output': 'output'}
+
+    monkeypatch.setattr(evaluatorq_module, 'setup_orq_client', lambda _api_key: object())
+    monkeypatch.setattr(evaluatorq_module, 'fetch_dataset_batches', one_batch_then_a_fetch_failure)
+    monkeypatch.setattr(evaluatorq_module, 'process_data_point', processing)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    with caplog.at_level('WARNING'), pytest.raises(LLMConfigurationError) as error:
+        await evaluatorq_module.evaluatorq(
+            'streaming-discarded-errors',
+            data=DatasetIdInput(dataset_id='dataset'),
+            jobs=[job],
+            print_results=False,
+            _send_results=False,
+        )
+
+    assert error.value is WRONG_MODEL
+    discarded = [record.getMessage() for record in caplog.records if 'Discarding error while a configuration error' in record.getMessage()]
+    # The other row's error and the fetch failure are each logged once; the cancelled row is ours and is not.
+    assert sorted(discarded) == [
+        'Discarding error while a configuration error stops the run: ConnectionError: dataset page 2 unavailable',
+        'Discarding error while a configuration error stops the run: RuntimeError: row 0 broke for another reason',
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Jury
 # ---------------------------------------------------------------------------

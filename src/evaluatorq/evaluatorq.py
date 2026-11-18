@@ -552,6 +552,16 @@ async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
             experiment_url_out.append(upload_response.experiment_url)
 
 
+def _log_errors_a_configuration_error_hides(errors: Sequence[BaseException | None], stopping: BaseException) -> None:
+    """Log each error from the run that will not be raised because ``stopping`` is; our own cancellations say nothing."""
+    for error in errors:
+        if error is None or error is stopping or isinstance(error, asyncio.CancelledError):
+            continue
+        logger.warning(
+            'Discarding error while a configuration error stops the run: {}: {}', type(error).__name__, error
+        )
+
+
 def _cancel_rest_on_configuration_error(
     tasks: Sequence[asyncio.Task[Any]], errors: list[LLMConfigurationError]
 ) -> Callable[[asyncio.Task[Any]], None]:
@@ -690,7 +700,11 @@ async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResul
             )
         raise fetch_error
     if configuration_errors:
-        raise configuration_errors[0]
+        # The run stops on the configuration error. Whatever else went wrong in the same run is not raised, so it is
+        # logged here; the cancellations are ours and say nothing.
+        stopping = configuration_errors[0]
+        _log_errors_a_configuration_error_hides([fetch_error, *task_errors], stopping)
+        raise stopping
 
     errors = ([fetch_error] if fetch_error is not None else []) + task_errors
     if errors:
