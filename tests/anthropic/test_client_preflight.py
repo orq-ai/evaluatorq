@@ -156,7 +156,7 @@ def test_a_default_red_team_run_with_an_anthropic_client_stops_before_any_call()
     assert target_client.messages.calls == [], 'the target was never called'
 
 
-def test_a_red_team_role_is_checked_against_its_own_client_before_the_shared_one() -> None:
+def test_a_red_team_role_is_checked_against_the_client_it_runs_on() -> None:
     from evaluatorq.redteam.contracts import EvaluatorConfig, LLMConfig
 
     # The evaluator has its own OpenAI client, so only the attacker runs on the injected Anthropic one.
@@ -166,12 +166,13 @@ def test_a_red_team_role_is_checked_against_its_own_client_before_the_shared_one
     assert '(redteam.attacker)=openai/' in str(info.value)
     assert 'redteam.evaluator' not in str(info.value)
 
-    # The reverse: an Anthropic client on one role only, with the shared client an OpenAI one.
-    config = LLMConfig(attacker=LLMCallConfig(client=cast('Any', RawAnthropic())))
+    # The reverse: the evaluator has its own Anthropic client and the shared one is an OpenAI client. The evaluator
+    # runs on its own, so its judges are the ones refused; the attacker runs on the shared client and is fine.
+    config = LLMConfig(evaluator=EvaluatorConfig(client=cast('Any', RawAnthropic())))
     with pytest.raises(ModelClientMismatchError) as info:
         _red_team_pre_flight(config, llm_client=_openai())
-    assert '(redteam.attacker)=openai/' in str(info.value)
-    assert 'redteam.evaluator' not in str(info.value)
+    assert '(redteam.evaluator)=openai/' in str(info.value)
+    assert 'redteam.attacker' not in str(info.value)
 
 
 def test_the_evaluator_model_shorthand_is_checked_as_the_first_judge() -> None:
@@ -381,3 +382,59 @@ async def test_insights_left_to_an_anthropic_only_environment_stops_the_same_way
 
     with pytest.raises(ModelClientMismatchError, match='ANTHROPIC_API_KEY is the only LLM key set'):
         await pipeline.insights(InsightsPopulation(), dimensions=(), labels=(), runs_dir=tmp_path / 'runs')
+
+
+# --- the pre-flight and the run pick each role's client in the same order ---
+
+
+@pytest.mark.parametrize(
+    ('role', 'expected'),
+    # The attacker takes the run-wide client first; the evaluator takes its own first.
+    [('attacker', 'run-wide'), ('evaluator', 'own')],
+)
+def test_each_role_runs_on_the_client_the_run_itself_picks(role: str, expected: str) -> None:
+    from evaluatorq.redteam.contracts import EvaluatorConfig, LLMConfig
+    from evaluatorq.redteam.runner import _resolve_attacker_llm_client, passed_in_client
+
+    own, run_wide = _openai(), _openai()
+    config = LLMConfig(attacker=LLMCallConfig(client=own), evaluator=EvaluatorConfig(client=own))
+    clients = {'own': own, 'run-wide': run_wide}
+
+    assert passed_in_client(role, config, run_wide) is clients[expected]
+    # With only one of the two set, that one is used, whichever it is.
+    assert passed_in_client(role, config, None) is own
+    assert passed_in_client(role, LLMConfig(), run_wide) is run_wide
+    assert passed_in_client(role, LLMConfig(), None) is None
+    assert passed_in_client(role, None, run_wide) is run_wide
+    # The run's own resolver agrees with it.
+    assert _resolve_attacker_llm_client(run_wide, config, create_if_missing=False) is passed_in_client('attacker', config, run_wide)
+
+
+def test_the_attacker_is_checked_against_the_run_wide_client_when_both_are_set() -> None:
+    from evaluatorq.redteam.contracts import LLMConfig
+
+    # The run sends the attack model to the run-wide client, so that is the one that must serve it.
+    on_openai_role_client = LLMConfig(attacker=LLMCallConfig(model='openai/gpt-6-sol', client=_openai()))
+    with pytest.raises(ModelClientMismatchError, match='openai/gpt-6-sol'):
+        _red_team_pre_flight(on_openai_role_client, llm_client=RawAnthropic())
+
+    # The other way round the run works, so the check must pass: the Anthropic role client is never used.
+    on_anthropic_role_client = LLMConfig(
+        attacker=LLMCallConfig(model='openai/gpt-6-sol', client=cast('Any', RawAnthropic()))
+    )
+    _red_team_pre_flight(on_anthropic_role_client, llm_client=_openai(), mode='dynamic')
+
+
+def test_the_evaluator_is_checked_against_its_own_client_when_both_are_set() -> None:
+    from evaluatorq.redteam.contracts import EvaluatorConfig, LLMConfig
+
+    claude_attacker = LLMCallConfig(model='claude-sonnet-5-5')
+    own_openai = LLMConfig(attacker=claude_attacker, evaluator=EvaluatorConfig(model='openai/some-judge', client=_openai()))
+    _red_team_pre_flight(own_openai, llm_client=RawAnthropic())
+
+    own_anthropic = LLMConfig(
+        attacker=LLMCallConfig(model='openai/gpt-6-sol'),
+        evaluator=EvaluatorConfig(model='openai/some-judge', client=cast('Any', RawAnthropic())),
+    )
+    with pytest.raises(ModelClientMismatchError, match='openai/some-judge'):
+        _red_team_pre_flight(own_anthropic, llm_client=_openai())

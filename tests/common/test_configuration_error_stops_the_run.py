@@ -116,6 +116,79 @@ async def test_a_whole_evaluation_stops_on_a_configuration_error_and_cancels_the
     assert len(started) < 6, 'the rows still waiting never started'
 
 
+@pytest.mark.asyncio
+async def test_a_datapoint_that_cannot_be_resolved_for_a_configuration_error_ends_the_run() -> None:
+    from evaluatorq import evaluatorq
+
+    async def unresolvable(error: BaseException) -> DataPoint:
+        raise error
+
+    async def job_fn(data: DataPoint, row: int) -> dict[str, Any]:
+        return {'name': 'job', 'output': 'ok'}
+
+    with pytest.raises(ModelClientMismatchError):
+        await evaluatorq('unresolvable-row', data=[unresolvable(WRONG_MODEL)], jobs=[job_fn], print_results=False)
+
+    # Any other resolution failure stays on its row.
+    results = await evaluatorq(
+        'unresolvable-row', data=[unresolvable(RuntimeError('row source down'))], jobs=[job_fn], print_results=False
+    )
+    assert [str(result.error) for result in results] == ['row source down']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failing_rows', [{0}, {0, 1, 2}])
+async def test_a_streamed_dataset_stops_on_the_first_configuration_error_and_raises_it_unwrapped(
+    monkeypatch: pytest.MonkeyPatch, failing_rows: set[int]
+) -> None:
+    import asyncio
+    import importlib
+
+    from evaluatorq.fetch_data import DataPointBatch
+    from evaluatorq.types import DatasetIdInput
+
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    started: list[int] = []
+    finished: list[int] = []
+
+    async def two_batches(*_args: object, **_kwargs: object) -> Any:
+        for batch in range(2):
+            yield DataPointBatch(
+                datapoints=[DataPoint(inputs={'row': batch * 4 + i}) for i in range(4)], has_more=batch == 0, batch_number=batch + 1
+            )
+            await asyncio.sleep(0.05)
+
+    async def processing(_data: object, row: int, *_args: object, **_kwargs: object) -> list[object]:
+        started.append(row)
+        if row in failing_rows:
+            raise WRONG_MODEL
+        await asyncio.sleep(0.3)
+        finished.append(row)
+        return []
+
+    async def job(_data: DataPoint, _row: int) -> dict[str, Any]:
+        return {'name': 'job', 'output': 'output'}
+
+    monkeypatch.setattr(evaluatorq_module, 'setup_orq_client', lambda _api_key: object())
+    monkeypatch.setattr(evaluatorq_module, 'fetch_dataset_batches', two_batches)
+    monkeypatch.setattr(evaluatorq_module, 'process_data_point', processing)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    with pytest.raises(LLMConfigurationError) as error:
+        await evaluatorq_module.evaluatorq(
+            'streaming-configuration-error',
+            data=DatasetIdInput(dataset_id='dataset'),
+            jobs=[job],
+            print_results=False,
+            _send_results=False,
+        )
+
+    # The error itself, even when several rows raised it: a caller catching LLMConfigurationError sees it.
+    assert error.value is WRONG_MODEL
+    assert finished == [], 'rows in flight were cancelled'
+    assert max(started) < 4, 'the second batch never started'
+
+
 # ---------------------------------------------------------------------------
 # Jury
 # ---------------------------------------------------------------------------
@@ -232,6 +305,34 @@ async def test_a_batch_that_hits_a_configuration_error_raises_and_any_other_erro
 
     results = await _runner(RuntimeError('judge down')).run_batch(datapoints, max_turns=1)
     assert [r.terminated_by for r in results] == [TerminatedBy.error] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_batch_stops_at_the_first_configuration_error_and_starts_no_further_conversation() -> None:
+    from evaluatorq.simulation.contracts import Scenario, SimulationDatapoint
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+
+    started: list[str] = []
+
+    async def target(messages: Any) -> str:
+        started.append('conversation')
+        return 'fine'
+
+    runner = SimulationRunner(
+        target=target, model='test-model', user_simulator=cast('Any', _User()), judge=cast('Any', _Judge(WRONG_MODEL))
+    )
+    datapoints = [
+        SimulationDatapoint(
+            id=f'dp{i}', persona=_persona(), scenario=Scenario(name='S', goal='g'), user_system_prompt='', first_message='hi'
+        )
+        for i in range(10)
+    ]
+
+    with pytest.raises(ModelClientMismatchError):
+        await runner.run_batch(datapoints, max_turns=1, max_concurrency=2)
+
+    # Two rows hold the two slots when the first judge call fails; the other eight never get one.
+    assert 1 <= len(started) <= 2
 
 
 # ---------------------------------------------------------------------------
