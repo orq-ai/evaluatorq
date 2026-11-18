@@ -39,7 +39,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync --frozen --all-extras --all-groups
+        run: uv sync --locked --all-extras --all-groups
 
       - name: Run ${{ matrix.example }}
         env:
@@ -61,7 +61,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync --frozen --all-extras --all-groups
+        run: uv sync --locked --all-extras --all-groups
 
       # Unit tests mock the client, so they assert the shape we *believe* the
       # API wants. Only a real call proves it accepts that shape — RES-1231 was
