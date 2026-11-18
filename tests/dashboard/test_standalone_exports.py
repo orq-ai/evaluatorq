@@ -4,7 +4,6 @@ from __future__ import annotations
 import subprocess
 import sys
 from html.parser import HTMLParser
-from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner

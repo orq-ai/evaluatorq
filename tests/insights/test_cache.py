@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -255,7 +255,7 @@ def test_invalid_vectors_are_skipped_without_aborting_valid_writes(tmp_path, cac
     cache = cache_factory(tmp_path / 'cache.sqlite')
     vectors = {
         'good': [0.5, 1.0],
-        'not-numeric': cast('list[float]', ['bad']),
+        'not-numeric': cast('Any', ['bad']),
         'overflow': [1e100],
         'empty': [],
         'non-finite': [float('nan')],

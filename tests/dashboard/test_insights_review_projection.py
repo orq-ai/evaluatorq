@@ -6,7 +6,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from evaluatorq.dashboard import insights_review_projection as projection
 from evaluatorq.insights.models import DimensionResult, InsightsConfig, InsightsRun, TraceInsight
@@ -82,7 +82,7 @@ def test_new_report_missing_dimension_does_not_fallback():
 def test_review_xy_skips_invalid_saved_coordinates(caplog: pytest.LogCaptureFixture):
     run = _run()
     run.traces[0].coords_2d = {'intent': (float('nan'), 2.0)}
-    run.traces[1].coords_2d = {'intent': cast('tuple[float, float]', (1.0,))}
+    run.traces[1].coords_2d = {'intent': cast('Any', (1.0,))}
 
     points = projection.review_xy(run, 'intent')
 

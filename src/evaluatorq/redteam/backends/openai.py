@@ -149,7 +149,7 @@ class OpenAIModelTarget(AgentTarget):
         # system prompt and the latest turn as cache breakpoints — Anthropic does
         # not cache without them (see common/prompt_cache.py).
         routes_through_orq = client_routes_through_orq(self.client)
-        completion_messages = cast(
+        completion_messages = cast(  # ty: ignore[disjoint-cast]
             'list[ChatCompletionMessageParam]',
             # volatile_tail=0: the caller owns the transcript and this target only
             # ever appends to it, so every message here persists into the next turn.

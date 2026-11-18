@@ -36,7 +36,7 @@ from evaluatorq.insights.progress import stage_plan
 from evaluatorq.insights.store import save_run
 from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection, Snapshot
 from evaluatorq.trace_finder.settings import DashboardSettings
-from tests.dashboard.test_insights_page import minimal_run
+from tests.dashboard.insights_run_factory import build_minimal_run
 from tests.insights.test_population import _run_export, make_trace
 
 
@@ -1964,7 +1964,7 @@ def test_finder_worker_rejects_snapshot_replaced_after_payload_validation(
 
     with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
         spawn.return_value.pid = 43210
-        run_id = launch_insights(spec, tmp_path / 'runs')
+        launch_insights(spec, tmp_path / 'runs')
     payload_json = spawn.call_args.kwargs['env'][_REQUEST_ENV]
     monkeypatch.setenv(_REQUEST_ENV, payload_json)
     payload = read_launch_payload()
@@ -2563,7 +2563,7 @@ def test_running_and_completed_pages_show_manifest_stages(monkeypatch: pytest.Mo
     assert 'location.reload()' in running.text
 
     writer.end_stage('summary')
-    report = save_run(minimal_run.__wrapped__(), directory)
+    report = save_run(build_minimal_run(), directory)
     writer.complete(report)
     completed = client.get('/insights/run-1')
     assert completed.status_code == 200

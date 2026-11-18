@@ -166,7 +166,7 @@ def _run_invocations(workflow: str, prefix: list[str]) -> list[list[str]]:
 
 def _assert_failure_enforcing(block: str, *, indent: int) -> None:
     assert not re.search(
-        rf'(?m)^{{indent}}continue-on-error\s*:'.format(indent=' ' * indent),
+        r'(?m)^{indent}continue-on-error\s*:'.format(indent=' ' * indent),
         block,
     )
 
@@ -319,10 +319,10 @@ def test_ty_migration_audit_matches_effective_offline_coverage(monkeypatch: pyte
     classified = audit_ty_migration.audit()
 
     assert {name: len(diagnostics) for name, diagnostics in classified.items()} == {
-        'ty-backed': 22,
+        'ty-backed': 23,
         'ruff-only': 8,
         'partial': 14,
-        'absent': 21,
+        'absent': 20,
     }
 
 

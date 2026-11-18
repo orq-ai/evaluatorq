@@ -1,0 +1,13 @@
+# Tests are linted with a narrow rule set rather than the full source config: the
+# rules below catch tests that never run or never check anything (a redefined test
+# function, an unused result, a dead import) without restyling the test suite.
+# Tests stay unformatted on purpose, so this file only narrows `lint.select`.
+extend = "../pyproject.toml"
+
+[lint]
+select = ["F", "B", "ASYNC"]
+# Blocking pathlib calls and a polling sleep loop are normal inside an async test;
+# B009/B010: a constant getattr/setattr is how a test reaches an attribute the type
+# checker does not know about. B017 matches the source config, and B903 flags small
+# test-only record classes.
+ignore = ["ASYNC110", "ASYNC240", "B009", "B010", "B017", "B903"]

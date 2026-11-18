@@ -722,7 +722,6 @@ def finder_export_dir_problem(info: os.stat_result) -> str | None:
 def _read_approved_finder_export(root: Path, path: Path) -> bytes:
     """Read a bounded export from the opened approved directory and file descriptors."""
     directory_fd: int | None = None
-    directory_before: os.stat_result | None = None
     windows_directory_identity: tuple[int, int, int] | None = None
     try:
         if os.name != 'nt':

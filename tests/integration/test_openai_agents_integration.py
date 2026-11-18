@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 

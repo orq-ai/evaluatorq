@@ -761,7 +761,6 @@ class TestViewRoutesHonorFilter:
 
     def test_breakdown_filter_drops_resistant_category(self, tmp_path: Path) -> None:
         """Filtering to Vulnerable should exclude the all-resistant LLM01 category."""
-        import json
 
         client, rid = self._filtered_report(tmp_path)
         html = client.get(f'/r/{rid}/view/breakdown?group_by=category&result=Vulnerable').text

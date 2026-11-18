@@ -32,7 +32,6 @@ from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
 from evaluatorq.trace_finder.models import Snapshot
 from tests.common.llm_error_factories import STATUS_FACTORIES
 from tests.insights.test_population import make_trace
-from tests.local_sessions.conftest import claude_projects, codex_home
 
 
 def _app() -> typer.Typer:

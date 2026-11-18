@@ -52,8 +52,9 @@ uv run pytest -m 'not integration' path/to/test.py::test_name
 # Run integration tests (requires ORQ_API_KEY in .env)
 uv run pytest -m integration
 
-# Lint
+# Lint (tests use the narrow set in tests/ruff.toml)
 uv run ruff check src
+uv run ruff check tests
 
 # Format
 uv run ruff format src
@@ -105,6 +106,7 @@ Run the same checks CI runs, **verbatim**, before every push:
 
 ```bash
 uv run ruff check src
+uv run ruff check tests
 uv run ruff format --check src
 uv run ty check                     # configured repo surface — NOT a path
 uv run pytest -m 'not integration'
@@ -114,7 +116,7 @@ uv run pytest -m 'not integration'
 
 **Never run pytest with xdist locally: no `-n auto`, no `-n <N>`.** Each xdist worker collects the whole suite, so on a laptop running several worktrees at once it multiplies CPU and memory and slows every other session. CI adds `-n auto` on its own runners; that is the only place it belongs. This applies to every subagent you dispatch, so say it in the dispatch prompt. To go faster, scope the run to the test files your change touches first, then run the full serial suite once before pushing.
 
-Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **ty** is not scoped. Match CI, not intuition.
+Note the asymmetry: **ruff format** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **ruff check** runs on both, but `tests/ruff.toml` narrows the test tree to `F`, `B` and `ASYNC`. **ty** is not scoped. Match CI, not intuition.
 
 CI does not run integration tests. Real-API coverage runs weekly via `.github/workflows/examples-weekly.yml`, which opens an issue on failure rather than blocking a PR.
 

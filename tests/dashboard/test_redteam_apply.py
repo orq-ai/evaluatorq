@@ -21,11 +21,9 @@ from evaluatorq.dashboard.apply_ui import record_applied_on_report, render_previ
 from evaluatorq.redteam.reports.apply import ApplyRecommendationsResult
 
 if TYPE_CHECKING:
-    from pathlib import Path
 
-    from starlette.testclient import TestClient
 
-    from evaluatorq.redteam.contracts import RedTeamReport
+    pass
 
 
 @pytest.fixture

@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import threading
 
-import pytest
 
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.api import _notify_evaluator_complete, _stamp_evaluator_scores

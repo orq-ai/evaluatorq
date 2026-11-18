@@ -194,7 +194,8 @@ Keep it natural - this is how they would actually open a conversation."""
                     lambda: execute_response(
                         client=self._client,
                         model=self._model,
-                        messages=cast('list[dict[str, Any]]', messages),
+                        # TypedDict params to the helper's plain dicts; see redteam/backends/openai.py.
+                        messages=cast('list[dict[str, Any]]', messages),  # ty: ignore[disjoint-cast]
                         span=span,
                         timeout_s=self._config.timeout_s(_TIMEOUT_S),
                         max_output_tokens=_MAX_OUTPUT_TOKENS,

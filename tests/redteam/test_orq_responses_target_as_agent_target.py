@@ -155,7 +155,6 @@ class TestTraceContextPropagation:
 
     @pytest.mark.asyncio
     async def test_respond_injects_traceparent_header(self):
-        import opentelemetry.trace as ot
         from opentelemetry.sdk.trace import TracerProvider
 
         client = _make_client()

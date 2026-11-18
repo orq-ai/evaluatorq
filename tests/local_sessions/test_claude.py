@@ -7,10 +7,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-import pytest
 from loguru import logger
 
-from evaluatorq.local_sessions import SessionLoadError, session_document
+from evaluatorq.local_sessions import session_document
 from evaluatorq.local_sessions.claude import READER
 from evaluatorq.local_sessions.models import MAX_TOOL_TEXT_CHARS
 

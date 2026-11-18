@@ -161,6 +161,22 @@ def _isolate_local_session_roots(tmp_path, monkeypatch):
     monkeypatch.setattr("evaluatorq.local_sessions.roots.claude_desktop_dir", lambda: base / "claude-desktop")
 
 
+@pytest.fixture
+def claude_projects() -> Path:
+    """Create and return the isolated Claude Code projects root, so a test can write sessions into it."""
+    path = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@pytest.fixture
+def codex_home() -> Path:
+    """Create and return the isolated Codex home, so a test can write sessions into it."""
+    path = Path(os.environ["CODEX_HOME"])
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 @pytest.fixture(autouse=True)
 def _hide_ambient_credentials(request, monkeypatch):
     """Unset real API keys so unit tests cannot reach a live service.

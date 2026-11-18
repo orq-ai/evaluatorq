@@ -45,16 +45,6 @@ def _made(path: Path) -> Path:
 
 
 @pytest.fixture
-def claude_projects() -> Path:
-    return _made(Path(os.environ['CLAUDE_CONFIG_DIR']) / 'projects')
-
-
-@pytest.fixture
-def codex_home() -> Path:
-    return _made(Path(os.environ['CODEX_HOME']))
-
-
-@pytest.fixture
 def omp_sessions() -> Path:
     return _made(Path(os.environ['PI_CODING_AGENT_DIR']) / 'sessions')
 

@@ -152,7 +152,7 @@ class TestGetCategoryInfo:
 
     def test_info_structure(self):
         info = get_category_info()
-        for cat, details in info.items():
+        for details in info.values():
             assert 'name' in details
             assert 'strategy_count' in details
             assert 'single_turn_count' in details

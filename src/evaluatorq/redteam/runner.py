@@ -2646,7 +2646,6 @@ async def _retrieve_agent_contexts(
     # Pre-fetch contexts for AgentTarget objects (they may provide their own context)
     at_contexts: dict[int, AgentContext] = {}
     for at in resolved_agent_targets:
-        at_deduped_label = agent_target_labels[id(at)]
         try:
             at_ctx = await at.get_agent_context()
         except Exception as exc:

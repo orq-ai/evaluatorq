@@ -2807,7 +2807,6 @@ async def _simulate_via_evaluatorq(
     from evaluatorq.types import DataPoint
 
     run_name = config.run_name
-    model = config.model
     # _simulate_core resolves max_turns before calling here; the fallback only
     # covers a direct call that skipped it.
     max_turns = config.max_turns if config.max_turns is not None else DEFAULT_MAX_TURNS

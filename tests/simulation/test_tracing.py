@@ -674,7 +674,6 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     # Pretty-print the span tree for visual inspection
     print('\n=== Captured span tree (smoke test) ===')
 
-    by_id = {typing.cast(typing.Any, s.context).span_id: s for s in span_collector.spans}
     children: dict[int | None, list[ReadableSpan]] = {}
     for s in span_collector.spans:
         parent_id = s.parent.span_id if s.parent else None

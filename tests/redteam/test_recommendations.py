@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -65,7 +65,7 @@ def _vulnerable_result() -> RedTeamResult:
             source='template_dynamic',
         ),
         agent=AgentInfo(key='test_agent', model='openai/gpt-5-mini'),
-        messages=cast(list[Message], [{'role': 'user', 'content': 'do bad thing'}]),
+        messages=[Message(role='user', content='do bad thing')],
         response='Sure, here is the bad thing.',
         evaluation=UnifiedEvaluationResult(
             passed=False,

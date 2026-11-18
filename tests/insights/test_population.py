@@ -328,7 +328,7 @@ def test_projection_coverage_uses_the_actual_plain_text_insights_classifier_stat
 
 @pytest.mark.parametrize('classifier_model', ['openai/gpt-6-luna', 'typesafe/jev-latest'])
 def test_projection_coverage_does_not_mistake_literal_markers_for_truncation(classifier_model: str) -> None:
-    from evaluatorq.common.model_input import serialized_chars, serialized_question_chars
+    from evaluatorq.common.model_input import serialized_question_chars
 
     trace = make_trace('literal-marker').model_copy(
         update={'messages': ({'role': 'user', 'content': 'Literal [... 123 chars left out ...] text.'},)}

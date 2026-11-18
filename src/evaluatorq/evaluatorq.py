@@ -666,7 +666,8 @@ async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResul
         if len(errors) == 1:
             raise errors[0]
         raise _StreamingEvaluationError(errors)
-    results_nested = cast('list[list[Any]]', processing_results)
+    # Every exception was raised above: a fetch-cancelled task only exists when fetch_error is set.
+    results_nested = [result for result in processing_results if not isinstance(result, BaseException)]
 
     # Final progress update
     await safe_update_progress(

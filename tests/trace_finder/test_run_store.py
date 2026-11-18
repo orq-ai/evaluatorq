@@ -1040,7 +1040,7 @@ async def test_traces_error_after_cancel_preserves_cancelled_state(caplog: pytes
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             await release.wait()
-            raise RuntimeError('hydration failed after cancellation')
+            raise RuntimeError('hydration failed after cancellation') from None
         return ()
 
     store, _, _, _, _ = make_store()

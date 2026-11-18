@@ -751,21 +751,21 @@ def run(
         report = asyncio.run(red_team(**kwargs))
     except CancelledError:
         typer.echo('Run cancelled.')
-        raise typer.Exit(code=0)
+        raise typer.Exit(code=0) from None
     except KeyboardInterrupt:
         typer.echo('\nInterrupted.')
-        raise typer.Exit(code=130)
+        raise typer.Exit(code=130) from None
     except (RedTeamError, ReplayError) as e:
         typer.echo(f'Error: {e}', err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
     except ValueError as e:
         typer.echo(f'Error: {e}', err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
     except ImportError as e:
         # e.g. static/hybrid run needs huggingface-hub — show the install hint
         # cleanly instead of a traceback.
         typer.echo(f'Error: {e}', err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     if report_path:
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -832,7 +832,7 @@ def _import_hf_download() -> Any:
             '(or: python -m pip install "evaluatorq[redteam]")',
             err=True,
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
     return hf_hub_download
 
 
@@ -847,13 +847,13 @@ def _download_and_read_hf_dataset(hf_hub_download: Any, repo: str, filename: str
             'access (set HF_TOKEN for gated/private datasets).',
             err=True,
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
     try:
         with open(local_path, encoding='utf-8') as f:
             raw = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         typer.echo(f'Failed to read dataset file: {e}', err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
     return raw
 
 

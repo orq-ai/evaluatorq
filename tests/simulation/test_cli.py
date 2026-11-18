@@ -2172,7 +2172,6 @@ def test_run_yes_exits_clean(tmp_path: Path) -> None:
 
 def test_export_md_includes_stored_recommendations(tmp_path):
     """eq sim export --format md renders a run JSON's stored suggestions."""
-    import json as _json
 
     from evaluatorq.contracts import Message, TokenUsage
     from evaluatorq.simulation.contracts import (
