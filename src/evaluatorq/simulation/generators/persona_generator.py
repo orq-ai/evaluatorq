@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.structured_output import StructuredResult
+
 logger = logging.getLogger(__name__)
 
 # A persona carries more prose than a scenario (background, quirks, speech
@@ -175,6 +177,19 @@ class PersonaGenerator(UsageTracking):
                 logger.warning('Failed to parse persona: %s', e)
         return personas
 
+    @staticmethod
+    def _pick_personas(result: StructuredResult[PersonaListResponse]) -> list[Persona]:
+        """The real personas in a result: from the parsed answer, or from its raw text when that holds more.
+
+        Raw text beside a parsed answer is what a second run left when its answer did not validate; see ``accept=``
+        on `generate_structured`. With no parsed answer it is the salvage path this generator always had.
+        """
+        parsed = _real_personas(result.parsed.personas) if result.parsed is not None else []
+        if result.parsed is not None and not result.raw:
+            return parsed
+        salvaged = _real_personas(PersonaGenerator._parse_personas(result.raw or '[]'))
+        return salvaged if len(salvaged) > len(parsed) else parsed
+
     async def generate(
         self,
         *,
@@ -267,8 +282,7 @@ Return ONLY a JSON array, no other text."""
                 accept=_accepts_personas(num_personas),
             )
             self._accumulate(result.usage)
-            personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
-            personas = _real_personas(personas)
+            personas = self._pick_personas(result)
 
             if len(personas) < num_personas:
                 logger.warning(
@@ -396,8 +410,7 @@ Return ONLY a JSON array, no other text."""
                 accept=_accepts_personas(num_personas),
             )
             self._accumulate(result.usage)
-            personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
-            personas = _real_personas(personas)
+            personas = self._pick_personas(result)
 
             # Validate coverage and fill gaps
             personas = self._ensure_style_coverage(personas, [CommunicationStyle(s) for s in styles])

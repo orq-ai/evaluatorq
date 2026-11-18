@@ -199,6 +199,22 @@ def _real_scenarios(scenarios: list[Scenario]) -> list[Scenario]:
     return real
 
 
+def _real_or_salvaged(scenarios: list[Scenario], parsed: ScenarioListResponse | None, raw: str) -> list[Scenario]:
+    """The real scenarios among ``scenarios``, or those in ``raw`` when a parsed answer came with text that holds more.
+
+    Raw text beside a parsed answer is what a second run left when its answer did not validate; see ``accept=`` on
+    `generate_structured`.
+    """
+    real = _real_scenarios(scenarios)
+    if parsed is None or not raw:
+        return real
+    try:
+        salvaged = _real_scenarios(_parse_scenarios(_parse_json_list(raw)))
+    except json.JSONDecodeError:
+        return real
+    return salvaged if len(salvaged) > len(real) else real
+
+
 def _accepts_scenarios(expected: int) -> Callable[[ScenarioListResponse], bool]:
     """The content check for `generate_structured`: enough scenarios for ``expected`` asked, and no stub among them."""
 
@@ -349,7 +365,7 @@ Return ONLY a JSON array, no other text."""
                     scenario_dicts = _parse_json_list(raw or '[]')
                     scenarios = _parse_scenarios(scenario_dicts)
 
-                scenarios = _real_scenarios(scenarios)
+                scenarios = _real_or_salvaged(scenarios, parsed, raw)
                 if len(scenarios) < num_scenarios:
                     logger.warning(
                         'ScenarioGenerator: requested %d scenarios but only %d were successfully parsed',
@@ -438,7 +454,7 @@ Return ONLY a JSON array, no other text."""
                 if len(scenarios) > num_scenarios:
                     scenarios = scenarios[:num_scenarios]
 
-                scenarios = _real_scenarios(scenarios)
+                scenarios = _real_or_salvaged(scenarios, parsed, raw)
                 if len(scenarios) < num_scenarios:
                     logger.warning(
                         'ScenarioGenerator: requested %d scenarios (with coverage) but only %d parsed',
@@ -513,7 +529,7 @@ Return ONLY a JSON array, no other text."""
                         s_dict['is_edge_case'] = True
                     scenarios = _parse_scenarios(scenario_dicts)
 
-                scenarios = _real_scenarios(scenarios)
+                scenarios = _real_or_salvaged(scenarios, parsed, raw)
                 if len(scenarios) < num_edge_cases:
                     logger.warning(
                         'ScenarioGenerator: requested %d edge cases but only %d parsed',
@@ -584,7 +600,7 @@ Return ONLY a JSON array, no other text."""
                         s_dict['is_edge_case'] = True
                     scenarios = _parse_scenarios(scenario_dicts)
 
-                scenarios = _real_scenarios(scenarios)
+                scenarios = _real_or_salvaged(scenarios, parsed, raw)
                 if len(scenarios) < num_scenarios:
                     logger.warning(
                         'ScenarioGenerator: requested %d boundary scenarios but only %d parsed',
@@ -668,7 +684,7 @@ Return ONLY a JSON array, no other text."""
                         s_dict['is_edge_case'] = True
                     scenarios = _parse_scenarios(scenario_dicts)
 
-                scenarios = _real_scenarios(scenarios)
+                scenarios = _real_or_salvaged(scenarios, parsed, raw)
                 if len(scenarios) < num_scenarios:
                     logger.warning(
                         'ScenarioGenerator: requested %d security scenarios but only %d parsed',

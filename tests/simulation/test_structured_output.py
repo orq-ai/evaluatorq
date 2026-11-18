@@ -1253,7 +1253,7 @@ async def test_when_the_second_run_is_no_better_the_first_answer_is_kept_with_bo
 
 
 @pytest.mark.asyncio
-async def test_text_the_second_run_could_not_validate_is_handed_back_for_salvage(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_text_the_second_run_could_not_validate_rides_along_with_the_first_answer(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.common import structured_output
     from evaluatorq.common.structured_output import StructuredResult
 
@@ -1281,7 +1281,8 @@ async def test_text_the_second_run_could_not_validate_is_handed_back_for_salvage
         accept=_not_a_stub,
     )
 
-    assert (result.parsed, result.raw) == (None, '[{"value": "a bare array"}]')
+    assert result.parsed is not None
+    assert (result.parsed.value, result.raw) == ('stub', '[{"value": "a bare array"}]')
     assert result.usage is not None
     assert result.usage.input_tokens == 350
 

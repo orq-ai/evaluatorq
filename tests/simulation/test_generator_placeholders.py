@@ -181,3 +181,39 @@ async def test_a_short_real_name_is_kept(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert [persona.name for persona in personas][0] == 'Li'
     assert len(personas) == 3
+
+
+@pytest.mark.asyncio
+async def test_real_items_in_the_second_runs_text_replace_a_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What Opus does: a stub from the schema rung, then a bare array of real personas the wrapper model cannot parse."""
+    raw = json.dumps([_persona(name=f'Persona {index}') for index in range(5)])
+    _install(monkeypatch, lambda model: StructuredResult(model.model_validate({'personas': [_persona(name='', background='')]}), raw, None))
+
+    personas = await PersonaGenerator(model='openai/gpt-6-luna').generate(agent_description='A bookshop agent', num_personas=5)
+
+    assert [persona.name for persona in personas] == [f'Persona {index}' for index in range(5)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('raw', ['', 'not json at all', '[]', json.dumps([_scenario(name='Only one')])])
+async def test_an_honest_short_list_is_never_made_shorter(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    """Two real items for five asked are re-asked; whatever the second run left, the two are still returned."""
+    two = [_persona(name='First real'), _persona(name='Second real')]
+    _install(monkeypatch, lambda model: StructuredResult(model.model_validate({'personas': two}), raw, None))
+    personas = await PersonaGenerator(model='openai/gpt-6-luna').generate(agent_description='A bookshop agent', num_personas=5)
+    assert [persona.name for persona in personas] == ['First real', 'Second real']
+
+    pair = [_scenario(name='First real'), _scenario(name='Second real')]
+    _install(monkeypatch, lambda model: StructuredResult(model.model_validate({'scenarios': pair}), raw, None))
+    scenarios = await ScenarioGenerator(model='openai/gpt-6-luna').generate(agent_description='A bookshop agent', num_scenarios=5)
+    assert [scenario.name for scenario in scenarios] == ['First real', 'Second real']
+
+
+@pytest.mark.asyncio
+async def test_real_scenarios_in_the_second_runs_text_replace_a_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = json.dumps({'scenarios': [_scenario(name=f'Scenario {index}') for index in range(4)]})
+    _install(monkeypatch, lambda model: StructuredResult(model.model_validate({'scenarios': [_scenario(name='x', goal='x')]}), raw, None))
+
+    scenarios = await ScenarioGenerator(model='openai/gpt-6-luna').generate_security_scenarios(agent_description='A bookshop agent', num_scenarios=4)
+
+    assert [scenario.name for scenario in scenarios] == [f'Scenario {index}' for index in range(4)]
