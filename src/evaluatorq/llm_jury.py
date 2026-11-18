@@ -32,7 +32,7 @@ from evaluatorq.common.jury import (
 from evaluatorq.common.llm_client import (
     as_llm_client,
     client_routes_through_orq,
-    require_models_served_by_provider,
+    require_models_served,
     resolve_llm_client,
 )
 from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
@@ -672,13 +672,12 @@ def _resolve_and_validate_panel(
 def _require_panel_served(
     *, client: Any, judges: list[str] | None, model: str | None, panel: list[str], replacement_judges: list[str] | None
 ) -> None:
-    """Stop at declaration, before any target call is billed, when the env-resolved client cannot serve the panel.
+    """Stop at declaration, before any target call is billed, when the client that will judge cannot serve the panel.
 
-    Only a panel left to the environment is checked, and only when ``ANTHROPIC_API_KEY`` is the one LLM key set
-    (`require_models_served_by_provider`); declaring a jury still needs no credentials.
+    A panel left to the environment is checked only when ``ANTHROPIC_API_KEY`` is the one LLM key set, and a client
+    passed in is checked only when it is an Anthropic client (`require_models_served`); declaring a jury still needs no
+    credentials.
     """
-    if client is not None:
-        return
     if judges is not None:
         named = {f'judges[{i}]': judge for i, judge in enumerate(panel)}
     elif model is not None:
@@ -688,7 +687,7 @@ def _require_panel_served(
         named = {default_label: default_model}
     for i, judge in enumerate(replacement_judges or []):
         named[f'replacement_judges[{i}]'] = judge
-    require_models_served_by_provider(models_called_off_router(named))
+    require_models_served(models_called_off_router(named), client=client)
 
 
 def _apply_preset(

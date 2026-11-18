@@ -42,7 +42,15 @@ Every entry point that takes an injected client accepts an Anthropic client dire
 
 ## Set a Claude model for every role
 
-An Anthropic client cannot serve evaluatorq's default models. The defaults are `openai/gpt-6-sol` for the `smart` role, `openai/gpt-6-luna` for `fast` and `typesafe/jev-latest` for `classifier`, and the adapter refuses any `provider/` prefix other than `anthropic/`. It raises `ModelClientMismatchError` before the request, with a message that names the role variable resolving to the bad model. It is a subclass of `LLMConfigurationError`, which is a `ValueError`. Judges, classify calls and the signal classifiers re-raise it instead of turning it into a judge error. The run does not stop yet, though: inside `red_team()` and `simulate()` each attack or row that hits it records it as that row's error and the batch carries on, so you see the same error on every row. Stopping the run on the first one is tracked as RES-1879.
+An Anthropic client cannot serve evaluatorq's default models. The defaults are `openai/gpt-6-sol` for the `smart` role, `openai/gpt-6-luna` for `fast` and `typesafe/jev-latest` for `classifier`, and the adapter refuses any `provider/` prefix other than `anthropic/`. It raises `ModelClientMismatchError` before the request, with a message that names the role variable resolving to the bad model. It is a subclass of `LLMConfigurationError`, which is a `ValueError`. Judges, classify calls and the signal classifiers re-raise it instead of turning it into a judge error.
+
+`red_team()`, `simulate()`, `generate()`, `insights()` and a jury declaration (`llm_jury()`, `llm_jury_pairwise()`) check the models they are about to call before the first call, so a run on the defaults stops once, before the target or any model is called:
+
+```pytb
+ModelClientMismatchError: The Anthropic client passed in cannot serve EVALUATORQ_SMART_MODEL (unset, built-in default) (redteam.attacker)=openai/gpt-6-sol, EVALUATORQ_SMART_MODEL (unset, built-in default) (redteam.evaluator)=openai/gpt-6-sol. Set those to Claude model ids (for example claude-sonnet-5-5), or pass a client that serves them.
+```
+
+The check covers the models the entry point itself resolves. A model it cannot see ahead of time still fails at call time with the message below, once per attack or row: the model inside a simulator or judge agent you inject, for example.
 
 ```pytb
 ModelClientMismatchError: An Anthropic client needs a Claude model id, got 'openai/gpt-6-sol'. Set the model explicitly, for example through the EVALUATORQ_SMART_MODEL role variable, to a name such as "claude-sonnet-5-5" or "anthropic/claude-sonnet-5-5".

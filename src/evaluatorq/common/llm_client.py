@@ -74,14 +74,14 @@ def orq_base_url() -> str:
 class LLMConfigurationError(ValueError):
     """A client, model or request setting that no call can succeed with, raised before any request is sent.
 
-    A run-wide configuration mistake: every call would fail the same way. Judge, classify and signals code re-raises it instead of turning it into a per-item judge error. A per-item handler further up (a red-team attack, a simulation row) still records it on that row and the batch carries on until RES-1879 lands, so the error appears once per row rather than stopping the run.
+    A run-wide configuration mistake: every call would fail the same way. Judge, classify and signals code re-raises it instead of turning it into a per-item judge error. A per-item handler further up (a red-team attack, a simulation row) still records it on that row and the batch carries on, so an error that reaches one appears once per row. The entry points stop the commonest case, a model the client cannot serve, before the first call (`require_models_served`).
     """
 
 
 class ModelClientMismatchError(LLMConfigurationError):
     """A model id that the client it was sent to cannot serve, such as an OpenAI default model reaching an Anthropic client.
 
-    Judge, classify and signals code re-raises it like every `LLMConfigurationError`; a per-item handler further up still records it on each row until RES-1879 lands.
+    The entry points (`red_team`, `simulate`, `generate`, `insights`, a jury declaration) check the models they are about to call with `require_models_served` and raise this once, before any call. A model they cannot see ahead of time, such as the one inside an injected agent, still reaches the adapter at call time; judge, classify and signals code re-raises it there like every `LLMConfigurationError`, and a per-item handler further up records it on each row.
     """
 
 
@@ -244,6 +244,53 @@ def require_models_served_by_provider(models: Mapping[str, str]) -> None:
     """
     if configured_llm_provider() != 'anthropic':
         return
+    rejected = _models_anthropic_rejects(models)
+    if rejected:
+        raise ModelClientMismatchError(
+            'Anthropic was chosen because ANTHROPIC_API_KEY is the only LLM key set, but it cannot serve '
+            f'{", ".join(rejected)}. Set those to Claude model ids (for example claude-sonnet-5-5), '
+            'or set ORQ_API_KEY or OPENAI_API_KEY to use another provider.'
+        )
+
+
+def require_models_served_by_client(client: object, models: Mapping[str, str]) -> None:
+    """Stop a run before any work when a client that was passed in is an Anthropic client and a model it will be sent names another provider.
+
+    The counterpart of `require_models_served_by_provider` for an injected client. Without it the adapter raises the same error at the first call of every item, the per-item handlers record it on each row, and the run finishes with a row of identical errors after paying for every call that came before the failing one.
+
+    A client of any other kind is not checked: the Orq router and OpenAI resolve model ids themselves, and a wrong one fails there.
+
+    Args:
+        client: The client the models will be sent to, wrapped or raw. ``None`` is not an Anthropic client and passes.
+        models: Each model that client will be sent, keyed by where it is set, as in `require_models_served_by_provider`.
+
+    Raises:
+        ModelClientMismatchError: ``client`` is an Anthropic client and at least one model is not served by it.
+    """
+    if not is_anthropic_client(client):
+        return
+    rejected = _models_anthropic_rejects(models)
+    if rejected:
+        raise ModelClientMismatchError(
+            f'The Anthropic client passed in cannot serve {", ".join(rejected)}. '
+            'Set those to Claude model ids (for example claude-sonnet-5-5), or pass a client that serves them.'
+        )
+
+
+def require_models_served(models: Mapping[str, str], *, client: object = None) -> None:
+    """Check ``models`` against the client that will serve them: ``client`` when one was passed in, else the provider the environment picks.
+
+    Raises:
+        ModelClientMismatchError: The serving side is Anthropic and at least one model is not served by it.
+    """
+    if client is not None:
+        require_models_served_by_client(client, models)
+    else:
+        require_models_served_by_provider(models)
+
+
+def _models_anthropic_rejects(models: Mapping[str, str]) -> list[str]:
+    """``source=model`` for each model an Anthropic client refuses: `normalize_model`'s rule, and no wider."""
     from evaluatorq.anthropic.convert import normalize_model
 
     rejected: list[str] = []
@@ -252,12 +299,7 @@ def require_models_served_by_provider(models: Mapping[str, str]) -> None:
             normalize_model(model)
         except ModelClientMismatchError:  # noqa: PERF203
             rejected.append(f'{source}={model}')
-    if rejected:
-        raise ModelClientMismatchError(
-            'Anthropic was chosen because ANTHROPIC_API_KEY is the only LLM key set, but it cannot serve '
-            f'{", ".join(rejected)}. Set those to Claude model ids (for example claude-sonnet-5-5), '
-            'or set ORQ_API_KEY or OPENAI_API_KEY to use another provider.'
-        )
+    return rejected
 
 
 def _resolve_anthropic_client(max_retries: int | None) -> ResolvedClient:
@@ -411,6 +453,8 @@ __all__ = [
     'client_routes_through_orq',
     'configured_llm_provider',
     'is_anthropic_client',
+    'require_models_served',
+    'require_models_served_by_client',
     'require_models_served_by_provider',
     'resolve_llm_client',
     'resolve_orq_credential',

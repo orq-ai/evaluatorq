@@ -22,6 +22,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import (
     as_llm_client,
     configured_llm_provider,
+    require_models_served_by_client,
     require_models_served_by_provider,
     resolve_orq_credential,
     resolve_results_base_url,
@@ -818,24 +819,29 @@ def _validate_credentials_and_deps(
     resolved_mode: Pipeline,
     dataset: Path | str | StaticDataset | None,
 ) -> None:
-    # Early credential validation, before any work. A role with its own client, or a run with an injected client,
-    # needs nothing from the environment; every other role resolves its client from it.
-    if llm_client is None:
-        provider = configured_llm_provider()
-        planned = redteam_models(config, mode=resolved_mode)
-        from_env: dict[str, str] = {}
-        for role, models in planned.items():
-            role_config: LLMCallConfig = getattr(config, role)
-            if role_config.client is None:
-                from_env.update(models)
-        if from_env:
-            if provider is None:
-                raise CredentialError(
-                    'Missing LLM credentials for attack/evaluation models. '
-                    'Set OPENAI_API_KEY for direct OpenAI access, ORQ_API_KEY to use the ORQ router, '
-                    'or ANTHROPIC_API_KEY to use Claude directly.'
-                )
-            require_models_served_by_provider(from_env)
+    # Early validation, before any work. Each role runs on its own client when it has one, else on the injected
+    # client, else on one resolved from the environment. A role served by a client that was passed in is checked
+    # against that client; the rest need credentials and are checked against the provider the environment picks.
+    from_env: dict[str, str] = {}
+    # Grouped by client, so two roles on one client are reported together in one error.
+    on_client: dict[int, tuple[object, dict[str, str]]] = {}
+    for role, models in redteam_models(config, mode=resolved_mode).items():
+        role_config: LLMCallConfig = getattr(config, role)
+        role_client = role_config.client if role_config.client is not None else llm_client
+        if role_client is None:
+            from_env.update(models)
+        else:
+            on_client.setdefault(id(role_client), (role_client, {}))[1].update(models)
+    for passed_in, models in on_client.values():
+        require_models_served_by_client(passed_in, models)
+    if from_env:
+        if configured_llm_provider() is None:
+            raise CredentialError(
+                'Missing LLM credentials for attack/evaluation models. '
+                'Set OPENAI_API_KEY for direct OpenAI access, ORQ_API_KEY to use the ORQ router, '
+                'or ANTHROPIC_API_KEY to use Claude directly.'
+            )
+        require_models_served_by_provider(from_env)
 
     # Fail fast: static/hybrid runs that pull static datapoints from HuggingFace
     # need huggingface-hub. Check now rather than deep in the static leg — in
