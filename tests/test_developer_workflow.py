@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import copy
 import json
 import os
 import re
@@ -9,13 +8,20 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Any, TypedDict, cast
 
 import pytest
 
-from scripts import audit_ty_migration
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _ty_config() -> dict[str, Any]:
+    return tomllib.loads((REPO_ROOT / 'pyproject.toml').read_text())['tool']['ty']
 
 
 class _CollectedItem(TypedDict):
@@ -308,86 +314,6 @@ def test_local_pytest_stays_serial() -> None:
     addopts = _array(_table((REPO_ROOT / 'pyproject.toml').read_text(), 'tool.pytest.ini_options'), 'addopts')
 
     assert not any(option == '-n' or option.startswith(('-n', '--numprocesses', '--dist')) for option in addopts), addopts
-
-
-def test_ty_migration_audit_matches_effective_offline_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
-    def network_forbidden(url: str) -> str:
-        raise AssertionError(f'offline audit attempted network access: {url}')
-
-    monkeypatch.setattr(audit_ty_migration, '_download', network_forbidden)
-
-    assert audit_ty_migration.audit() == audit_ty_migration.EXPECTED
-
-
-_RULES_EXCERPT = """\
-<a id="old-name"></a>
-
-## `new-name`
-
-Default level: <code>error</code>
-
-<a id="split-rule"></a>
-
-## `part-one`
-
-Default level: <code>error</code>
-
-**Migrating from `split-rule`**
-
-
-`split-rule` was split into [`part-one`](#part-one) and [`part-two`](#part-two), see also [`split-rule`](#split-rule).
-
-**References**
-
-## `part-two`
-
-Default level: <code>warn</code>
-
-## `current-rule`
-
-Default level: <code>error</code>
-"""
-
-
-def test_rule_successors_derive_renames_and_splits_from_the_rule_reference() -> None:
-    derived = audit_ty_migration._rule_successors(_RULES_EXCERPT, {'old-name', 'split-rule', 'current-rule'})
-
-    assert derived == {'old-name': ['new-name'], 'split-rule': ['part-one', 'part-two']}
-
-
-def test_rule_successors_reject_a_name_the_rule_reference_does_not_explain() -> None:
-    with pytest.raises(RuntimeError, match='does not explain mystery-rule'):
-        audit_ty_migration._rule_successors(_RULES_EXCERPT, {'mystery-rule', 'old-name'})
-
-
-@pytest.mark.parametrize(
-    ('diagnostic', 'mutation'),
-    [
-        ('reportAssertAlwaysTrue', 'global-ignore'),
-        ('reportAssertAlwaysTrue', 'per-file-ignore'),
-        ('reportTypeCommentUsage', 'preview-off'),
-    ],
-)
-def test_ty_migration_audit_applies_effective_ruff_configuration(diagnostic: str, mutation: str) -> None:
-    baseline = audit_ty_migration._load(audit_ty_migration.BASELINE)
-    config = audit_ty_migration._project_config()
-    config = copy.deepcopy(config)
-    if mutation == 'global-ignore':
-        config['tool']['ruff']['lint']['ignore'].append('F631')
-    elif mutation == 'per-file-ignore':
-        config['tool']['ruff']['lint']['per-file-ignores']['src/**/*.py'] = ['F631']
-    else:
-        config['tool']['ruff']['preview'] = False
-
-    classification, surface = audit_ty_migration._classification_and_surface(
-        diagnostic,
-        baseline['mapping_cells'][diagnostic],
-        baseline,
-        config,
-    )
-
-    assert classification == 'absent'
-    assert surface.startswith('uncovered:')
 
 
 def test_ci_runs_ty_once_on_the_python_310_ubuntu_leg() -> None:
@@ -727,7 +653,7 @@ def test_ty_promotes_contract_diagnostics_to_errors() -> None:
 
 def test_ty_config_names_only_current_rules() -> None:
     # ty only warns about a renamed rule in its config, and an old name can stop covering a split-off rule.
-    ty = audit_ty_migration._project_config()['tool']['ty']
+    ty = _ty_config()
     configured = set(ty.get('rules', {})).union(*(override.get('rules', {}) for override in ty.get('overrides', [])))
     explained = subprocess.run(
         [sys.executable, '-m', 'ty', 'explain', 'rule', '--output-format', 'json'],
@@ -750,7 +676,7 @@ def test_ci_installs_fail_when_the_lock_disagrees_with_pyproject(workflow: str) 
 
 
 def test_ty_dashboard_overrides_match_the_diagnostic_baseline() -> None:
-    overrides = audit_ty_migration._project_config()['tool']['ty']['overrides']
+    overrides = _ty_config()['overrides']
 
     assert overrides == [
         {
