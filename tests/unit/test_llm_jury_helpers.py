@@ -196,7 +196,7 @@ async def test_bare_none_outcome_counts_as_a_failed_repetition():
 @pytest.mark.asyncio
 async def test_bare_none_outcome_starts_a_replacement_judge():
     # A failed judge is replaced and a clean abstention is not, so reading value=None as
-    # a failure means an extra, billed judge. The changelog states this.
+    # a failure means an extra, billed judge.
     from evaluatorq.common.jury import Prediction, VerdictKind, run_jury
 
     calls: list[str] = []

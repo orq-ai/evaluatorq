@@ -458,8 +458,11 @@ def insights_cmd(
         int | None, typer.Option('--window-days', min=1, max=90, help='Recent days to scan.')
     ] = None,
     filter_selection: Annotated[
-        Literal['llm', 'llm+jev'] | None,
-        typer.Option('--filter-selection', help='Natural-language metadata filter mode: llm or llm+jev.'),
+        Literal['llm', 'llm+decision', 'llm+jev'] | None,
+        typer.Option(
+            '--filter-selection',
+            help='Natural-language metadata filter mode: llm or llm+decision. The old name llm+jev still works.',
+        ),
     ] = None,
     limit: Annotated[
         int | None,

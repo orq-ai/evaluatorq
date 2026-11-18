@@ -190,7 +190,6 @@ plugins:
           - examples/**/*.md
         About:
           - contributing.md: How to contribute.
-          - changelog.md: Release notes.
           - roadmap.md: Planned work.
   - redirects:
       redirect_maps:
@@ -325,5 +324,5 @@ nav:
   - FAQ: faq.md
   - About:
       - Contributing: contributing.md
-      - Changelog: changelog.md
+      - Changelog: https://github.com/orq-ai/evaluatorq/releases
       - Roadmap: roadmap.md

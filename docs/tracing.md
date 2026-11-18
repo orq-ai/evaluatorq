@@ -173,6 +173,8 @@ Span attributes on `orq.evaluation`:
 | `orq.score` | JSON-serialised score value |
 | `orq.explanation` | Explanation string (if the evaluator provides one) |
 | `orq.pass` | Boolean pass/fail result |
+| `orq.evaluation.input` / `gen_ai.input` | JSON scorer input: the datapoint, the job output and the row (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
+| `orq.evaluation.output` / `gen_ai.output` | JSON verdict: `passed`, `value`, `type`, `reason`, or `error` when the scorer raised (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 
 ### Red teaming spans
 
@@ -277,7 +279,7 @@ orq.simulation.generate          # root — one per standalone generate() call
   └── chat/responses {model}     # persona/scenario/first-message generation calls
 ```
 
-`generate_personas()` and `generate_scenarios()` don't open a synthetic root span when invoked standalone. They do create `orq.simulation.persona_generation` / `orq.simulation.scenario_generation` spans around their LLM calls. Those generation spans carry the active run metadata when called inside an outer simulation or red-team scope; standalone helpers intentionally have no synthetic run id to stamp.
+`generate_personas()` and `generate_scenarios()` don't open a synthetic root span when invoked standalone. They do create `orq.simulation.persona_generation` / `orq.simulation.scenario_generation` spans around their LLM calls. Those generation spans carry the active run metadata when called inside an outer simulation or red-team scope; standalone helpers intentionally have no synthetic run id to stamp. `generate_checked_personas()`, `generate_checked_scenarios()`, `check_personas()` and `check_scenarios()` add an `orq.simulation.fit_check` span around each round of judge calls, with the judge's LLM spans as children.
 
 Span attributes on `Evaluatorq - Agent Simulation` / `orq.simulation.generate`:
 

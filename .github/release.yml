@@ -1,6 +1,6 @@
 # Controls GitHub's auto-generated release notes (the "What's Changed" + contributor
 # list). The release workflow regenerates each Release body from these categories so
-# notes are PR-based with attributions, complementing the commit-based CHANGELOG.md.
+# notes are PR-based with attributions. They are the only changelog: there is no CHANGELOG.md.
 changelog:
   exclude:
     labels:

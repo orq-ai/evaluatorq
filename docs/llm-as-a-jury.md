@@ -85,9 +85,11 @@ helpfulness = llm_jury(
 
 `labels`/`passing_labels` are valid only for `categorical`; passing them with `numeric` raises `ValueError`. In labeled mode `passing_labels` must be a subset of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
 
-## Jev as a judge
+<a id="jev-as-a-judge"></a>
 
-`typesafe/jev-latest` (Jev) is a **classify model**: it is never prompted. It is handed the material to judge and one question about it, and answers with a probability distribution instead of prose. On a panel it takes a seat beside prompted LLM judges and casts an ordinary vote.
+## A decision model as a judge
+
+A **decision model**, which this page also calls a classify model, is a model served through the Orq router's classify endpoint. `typesafe/jev-latest` (Jev) is one: it is never prompted. It is handed the material to judge and one question about it, and answers with a probability distribution instead of prose. On a panel it takes a seat beside prompted LLM judges and casts an ordinary vote.
 
 See [Classify judges](classify-judges.md) for the task-focused guide to question shapes, state selection, routing, warnings and failure modes.
 
@@ -142,7 +144,7 @@ The classify path follows these rules:
 At runtime, the Orq catalogue's `supports_classify` flag is authoritative. When a model has no catalogue entry, the built-in fallback covers `typesafe/jev-latest` and warns once. Before the first call, `llm_jury()` uses that fallback and any `register_model()` overrides only for early validation; models discovered through the catalogue receive ignored-setting and repetition warnings on their first call.
 
 !!! warning "A classify judge only works through the Orq router"
-    The classify endpoint lives on the Orq router, so a client that does not route through it never reaches that path. `typesafe/jev-latest` is then sent as an ordinary chat model, the provider rejects the id, and the panel records a failed judge rather than raising — the symptom is a seat that never votes and a verdict decided by the rest of the panel. Give the run an `ORQ_API_KEY` (see [Configuration](configuration.md)), or leave Jev off the panel.
+    The classify endpoint lives on the Orq router, so a client that does not route through it never reaches that path. `typesafe/jev-latest` is then sent as an ordinary chat model, the provider rejects the id, and the panel records a failed judge rather than raising — the symptom is a seat that never votes and a verdict decided by the rest of the panel. Give the run an `ORQ_API_KEY` (see [Configuration](configuration.md)), or leave the decision model off the panel.
 
 Red teaming and simulation do not seat classify judges. `EvaluatorConfig` panels are prompted judges only.
 
@@ -153,7 +155,7 @@ Red teaming and simulation do not seat classify judges. `EvaluatorConfig` panels
 | `preset` | `None` | Name of a ready-made panel from [Jury Presets](jury-presets.md), such as `"balanced-trio"`. Seats the judges, the aggregation rule and a majority quorum (two of three, three of five). Mutually exclusive with `judges` and `model`. |
 | `judges` | — | Judge model IDs. Two or more makes it a jury. Mutually exclusive with `model`. |
 | `model` | — | Single-judge shorthand for `judges=[model]`. With none of `preset`, `judges` or `model`, the panel is one judge on the `smart` role (`openai/gpt-6-sol` by default; see [Configuration › Models](configuration.md#models)). |
-| `criteria` / `prompt` | — | What the judges go on. Pass at least one; both together is allowed. An LLM judge reads the rendered `prompt` and can pull the rubric in with a `{{criteria}}` placeholder; a [classify judge](#jev-as-a-judge) is handed `criteria` as its question and never sees the prompt. Setting both on a panel that seats no classify judge and whose prompt never renders `{{criteria}}` logs one warning, because nothing then reads the rubric. |
+| `criteria` / `prompt` | — | What the judges go on. Pass at least one; both together is allowed. An LLM judge reads the rendered `prompt` and can pull the rubric in with a `{{criteria}}` placeholder; a [classify judge](#a-decision-model-as-a-judge) is handed `criteria` as its question and never sees the prompt. Setting both on a panel that seats no classify judge and whose prompt never renders `{{criteria}}` logs one warning, because nothing then reads the rubric. |
 | `labels` | `None` | Categorical labels, either as a list (`["rude", "neutral", "friendly"]`) or as a `{label: description}` dict. The dict form describes each option: an LLM judge reads the descriptions through its verdict schema and system prompt, a classify judge takes them as the options of its choice question. |
 | `levels` | `None` | Numeric mode only: 2 to 10 ordered level descriptions, lowest first. Required when the panel seats a classify judge, whose score comes back scaled into `(0.0, 1.0)` — so `score_range` must stay at its default there. |
 | `state_fields` | `None` | Classify judges only: which template paths are handed over as the material to judge. Defaults to every placeholder the prompt template renders, minus `criteria`. |
@@ -308,7 +310,7 @@ It is `None` when undefined, for example a single-judge run or fewer than two mu
 
 `llm_jury()` and `PairwiseComparator` always send judge calls to the Orq router's `responses` endpoint (`api='responses'`) — the endpoint the router prices, so a jury verdict records cost the same way the call it judges does. There is no config knob to opt out; `run_judge` handles the cases that cannot use it on its own, falling back to Chat Completions for a client that does not route through the Orq router, a model the catalogue does not qualify for Responses, or a model that 400s on the endpoint.
 
-A [classify judge](#jev-as-a-judge) is the exception: it serves neither endpoint, so `api='responses'` says nothing about it and it goes to the router's `classify` endpoint instead. Which of the three served a verdict is recorded on `JudgeOutcome.endpoint`.
+A [classify judge](#a-decision-model-as-a-judge) is the exception: it serves neither endpoint, so `api='responses'` says nothing about it and it goes to the router's `classify` endpoint instead. Which of the three served a verdict is recorded on `JudgeOutcome.endpoint`.
 
 Retries happen at the `run_judge` layer, not the SDK's: with a default budget of one retry (`LLMCallConfig.retry_count=1`, i.e. up to two requests per judge call), `run_judge` disarms the SDK-level retry budget (`max_retries=0`) on whichever client it is given — the one either helper builds for itself when no `client=` is passed in, or a client you pass in yourself — so the two retry layers never stack. There is no way to keep an injected client's own SDK retries active alongside `run_judge`'s.
 
@@ -327,7 +329,7 @@ jury = llm_jury(
 )
 ```
 
-Because these judges send to the `responses` endpoint, the effort renders as a `reasoning` block — unless `run_judge` falls back to Chat Completions for one of the reasons above, in which case it renders as a flat `reasoning_effort` field. Either way the provider is the authority on which values it accepts. A [classify judge](#jev-as-a-judge) on the panel ignores the effort and says so in a warning — it takes no sampling settings at all.
+Because these judges send to the `responses` endpoint, the effort renders as a `reasoning` block — unless `run_judge` falls back to Chat Completions for one of the reasons above, in which case it renders as a flat `reasoning_effort` field. Either way the provider is the authority on which values it accepts. A [classify judge](#a-decision-model-as-a-judge) on the panel ignores the effort and says so in a warning — it takes no sampling settings at all.
 
 This is a distinct knob from red teaming's `target_reasoning_effort` (the agent *under test*), from `LLMCallConfig.reasoning_effort` on red teaming's own `attacker=` / `evaluator=` roles, and from `EVALUATORQ_REASONING_EFFORT` (the simulator's user-simulator and judge). See [Tuning](tuning.md) for the full disambiguation.
 
@@ -345,7 +347,7 @@ jury = llm_jury(
 )
 ```
 
-`extra_kwargs` sets arguments on the SDK call and **replaces** the key. `extra_body` adds fields to the request body and is **merged** per key, so router-owned body fields survive alongside yours. Both reach prompted judges only — a [classify judge](#jev-as-a-judge) ignores them and names them in a warning.
+`extra_kwargs` sets arguments on the SDK call and **replaces** the key. `extra_body` adds fields to the request body and is **merged** per key, so router-owned body fields survive alongside yours. Both reach prompted judges only — a [classify judge](#a-decision-model-as-a-judge) ignores them and names them in a warning.
 
 !!! warning "`extra_body` inside `extra_kwargs` is rejected"
     `extra_body` is one of the structural fields the call site owns, so passing it through `extra_kwargs` raises — and because a judge failure is caught and turned into a verdict, the symptom is a judge that always fails rather than a crash. Use the `extra_body=` parameter.

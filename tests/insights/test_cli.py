@@ -534,6 +534,23 @@ def test_filter_selection_requires_query_before_pipeline(monkeypatch: pytest.Mon
     assert invoked == []
 
 
+@pytest.mark.parametrize('value', ['llm+decision', 'llm+jev'])
+def test_filter_selection_accepts_the_new_name_and_the_old_one(value: str) -> None:
+    result = CliRunner().invoke(_app(), ['insights', '--filter-selection', value])
+
+    # Both reach the option check that follows parsing; a value typer rejects never gets that far.
+    assert result.exit_code == 2
+    assert '--filter-selection requires --query' in result.output
+    assert 'Invalid value' not in result.output
+
+
+def test_filter_selection_rejects_an_unknown_mode() -> None:
+    result = CliRunner().invoke(_app(), ['insights', '--filter-selection', 'merged'])
+
+    assert result.exit_code == 2
+    assert '--filter-selection requires --query' not in result.output
+
+
 def test_cli_prints_report_path_without_loading_historical_runs(
     monkeypatch: Any, minimal_run: Any, tmp_path: Path
 ) -> None:

@@ -31,6 +31,14 @@ DEFAULT_TRACE_INPUT_CHARS = 500_000
 _LEGACY_MODEL_KEYS = frozenset({'compiler_model', 'apply_model', 'classifier_model'})
 _LEGACY_DEFAULT_MODEL = 'openai/gpt-5.6-luna'
 _LEGACY_CLASSIFIER_MODEL = 'typesafe/jev-latest'
+LEGACY_FILTER_SELECTION = 'llm+jev'
+
+
+def normalize_filter_selection(value: object) -> object:
+    """Read the pre-rename ``llm+jev`` filter mode as ``llm+decision``; any other value passes through to validation."""
+    return 'llm+decision' if value == LEGACY_FILTER_SELECTION else value
+
+
 CURRENT_SETTINGS_SCHEMA_VERSION = 1
 AUTH_SETTINGS_FIELDS = frozenset({
     'orq_auth_method',
@@ -64,7 +72,7 @@ class DashboardSettings(BaseModel):
     limit: int = Field(DEFAULT_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
     trace_input_chars: int = Field(DEFAULT_TRACE_INPUT_CHARS, ge=MIN_TRACE_INPUT_CHARS, le=MAX_TRACE_INPUT_CHARS)
-    filter_selection: Literal['llm', 'llm+jev'] = 'llm+jev'
+    filter_selection: Literal['llm', 'llm+decision'] = 'llm+decision'
     ask_ai_mode: Literal['immediate', 'review'] = 'immediate'
     orq_auth_method: Literal['environment', 'cli_profile', 'cli_oauth', 'stored_api_key'] = 'environment'
     orq_api_key_ciphertext: str | None = None
@@ -106,6 +114,12 @@ class DashboardSettings(BaseModel):
         if unknown:
             logger.warning('Dropping unknown explorer column(s) {} from dashboard settings', ', '.join(unknown))
         return tuple(key for key in value if key in COLUMNS)
+
+    @field_validator('filter_selection', mode='before')
+    @classmethod
+    def migrate_filter_selection(cls, value: object) -> object:
+        """Load a settings file saved with the old ``llm+jev`` mode name."""
+        return normalize_filter_selection(value)
 
     @model_validator(mode='before')
     @classmethod

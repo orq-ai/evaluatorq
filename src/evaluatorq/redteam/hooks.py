@@ -124,7 +124,7 @@ class ConfirmPayload(TypedDict, total=False):
     """Target identifier string."""
 
     dataset_path: str | None
-    """Path to static dataset (static/hybrid modes)."""
+    """Static dataset source (static/hybrid modes): a path, a specifier, or a short label for a dataset passed in memory."""
 
     vulnerabilities: list[str] | None
     """Vulnerability labels loaded from dataset (static mode)."""

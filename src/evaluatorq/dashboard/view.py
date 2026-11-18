@@ -1165,10 +1165,10 @@ def settings_body(
         '<div class="config-row settings-field"><label class="config-key" for="ask_ai_mode">Ask AI on traces</label>'
         f'<span class="config-val"><span class="settings-select"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></span></div>'
     )
-    filter_mode = setting_value('filter_selection') or 'llm+jev'
+    filter_mode = setting_value('filter_selection') or 'llm+decision'
     filter_options = ''.join(
         f'<option value="{value}"{" selected" if value == filter_mode else ""}>{label}</option>'
-        for value, label in (('llm+jev', 'LLM + Jev'), ('llm', 'LLM only'))
+        for value, label in (('llm+decision', 'LLM + decision model'), ('llm', 'LLM only'))
     )
     field_rows.append(
         '<div class="config-row settings-field"><label class="config-key" for="filter_selection">Trace filters</label>'

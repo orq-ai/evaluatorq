@@ -45,6 +45,43 @@ async def test_full_static_run(
 
 
 @pytest.mark.asyncio
+async def test_static_run_takes_an_in_memory_static_dataset(
+    mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
+    static_dataset_path: Path,
+) -> None:
+    """A `StaticDataset` object runs every sample, and the confirmation step shows a short label for it."""
+    import json
+
+    from evaluatorq.redteam import StaticDataset
+    from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks
+
+    confirmed: list[ConfirmPayload] = []
+
+    class _RecordConfirm(DefaultHooks):
+        async def on_confirm(self, payload: ConfirmPayload) -> bool:
+            confirmed.append(payload)
+            return True
+
+    dataset = StaticDataset.model_validate(json.loads(static_dataset_path.read_text(encoding="utf-8")))
+    with _static_patches(mock_backend_bundle):
+        report = await red_team(
+            "agent:e2e-static-model",
+            mode="static",
+            datapoint_parallelism=2,
+            dataset=dataset,
+            hooks=_RecordConfirm(),
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+            description="E2E static test",
+        )
+
+    errors = validate_report_structure(report, expected_pipeline="static", min_results=3)
+    assert not errors, f"Report validation errors: {errors}"
+    assert report.total_results == 3
+    assert [payload["dataset_path"] for payload in confirmed] == ["StaticDataset (3 samples, in memory)"]
+
+
+@pytest.mark.asyncio
 async def test_static_vulnerability_detection(
     mock_llm_client: DeterministicAsyncOpenAI,
     static_dataset_path: Path,

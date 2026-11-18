@@ -146,7 +146,7 @@ def test_orq_load_uses_recent_seven_day_window_and_renders_actual_preview(
     assert '&lt;script&gt;alert(1)&lt;/script&gt;' in response.text
     assert '<script>alert(1)</script>' not in response.text
     assert 'Readable view' in response.text
-    assert 'Jev state' in response.text
+    assert 'decision state' in response.text
     assert 'trace-42' not in response.text
 
 
@@ -248,8 +248,8 @@ def test_local_search_and_load_use_real_claude_and_codex_readers_and_escape_cont
     assert html.escape(answer) in loaded.text
     assert '<script>alert(' not in loaded.text
     assert '<img src=x onerror=' not in loaded.text
-    assert 'Jev state' in loaded.text
-    assert 'serialized jev state characters' in loaded.text.lower()
+    assert 'decision state' in loaded.text
+    assert 'serialized decision state characters' in loaded.text.lower()
     assert 'global character cap' in loaded.text.lower()
     assert 'question-aware' in loaded.text.lower()
 
