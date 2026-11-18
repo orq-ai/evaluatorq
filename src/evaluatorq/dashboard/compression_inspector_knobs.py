@@ -145,7 +145,7 @@ def _decision_group(values: Values, defaults: Values) -> str:
         '<legend>Output (decision state)</legend>'
         '<div class="compression-knob-grid">'
         f'{_number("global_char_cap", "Global character cap", values, defaults)}'
-        f'{_number("decision_state_chars", "decision state limit", values, defaults)}'
+        f'{_number("decision_state_chars", "Decision state limit", values, defaults)}'
         '</div>'
         f'<div class="compression-knob-grid">{limits}</div>'
         '<p class="compression-knob-title">Include</p>'

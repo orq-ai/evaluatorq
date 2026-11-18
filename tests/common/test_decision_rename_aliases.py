@@ -32,8 +32,11 @@ def test_an_old_name_resolves_to_the_renamed_object_and_warns(old: str, new: str
     assert resolved is getattr(model_input, new)
 
 
-def test_every_renamed_name_has_an_alias() -> None:
-    assert dict(RENAMED) == model_input._RENAMED
+def test_no_public_name_still_says_jev_and_every_alias_points_at_a_real_name() -> None:
+    assert [name for name in vars(model_input) if 'jev' in name.lower() and not name.startswith('_')] == []
+    assert sorted(model_input._RENAMED) == sorted(old for old, _ in RENAMED)
+    for new in model_input._RENAMED.values():
+        assert hasattr(model_input, new), new
 
 
 def test_the_new_names_do_not_warn_and_an_unknown_name_still_fails() -> None:

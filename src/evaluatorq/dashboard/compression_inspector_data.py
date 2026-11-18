@@ -149,7 +149,7 @@ class CompressionKnobs:
     def from_form(cls, form: Mapping[str, Any]) -> CompressionKnobs:
         """Parse and validate the posted fields; every number must be present and in range."""
         decision = DecisionOptions(
-            state_chars=_whole(form, 'decision_state_chars', 'decision state limit'),
+            state_chars=_whole(form, 'decision_state_chars', 'Decision state limit'),
             assistant=_edge_limit(form, 'assistant'),
             user=_edge_limit(form, 'user'),
             system=_edge_limit(form, 'system'),

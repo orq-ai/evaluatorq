@@ -109,7 +109,7 @@ A task override is more specific than a role, so a task override in the settings
 
 ### Set models and the input cap in the settings file
 
-The dashboard Settings page and the trace finder read and write `.evaluatorq/dashboard-settings.json`, or the path in `EVALUATORQ_DASHBOARD_SETTINGS`. The same file feeds the library and the CLI. A role field left out, or `null`, means use the default. The file also stores `trace_input_chars`, the maximum size of a rendered summary request or the combined classifier state and serialized questions; it defaults to `500000`. For a decision model, the state is further limited to 112,000 characters, with state plus the longest question capped at 128,000 and state plus all questions capped at 256,000 characters.
+The dashboard Settings page and the trace finder read and write `.evaluatorq/dashboard-settings.json`, or the path in `EVALUATORQ_DASHBOARD_SETTINGS`. The same file feeds the library and the CLI. A role field left out, or `null`, means use the default. The file also stores `trace_input_chars`, the maximum size of a rendered summary request or the combined classifier state and serialized questions; it defaults to `500000`. For the `typesafe/jev` models, the state is further limited to 112,000 characters, with state plus the longest question capped at 128,000 and state plus all questions capped at 256,000 characters.
 
 ```json
 {

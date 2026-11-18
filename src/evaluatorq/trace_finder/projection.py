@@ -111,7 +111,7 @@ def _project_full_conversation(
     model: str,
     question_payloads: Mapping[str, Any] | None,
 ) -> TraceProjection:
-    """Render the complete readable conversation for text-state classifiers under the saved cap."""
+    """Render the complete readable conversation for plain-text classifiers under the saved cap."""
     from evaluatorq.insights.transcript import full_conversation_view_with_message_spans
 
     original_conversation, message_spans, source_message_count = full_conversation_view_with_message_spans(trace)
@@ -123,7 +123,7 @@ def _project_full_conversation(
         global_char_cap=character_cap,
     )
     if not isinstance(fitted_payload, dict):
-        raise TypeError('text classifier state must be an object')
+        raise TypeError('plain-text classifier state must be an object')
     payload = fitted_payload
     conversation = payload['conversation']
     serialized = serialize_projection(payload)

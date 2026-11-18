@@ -128,7 +128,7 @@ The finder merges the generated filters with any you chose explicitly and builds
 
 ### 3. Project each trace
 
-The classifier's exact serialized questions share the trace-input cap from Dashboard Settings with its state, defaulting to 500,000 total characters. Decision state is additionally capped at 112,000 characters, and reduced as needed to keep state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. For rough cost estimates, character counts are divided by about four to estimate tokens; this is not the model tokenizer or an exact token-count guarantee.
+The classifier's exact serialized questions share the trace-input cap from Dashboard Settings with its state, defaulting to 500,000 total characters. For the `typesafe/jev` models the decision state is additionally capped at 112,000 characters, and reduced as needed to keep state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. For rough cost estimates, character counts are divided by about four to estimate tokens; this is not the model tokenizer or an exact token-count guarantee.
 
 ??? info "What the decision state keeps and drops"
     - **Keeps** indexed role/type entries, full tool names, paired tool inputs/results, and recorded status and exit/error codes.
@@ -286,7 +286,7 @@ The facet and numeric options are explicit OQL constraints. The question supplie
 
 ## Limits and cost
 
-The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. The configured global character cap bounds classifier state plus exact serialized questions. A decision model receives an indexed structured state with paired tool results, also subject to a 112,000-character state cap and its 128,000/256,000-character state-plus-question ceilings.
+The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. The configured global character cap bounds classifier state plus exact serialized questions. A decision model receives an indexed structured state with paired tool results; for the `typesafe/jev` models it is also subject to a 112,000-character state cap and its 128,000/256,000-character state-plus-question ceilings.
 
 | Limit | Value |
 |---|---|

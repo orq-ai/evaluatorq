@@ -17,6 +17,8 @@ from evaluatorq.common.messages import MediaContent, iter_content_parts, match_t
 from evaluatorq.common.redact import scrub_known_secrets
 
 CHARS_PER_ESTIMATED_TOKEN = 4
+# The decision-state ceilings are the input limits of the ``typesafe/jev`` models, the only models that take a
+# decision state today (`uses_decision_state`). A second decision model needs its own limits, not these.
 DECISION_STATE_CHARS = 28_000 * CHARS_PER_ESTIMATED_TOKEN
 DECISION_STATE_QUESTION_CHARS = 32_000 * CHARS_PER_ESTIMATED_TOKEN
 DECISION_STATE_ALL_QUESTIONS_CHARS = 64_000 * CHARS_PER_ESTIMATED_TOKEN

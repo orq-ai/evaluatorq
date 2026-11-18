@@ -641,14 +641,14 @@ async def test_shell_output_reaches_the_tool_activity_question_only_after_scrubb
 
 
 @pytest.mark.asyncio
-async def test_text_state_request_reserves_serialized_questions_from_the_global_cap(
+async def test_plain_text_request_reserves_serialized_questions_from_the_global_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from evaluatorq.common.llm_call import classify_request_body
     from evaluatorq.common.model_input import serialized_chars
 
     model = 'openai/gpt-6-luna'
-    trace = make_trace('text-state-question-cap').model_copy(
+    trace = make_trace('plain-text-question-cap').model_copy(
         update={'messages': ({'role': 'user', 'content': 'REQUEST-START-' + 'x' * 10_000 + '-REQUEST-END'},)}
     )
     label = LabelSpec(

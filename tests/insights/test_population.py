@@ -297,7 +297,7 @@ async def test_live_population_reports_the_same_projection_coverage(monkeypatch:
 
 
 
-def test_projection_coverage_uses_the_actual_text_state_insights_classifier_state() -> None:
+def test_projection_coverage_uses_the_actual_plain_text_insights_classifier_state() -> None:
     from evaluatorq.insights.labeling import prepare_classifier_state
 
     trace = make_trace('input').model_copy(
@@ -389,6 +389,8 @@ def test_projection_coverage_applies_available_decision_question_reserve() -> No
     state_chars = serialized_chars(state)
     question_chars = serialized_question_chars(questions)
     longest_question = max(serialized_chars(question) for question in questions.values())
+    # New reports name the format by the concept; `is_decision_state_format` still reads the older `jev`.
+    assert coverage['classifier_state_format'] == 'decision'
     assert coverage['classifier_question_reserve'] == 'applied'
     assert coverage['classifier_state_chars'] == state_chars
     assert state_chars <= DECISION_STATE_CHARS

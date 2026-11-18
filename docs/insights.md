@@ -347,7 +347,7 @@ Plain-text tool views read the first 300 characters of each input; non-shell res
 
 Decision-state tool views keep the first and last 100 characters of each input and result, plus recorded status, exit code, and error code; shell failure markers are checked across the full scrubbed output. Decision-state inputs and results are scrubbed before excerpting, and plain-text shell outputs are scrubbed before their excerpts.
 
-If a plain-text tool view is too long, Insights cuts the middle only when at most 30% is lost; otherwise it splits calls into ordered parts. A decision-state view splits complete tool records into chunks that reserve the exact serialized selected questions under the global input cap and fit the decision state-plus-question ceilings.
+If a plain-text tool view is too long, Insights cuts the middle only when at most 30% is lost; otherwise it splits calls into ordered parts. A decision-state view splits complete tool records into chunks that reserve the exact serialized selected questions under the global input cap and fit the decision-state and question ceilings.
 
 `risky_action` takes the most confident answer other than `none` from any part, and `unfixed_error` takes the answer from the last part, because an error only counts as unfixed if it is still broken at the end. If a part fails and no other part found anything, the label fails rather than reading as no.
 
@@ -415,7 +415,7 @@ Model input coverage: 0 of 2 traces hit a summary or classifier input cap of 500
 A run would send 2 traces (3.9 KB) from sessions.json to models: summary openai/gpt-6-sol, classifier typesafe/jev-latest, embedding openai/text-embedding-3-small.
 ```
 
-The coverage line reports how many traces hit a summary or classifier cap, average rendered character counts for the summary and combined classifier request, and messages omitted from decision state. These are character counts, not exact tokenizer counts. You can preview a fresh selection without exporting it first:
+The coverage line reports how many traces hit a summary or classifier cap, average rendered character counts for the summary and combined classifier request, and messages omitted from the decision state. These are character counts, not exact tokenizer counts. You can preview a fresh selection without exporting it first:
 
 ```bash
 eq insights --sessions --project-dir . --from 2026-10-01 --preview-input
@@ -484,7 +484,7 @@ The classifier does not read the summary. `trace_input_chars`, saved in Dashboar
 
 A **decision model** is a classifier served through the router's classify endpoint that reads structured input instead of a transcript. Today that means the `typesafe/jev` models. For those, the state is indexed and structured, and this page calls it the **decision state**; tool calls are grouped with matching results, recorded status and error codes are retained, and text excerpts keep the first and last 100 characters for tool inputs/results, 500 for assistant messages, 1,000 for user messages, and 4,000 for system/developer messages.
 
-Decision state is also capped at 112,000 characters; state plus the longest question stays within 128,000 characters and state plus all questions within 256,000 characters. Credentials are scrubbed before excerpting; reasoning and known `<system-reminder>` sections are removed. Inline images show their size when known, and remote media is never fetched.
+For the `typesafe/jev` models the decision state is also capped at 112,000 characters; state plus the longest question stays within 128,000 characters and state plus all questions within 256,000 characters. Credentials are scrubbed before excerpting; reasoning and known `<system-reminder>` sections are removed. Inline images show their size when known, and remote media is never fetched.
 
 Other classifiers receive the `DETAILED` [conversation view](#the-conversation-view), shortened as needed to leave room for their selected questions. Known media parts render as placeholders, while unrelated structured content remains JSON. The source trace stays unchanged.
 
@@ -753,7 +753,7 @@ The estimate is computed before any request is made. Trace counts and configured
 | Estimate | Basis and limits |
 |---|---|
 | Traces | A local trace file gives its exact count. Orq gives `up to N`, the smaller of the trace limit and estimated count. With no filters, the estimate uses workspace status counts. With multiple facets, it uses the smallest per-facet sum because a trace must match every facet. If Orq truncated facet values or cannot count a project id, the estimate falls back to the trace limit and says why. If a file count cannot be read, it shows `unknown`. |
-| Cost | Per stage, the estimate multiplies traces by estimated input and output tokens and the Orq catalogue price. It divides the configured character cap by about four for a rough token estimate; this is not the model tokenizer. Classifier state and serialized questions share the cap. A decision model also limits state to 112,000 characters, state plus the longest question to 128,000, and state plus all questions to 256,000. The estimate uses the smaller of the configured cap and the 256,000-character ceiling. Summary prompts fit the configured cap by shortening the conversation as needed. Long coding activity may need extra chunks, so that cost is unknown. Unpriced stages show `unknown` and are excluded from the total, which is marked `(priced stages only)`. |
+| Cost | Per stage, the estimate multiplies traces by estimated input and output tokens and the Orq catalogue price. It divides the configured character cap by about four for a rough token estimate; this is not the model tokenizer. Classifier state and serialized questions share the cap. The `typesafe/jev` models also limit state to 112,000 characters, state plus the longest question to 128,000, and state plus all questions to 256,000. The estimate uses the smaller of the configured cap and the 256,000-character ceiling. Summary prompts fit the configured cap by shortening the conversation as needed. Long coding activity may need extra chunks, so that cost is unknown. Unpriced stages show `unknown` and are excluded from the total, which is marked `(priced stages only)`. |
 | Time | Median per-trace stage times from completed Insights runs, scaled to the parallelism used in those runs. Before the first completed run, it says `estimated after your first run`. If some stages have no prior timing, the total says `(timed stages only)`. Treat the figure as rough. |
 
 For a query run, every trace in range is labeled, but only matching traces reach summary and embedding stages. Their estimated count therefore ranges from zero to the full population, and the total is shown as `$low to $high`.

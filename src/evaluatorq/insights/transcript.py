@@ -2,10 +2,10 @@
 
 Three views, each for one `/decisions` call:
 
-- `full_conversation_view`: the source messages, numbered by message index, for text-state classifiers and summaries. Each message type has its own cap (`-1` keeps it whole) and can be included or excluded, with reasoning left out by default; tool calls are either one collapsed line per run or one line per call with a status flag. The whole view is capped to the configured trace-input budget.
-- `full_conversation_view`: the source messages as `#<index> <kind>:` entries, for text-state classifiers, summaries and Trace Finder. `ConversationViewOptions` and its presets `COMPACT`, `DETAILED` and `WHOLE` choose the message types and each type's cap; the trace-input budget then drops whole entries from the middle.
+- `full_conversation_view`: the source messages, numbered by message index, for plain-text classifiers and summaries. Each message type has its own cap (`-1` keeps it whole) and can be included or excluded, with reasoning left out by default; tool calls are either one collapsed line per run or one line per call with a status flag. The whole view is capped to the configured trace-input budget.
+- `full_conversation_view`: the source messages as `#<index> <kind>:` entries, for plain-text classifiers, summaries and Trace Finder. `ConversationViewOptions` and its presets `COMPACT`, `DETAILED` and `WHOLE` choose the message types and each type's cap; the trace-input budget then drops whole entries from the middle.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.
-- `tool_activity_chunks`: user context and paired tool activity for coding-tool questions. Text-state traces keep their question-specific command excerpts; decision-state traces use filtered structured state, 100-character input/result edges, and complete-record chunks that fit the exact question reserve and decision state-plus-question ceilings.
+- `tool_activity_chunks`: user context and paired tool activity for coding-tool questions. Plain-text traces keep their question-specific command excerpts; decision-state traces use filtered structured state, 100-character input/result edges, and complete-record chunks that fit the exact question reserve and decision-state and question ceilings.
 
 Nothing here calls a model or any other service. A shell output excerpt is scrubbed of credentials with
 `common.redact.scrub_known_secrets` over the whole output before it is cut to its start and end, so a secret across
@@ -976,10 +976,10 @@ def tool_activity_chunks(
             )
     call_lines = [line for line in lines if line.startswith('CALL')]
     if any(len(line) + 1 > chunk_budget for line in call_lines):
-        raise ValueError('one text-state tool-activity record exceeds the question-reserved state budget')
+        raise ValueError('one plain-text tool-activity record exceeds the question-reserved state budget')
     if not call_lines:
         if len('No tool calls.') > chunk_budget:
-            raise ValueError('classifier questions leave no text-state state budget for tool activity')
+            raise ValueError('classifier questions leave no plain-text state budget for tool activity')
         return ['No tool calls.']
     full_view_chars = sum(len(line) for line in lines) + len(lines) - 1
     if full_view_chars <= chunk_budget:
@@ -1171,18 +1171,18 @@ def _chunk(lines: list[str], budget: int) -> list[str]:
         index += 1
     body = lines[index:]
     if not body:
-        raise ValueError('text-state tool activity has no call records to chunk')
+        raise ValueError('plain-text tool activity has no call records to chunk')
 
     opening = '\n'.join(lines[:index])
     largest_record = max(len(line) + 1 for line in body)
     context_budget = budget - largest_record - 80
     if context_budget < len('[... 0 chars left out ...]'):
-        raise ValueError('one text-state tool-activity record cannot fit with its chunk header')
+        raise ValueError('one plain-text tool-activity record cannot fit with its chunk header')
     if len(opening) > context_budget:
         opening = cap_text(opening, context_budget)[0]
     capacity = budget - len(opening) - 80
     if capacity < largest_record:
-        raise ValueError('one text-state tool-activity record cannot fit with its chunk context and header')
+        raise ValueError('one plain-text tool-activity record cannot fit with its chunk context and header')
 
     groups: list[list[str]] = [[]]
     used = 0
@@ -1197,7 +1197,7 @@ def _chunk(lines: list[str], budget: int) -> list[str]:
         for number, group in enumerate(groups, start=1)
     ]
     if any(len(chunk) > budget for chunk in chunks):
-        raise ValueError('text-state tool-activity chunk exceeded its question-reserved state budget')
+        raise ValueError('plain-text tool-activity chunk exceeded its question-reserved state budget')
     return chunks
 
 
