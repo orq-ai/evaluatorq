@@ -99,11 +99,17 @@ class StructuredResult(Generic[T]):
     ``raw`` is then the last non-empty text seen, for a caller with its own
     salvage. ``usage`` is the sum over every rung that reached the provider;
     ``None`` means no rung ever reached one.
+
+    ``other`` is set only when ``accept=`` made the call ask twice and both runs
+    parsed: it is the answer that is not in ``parsed``. A caller that can measure
+    its answers (count the real items, say) compares the two; one that cannot
+    ignores it.
     """
 
     parsed: T | None
     raw: str
     usage: TokenUsage | None = None
+    other: T | None = None
 
 
 class StructuredGenerationError(RuntimeError):
@@ -873,10 +879,11 @@ async def generate_structured(
     an empty stub. When it returns ``False`` the ladder is run once more, starting at the forced tool call and
     skipping every rung that sends the JSON schema as a response format: some models (Claude Sonnet 5.5 and Opus 5.5
     at the time of writing) often answer a JSON-schema format with one schema-valid placeholder, and asking the same
-    way again mostly returns another. The second answer replaces the first only when ``accept`` passes it. Otherwise,
-    and when the second run raises, ``parsed`` is the first answer, so a caller never has less than without
-    ``accept``; ``raw`` is then the second run's text when it produced any that did not validate, for the caller's
-    own salvage. The returned usage covers both runs. It is one re-ask on content, outside the
+    way again mostly returns another. ``parsed`` is the second answer when ``accept`` passes it; otherwise, and when
+    the second run raises, it is the first. The answer not chosen comes back in `StructuredResult.other`, because
+    accepted does not mean better: a caller that can measure its answers compares the two, and then never has less
+    than without ``accept``. ``raw`` is the second run's text when it produced any that did not validate, for the
+    caller's own salvage. The returned usage covers both runs. It is one re-ask on content, outside the
     per-rung ``with_retry``: it adds at most the tool and ``json_object`` rungs to the worst case below.
 
     ``api`` selects the endpoint tried first; ``responses`` puts a Responses call
@@ -959,11 +966,13 @@ async def generate_structured(
             )
         usage = sum_structured_usage([first.usage, second.usage])
         if second.parsed is not None and accept(second.parsed):
-            return StructuredResult(second.parsed, second.raw, usage)
-        # Neither run was accepted: the first answer stands. When the second run answered in a shape that did not
-        # validate (a bare array for a wrapper object, say), its text rides along in ``raw`` for the caller's own
-        # salvage, so the caller can take whichever of the two holds more.
-        return StructuredResult(first.parsed, second.raw or first.raw, usage)
+            # Accepted is not the same as better: the first answer may hold more of what the caller wanted (four
+            # real items and a stub against three real items). It goes back in ``other`` so the caller can compare.
+            return StructuredResult(second.parsed, second.raw, usage, other=first.parsed)
+        # Neither run was accepted: the first answer stands, and the second goes back in ``other``. When the second
+        # run answered in a shape that did not validate (a bare array for a wrapper object, say), its text rides
+        # along in ``raw`` for the caller's own salvage.
+        return StructuredResult(first.parsed, second.raw or first.raw, usage, other=second.parsed)
 
     temperature, extra_kwargs, extra_body, reasoning_effort, timeout_s = _fold_config(
         config=config,

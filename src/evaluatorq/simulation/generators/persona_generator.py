@@ -179,16 +179,16 @@ class PersonaGenerator(UsageTracking):
 
     @staticmethod
     def _pick_personas(result: StructuredResult[PersonaListResponse]) -> list[Persona]:
-        """The real personas in a result: from the parsed answer, or from its raw text when that holds more.
+        """The real personas in a result, from whichever of its answers holds the most.
 
-        Raw text beside a parsed answer is what a second run left when its answer did not validate; see ``accept=``
-        on `generate_structured`. With no parsed answer it is the salvage path this generator always had.
+        The candidates are the parsed answer, the other parsed answer when ``accept=`` made `generate_structured`
+        ask twice, and the raw text: the salvage path this generator always had when nothing parsed, and the text of
+        a second run that did not validate. A tie keeps the earlier candidate in that order.
         """
-        parsed = _real_personas(result.parsed.personas) if result.parsed is not None else []
-        if result.parsed is not None and not result.raw:
-            return parsed
-        salvaged = _real_personas(PersonaGenerator._parse_personas(result.raw or '[]'))
-        return salvaged if len(salvaged) > len(parsed) else parsed
+        candidates = [_real_personas(answer.personas) for answer in (result.parsed, result.other) if answer is not None]
+        if result.parsed is None or result.raw:
+            candidates.append(_real_personas(PersonaGenerator._parse_personas(result.raw or '[]')))
+        return max(candidates, key=len)
 
     async def generate(
         self,

@@ -255,3 +255,74 @@ async def test_scenarios_taken_from_the_second_runs_text_still_go_through_covera
 
     assert from_text
     assert [scenario.model_dump() for scenario in from_text] == [scenario.model_dump() for scenario in from_parsed]
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_second_answer_does_not_cost_real_items_the_first_one_had(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Five asked: the first answer had four real personas and a stub, the accepted second has three. Four come back."""
+    three = [_persona(name=f'Second {index}') for index in range(3)]
+    four_and_a_stub = [*[_persona(name=f'First {index}') for index in range(4)], _persona(name='', background='')]
+    _install(
+        monkeypatch,
+        lambda model: StructuredResult(
+            model.model_validate({'personas': three}), '', None, other=model.model_validate({'personas': four_and_a_stub})
+        ),
+    )
+
+    personas = await PersonaGenerator(model='openai/gpt-6-luna').generate(agent_description='A bookshop agent', num_personas=5)
+
+    assert [persona.name for persona in personas] == [f'First {index}' for index in range(4)]
+
+
+@pytest.mark.asyncio
+async def test_the_scenario_methods_also_take_the_answer_with_more_real_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    three = [_scenario(name=f'Second {index}') for index in range(3)]
+    four_and_a_stub = [*[_scenario(name=f'First {index}') for index in range(4)], _scenario(name='x', goal='x')]
+    _install(
+        monkeypatch,
+        lambda model: StructuredResult(
+            model.model_validate({'scenarios': three}), '', None, other=model.model_validate({'scenarios': four_and_a_stub})
+        ),
+    )
+
+    scenarios = await ScenarioGenerator(model='openai/gpt-6-luna').generate(agent_description='A bookshop agent', num_scenarios=5)
+    assert [scenario.name for scenario in scenarios] == [f'First {index}' for index in range(4)]
+
+    # A tie keeps the answer the helper chose.
+    _install(
+        monkeypatch,
+        lambda model: StructuredResult(
+            model.model_validate({'scenarios': three}),
+            '',
+            None,
+            other=model.model_validate({'scenarios': [_scenario(name=f'Other {index}') for index in range(3)]}),
+        ),
+    )
+    tied = await ScenarioGenerator(model='openai/gpt-6-luna').generate(agent_description='A bookshop agent', num_scenarios=5)
+    assert [scenario.name for scenario in tied] == [f'Second {index}' for index in range(3)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('method', 'count_kwarg'),
+    [
+        ('generate', 'num_scenarios'),
+        ('generate_with_coverage', 'num_scenarios'),
+        ('generate_edge_cases', 'num_edge_cases'),
+        ('generate_boundary_scenarios', 'num_scenarios'),
+        ('generate_security_scenarios', 'num_scenarios'),
+    ],
+)
+async def test_a_stub_inside_a_parsed_scenario_answer_is_dropped_by_every_method(
+    monkeypatch: pytest.MonkeyPatch, method: str, count_kwarg: str
+) -> None:
+    """One stub and one real scenario, parsed, with no raw text and no other answer: only the real one comes back."""
+    _install(
+        monkeypatch,
+        lambda model: StructuredResult(model.model_validate({'scenarios': [_scenario(name='x', goal='x'), _scenario()]}), '', None),
+    )
+
+    scenarios = await getattr(ScenarioGenerator(model='openai/gpt-6-luna'), method)(agent_description='A bookshop agent', **{count_kwarg: 2})
+
+    assert 'x' not in [scenario.name for scenario in scenarios]
+    assert 'Late delivery' in [scenario.name for scenario in scenarios]

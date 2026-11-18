@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from openai import AsyncOpenAI
+
+    from evaluatorq.common.structured_output import StructuredResult
 
 logger = logging.getLogger(__name__)
 
@@ -199,23 +202,21 @@ def _real_scenarios(scenarios: list[Scenario]) -> list[Scenario]:
     return real
 
 
-def _scenarios_from(parsed: ScenarioListResponse | None, raw: str) -> list[Scenario]:
-    """The real scenarios in an answer, before a method applies its own coverage or edge-case marking.
+def _scenarios_from(result: StructuredResult[ScenarioListResponse]) -> list[Scenario]:
+    """The real scenarios in a result, before a method applies its own coverage or edge-case marking.
 
-    With no parsed answer this is the salvage path the generator always had, and bad JSON raises as before. Raw text
-    beside a parsed answer is what a second run left when its answer did not validate (see ``accept=`` on
-    `generate_structured`); it is used only when it holds more real scenarios than the parsed answer.
+    Taken from whichever answer holds the most: the parsed answer, the other parsed answer when ``accept=`` made
+    `generate_structured` ask twice, or the raw text of a second run that did not validate. A tie keeps the earlier
+    one in that order. With no parsed answer at all this is the salvage path the generator always had, and bad JSON
+    raises as before.
     """
-    if parsed is None:
-        return _real_scenarios(_parse_scenarios(_parse_json_list(raw or '[]')))
-    real = _real_scenarios(parsed.scenarios)
-    if not raw:
-        return real
-    try:
-        salvaged = _real_scenarios(_parse_scenarios(_parse_json_list(raw)))
-    except json.JSONDecodeError:
-        return real
-    return salvaged if len(salvaged) > len(real) else real
+    if result.parsed is None and result.other is None:
+        return _real_scenarios(_parse_scenarios(_parse_json_list(result.raw or '[]')))
+    candidates = [_real_scenarios(answer.scenarios) for answer in (result.parsed, result.other) if answer is not None]
+    if result.raw:
+        with contextlib.suppress(json.JSONDecodeError):
+            candidates.append(_real_scenarios(_parse_scenarios(_parse_json_list(result.raw))))
+    return max(candidates, key=len)
 
 
 def _accepts_scenarios(expected: int) -> Callable[[ScenarioListResponse], bool]:
@@ -360,9 +361,7 @@ Return ONLY a JSON array, no other text."""
                     accept=_accepts_scenarios(num_scenarios),
                 )
                 self._accumulate(result.usage)
-                parsed, raw = result.parsed, result.raw
-
-                scenarios = _scenarios_from(parsed, raw)
+                scenarios = _scenarios_from(result)
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(
@@ -437,9 +436,7 @@ Return ONLY a JSON array, no other text."""
                     accept=_accepts_scenarios(num_scenarios),
                 )
                 self._accumulate(result.usage)
-                parsed, raw = result.parsed, result.raw
-
-                scenarios = _scenarios_from(parsed, raw)
+                scenarios = _scenarios_from(result)
 
                 # Validate coverage
                 scenarios = self._ensure_emotion_coverage(scenarios, [StartingEmotion(e) for e in emotions])
@@ -512,9 +509,7 @@ Return ONLY a JSON array, no other text."""
                     accept=_accepts_scenarios(num_edge_cases),
                 )
                 self._accumulate(result.usage)
-                parsed, raw = result.parsed, result.raw
-
-                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in _scenarios_from(parsed, raw)]
+                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in _scenarios_from(result)]
 
                 if len(scenarios) < num_edge_cases:
                     logger.warning(
@@ -576,9 +571,7 @@ Return ONLY a JSON array, no other text."""
                     accept=_accepts_scenarios(num_scenarios),
                 )
                 self._accumulate(result.usage)
-                parsed, raw = result.parsed, result.raw
-
-                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in _scenarios_from(parsed, raw)]
+                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in _scenarios_from(result)]
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(
@@ -653,9 +646,7 @@ Return ONLY a JSON array, no other text."""
                     accept=_accepts_scenarios(num_scenarios),
                 )
                 self._accumulate(result.usage)
-                parsed, raw = result.parsed, result.raw
-
-                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in _scenarios_from(parsed, raw)]
+                scenarios = [s.model_copy(update={'is_edge_case': True}) for s in _scenarios_from(result)]
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(

@@ -1245,8 +1245,9 @@ async def test_when_the_second_run_is_no_better_the_first_answer_is_kept_with_bo
     )
 
     assert result.parsed is not None
-    # The first answer, not the second run's equally unaccepted one.
+    # The first answer, not the second run's equally unaccepted one, which goes back beside it.
     assert result.parsed.value == 'stub'
+    assert (result.other.value if result.other else None) == ('stub from the tool' if second == 'also a stub' else None)
     assert result.usage is not None
     # 100 for the first run; 200 for the tool rung; 50 more when the tool rung parsed nothing and json_object ran.
     assert result.usage.input_tokens == {'also a stub': 300, 'nothing': 350, 'raises': 300}[second]
@@ -1282,7 +1283,7 @@ async def test_text_the_second_run_could_not_validate_rides_along_with_the_first
     )
 
     assert result.parsed is not None
-    assert (result.parsed.value, result.raw) == ('stub', '[{"value": "a bare array"}]')
+    assert (result.parsed.value, result.raw, result.other) == ('stub', '[{"value": "a bare array"}]', None)
     assert result.usage is not None
     assert result.usage.input_tokens == 350
 
@@ -1314,6 +1315,9 @@ async def test_an_accepted_second_answer_carries_what_both_runs_cost(monkeypatch
 
     assert result.parsed is not None
     assert (result.parsed.value, result.usage.input_tokens if result.usage else None) == ('real', 300)
+    # Accepted is not the same as better, so the first answer comes back too for a caller that can compare.
+    assert result.other is not None
+    assert result.other.value == 'stub'
 
 
 @pytest.mark.asyncio
