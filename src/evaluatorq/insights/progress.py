@@ -24,16 +24,16 @@ def _selection_labels(mode: str | None, *, has_filters: bool, has_labels: bool) 
         'query': 'Find matching traces',
         'filter': 'Filter recent traces' if has_filters else 'Load recent traces',
     }.get(mode)
-    classify = (
-        ('Match and classify traces' if has_labels else 'Match traces')
+    label_stage = (
+        ('Match and label traces' if has_labels else 'Match traces')
         if mode == 'query'
-        else 'Classify traces'
+        else 'Label traces'
         if has_labels
         else 'Keep selected traces'
         if has_filters
         else 'Prepare traces'
     )
-    return source, classify
+    return source, label_stage
 
 
 def stage_plan(
@@ -62,10 +62,10 @@ def stage_plan(
         if population.query is not None
         else 'filter'
     )
-    source, classify = _selection_labels(mode, has_filters=has_filters, has_labels=has_labels)
+    source, label_stage = _selection_labels(mode, has_filters=has_filters, has_labels=has_labels)
     if source is None:
         raise ValueError(f'Unknown Insights population mode: {mode}')
-    plan = [('population', source), ('label', classify), ('summary', 'Summarize traces')]
+    plan = [('population', source), ('label', label_stage), ('summary', 'Summarize traces')]
     plan.extend((f'dimension:{name}', f'Cluster and map {name}') for name in dimensions)
     priority_ready = priority_dimension in dimensions and any(spec.name == 'customer_satisfaction' for spec in labels)
     plan.extend((
@@ -115,13 +115,13 @@ def _rebuilt_labels(run: InsightsRun) -> dict[str, str]:
     # Resolved dates exist even for default runs; only a non-default span proves a selection.
     if isinstance(start, str) and isinstance(end, str):
         has_filters |= datetime.fromisoformat(end) - datetime.fromisoformat(start) != timedelta(days=7)
-    source, classify = _selection_labels(
+    source, label_stage = _selection_labels(
         mode if isinstance(mode, str) else None, has_filters=has_filters, has_labels=has_labels
     )
     priority_ready = config.priority_dimension in dimensions and any(
         spec.name == 'customer_satisfaction' for spec in config.labels
     )
-    labels = {'label': classify, 'summary': 'Summarize traces'}
+    labels = {'label': label_stage, 'summary': 'Summarize traces'}
     if source is not None:
         labels['population'] = source
     labels.update({f'dimension:{name}': f'Cluster and map {name}' for name in dimensions})

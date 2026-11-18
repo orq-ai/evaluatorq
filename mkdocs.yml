@@ -144,7 +144,7 @@ plugins:
           - anthropic.md: Run red teaming, simulation and Insights on an Anthropic, Bedrock or Vertex client, with Claude model ids per role and server-side fallbacks.
           - coding-agent-targets.md: Run Claude Code, Codex CLI or OpenCode as the system under test, directly or through orq launch.
           - dashboard.md: Browse red team and simulation reports in a local web dashboard.
-          - trace-finder.md: Find semantic matches in recent Orq traces with a classify model.
+          - trace-finder.md: Find semantic matches in recent Orq traces with a decision model.
           - fetching-traces.md: Fetch recorded Orq traces into your own code with fetch_traces(), and handle per-trace import failures.
           - formats.md: Convert an agent run between chat messages, OpenResponses items, OTel GenAI traces and ATIF trajectories.
           - signals.md: Deterministic measurements and tags computed from agent trajectories.
@@ -158,8 +158,8 @@ plugins:
           - guides/red-teaming-output.md: The RedTeamReport output model, where it is written, and how to read it.
           - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
           - llm-as-a-jury.md: Multi-judge panel (jury) evaluation.
-          - classify-judges.md: Use classify models as typed, structured jury seats.
-          - classify-endpoint.md: Several typed questions about one state, in one /decisions call.
+          - decision-model-judges.md: Use decision models as typed, structured jury seats.
+          - decisions-endpoint.md: Several typed questions about one state, in one /decisions call.
           - jury-presets.md: Named judge panels with published costs, and how they stay current.
           - cyclic-judge.md: Round-robin (CyclicJudge) judge assignment at single-judge cost.
           - pairwise-judging.md: Pairwise comparison judging.
@@ -196,6 +196,8 @@ plugins:
         guides/agent-simulation-openai.md: guides/agent-simulation.md
         guides/red-teaming-openai.md: guides/red-teaming.md
         orq-deployment.md: guides/targets.md
+        classify-judges.md: decision-model-judges.md
+        classify-endpoint.md: decisions-endpoint.md
   - git-revision-date-localized:
       enable_creation_date: true
       type: timeago
@@ -306,8 +308,8 @@ nav:
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - LLM as a Jury:
           - Overview: llm-as-a-jury.md
-          - Classify Judges: classify-judges.md
-          - Classify Endpoint: classify-endpoint.md
+          - Decision Model Judges: decision-model-judges.md
+          - The Decisions Endpoint: decisions-endpoint.md
           - Jury Presets: jury-presets.md
           - Cyclic Judge Assignment: cyclic-judge.md
           - Pairwise Judging: pairwise-judging.md

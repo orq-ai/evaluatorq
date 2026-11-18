@@ -23,7 +23,7 @@ from loguru import logger
 
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL
 
-# The Orq router route classify models are served on, shared with the executor that posts to it.
+# The Orq router route decision models are served on, shared with the executor that posts to it.
 DECISIONS_PATH = '/decisions'
 
 # Environment credentials and profile selection override the CLI OAuth session.

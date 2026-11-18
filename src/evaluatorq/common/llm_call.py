@@ -21,6 +21,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from evaluatorq.common.cli_oauth import DECISIONS_PATH
+from evaluatorq.common.deprecation import renamed_attributes
 from evaluatorq.common.llm_client import as_llm_client, client_routes_through_orq
 from evaluatorq.common.llm_errors import BAD_REQUEST_ERRORS, error_text
 from evaluatorq.common.llm_limit import llm_slot
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
     from pydantic import BaseModel
 
-    from evaluatorq.common.judge import ClassifyQuestion, ClassifyRequest
+    from evaluatorq.common.judge import DecisionQuestion, DecisionRequest
 
 logger = logging.getLogger(__name__)
 
@@ -518,21 +519,21 @@ async def execute_response(
     )
 
 
-def classify_request_body(
+def decision_request_body(
     model: str,
     state: dict[str, Any] | str | list[Any],
-    questions: Mapping[str, ClassifyQuestion],
+    questions: Mapping[str, DecisionQuestion],
 ) -> dict[str, Any]:
     """Build the exact body sent to the Orq ``/decisions`` endpoint."""
     return {'model': model, 'state': state, 'questions': classifier_question_wire_payloads(questions)}
 
 
-async def execute_classify(
+async def execute_decision(
     *,
     client: AsyncOpenAI,
     model: str,
-    question: ClassifyQuestion | None = None,
-    request: ClassifyRequest | None = None,
+    question: DecisionQuestion | None = None,
+    request: DecisionRequest | None = None,
     span: Span | None,
     timeout_s: float,
     inject_trace_headers: bool = True,
@@ -547,7 +548,7 @@ async def execute_classify(
     Responses executors own and nothing more: the bounded call, trace-header
     injection, span input/output recording and usage extraction. The reply is
     returned as the decoded wire payload, unvalidated; shaping it into
-    `ClassifyResponse` belongs to the caller, the same way this module hands the
+    `DecisionResponse` belongs to the caller, the same way this module hands the
     chat and Responses executors' replies back unparsed.
 
     ``cast_to=object`` rather than a pydantic model: the SDK refuses a plain
@@ -567,18 +568,18 @@ async def execute_classify(
     ``with_retry``, which is why the client arrives with ``max_retries=0``.
     """
     if (question is None) == (request is None):
-        raise ValueError('execute_classify requires exactly one of question= or request=')
+        raise ValueError('execute_decision requires exactly one of question= or request=')
 
     if question is not None:
         questions = {'verdict': question}
         state = question.state
     else:
-        request = cast('ClassifyRequest', request)
+        request = cast('DecisionRequest', request)
         questions = request.questions
         state = request.state
     # No `apply_pipeline_metadata` here: the wire contract accepts only model, state and
     # questions, so a metadata block is an unknown key on a body the router validates strictly.
-    body = classify_request_body(model, state, questions)
+    body = decision_request_body(model, state, questions)
     wire_questions = body['questions']
 
     # `apply_trace_headers` merges into `params['extra_headers']`, the SDK's
@@ -615,7 +616,7 @@ async def execute_classify(
     )
     # `record_llm_response` is duck-typed (its `_field` helper reads dicts as well as
     # objects), so the decoded payload records `gen_ai.response.model`/id exactly as
-    # the chat and Responses executors do. The classify reply has neither `choices`
+    # the chat and Responses executors do. The `/decisions` reply has neither `choices`
     # nor `output`, so the body is passed as `output_content` — nothing else would
     # record it. Usage is recorded separately, below: with `record_usage=True` an
     # unreadable `usage` block records zeros, which on this path would contradict the
@@ -627,7 +628,7 @@ async def execute_classify(
         # Not recorded at all: a call with no readable usage is unpriced, and
         # `gen_ai.usage.*` zeros on the span would read as a genuinely free call.
         logger.warning(
-            'Classify %s reply carried no readable usage block; the call stays unpriced and its span records no usage',
+            '/decisions reply from %s carried no readable usage block; the call stays unpriced and its span records no usage',
             model,
         )
         return payload, TokenUsage(calls=1, priced_calls=0)
@@ -635,3 +636,9 @@ async def execute_classify(
     served = payload.get('model') if isinstance(payload, dict) else None
     # Priced by the router; price_usage is a no-op unless it came back unpriced.
     return payload, await price_usage(usage, model, client, served_model=served)
+
+
+# Names from before classify models were renamed to decision models: each still resolves, with a DeprecationWarning.
+__getattr__ = renamed_attributes(
+    __name__, globals(), {'classify_request_body': 'decision_request_body', 'execute_classify': 'execute_decision'}
+)

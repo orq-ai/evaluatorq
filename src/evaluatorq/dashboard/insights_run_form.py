@@ -269,7 +269,7 @@ def _saved_file_usable(source: Source, path: Path, runs_dir: Path) -> bool:
 
 INSIGHTS_MODEL_FIELDS: MappingProxyType[str, tuple[ModelKind, str]] = MappingProxyType({
     'summary_model': ('chat', 'Summary model'),
-    'classifier_model': ('classify', 'Classifier model'),
+    'classifier_model': ('decision', 'Classifier model'),
     'embedding_model': ('embedding', 'Embedding model'),
     'compiler_model': ('chat', 'Question compiler'),
 })

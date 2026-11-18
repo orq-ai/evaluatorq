@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.insights.estimate import RunEstimate, StageEstimate
 
-_CODING_TITLE = 'Coding questions (extra classify call)'
+_CODING_TITLE = 'Coding questions (extra /decisions call)'
 
 
 def _money(value: float) -> str:

@@ -11,7 +11,7 @@ from loguru import logger
 from openai import AsyncOpenAI
 
 from evaluatorq.trace_finder import filter_selector as filter_selector_module
-from evaluatorq.common.judge import ClassifyAnswer, ClassifyOutcome, ClassifyResponse, JudgeError
+from evaluatorq.common.judge import DecisionAnswer, DecisionOutcome, DecisionResponse, JudgeError
 from evaluatorq.trace_finder.filter_selector import FilterSelectionError, select_filters, select_filters_with_response
 from evaluatorq.trace_finder.debug import cli_debug
 from evaluatorq.trace_finder.models import FACET_NAMES, FILTER_OR_JUDGMENT_RULE, FacetCatalogue, FacetSelection
@@ -42,7 +42,7 @@ def catalogue() -> FacetCatalogue:
         ('status', 'error'),
     ],
 )
-async def test_filter_selection_accepts_exact_catalogue_values_from_classify(facet: str, value: str) -> None:
+async def test_filter_selection_accepts_exact_catalogue_values_from_decision(facet: str, value: str) -> None:
     bodies: list[dict[str, Any]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -90,18 +90,18 @@ async def test_no_filter_choice_does_not_hide_literal_none_values(choice: str, s
 
 @pytest.mark.asyncio
 async def test_filter_request_and_response_are_debug_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
-        return ClassifyOutcome(
-            response=ClassifyResponse(answers={'project': ClassifyAnswer(type='choice', choice='Demos')})
+    async def fake_run_decision(**kwargs: Any) -> DecisionOutcome:
+        return DecisionOutcome(
+            response=DecisionResponse(answers={'project': DecisionAnswer(type='choice', choice='Demos')})
         )
 
-    monkeypatch.setattr(filter_selector_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(filter_selector_module, 'run_decision', fake_run_decision)
     monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
     messages: list[str] = []
     sink_id = logger.add(lambda message: messages.append(str(message)), format='{message}', level='DEBUG')
     try:
         await select_filters_with_response(cast(Any, object()), 'typesafe/jev-latest', FacetCatalogue(project=('Demos',)), 'Demos')
-        assert not any('Trace finder filter classify request' in message for message in messages)
+        assert not any('Trace finder filter /decisions request' in message for message in messages)
         with cli_debug(active=True):
             await select_filters_with_response(
                 cast(Any, object()), 'typesafe/jev-latest', FacetCatalogue(project=('Demos',)), 'Demos'
@@ -109,22 +109,22 @@ async def test_filter_request_and_response_are_debug_only(monkeypatch: pytest.Mo
     finally:
         logger.remove(sink_id)
 
-    request_line = next(message for message in messages if 'Trace finder filter classify request' in message)
+    request_line = next(message for message in messages if 'Trace finder filter /decisions request' in message)
     request_body = json.loads(request_line.split(' input=', 1)[1])
     assert request_body['state'] == {'query': 'Demos', 'rule': FILTER_OR_JUDGMENT_RULE}
     assert request_body['questions']['project']['type'] == 'choice'
-    assert any('Trace finder filter classify response' in message and 'Demos' in message for message in messages)
+    assert any('Trace finder filter /decisions response' in message and 'Demos' in message for message in messages)
 
 
 @pytest.mark.asyncio
-async def test_select_filters_uses_one_classify_request_for_non_empty_facets(monkeypatch) -> None:
+async def test_select_filters_uses_one_decision_request_for_non_empty_facets(monkeypatch) -> None:
     captured: list[Any] = []
 
-    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+    async def fake_run_decision(**kwargs: Any) -> DecisionOutcome:
         captured.append(kwargs)
         request = kwargs['request']
         answers = {
-            name: ClassifyAnswer(type='choice', choice={
+            name: DecisionAnswer(type='choice', choice={
                 'project': 'Demos',
                 'provider': 'openai',
                 'status': 'none',
@@ -134,9 +134,9 @@ async def test_select_filters_uses_one_classify_request_for_non_empty_facets(mon
             }.get(name, 'none'))
             for name in request.questions
         }
-        return ClassifyOutcome(response=ClassifyResponse(answers=answers))
+        return DecisionOutcome(response=DecisionResponse(answers=answers))
 
-    monkeypatch.setattr('evaluatorq.trace_finder.filter_selector.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.trace_finder.filter_selector.run_decision', fake_run_decision)
 
     selected = await select_filters(cast(Any, object()), 'typesafe/jev-latest', catalogue(), ' OpenAI errors in Demos ')
 
@@ -152,21 +152,21 @@ async def test_select_filters_uses_one_classify_request_for_non_empty_facets(mon
 
 
 @pytest.mark.asyncio
-async def test_filter_selector_retains_the_structured_classify_response(monkeypatch) -> None:
-    response = ClassifyResponse(
+async def test_filter_selector_retains_the_structured_decision_response(monkeypatch) -> None:
+    response = DecisionResponse(
         model='jev-latest',
-        answers={'project': ClassifyAnswer(type='choice', choice='Demos', confidence=0.8)},
+        answers={'project': DecisionAnswer(type='choice', choice='Demos', confidence=0.8)},
     )
 
-    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+    async def fake_run_decision(**kwargs: Any) -> DecisionOutcome:
         request = kwargs['request']
         answers = {
-            name: response.answers['project'] if name == 'project' else ClassifyAnswer(type='choice', choice='none')
+            name: response.answers['project'] if name == 'project' else DecisionAnswer(type='choice', choice='none')
             for name in request.questions
         }
-        return ClassifyOutcome(response=response.model_copy(update={'answers': answers}))
+        return DecisionOutcome(response=response.model_copy(update={'answers': answers}))
 
-    monkeypatch.setattr(filter_selector_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(filter_selector_module, 'run_decision', fake_run_decision)
 
     result = await select_filters_with_response(cast(Any, object()), 'typesafe/jev-latest', catalogue(), 'Demos')
 
@@ -181,17 +181,17 @@ async def test_filter_selector_retains_the_structured_classify_response(monkeypa
 async def test_select_filters_keeps_multiple_explicit_project_values_in_one_request(monkeypatch) -> None:
     calls: list[Any] = []
 
-    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+    async def fake_run_decision(**kwargs: Any) -> DecisionOutcome:
         calls.append(kwargs['request'])
         answers = {
-            name: ClassifyAnswer(type='noul', noul=0.9)
+            name: DecisionAnswer(type='noul', noul=0.9)
             if question.kind == 'noul'
-            else ClassifyAnswer(type='choice', choice='none')
+            else DecisionAnswer(type='choice', choice='none')
             for name, question in kwargs['request'].questions.items()
         }
-        return ClassifyOutcome(response=ClassifyResponse(answers=answers))
+        return DecisionOutcome(response=DecisionResponse(answers=answers))
 
-    monkeypatch.setattr(filter_selector_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(filter_selector_module, 'run_decision', fake_run_decision)
     available = FacetCatalogue(project=('A', 'B', 'C'), provider=('openai',))
 
     selected = await select_filters(cast(Any, object()), 'typesafe/jev-latest', available, 'project A or project B')
@@ -203,10 +203,10 @@ async def test_select_filters_keeps_multiple_explicit_project_values_in_one_requ
 
 @pytest.mark.asyncio
 async def test_select_filters_rejects_a_request_exceeding_question_limit(monkeypatch) -> None:
-    async def should_not_call(**kwargs: Any) -> ClassifyOutcome:
-        raise AssertionError('oversized classify request should not be sent')
+    async def should_not_call(**kwargs: Any) -> DecisionOutcome:
+        raise AssertionError('oversized /decisions request should not be sent')
 
-    monkeypatch.setattr(filter_selector_module, 'run_classify', should_not_call)
+    monkeypatch.setattr(filter_selector_module, 'run_decision', should_not_call)
     values = tuple(f'value_{index}' for index in range(50))
     available = FacetCatalogue(project=values, model=values, provider=values)
     query = ' '.join(values)
@@ -216,28 +216,28 @@ async def test_select_filters_rejects_a_request_exceeding_question_limit(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_select_filters_turns_classify_errors_into_filter_selection_error(monkeypatch) -> None:
-    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
-        return ClassifyOutcome(error_kind=JudgeError.PARSE, error_message='malformed classify reply')
+async def test_select_filters_turns_decision_errors_into_filter_selection_error(monkeypatch) -> None:
+    async def fake_run_decision(**kwargs: Any) -> DecisionOutcome:
+        return DecisionOutcome(error_kind=JudgeError.PARSE, error_message='malformed decision reply')
 
-    monkeypatch.setattr('evaluatorq.trace_finder.filter_selector.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.trace_finder.filter_selector.run_decision', fake_run_decision)
 
-    with pytest.raises(FilterSelectionError, match='malformed classify reply'):
+    with pytest.raises(FilterSelectionError, match='malformed decision reply'):
         await select_filters(cast(Any, object()), 'typesafe/jev-latest', catalogue(), 'find errors')
 
 
 @pytest.mark.asyncio
 async def test_select_filters_rejects_a_choice_outside_the_catalogue(monkeypatch) -> None:
-    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+    async def fake_run_decision(**kwargs: Any) -> DecisionOutcome:
         request = kwargs['request']
         answers = {
-            name: ClassifyAnswer(type='choice', choice='invented') if name == 'project'
-            else ClassifyAnswer(type='choice', choice='none')
+            name: DecisionAnswer(type='choice', choice='invented') if name == 'project'
+            else DecisionAnswer(type='choice', choice='none')
             for name in request.questions
         }
-        return ClassifyOutcome(response=ClassifyResponse(answers=answers))
+        return DecisionOutcome(response=DecisionResponse(answers=answers))
 
-    monkeypatch.setattr('evaluatorq.trace_finder.filter_selector.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.trace_finder.filter_selector.run_decision', fake_run_decision)
 
     with pytest.raises(FilterSelectionError, match='unavailable project choice'):
         await select_filters(cast(Any, object()), 'typesafe/jev-latest', catalogue(), 'invent a project')
@@ -245,28 +245,28 @@ async def test_select_filters_rejects_a_choice_outside_the_catalogue(monkeypatch
 
 @pytest.mark.asyncio
 async def test_select_filters_rejects_empty_query(monkeypatch) -> None:
-    async def should_not_run(**kwargs: Any) -> ClassifyOutcome:
+    async def should_not_run(**kwargs: Any) -> DecisionOutcome:
         raise AssertionError('classify should not run')
 
-    monkeypatch.setattr('evaluatorq.trace_finder.filter_selector.run_classify', should_not_run)
+    monkeypatch.setattr('evaluatorq.trace_finder.filter_selector.run_decision', should_not_run)
 
     with pytest.raises(ValueError, match='Enter a semantic trace query'):
         await select_filters(cast(Any, object()), 'typesafe/jev-latest', catalogue(), ' \n\t ')
 
 
 @pytest.mark.asyncio
-async def test_select_filters_retries_a_transient_classify_failure(monkeypatch) -> None:
+async def test_select_filters_retries_a_transient_decision_failure(monkeypatch) -> None:
     calls = 0
 
-    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+    async def fake_run_decision(**kwargs: Any) -> DecisionOutcome:
         nonlocal calls
         calls += 1
         if calls == 1:
             raise RuntimeError('transient')
         request = kwargs['request']
-        return ClassifyOutcome(
-            response=ClassifyResponse(
-                answers={name: ClassifyAnswer(type='choice', choice='none') for name in request.questions}
+        return DecisionOutcome(
+            response=DecisionResponse(
+                answers={name: DecisionAnswer(type='choice', choice='none') for name in request.questions}
             )
         )
 
@@ -277,7 +277,7 @@ async def test_select_filters_retries_a_transient_classify_failure(monkeypatch) 
         except RuntimeError:
             return await fn()
 
-    monkeypatch.setattr(filter_selector_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(filter_selector_module, 'run_decision', fake_run_decision)
     monkeypatch.setattr(filter_selector_module, 'with_retry', fake_with_retry)
 
     selected = await select_filters(cast(Any, object()), 'typesafe/jev-latest', catalogue(), 'find errors')
@@ -288,7 +288,7 @@ async def test_select_filters_retries_a_transient_classify_failure(monkeypatch) 
 
 @pytest.mark.asyncio
 async def test_select_filters_turns_exhausted_retries_into_domain_error(monkeypatch) -> None:
-    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+    async def fake_run_decision(**kwargs: Any) -> DecisionOutcome:
         del kwargs
         raise RuntimeError('transient exhausted')
 
@@ -296,7 +296,7 @@ async def test_select_filters_turns_exhausted_retries_into_domain_error(monkeypa
         del kwargs
         return await fn()
 
-    monkeypatch.setattr(filter_selector_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(filter_selector_module, 'run_decision', fake_run_decision)
     monkeypatch.setattr(filter_selector_module, 'with_retry', fake_with_retry)
 
     with pytest.raises(FilterSelectionError, match='transient exhausted'):

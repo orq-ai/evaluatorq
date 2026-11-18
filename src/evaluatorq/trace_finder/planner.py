@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from orq_ai_sdk import Orq
 
-    from evaluatorq.common.judge import ClassifyResponse
+    from evaluatorq.common.judge import DecisionResponse
     from evaluatorq.contracts import Usage
     from evaluatorq.trace_finder.compiler import CompiledQuery
 
@@ -37,7 +37,7 @@ class PlanningResult:
     generated_numeric: NumericFilters
     generated_time: tuple[datetime | None, datetime | None] | None
     effective_population: PopulationRequest
-    selector_response: ClassifyResponse | None
+    selector_response: DecisionResponse | None
     selector_error: str | None
     provenance: Mapping[str, str]
     usage: Mapping[str, Any]

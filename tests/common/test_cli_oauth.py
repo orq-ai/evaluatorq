@@ -49,7 +49,7 @@ async def test_cli_parse_uses_strict_schema_and_returns_validated_model(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_cli_classify_post_uses_oauth_request_endpoint(monkeypatch: Any) -> None:
+async def test_cli_decision_post_uses_oauth_request_endpoint(monkeypatch: Any) -> None:
     seen: dict[str, Any] = {}
 
     async def fake_create(*args: str, **kwargs: Any) -> _Process:

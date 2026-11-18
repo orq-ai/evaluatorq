@@ -67,9 +67,9 @@ Above the table, **Ask AI** plans a natural-language question and creates zero t
 1. You enter a question, such as `Conversations over 20k tokens where the customer was frustrated.`
 2. The compiler runs first, producing zero to three named classifier dimensions, numeric constraints for total tokens or duration, and (when requested) calendar bounds. The filter selector then uses the live catalogue of up to 50 values per facet to choose metadata filters; the two steps are sequential, not concurrent. Choose **LLM only** to have the configured fast `finder.filters` model select facets, numeric bounds and time bounds, or **LLM + decision model** to use the configured `finder.classifier` for facets while the compiler supplies numeric and calendar bounds. Both modes use the same compiler for dimensions. Literal-name assistance recognizes `model X`, `provider X`, `agent X`, `tool X`, `project X`, slash-qualified model names, and quoted values; a name outside the catalogue is used only after an exact scoped trace query confirms it. Boolean selections accept either `yes`/`no` or `true`/`false` labels.
 3. The finder merges those selections with any filters you chose explicitly and builds an OQL query. The base filter excludes `generate_content` operations, so the compiler and classifier traces do not crowd the population being searched. A model or provider filter drops the base filter, because a bare model call is itself a `generate_content` trace and would otherwise never match.
-4. The classifier judges each projected trace through evaluatorq, asking every dimension in one classify call per trace. A trace is included only when it matches every dimension. Results stream into one table column per dimension as each trace finishes, including the final poll after the run ends. With zero dimensions, every trace the filters keep is included without a classifier call.
+4. The classifier judges each projected trace through evaluatorq, asking every dimension in one classifier call per trace. A trace is included only when it matches every dimension. Results stream into one table column per dimension as each trace finishes, including the final poll after the run ends. With zero dimensions, every trace the filters keep is included without a classifier call.
 
-Each trace is prepared for the selected classifier model without changing the stored source. The configurable trace-input cap is 500,000 characters by default and covers classifier state plus the exact serialized selected questions. `typesafe/jev` receives indexed structured messages with paired tool results and recorded status/error metadata. Its state is capped at 112,000 characters, with state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. Other classifiers receive the full readable conversation, including tool inputs and results, shortened as needed to leave room for their questions. Known media parts render as placeholders, while unrelated structured content remains JSON. For rough cost estimates, character counts are divided by about four to estimate tokens; this is not the model tokenizer or an exact token-count guarantee.
+Each trace is prepared for the selected classifier model without changing the stored source. The configurable trace-input cap is 500,000 characters by default and covers classifier state plus the exact serialized selected questions. A decision model, such as the default `typesafe/jev-latest`, receives the decision state: indexed structured messages with paired tool results and recorded status/error metadata. Whether a model is a decision model comes from the Orq model catalogue, and `EVALUATORQ_DECISION_MODELS` overrides it. The `/decisions` input limits cap that state at 112,000 characters, with state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. Every other classifier model receives the full readable conversation, including tool inputs and results, shortened as needed to leave room for their questions. Known media parts render as placeholders, while unrelated structured content remains JSON. For rough cost estimates, character counts are divided by about four to estimate tokens; this is not the model tokenizer or an exact token-count guarantee.
 
 On **Traces**, Ask AI can classify traces already loaded in the table or search a new population. The finder creates zero to three dimensions; when dimensions exist, each selected trace gets one call that evaluates them all.
 
@@ -128,7 +128,7 @@ The finder merges the generated filters with any you chose explicitly and builds
 
 ### 3. Project each trace
 
-The classifier's exact serialized questions share the trace-input cap from Dashboard Settings with its state, defaulting to 500,000 total characters. For the `typesafe/jev` models the decision state is additionally capped at 112,000 characters, and reduced as needed to keep state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. For rough cost estimates, character counts are divided by about four to estimate tokens; this is not the model tokenizer or an exact token-count guarantee.
+The classifier's exact serialized questions share the trace-input cap from Dashboard Settings with its state, defaulting to 500,000 total characters. When the classifier is a decision model, the `/decisions` input limits additionally cap the decision state at 112,000 characters, and reduced as needed to keep state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. For rough cost estimates, character counts are divided by about four to estimate tokens; this is not the model tokenizer or an exact token-count guarantee.
 
 ??? info "What the decision state keeps and drops"
     - **Keeps** indexed role/type entries, full tool names, paired tool inputs/results, and recorded status and exit/error codes.
@@ -148,7 +148,7 @@ When dimensions exist, the classifier evaluates all dimensions for each projecte
     The finder does not upload evaluation result rows. Trace retrieval and model inference call Orq, and OpenTelemetry tracing may export spans when configured through environment variables. Selecting a CLI profile alone does not enable tracing. Set `ORQ_DISABLE_TRACING=1` before starting the command or dashboard to disable it.
 
 
-On **Trace search**, the review panel (shown in **Review first**) gains an **Apply filters only** button below the plan, so you can load the reviewed population into the table without spending a classifier call — the classify button itself is labelled with the trace count it is about to judge.
+On **Trace search**, the review panel (shown in **Review first**) gains an **Apply filters only** button below the plan, so you can load the reviewed population into the table without spending a classifier call — the **Apply + run classifier** button itself is labelled with the trace count it is about to judge.
 
 Filter chips generated by the classifier (rather than chosen explicitly by you) are marked with a small **AI** badge, so it's clear which filters you set and which the model picked.
 
@@ -164,7 +164,7 @@ When a run completes, choose **Download JSON** to export the query, classifier d
 
 Use the **Analyze matches** section after a completed run to download its export and see the Python and CLI commands for analyzing only the matched traces. The [Trace Insights guide](insights.md) explains the population, labels, discovered clusters, and saved-run review workflow.
 
-On **Trace search**, the common failure mode is stopping in **Review first**: the plan is visible, but no trace is judged until you press the classify button. If no traces match the compiled filters, the run ends with an explicit error instead of pretending that zero judgments are a successful result. The page stays available without Orq credentials and explains that trace loading is unavailable.
+On **Trace search**, the common failure mode is stopping in **Review first**: the plan is visible, but no trace is judged until you press **Apply + run classifier**. If no traces match the compiled filters, the run ends with an explicit error instead of pretending that zero judgments are a successful result. The page stays available without Orq credentials and explains that trace loading is unavailable.
 
 ## Filter chips
 
@@ -191,7 +191,7 @@ The facet selector picks categorical metadata from the live catalogue. The catal
 
 ### Numeric ranges
 
-The compiler, not the classifier, extracts numeric bounds. Classify tasks return a label (`choice`), a yes/no probability (`noul`), or a 0–1 score (`score`), so they cannot produce metadata thresholds. The compiler extracts inclusive integer ranges for `total_tokens` and `duration_ms` and applies them in OQL:
+The compiler, not the classifier, extracts numeric bounds. Decision questions return a label (`choice`), a yes/no probability (`noul`), or a 0–1 score (`score`), so they cannot produce metadata thresholds. The compiler extracts inclusive integer ranges for `total_tokens` and `duration_ms` and applies them in OQL:
 
 | You write | OQL bound |
 |---|---|
@@ -238,7 +238,7 @@ The dashboard command accepts `--compiler-model`, `--classifier-model`, `--windo
 
 ## CLI reference
 
-`eq find` first plans the question and loads the population, then prints the plan: the question, the search window, your filters, the filters the question generated, each classifier dimension with the answer that includes a trace, and the trace count, marked when it reached `--limit`. It then asks `Classify N traces?` (default yes) and starts classification only on yes; answering no cancels the run without any classify calls, and Ctrl-C exits with status 130. Pass `--yes` (`-y`) to skip the prompt; it is also skipped when stdin is not a terminal, and for a zero-dimension plan, which makes no per-trace calls. After classification it prints a newest-first table of matched traces and a summary of the full run. The CLI has no explorer table, trajectories view, or drawer. Add `--json PATH` to write the completed run export, and pass `--positive-only` to keep only matched trace records in that JSON export; the counts still describe the full run. Pass `--debug` to print progress and the compiler, filter, and classifier requests and responses. For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`. Debug output includes projected conversation content for every classified trace, even with `--positive-only`, so treat saved logs as trace data. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same diagnostics in CLI and dashboard runs.
+`eq find` first plans the question and loads the population, then prints the plan: the question, the search window, your filters, the filters the question generated, each classifier dimension with the answer that includes a trace, and the trace count, marked when it reached `--limit`. It then asks `Run the classifier on N traces?` (default yes) and starts classification only on yes; answering no cancels the run without any classifier calls, and Ctrl-C exits with status 130. Pass `--yes` (`-y`) to skip the prompt; it is also skipped when stdin is not a terminal, and for a zero-dimension plan, which makes no per-trace calls. After classification it prints a newest-first table of matched traces and a summary of the full run. The CLI has no explorer table, trajectories view, or drawer. Add `--json PATH` to write the completed run export, and pass `--positive-only` to keep only matched trace records in that JSON export; the counts still describe the full run. Pass `--debug` to print progress and the compiler, filter, and classifier requests and responses. For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`. Debug output includes projected conversation content for every classified trace, even with `--positive-only`, so treat saved logs as trace data. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same diagnostics in CLI and dashboard runs.
 
 The command cancels a run that has not finished after two hours of planning and classification; time spent at the prompt does not count. If any trace classification fails, it exits with status 1 and does not write the JSON file. Pass `--profile NAME` to use an Orq CLI API-key profile for trace retrieval and model calls. It overrides the saved profile and environment credentials. Without the flag, the saved profile applies only when **CLI API-key profile** is selected in Settings; choose **Environment** to use `ORQ_API_KEY` and `ORQ_BASE_URL`. Saved project IDs from older dashboard settings are ignored. Use `--project` to choose a project facet for one run.
 
@@ -260,9 +260,9 @@ For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`
 | `--yes`, `-y` | Skip the plan confirmation prompt. |
 | `--debug` | Print changed progress and compiler and classifier request and response data, including trace content. |
 | `--window-days INTEGER` (`1`–`90`) | How many recent days to search. |
-| `--filter-selection llm|llm+decision` | Override the saved metadata-filter selection mode for this run. The old name `llm+jev` still works. |
-| `--limit INTEGER` (`1`–`5000`) | Maximum traces to classify. |
-| `--parallelism INTEGER` (`1`–`200`) | Concurrent classify calls. |
+| `--filter-selection llm|llm+decision` | Override the saved metadata-filter selection mode for this run. The old name `llm+jev` is still read, with a deprecation warning. |
+| `--limit INTEGER` (`1`–`5000`) | Maximum traces to run the classifier on. |
+| `--parallelism INTEGER` (`1`–`200`) | Concurrent classifier calls. |
 | `--compiler-model TEXT` | Model that compiles the search question through the Orq router. Pins the `finder.compiler` task; default is the `fast` role, `openai/gpt-6-luna`. |
 | `--classifier-model TEXT` | Model that classifies each trace through the Orq router. Pins the `finder.classifier` task; default is the `classifier` role, `typesafe/jev-latest`. |
 | `--json PATH` | Write the completed run export to `PATH`. |
@@ -286,7 +286,7 @@ The facet and numeric options are explicit OQL constraints. The question supplie
 
 ## Limits and cost
 
-The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. The configured global character cap bounds classifier state plus exact serialized questions. The `typesafe/jev` models receive the decision state, an indexed structured state with paired tool results, which is also subject to a 112,000-character state cap and its 128,000/256,000-character state-plus-question ceilings.
+The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. The configured global character cap bounds classifier state plus exact serialized questions. Every decision model receives the decision state, an indexed structured state with paired tool results, which is also subject to the `/decisions` input limits: a 112,000-character state cap and 128,000/256,000-character state-plus-question ceilings.
 
 | Limit | Value |
 |---|---|

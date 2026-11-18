@@ -9,7 +9,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, create_model
 
 from evaluatorq.common.judge import (
-    ClassifyQuestion,
+    DecisionQuestion,
     JudgeOutcome,
     build_eval_replacements,
     models_called_off_router,
@@ -35,7 +35,7 @@ from evaluatorq.common.llm_client import (
     require_models_served_by_provider,
     resolve_llm_client,
 )
-from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
+from evaluatorq.common.model_catalogue import is_decision_model, is_known_decision_model
 from evaluatorq.common.model_roles import model_source, role_model
 from evaluatorq.common.output_adapters import (
     inputs_to_messages,
@@ -58,12 +58,12 @@ DEFAULT_JUDGE_MODEL = DEFAULT_SMART_MODEL
 DEFAULT_JURY_MAX_TOKENS = 8000
 
 PAIRWISE_LABELS = ['A', 'B', 'tie']
-PAIRWISE_CLASSIFY_CRITERIA = {
+PAIRWISE_DECISION_CRITERIA = {
     'A': 'Response A is better',
     'B': 'Response B is better',
     'tie': 'Neither is clearly better',
 }
-"""The three options a classify judge picks between on a pairwise comparison."""
+"""The three options a decision-model judge picks between on a pairwise comparison."""
 DEFAULT_PAIRWISE_CRITERIA = (
     'Compare the two responses on accuracy and correctness, helpfulness and '
     'completeness, clarity and organization, and relevance to the question.'
@@ -204,8 +204,8 @@ DEFAULT_TEMPLATE = (
 )
 
 
-def _build_classify_state(*, paths: list[str], replacements: dict[str, Any]) -> dict[str, Any]:
-    """Collect the material a classify judge is handed instead of a rendered prompt.
+def _build_decision_state(*, paths: list[str], replacements: dict[str, Any]) -> dict[str, Any]:
+    """Collect the material a decision-model judge is handed instead of a rendered prompt.
 
     ``paths`` is resolved once at construction — the caller's ``state_fields`` when it
     named any, otherwise every path the template would render, which is exactly what an
@@ -214,11 +214,11 @@ def _build_classify_state(*, paths: list[str], replacements: dict[str, Any]) -> 
     runs once per datapoint: re-deriving the paths would repeat those warnings for every
     row of the dataset.
 
-    ``criteria`` is always left out: a classify question carries it as ``instructions``,
-    and repeating it inside the material to judge would ask the model to classify its own
+    ``criteria`` is always left out: a decision question carries it as ``instructions``,
+    and repeating it inside the material to judge would ask the model to judge its own
     rubric. A path with no value in ``replacements`` is skipped with a debug log rather
     than sent as null. `_run_single_judge` warns about an empty result only after the
-    catalogue confirms that this model really uses the classify endpoint.
+    catalogue confirms that this model really uses the ``/decisions`` endpoint.
 
     Values are resolved nested-first (``prefer_nested=True``): the state is serialised as
     JSON, so the live list behind ``input.all_messages`` is what the decision model should read, not the
@@ -231,32 +231,32 @@ def _build_classify_state(*, paths: list[str], replacements: dict[str, Any]) -> 
     for path in requested:
         found, value = resolve_template_path(replacements, path, prefer_nested=True)
         if not found:
-            logger.debug('classify state: no value for template path {!r}, skipping it', path)
+            logger.debug('decision state: no value for template path {!r}, skipping it', path)
             continue
         state[path] = value
     return state
 
 
-def _warn_classify_repetitions(repetitions: int, *, pairwise: bool) -> None:
+def _warn_decision_repetitions(repetitions: int, *, pairwise: bool) -> None:
     """Name deterministic duplicate calls while preserving pairwise swap semantics."""
     if repetitions <= 1:
         return
     if pairwise:
         logger.warning(
-            'repetitions={} on a pairwise panel seating a classify judge: each A/B ordering is '
+            'repetitions={} on a pairwise panel seating a decision-model judge: each A/B ordering is '
             'deterministic, so repetitions bill extra calls for identical answers; `swap` still '
             'runs the two distinct orderings as intended',
             repetitions,
         )
         return
     logger.warning(
-        'repetitions={} on a panel seating a classify judge: a classify verdict is '
+        'repetitions={} on a panel seating a decision-model judge: a decision-model verdict is '
         'deterministic, so the extra calls are billed for identical answers',
         repetitions,
     )
 
 
-def _build_classify_question(
+def _build_decision_question(
     *,
     verdict_kind: str,
     criteria: str | None,
@@ -264,16 +264,16 @@ def _build_classify_question(
     levels: list[str] | None,
     threshold: float,
     state: dict[str, Any],
-) -> ClassifyQuestion | None:
-    """Build the question a classify judge answers, or ``None`` when the panel cannot pose one.
+) -> DecisionQuestion | None:
+    """Build the question a decision-model judge answers, or ``None`` when the panel cannot pose one.
 
     Built whenever the panel fields can express one. The fetched catalogue can reveal
-    a classify model only after construction, so every judge receives the candidate
+    a decision model only after construction, so every judge receives the candidate
     question and `run_judge` ignores it for models it judges by prompt.
 
-    ``None`` means the configuration cannot express a classify question — no
+    ``None`` means the configuration cannot express a decision question — no
     ``criteria`` to ask, a numeric panel with no ``levels`` to score against, or a
-    boolean threshold outside the probability range. A runtime-discovered classify
+    boolean threshold outside the probability range. A runtime-discovered decision
     model validates that configuration before calling `run_judge`; prompted judges
     continue to ignore the candidate question.
     """
@@ -282,15 +282,15 @@ def _build_classify_question(
     if verdict_kind == 'numeric':
         if not levels:
             return None
-        return ClassifyQuestion(kind='score', instructions=criteria, criteria=list(levels), state=state)
+        return DecisionQuestion(kind='score', instructions=criteria, criteria=list(levels), state=state)
     if label_descriptions:
-        return ClassifyQuestion(kind='choice', instructions=criteria, criteria=dict(label_descriptions), state=state)
+        return DecisionQuestion(kind='choice', instructions=criteria, criteria=dict(label_descriptions), state=state)
     if not 0.0 <= threshold <= 1.0:
         return None
-    return ClassifyQuestion(kind='noul', instructions=criteria, state=state, noul_threshold=threshold)
+    return DecisionQuestion(kind='noul', instructions=criteria, state=state, noul_threshold=threshold)
 
 
-def _validate_classify_configuration(
+def _validate_decision_configuration(
     *,
     criteria: str | None,
     verdict_kind: str,
@@ -299,32 +299,32 @@ def _validate_classify_configuration(
     label_names: list[str] | None,
     threshold: float,
 ) -> None:
-    """Reject panel settings that a runtime classify seat cannot honour."""
+    """Reject panel settings that a runtime decision-model seat cannot honour."""
     if not criteria:
         raise ValueError(
-            'A classify judge needs `criteria` to ask about; `prompt` alone does not build a classify question.'
+            'A decision-model judge needs `criteria` to ask about; `prompt` alone does not build a decision question.'
         )
     if verdict_kind == 'numeric' and not levels:
         raise ValueError(
-            'A classify judge scoring numerically needs `levels`: 2-10 ordered level '
+            'A decision-model judge scoring numerically needs `levels`: 2-10 ordered level '
             'descriptions the score is a weighted mean over.'
         )
     if verdict_kind == 'numeric' and tuple(score_range) != (0.0, 1.0):
         raise ValueError(
-            f'A classify judge returns a score scaled into (0.0, 1.0), so score_range '
-            f'{score_range} cannot be honoured. Drop the override or drop the classify judge.'
+            f'A decision-model judge returns a score scaled into (0.0, 1.0), so score_range '
+            f'{score_range} cannot be honoured. Drop the override or drop the decision-model judge.'
         )
     if verdict_kind == 'categorical' and not label_names and not 0.0 <= threshold <= 1.0:
         raise ValueError(
-            f'A classify judge compares `threshold` against a probability, so threshold '
+            f'A decision-model judge compares `threshold` against a probability, so threshold '
             f'({threshold}) must lie in [0.0, 1.0].'
         )
 
 
-def _warn_classify_ignored_settings(
+def _warn_decision_ignored_settings(
     *,
     all_judges: list[str],
-    classify_judges: list[str],
+    decision_judges: list[str],
     system_prompt: str | None,
     prompt: str | None,
     temperature: float | None,
@@ -334,18 +334,18 @@ def _warn_classify_ignored_settings(
     extra_kwargs: dict[str, Any] | None,
     extra_body: dict[str, Any] | None,
 ) -> None:
-    """Warn once when a classify seat is known about settings it cannot read.
+    """Warn once when a decision-model seat is known about settings it cannot read.
 
     ``system_prompt``/``prompt``/``temperature``/``structured_output`` are `llm_jury`
     keywords rather than `LLMCallConfig` fields, so the per-call
     `warn_unread_config_fields` inside `run_judge` never sees them. The other four
     configure the call; `_run_single_judge` keeps them off the config it builds for a
-    classify judge, so nothing downstream reports them either. Without this line all
+    decision-model judge, so nothing downstream reports them either. Without this line all
     eight would be dropped in silence. Only values detectably different from their
     defaults are named, so a panel using the defaults says nothing.
 
     ``all_judges`` is the whole panel, replacements included, so the warning can say
-    whether another seat may still read the ignored settings. Catalogue-only classify
+    whether another seat may still read the ignored settings. Catalogue-only decision
     models are not known synchronously, so that qualification deliberately says "any"
     prompted judges instead of claiming an unresolved seat is prompted.
     """
@@ -365,34 +365,34 @@ def _warn_classify_ignored_settings(
     ]
     if not ignored:
         return
-    runtime_classify = set(classify_judges)
-    prompted = [judge for judge in all_judges if judge not in runtime_classify and not is_known_classify_model(judge)]
+    runtime_decision = set(decision_judges)
+    prompted = [judge for judge in all_judges if judge not in runtime_decision and not is_known_decision_model(judge)]
     still_apply = ' (they still apply to any prompted judges)' if prompted else ''
     logger.warning(
-        'Panel seats a classify judge ({}); it is not prompted, so these settings do not reach it: {}{}.',
-        ', '.join(classify_judges),
+        'Panel seats a decision-model judge ({}); it is not prompted, so these settings do not reach it: {}{}.',
+        ', '.join(decision_judges),
         ', '.join(ignored),
         still_apply,
     )
 
 
-def _warn_unread_criteria(*, prompt: str | None, criteria: str | None, classify_seated: bool) -> None:
+def _warn_unread_criteria(*, prompt: str | None, criteria: str | None, decision_seated: bool) -> None:
     """Warn when ``criteria`` is set on a panel where nothing will read it.
 
-    ``criteria`` reaches a judge one of two ways: a classify judge takes it as the
+    ``criteria`` reaches a judge one of two ways: a decision-model judge takes it as the
     question it answers, and a prompted judge sees it only where the template renders
-    ``{{criteria}}``. Catalogue-only classify models are not known synchronously, so
-    the warning hedges that case instead of claiming the panel has no classify seat.
+    ``{{criteria}}``. Catalogue-only decision models are not known synchronously, so
+    the warning hedges that case instead of claiming the panel has no decision-model seat.
     Shared by `llm_jury` and `llm_jury_pairwise` so the two cannot disagree about when
     that is worth saying.
     """
-    if classify_seated or not prompt or not criteria:
+    if decision_seated or not prompt or not criteria:
         return
     if 'criteria' in extract_template_paths(prompt):
         return
     logger.warning(
-        'criteria is set but no judge reads it synchronously: no classify judge is known yet and '
-        'the prompt never renders {{criteria}}. A classify seat discovered from the '
+        'criteria is set but no judge reads it synchronously: no decision-model judge is known yet and '
+        'the prompt never renders {{criteria}}. A decision-model seat discovered from the '
         'catalogue still reads it as its question; otherwise add the placeholder or drop `criteria`.'
     )
 
@@ -450,22 +450,22 @@ async def _run_single_judge(
     extra_kwargs: dict[str, Any] | None,
     extra_body: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
-    classify: ClassifyQuestion | None = None,
-    classify_state_paths: list[str] | None = None,
-    classify_empty_warned: list[bool] | None = None,
-    on_classify: typing.Callable[[str], bool] | None = None,
+    decision: DecisionQuestion | None = None,
+    decision_state_paths: list[str] | None = None,
+    decision_empty_warned: list[bool] | None = None,
+    on_decision: typing.Callable[[str], bool] | None = None,
 ) -> Prediction:
     """Run one judge call and map its outcome to a `Prediction`.
 
     The single ``run_judge`` call site shared by the pointwise (`llm_jury`)
     and pairwise (`PairwiseComparator`) juries — only the ``replacements``
-    and the ``classify`` question differ between them, so keeping one path
+    and the ``decision`` question differ between them, so keeping one path
     stops the two from drifting.
 
-    ``classify`` is a candidate question built whenever the panel fields can express
+    ``decision`` is a candidate question built whenever the panel fields can express
     one. The fetched catalogue is the runtime authority: `run_judge` reads the question
     only for a model that serves the router's ``/decisions`` endpoint and ignores it for
-    every prompted judge. ``on_classify`` has the last word for a model the catalogue
+    every prompted judge. ``on_decision`` has the last word for a model the catalogue
     reveals at runtime: it returns ``False`` to prompt the model instead, which the
     pointwise jury does for a panel with no ``criteria`` (#247).
 
@@ -475,25 +475,25 @@ async def _run_single_judge(
     `warn_unread_config_fields` guard would then warn about settings the caller never
     chose — on every datapoint. The prompted judges on the same panel keep the full
     config; what those settings do and do not reach is said once by
-    `_warn_classify_ignored_settings`, at construction for known ids or on the first
+    `_warn_decision_ignored_settings`, at construction for known ids or on the first
     call for a model discovered through the fetched catalogue.
     """
-    runtime_classify = client_routes_through_orq(client) and await supports_classify(model, client)
-    if runtime_classify and on_classify is not None:
-        runtime_classify = on_classify(model)
-    if runtime_classify:
+    runtime_decision = client_routes_through_orq(client) and await is_decision_model(model, client)
+    if runtime_decision and on_decision is not None:
+        runtime_decision = on_decision(model)
+    if runtime_decision:
         if (
-            classify is not None
-            and not classify.state
-            and classify_empty_warned is not None
-            and not classify_empty_warned[0]
+            decision is not None
+            and not decision.state
+            and decision_empty_warned is not None
+            and not decision_empty_warned[0]
         ):
-            classify_empty_warned[0] = True
+            decision_empty_warned[0] = True
             logger.warning(
-                'classify state is empty: none of {} resolved against the available values, so the classify '
+                'decision state is empty: none of {} resolved against the available values, so the decision-model '
                 'judge sees the criteria and no material to judge. Name the paths that do resolve with '
                 'state_fields=[...], or add the placeholders to the prompt template.',
-                [path for path in (classify_state_paths or []) if path != 'criteria'],
+                [path for path in (decision_state_paths or []) if path != 'criteria'],
             )
         cfg = LLMCallConfig(model=model, timeout_ms=timeout_ms)
     else:
@@ -522,7 +522,7 @@ async def _run_single_judge(
         # Cross-domain purpose tag (same key redteam/simulation use) so the
         # platform can query every judge call in a run, not just walk the tree.
         span_attributes={'orq.llm.purpose': 'judge'},
-        classify=classify if runtime_classify else None,
+        decision=decision if runtime_decision else None,
     )
     return _outcome_to_prediction(outcome=outcome)
 
@@ -763,10 +763,10 @@ async def _llm_jury_judge_fn(
     extra_kwargs: dict[str, Any] | None,
     extra_body: dict[str, Any] | None,
     reasoning_effort: str | None,
-    classify: ClassifyQuestion | None,
-    classify_state_paths: list[str],
-    classify_empty_warned: list[bool],
-    on_classify: typing.Callable[[str], bool],
+    decision: DecisionQuestion | None,
+    decision_state_paths: list[str],
+    decision_empty_warned: list[bool],
+    on_decision: typing.Callable[[str], bool],
 ) -> Prediction:
     """Adapt `run_jury`'s positional ``judge_fn(model)`` call onto `_run_single_judge`.
 
@@ -789,10 +789,10 @@ async def _llm_jury_judge_fn(
         extra_kwargs=extra_kwargs,
         extra_body=extra_body,
         reasoning_effort=reasoning_effort,
-        classify=classify,
-        classify_state_paths=classify_state_paths,
-        classify_empty_warned=classify_empty_warned,
-        on_classify=on_classify,
+        decision=decision,
+        decision_state_paths=decision_state_paths,
+        decision_empty_warned=decision_empty_warned,
+        on_decision=on_decision,
     )
 
 
@@ -827,9 +827,9 @@ async def _llm_jury_scorer(
     score_range: tuple[float, float],
     label_descriptions: dict[str, str | None] | None,
     levels: list[str] | None,
-    classify_state_paths: list[str],
-    classify_empty_warned: list[bool],
-    on_classify: typing.Callable[[str], bool],
+    decision_state_paths: list[str],
+    decision_empty_warned: list[bool],
+    on_decision: typing.Callable[[str], bool],
 ) -> EvaluationResult:
     """Score one datapoint with the configured panel.
 
@@ -859,14 +859,14 @@ async def _llm_jury_scorer(
         resolved_client = resolve_llm_client(config_client=None, max_retries=0).client
         client_state[0] = resolved_client
     replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
-    question = _build_classify_question(
+    question = _build_decision_question(
         verdict_kind=verdict_kind,
         criteria=criteria,
         label_descriptions=label_descriptions,
         levels=levels,
         threshold=threshold,
-        state=_build_classify_state(
-            paths=classify_state_paths,
+        state=_build_decision_state(
+            paths=decision_state_paths,
             replacements=replacements,
         ),
     )
@@ -884,10 +884,10 @@ async def _llm_jury_scorer(
         extra_kwargs=extra_kwargs,
         extra_body=extra_body,
         reasoning_effort=reasoning_effort,
-        classify=question,
-        classify_state_paths=classify_state_paths,
-        classify_empty_warned=classify_empty_warned,
-        on_classify=on_classify,
+        decision=question,
+        decision_state_paths=decision_state_paths,
+        decision_empty_warned=decision_empty_warned,
+        on_decision=on_decision,
     )
 
     if assignment == 'cyclic':
@@ -1012,14 +1012,14 @@ def llm_jury(
     -------------------
     Pass ``criteria``, ``prompt``, or both — at least one, because a judge with
     neither has nothing to go on. An LLM judge reads the rendered ``prompt``, which
-    can pull the rubric in with a ``{{criteria}}`` placeholder; a classify judge is
+    can pull the rubric in with a ``{{criteria}}`` placeholder; a decision-model judge is
     handed ``criteria`` directly as its question and never sees the prompt. Setting
-    both on a panel that seats no classify judge and whose prompt never renders
+    both on a panel that seats no decision-model judge and whose prompt never renders
     ``{{criteria}}`` logs one warning: nothing would read the rubric.
 
-    Classify judges
-    ---------------
-    A classify model (``typesafe/jev-latest``) is not prompted. It is handed the
+    Decision-model judges
+    ---------------------
+    A decision model (``typesafe/jev-latest``) is not prompted. It is handed the
     material to judge and a question about it, so ``criteria`` is required on a panel
     that seats one, and ``prompt``, ``system_prompt`` and the sampling settings play
     no part in its verdict. These four keywords shape that question, and three of
@@ -1028,9 +1028,9 @@ def llm_jury(
     | keyword | what it does |
     | --- | --- |
     | ``labels={'good': 'fully correct', 'bad': None}`` | the dict form of ``labels``: the options of a ``choice`` question, with what each one means. An LLM judge gets the same descriptions through the verdict schema and the default system prompt. ``labels=[...]`` stays valid and describes nothing |
-    | ``levels=['useless', 'ok', 'excellent']`` | 2-10 ordered level descriptions for a ``score`` question. ``verdict_kind="numeric"`` only, required there when a classify judge is seated, and ``score_range`` must stay ``(0.0, 1.0)`` because the score comes back scaled into it |
+    | ``levels=['useless', 'ok', 'excellent']`` | 2-10 ordered level descriptions for a ``score`` question. ``verdict_kind="numeric"`` only, required there when a decision-model judge is seated, and ``score_range`` must stay ``(0.0, 1.0)`` because the score comes back scaled into it |
     | ``state_fields=['output.response']`` | which template paths are handed over as the material to judge. Defaults to every placeholder the prompt template renders, minus ``criteria`` (which is the question, not the material). A path with no value is skipped |
-    | ``threshold`` | in boolean mode, the cutoff the classify judge's probability must clear to read as ``true``. An LLM judge returns a boolean and ignores it (in numeric mode it is the pass/fail cutoff for both) |
+    | ``threshold`` | in boolean mode, the cutoff the decision-model judge's probability must clear to read as ``true``. An LLM judge returns a boolean and ignores it (in numeric mode it is the pass/fail cutoff for both) |
 
     Verdict modes
     -------------
@@ -1192,10 +1192,10 @@ def llm_jury(
     # A construction-time hint only: `run_judge` asks the catalogue per call and is
     # the authority on which endpoint serves a judge. What it buys is rejecting a
     # panel that cannot produce a verdict before a single datapoint is billed.
-    classify_judges = [judge for judge in panel + (replacement_judges or []) if is_known_classify_model(judge)]
-    classify_seated = bool(classify_judges)
-    if classify_seated:
-        _validate_classify_configuration(
+    decision_judges = [judge for judge in panel + (replacement_judges or []) if is_known_decision_model(judge)]
+    decision_seated = bool(decision_judges)
+    if decision_seated:
+        _validate_decision_configuration(
             criteria=criteria,
             verdict_kind=verdict_kind,
             levels=levels,
@@ -1203,10 +1203,10 @@ def llm_jury(
             label_names=label_names,
             threshold=threshold,
         )
-        _warn_classify_repetitions(repetitions, pairwise=False)
-        _warn_classify_ignored_settings(
+        _warn_decision_repetitions(repetitions, pairwise=False)
+        _warn_decision_ignored_settings(
             all_judges=panel + (replacement_judges or []),
-            classify_judges=classify_judges,
+            decision_judges=decision_judges,
             system_prompt=system_prompt,
             prompt=prompt,
             temperature=temperature,
@@ -1216,7 +1216,7 @@ def llm_jury(
             extra_kwargs=extra_kwargs,
             extra_body=extra_body,
         )
-    _warn_unread_criteria(prompt=prompt, criteria=criteria, classify_seated=classify_seated)
+    _warn_unread_criteria(prompt=prompt, criteria=criteria, decision_seated=decision_seated)
     # Round-robin assignment (CyclicJudge, arXiv:2603.01865): each datapoint is
     # scored by exactly one judge over the deduplicated panel. Inside
     # evaluatorq() the runner passes the dataset row, so the item->judge
@@ -1257,20 +1257,20 @@ def llm_jury(
     # about every placeholder it rejects, and deriving the paths inside the scorer
     # would repeat those warnings for every row. This candidate state is also prepared
     # for models discovered through the fetched catalogue after construction.
-    classify_state_paths = (
+    decision_state_paths = (
         (state_fields if state_fields is not None else extract_template_paths(template)) if criteria else []
     )
     # One flag per evaluator, not per datapoint: the state is rebuilt for every row, and
     # an empty one is a property of the panel's configuration, so it is worth one line.
-    classify_empty_warned = [False]
-    runtime_classify_warned = set(classify_judges)
+    decision_empty_warned = [False]
+    runtime_decision_warned = set(decision_judges)
 
-    def _admit_runtime_classify(model: str) -> bool:
-        # `supports_classify` is additive: most catalogue classify models also serve chat,
-        # so a prompt-only panel prompts them. Known classify-only ids were rejected above.
-        if not criteria or model in runtime_classify_warned:
+    def _admit_runtime_decision(model: str) -> bool:
+        # `supports_classify` is additive: most catalogue decision models also serve chat,
+        # so a prompt-only panel prompts them. Known decision-only ids were rejected above.
+        if not criteria or model in runtime_decision_warned:
             return bool(criteria)
-        _validate_classify_configuration(
+        _validate_decision_configuration(
             criteria=criteria,
             verdict_kind=verdict_kind,
             levels=levels,
@@ -1278,11 +1278,11 @@ def llm_jury(
             label_names=label_names,
             threshold=threshold,
         )
-        runtime_classify_warned.add(model)
-        _warn_classify_repetitions(repetitions, pairwise=False)
-        _warn_classify_ignored_settings(
+        runtime_decision_warned.add(model)
+        _warn_decision_repetitions(repetitions, pairwise=False)
+        _warn_decision_ignored_settings(
             all_judges=panel + (replacement_judges or []),
-            classify_judges=[model],
+            decision_judges=[model],
             system_prompt=system_prompt,
             prompt=prompt,
             temperature=temperature,
@@ -1337,9 +1337,9 @@ def llm_jury(
         score_range=score_range,
         label_descriptions=label_descriptions,
         levels=levels,
-        classify_state_paths=classify_state_paths,
-        classify_empty_warned=classify_empty_warned,
-        on_classify=_admit_runtime_classify,
+        decision_state_paths=decision_state_paths,
+        decision_empty_warned=decision_empty_warned,
+        on_decision=_admit_runtime_decision,
     )
     return {'name': name, 'scorer': scorer}
 
@@ -1409,7 +1409,7 @@ class PairwiseComparator:
         client: LLMClient | None,
         reasoning_effort: str | None = None,
         state_fields: list[str] | None = None,
-        classify_seated: bool | None = None,
+        decision_seated: bool | None = None,
     ) -> None:
         self._panel = panel
         self._criteria = criteria
@@ -1430,42 +1430,42 @@ class PairwiseComparator:
         self._extra_body = extra_body
         self._reasoning_effort = reasoning_effort
         self._client = as_llm_client(client)
-        # `classify_seated=None` means the comparator was constructed by hand.
-        direct_construction = classify_seated is None
+        # `decision_seated=None` means the comparator was constructed by hand.
+        direct_construction = decision_seated is None
         self._verdict_model = _build_verdict_model(
             verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
         )
         self._template = template if template is not None else DEFAULT_PAIRWISE_TEMPLATE
-        # A fetched catalogue entry can reveal a classify model only after construction.
+        # A fetched catalogue entry can reveal a decision model only after construction.
         # Prepare the paths now so that model can receive a question without requiring
         # a redundant register_model call. Prompted judges ignore the question.
-        self._classify_state_paths = (
+        self._decision_state_paths = (
             state_fields if state_fields is not None else extract_template_paths(self._template)
         )
         # One flag per comparator, not per pair: an empty state is a property of the
         # panel's configuration, so it is worth one line however many pairs are compared.
-        self._classify_empty_warned = [False]
-        self._classify_warned = {
+        self._decision_empty_warned = [False]
+        self._decision_warned = {
             judge
             for judge in panel + (replacement_judges or [])
-            if is_known_classify_model(judge) and not direct_construction
+            if is_known_decision_model(judge) and not direct_construction
         }
         self._system_prompt_was_set = system_prompt is not None
         self._prompt_was_set = template is not None
         if direct_construction:
             for judge in panel + (replacement_judges or []):
-                if is_known_classify_model(judge):
-                    self._admit_runtime_classify(judge)
+                if is_known_decision_model(judge):
+                    self._admit_runtime_decision(judge)
 
-    def _admit_runtime_classify(self, model: str) -> bool:
-        """Seat a catalogue-revealed classify judge, warning once about the settings it ignores."""
-        if model in self._classify_warned:
+    def _admit_runtime_decision(self, model: str) -> bool:
+        """Seat a catalogue-revealed decision-model judge, warning once about the settings it ignores."""
+        if model in self._decision_warned:
             return True
-        self._classify_warned.add(model)
-        _warn_classify_repetitions(self._repetitions, pairwise=True)
-        _warn_classify_ignored_settings(
+        self._decision_warned.add(model)
+        _warn_decision_repetitions(self._repetitions, pairwise=True)
+        _warn_decision_ignored_settings(
             all_judges=self._panel + (self._replacement_judges or []),
-            classify_judges=[model],
+            decision_judges=[model],
             system_prompt=self._system_prompt if self._system_prompt_was_set else None,
             prompt=self._template if self._prompt_was_set else None,
             temperature=self._temperature,
@@ -1496,12 +1496,12 @@ class PairwiseComparator:
             replacements: dict[str, Any] = {'question': question, 'criteria': self._criteria}
             replacements.update(_side_to_namespace('response_a', first))
             replacements.update(_side_to_namespace('response_b', second))
-            classify_question = ClassifyQuestion(
+            decision_question = DecisionQuestion(
                 kind='choice',
                 instructions=self._criteria,
-                criteria=dict(PAIRWISE_CLASSIFY_CRITERIA),
-                state=_build_classify_state(
-                    paths=self._classify_state_paths,
+                criteria=dict(PAIRWISE_DECISION_CRITERIA),
+                state=_build_decision_state(
+                    paths=self._decision_state_paths,
                     replacements=replacements,
                 ),
             )
@@ -1519,10 +1519,10 @@ class PairwiseComparator:
                 extra_kwargs=self._extra_kwargs,
                 extra_body=self._extra_body,
                 reasoning_effort=self._reasoning_effort,
-                classify=classify_question,
-                classify_state_paths=self._classify_state_paths,
-                classify_empty_warned=self._classify_empty_warned,
-                on_classify=self._admit_runtime_classify,
+                decision=decision_question,
+                decision_state_paths=self._decision_state_paths,
+                decision_empty_warned=self._decision_empty_warned,
+                on_decision=self._admit_runtime_decision,
             )
 
         # CyclicJudge: one judge per comparison, cycling through the panel.
@@ -1575,7 +1575,7 @@ def llm_jury_pairwise(
     call ``compare`` per A/B pair, and roll many comparisons up with
     `evaluatorq.pairwise.build_report`.
 
-    A classify judge (``typesafe/jev-latest``) is seated the same way it is on a
+    A decision-model judge (``typesafe/jev-latest``) is seated the same way it is on a
     pointwise panel: it answers an ``A``/``B``/``tie`` choice question whose question
     is ``criteria`` and whose material is every placeholder the template renders
     except ``criteria`` itself. ``state_fields`` narrows that material to the paths
@@ -1626,12 +1626,12 @@ def llm_jury_pairwise(
     _validate_assignment(assignment, min_successful_judges=min_successful_judges)
     # A construction-time hint only, exactly as in `llm_jury`: `run_judge` asks the
     # catalogue per call and decides which endpoint serves each judge.
-    classify_judges = [judge for judge in deduped + (replacement_judges or []) if is_known_classify_model(judge)]
-    if classify_judges:
-        _warn_classify_repetitions(repetitions, pairwise=True)
-        _warn_classify_ignored_settings(
+    decision_judges = [judge for judge in deduped + (replacement_judges or []) if is_known_decision_model(judge)]
+    if decision_judges:
+        _warn_decision_repetitions(repetitions, pairwise=True)
+        _warn_decision_ignored_settings(
             all_judges=deduped + (replacement_judges or []),
-            classify_judges=classify_judges,
+            decision_judges=decision_judges,
             system_prompt=system_prompt,
             prompt=prompt,
             temperature=temperature,
@@ -1641,7 +1641,7 @@ def llm_jury_pairwise(
             extra_kwargs=extra_kwargs,
             extra_body=extra_body,
         )
-    _warn_unread_criteria(prompt=prompt, criteria=criteria, classify_seated=bool(classify_judges))
+    _warn_unread_criteria(prompt=prompt, criteria=criteria, decision_seated=bool(decision_judges))
     _require_panel_served(
         client=client, judges=judges, model=model, panel=deduped, replacement_judges=replacement_judges
     )
@@ -1667,5 +1667,5 @@ def llm_jury_pairwise(
         reasoning_effort=reasoning_effort,
         client=client,
         state_fields=state_fields,
-        classify_seated=bool(classify_judges),
+        decision_seated=bool(decision_judges),
     )

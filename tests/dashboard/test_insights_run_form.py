@@ -208,7 +208,7 @@ def test_stages_wrap_the_stage_plan_the_launch_uses() -> None:
     titles = [title for _, title in spec.stages()]
 
     assert titles[0] == 'Find matching traces'
-    assert 'Match and classify traces' in titles
+    assert 'Match and label traces' in titles
 
 
 def test_rejected_start_rerenders_what_the_user_entered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

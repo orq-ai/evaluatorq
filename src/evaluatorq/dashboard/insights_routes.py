@@ -20,6 +20,8 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from evaluatorq.common.model_catalogue import is_decision_model
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.common.reports import esc
 from evaluatorq.common.run_manifest import list_manifests
@@ -258,7 +260,7 @@ async def _model_rejection(auth: DashboardAuth, spec: InsightsLaunchSpec) -> str
     """Why the catalogue says a chosen model cannot do its job, or `None` when it can or cannot be checked."""
     unchecked: list[str] = []
     for field, wrong_for in (
-        ('classifier_model', lambda info: not info.supports_classify),
+        ('classifier_model', lambda info: not info.supports_decisions),
         ('embedding_model', lambda info: info.model_type != 'embedding'),
     ):
         model = getattr(spec, field)
@@ -782,6 +784,8 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         except ValueError:
             return _html('<p class="insights-error" role="alert">Enter a valid model input character cap.</p>', 422)
         classifier_model = str(form.get('classifier_model') or '') or None
+        # The preview shapes the state the same way a run will, so it looks the model up first.
+        await is_decision_model(classifier_model or role_model('classifier', task='insights.labels'))
         try:
             classifier_questions = _snapshot_classifier_questions(form)
         except (KeyError, TypeError, ValueError, ValidationError):

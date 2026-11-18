@@ -23,8 +23,8 @@ from evaluatorq.dashboard.pairwise_palette import pw_side_colour, pw_side_label
 from evaluatorq.dashboard.report_kit import panel, short_model
 from evaluatorq.dashboard.sim_compare import resolve_run
 from evaluatorq.dashboard.trace_links import single_trace_url, trace_link_button
-from evaluatorq.pairwise_reports.export_html import _classify_details
-from evaluatorq.pairwise_reports.sections import _classify_observations, judge_order
+from evaluatorq.pairwise_reports.export_html import _decision_details
+from evaluatorq.pairwise_reports.sections import _decision_observations, judge_order
 from evaluatorq.pairwise_reports.stats import comparison_flags
 
 if TYPE_CHECKING:
@@ -284,8 +284,8 @@ def _vote_item(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> str:
         if not lines and vote.explanation:
             lines.append(f'<div>{esc(vote.explanation)}</div>')
         body = f'<div class="pw-passes">{"".join(lines)}</div>' if lines else ''
-        classify = _classify_details({'classify_observations': _classify_observations(vote, run)})
-        body += classify
+        details = _decision_details({'decision_observations': _decision_observations(vote, run)})
+        body += details
     return f'<li class="pw-vote"><div class="pw-vote-head" style="--c:{pw_side_colour(value)}">{head}{tags}</div>{body}</li>'
 
 

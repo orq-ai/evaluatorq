@@ -35,7 +35,7 @@ from evaluatorq.trace_finder import (
     TraceRecord,
     ValueSelection,
 )
-from evaluatorq.common.judge import ClassifyAnswer, ClassifyQuestion, ClassifyResponse
+from evaluatorq.common.judge import DecisionAnswer, DecisionQuestion, DecisionResponse
 
 
 def test_failed_facet_warmup_releases_background_task(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,7 +92,7 @@ def _trace() -> TraceRecord:
 
 def _compiled() -> CompiledQuery:
     return CompiledQuery(
-        task=ClassifyQuestion(
+        task=DecisionQuestion(
             kind='choice',
             instructions="Judge the customer's emotional state.",
             criteria={'frustrated': 'Annoyed or escalating.', 'neutral': 'Transactional.'},
@@ -104,11 +104,11 @@ def _compiled() -> CompiledQuery:
 
 def test_review_form_preserves_zero_thresholds() -> None:
     noul = CompiledQuery(
-        task=ClassifyQuestion(kind='noul', instructions='Did it happen?', noul_threshold=0.5, state={}),
+        task=DecisionQuestion(kind='noul', instructions='Did it happen?', noul_threshold=0.5, state={}),
         selection=ValueSelection(kind='values', values=(True,)),
     )
     score = CompiledQuery(
-        task=ClassifyQuestion(kind='score', instructions='Score it.', criteria=['Low', 'High'], state={}),
+        task=DecisionQuestion(kind='score', instructions='Score it.', criteria=['Low', 'High'], state={}),
         selection=ThresholdSelection(kind='threshold', operator='gte', value=0.5),
     )
 
@@ -661,7 +661,7 @@ def test_full_page_polling_timer_disappears_on_terminal_fragment(setup_finder) -
 
 def test_score_review_keeps_generated_threshold_and_colors_scores() -> None:
     compiled = CompiledQuery(
-        task=ClassifyQuestion(kind='score', instructions='Score the trace.', criteria=['Low', 'High'], state={}),
+        task=DecisionQuestion(kind='score', instructions='Score the trace.', criteria=['Low', 'High'], state={}),
         selection=ThresholdSelection(kind='threshold', operator='gte', value=0.65),
     )
     review = finder_views.task_panel((compiled,), editable=True)
@@ -687,7 +687,7 @@ def test_completed_table_renders_one_verdict_column_per_dimension() -> None:
     """A two-dimension run names each result column after its dimension, not the old fixed Verdict/Conf. pair."""
     sentiment = CompiledQuery(
         name='Sentiment',
-        task=ClassifyQuestion(
+        task=DecisionQuestion(
             kind='choice', instructions="Judge the customer's tone.",
             criteria={'frustrated': 'Annoyed.', 'neutral': 'Calm.'}, state={},
         ),
@@ -695,7 +695,7 @@ def test_completed_table_renders_one_verdict_column_per_dimension() -> None:
     )
     escalated = CompiledQuery(
         name='Escalated',
-        task=ClassifyQuestion(kind='noul', instructions='Was this escalated?', noul_threshold=0.5, state={}),
+        task=DecisionQuestion(kind='noul', instructions='Was this escalated?', noul_threshold=0.5, state={}),
         selection=ValueSelection(kind='values', values=(True,)),
     )
     trace = _trace()
@@ -730,12 +730,12 @@ def test_review_form_with_two_dimensions_posts_dimension_prefixed_fields(setup_f
 
     sentiment = CompiledQuery(
         name='Sentiment',
-        task=ClassifyQuestion(kind='noul', instructions='Is the user frustrated?', noul_threshold=0.5, state={}),
+        task=DecisionQuestion(kind='noul', instructions='Is the user frustrated?', noul_threshold=0.5, state={}),
         selection=ValueSelection(kind='values', values=(True,)),
     )
     escalated = CompiledQuery(
         name='Escalated',
-        task=ClassifyQuestion(kind='noul', instructions='Was this escalated?', noul_threshold=0.5, state={}),
+        task=DecisionQuestion(kind='noul', instructions='Was this escalated?', noul_threshold=0.5, state={}),
         selection=ValueSelection(kind='values', values=(True,)),
     )
     store.snapshot_value = replace(store.snapshot_value, dimensions=(sentiment, escalated))
@@ -763,8 +763,8 @@ def test_review_form_with_two_dimensions_posts_dimension_prefixed_fields(setup_f
 def test_filter_output_panel_shows_structured_llm_reply_and_escaped_values() -> None:
     snapshot = RunSnapshot(
         generated_filters=FacetSelection(project=frozenset({'Demos'})),
-        filter_response=ClassifyResponse(
-            model='jev-latest', answers={'project': ClassifyAnswer(type='choice', choice='<script>')}
+        filter_response=DecisionResponse(
+            model='jev-latest', answers={'project': DecisionAnswer(type='choice', choice='<script>')}
         ),
     )
 
@@ -788,7 +788,7 @@ def test_filter_output_panel_reports_selection_failure() -> None:
 
 def test_noul_task_panel_omits_empty_label_and_criteria_sections() -> None:
     html = finder_views.task_panel((_compiled().model_copy(update={
-        'task': ClassifyQuestion(kind='noul', instructions='Does this match?', state={}),
+        'task': DecisionQuestion(kind='noul', instructions='Does this match?', state={}),
         'selection': ValueSelection(kind='values', values=(True,)),
     }),), editable=False)
 
@@ -1641,7 +1641,7 @@ def test_matched_answer_does_not_show_prose_reason_without_classifier_score() ->
 
     tone = CompiledQuery(
         name='Tone',
-        task=ClassifyQuestion(
+        task=DecisionQuestion(
             kind='choice', instructions='Tone?', criteria={'frustrated': 'Annoyed.', 'neutral': 'Calm.'}, state={}
         ),
         selection=ValueSelection(kind='values', values=('frustrated',)),
@@ -1657,7 +1657,7 @@ def test_matched_answer_does_not_show_prose_reason_without_classifier_score() ->
 
 def _yes_no_snapshot(summary: str | None, confidence: float | None = 0.93):
     dimension = CompiledQuery(
-        task=ClassifyQuestion(kind='noul', instructions='Is it about traces?', noul_threshold=0.5, state={}),
+        task=DecisionQuestion(kind='noul', instructions='Is it about traces?', noul_threshold=0.5, state={}),
         selection=ValueSelection(kind='values', values=(True,)),
     )
     answer = DimensionAnswer(value=True, matched=True, confidence=confidence, summary=summary)

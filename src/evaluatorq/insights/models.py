@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import warnings
 from datetime import datetime  # noqa: TC003
 from pathlib import Path  # noqa: TC003
 from types import MappingProxyType
@@ -12,7 +11,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from typing_extensions import Self
 
-from evaluatorq.common.judge import ClassifyQuestion
+from evaluatorq.common.judge import DecisionQuestion
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.trace_document import (  # noqa: TC001 — Pydantic needs the runtime model types.
     DatasetRef,
@@ -112,9 +111,9 @@ class LabelSpec(BaseModel):
     criteria: dict[str, str | None] | list[str] | None = None
     noul_threshold: BoundedRatio = 0.5
 
-    def to_question(self, state: dict[str, Any] | str | list[Any]) -> ClassifyQuestion:
+    def to_question(self, state: dict[str, Any] | str | list[Any]) -> DecisionQuestion:
         """Build the `/decisions` question for this label against `state`, validating the criteria/kind shape."""
-        return ClassifyQuestion(
+        return DecisionQuestion(
             kind=self.kind,
             instructions=self.instructions,
             criteria=self.criteria,
@@ -152,12 +151,7 @@ class InsightsPopulation(BaseModel):
     @classmethod
     def accept_legacy_filter_selection(cls, value: object) -> object:
         """Accept the old ``llm+jev`` name for ``llm+decision``, with a deprecation warning."""
-        normalized = normalize_filter_selection(value)
-        if normalized != value:
-            warnings.warn(
-                "filter_selection='llm+jev' is deprecated; use 'llm+decision'.", DeprecationWarning, stacklevel=2
-            )
-        return normalized
+        return normalize_filter_selection(value)
 
     @model_validator(mode='before')
     @classmethod

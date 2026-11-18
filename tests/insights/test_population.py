@@ -434,10 +434,10 @@ async def test_query_path_uses_shared_planner_and_generated_default_time(
     # The old name arrives as the function argument here, the one path a population's own validator does not cover.
     legacy = given == 'llm+jev'
     mode = 'llm+decision' if legacy else given
-    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.common.judge import DecisionQuestion
 
     compiled_query = CompiledQuery(
-        task=ClassifyQuestion(
+        task=DecisionQuestion(
             kind='choice', instructions='classify', criteria={'billing': 'billing help', 'technical': 'tech help'}, state={}
         ),
         selection=ValueSelection(kind='values', values=('billing',)),
@@ -826,10 +826,10 @@ async def test_export_path_bad_json_raises_population_error(tmp_path: Any) -> No
 @pytest.mark.asyncio
 @pytest.mark.parametrize('selection_error', ['catalogue unavailable', None])
 async def test_empty_query_plan_does_not_load_a_broader_population(monkeypatch, selection_error):
-    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.common.judge import DecisionQuestion
 
     dimension = CompiledQuery(
-        task=ClassifyQuestion(kind='noul', instructions='The user requests a refund.', state={}),
+        task=DecisionQuestion(kind='noul', instructions='The user requests a refund.', state={}),
         selection=ValueSelection(kind='values', values=(True,)),
     )
 

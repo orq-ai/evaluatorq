@@ -10,7 +10,7 @@ import pytest
 from loguru import logger
 from openai import APIStatusError
 
-from evaluatorq.common.judge import ClassifyAnswer, ClassifyOutcome, ClassifyRequest, ClassifyResponse, JudgeError
+from evaluatorq.common.judge import DecisionAnswer, DecisionOutcome, DecisionRequest, DecisionResponse, JudgeError
 from evaluatorq.contracts import Usage
 from evaluatorq.insights import merge as merge_module
 from evaluatorq.insights.describe import ClusterName
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 class _FakeClient:
-    """Placeholder object — `run_classify` is monkeypatched, so this is never called."""
+    """Placeholder object — `run_decision` is monkeypatched, so this is never called."""
 
 
 def fake_client() -> AsyncOpenAI:
@@ -46,21 +46,21 @@ async def test_merge_retries_http_520_but_records_each_attempt(monkeypatch: pyte
     async def no_wait(*_: Any) -> None:
         return None
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         nonlocal calls
         calls += 1
         if calls == 1:
-            return ClassifyOutcome(
+            return DecisionOutcome(
                 error_kind=JudgeError.API_STATUS,
                 error_exc=_api_status_error(520),
                 token_usage=Usage(input_tokens=3, calls=1),
             )
-        return ClassifyOutcome(
-            response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.9)}),
+        return DecisionOutcome(
+            response=DecisionResponse(answers={'same': DecisionAnswer(type='noul', noul=0.9)}),
             token_usage=Usage(input_tokens=5, calls=1),
         )
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
     monkeypatch.setattr('evaluatorq.common.retry.asyncio.sleep', no_wait)
     ledger = UsageLedger()
     result = await merge_similar(
@@ -79,16 +79,16 @@ async def test_merge_retries_http_520_but_records_each_attempt(monkeypatch: pyte
 async def test_merge_does_not_retry_http_400(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         nonlocal calls
         calls += 1
-        return ClassifyOutcome(
+        return DecisionOutcome(
             error_kind=JudgeError.API_STATUS,
             error_exc=_api_status_error(400),
             token_usage=Usage(input_tokens=3, calls=1),
         )
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
     ledger = UsageLedger()
     result = await merge_similar(
         _names(0, 1), examples={}, neighbours={0: [1]}, client=fake_client(), model='m', usage=ledger
@@ -104,10 +104,10 @@ async def test_merge_does_not_retry_http_400(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_merges_pair_above_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
-        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.6)}))
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
+        return DecisionOutcome(response=DecisionResponse(answers={'same': DecisionAnswer(type='noul', noul=0.6)}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     names = _names(0, 1)
     result = await merge_similar(names, examples={0: ['a'], 1: ['b']}, neighbours={0: [1], 1: [0]}, client=fake_client(), model='m', threshold=0.5)
@@ -117,10 +117,10 @@ async def test_merges_pair_above_threshold(monkeypatch: pytest.MonkeyPatch) -> N
 
 @pytest.mark.asyncio
 async def test_does_not_merge_pair_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
-        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.4)}))
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
+        return DecisionOutcome(response=DecisionResponse(answers={'same': DecisionAnswer(type='noul', noul=0.4)}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     names = _names(0, 1)
     result = await merge_similar(names, examples={0: ['a'], 1: ['b']}, neighbours={0: [1], 1: [0]}, client=fake_client(), model='m', threshold=0.5)
@@ -133,10 +133,10 @@ async def test_does_not_merge_pair_below_threshold(monkeypatch: pytest.MonkeyPat
 async def test_transitive_merge_collapses_chain_to_one_representative(monkeypatch: pytest.MonkeyPatch) -> None:
     # a~b (0,1) and b~c (1,2) merge above threshold; a~c is never asked (not neighbours)
     # but must still collapse onto one representative via union-find.
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
-        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.9)}))
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
+        return DecisionOutcome(response=DecisionResponse(answers={'same': DecisionAnswer(type='noul', noul=0.9)}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     names = _names(0, 1, 2)
     neighbours = {0: [1], 1: [0, 2], 2: [1]}
@@ -147,10 +147,10 @@ async def test_transitive_merge_collapses_chain_to_one_representative(monkeypatc
 
 @pytest.mark.asyncio
 async def test_failed_pair_keeps_both_clusters_unmerged_and_logs(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
-        return ClassifyOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
+        return DecisionOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     names = _names(0, 1)
     messages: list[str] = []
@@ -169,10 +169,10 @@ async def test_failed_pair_keeps_both_clusters_unmerged_and_logs(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_merge_result_counts_all_failed_pairs(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
-        return ClassifyOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
+        return DecisionOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     names = _names(0, 1, 2)
     result = await merge_similar(
@@ -191,14 +191,14 @@ async def test_merge_result_counts_all_failed_pairs(monkeypatch: pytest.MonkeyPa
 async def test_merge_result_counts_partial_pair_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         nonlocal calls
         calls += 1
         if calls == 1:
-            return ClassifyOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
-        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.1)}))
+            return DecisionOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
+        return DecisionOutcome(response=DecisionResponse(answers={'same': DecisionAnswer(type='noul', noul=0.1)}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     names = _names(0, 1, 2)
     result = await merge_similar(
@@ -214,10 +214,10 @@ async def test_merge_result_counts_partial_pair_failures(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_missing_answer_keeps_both_unmerged(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
-        return ClassifyOutcome(response=ClassifyResponse(answers={}))
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
+        return DecisionOutcome(response=DecisionResponse(answers={}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     names = _names(0, 1)
     result = await merge_similar(
@@ -230,11 +230,11 @@ async def test_missing_answer_keeps_both_unmerged(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.asyncio
 async def test_answer_with_non_noul_type_is_a_failed_pair(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
-        answer = ClassifyAnswer(type='choice', noul=0.9)
-        return ClassifyOutcome(response=ClassifyResponse(answers={'same': answer}))
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
+        answer = DecisionAnswer(type='choice', noul=0.9)
+        return DecisionOutcome(response=DecisionResponse(answers={'same': answer}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
     result = await merge_similar(
         _names(0, 1), examples={}, neighbours={0: [1]}, client=fake_client(), model='m', threshold=0.5
     )
@@ -245,13 +245,13 @@ async def test_answer_with_non_noul_type_is_a_failed_pair(monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_unexpected_pair_error_is_failed_without_aborting_other_pairs(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         state = cast(dict[str, Any], request.state)
         if state['cluster_a']['name'] == 'cluster-0':
             raise RuntimeError('unexpected router failure')
-        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.9)}))
+        return DecisionOutcome(response=DecisionResponse(answers={'same': DecisionAnswer(type='noul', noul=0.9)}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
     result = await merge_similar(
         _names(0, 1, 2), examples={}, neighbours={0: [1], 1: [2]}, client=fake_client(), model='m', threshold=0.5
     )
@@ -263,10 +263,10 @@ async def test_unexpected_pair_error_is_failed_without_aborting_other_pairs(monk
 
 @pytest.mark.asyncio
 async def test_pair_cancellation_is_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     with pytest.raises(asyncio.CancelledError):
         await merge_similar(_names(0, 1), examples={}, neighbours={0: [1]}, client=fake_client(), model='m')
@@ -276,12 +276,12 @@ async def test_pair_cancellation_is_not_swallowed(monkeypatch: pytest.MonkeyPatc
 async def test_pair_deduplicated_regardless_of_direction(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         nonlocal calls
         calls += 1
-        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.9)}))
+        return DecisionOutcome(response=DecisionResponse(answers={'same': DecisionAnswer(type='noul', noul=0.9)}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     names = _names(0, 1)
     # Both directions listed as neighbours — must be asked once, not twice.
@@ -294,12 +294,12 @@ async def test_pair_deduplicated_regardless_of_direction(monkeypatch: pytest.Mon
 async def test_neighbour_missing_from_names_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         nonlocal calls
         calls += 1
-        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.9)}))
+        return DecisionOutcome(response=DecisionResponse(answers={'same': DecisionAnswer(type='noul', noul=0.9)}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     names = _names(0)  # cluster 1 was never described (e.g. it failed) so it's absent
     await merge_similar(names, examples={}, neighbours={0: [1]}, client=fake_client(), model='m', threshold=0.5)
@@ -309,13 +309,13 @@ async def test_neighbour_missing_from_names_is_skipped(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_request_carries_both_clusters_name_description_and_examples(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: list[ClassifyRequest] = []
+    captured: list[DecisionRequest] = []
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         captured.append(request)
-        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.1)}))
+        return DecisionOutcome(response=DecisionResponse(answers={'same': DecisionAnswer(type='noul', noul=0.1)}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     names = _names(0, 1)
     examples = {0: ['ex-a1', 'ex-a2', 'ex-a3', 'ex-a4'], 1: ['ex-b1']}
@@ -346,12 +346,12 @@ async def test_invalid_threshold_is_rejected_before_classification(
 ) -> None:
     calls = 0
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         nonlocal calls
         calls += 1
-        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.9)}))
+        return DecisionOutcome(response=DecisionResponse(answers={'same': DecisionAnswer(type='noul', noul=0.9)}))
 
-    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(merge_module, 'run_decision', fake_run_decision)
 
     with pytest.raises(ValueError, match='threshold must be finite and between 0 and 1'):
         await merge_similar(

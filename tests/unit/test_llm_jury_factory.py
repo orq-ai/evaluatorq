@@ -21,7 +21,7 @@ llm_jury_mod = importlib.import_module("evaluatorq.llm_jury")
 
 
 def test_validation_requires_criteria_or_prompt():
-    # Both together is allowed — a classify judge reads `criteria`, an LLM judge
+    # Both together is allowed — a decision judge reads `criteria`, an LLM judge
     # renders the prompt, and a mixed panel needs each. Neither is the error.
     with pytest.raises(ValueError):
         llm_jury(name="x")

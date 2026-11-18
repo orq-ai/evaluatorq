@@ -13,11 +13,11 @@ from loguru import logger
 from openai import APIStatusError
 
 from evaluatorq.common.judge import (
-    ClassifyAnswer,
-    ClassifyOutcome,
-    ClassifyQuestion,
-    ClassifyRequest,
-    ClassifyResponse,
+    DecisionAnswer,
+    DecisionOutcome,
+    DecisionQuestion,
+    DecisionRequest,
+    DecisionResponse,
     JudgeError,
 )
 from evaluatorq.contracts import LLMCallConfig, Usage
@@ -58,7 +58,7 @@ MADE_ERRORS = LabelSpec(
 )
 
 INTENT_MATCH = CompiledQuery(
-    task=ClassifyQuestion(
+    task=DecisionQuestion(
         kind='choice',
         instructions='Classify the support need.',
         criteria={'billing': 'Billing help.', 'technical': 'Technical help.'},
@@ -85,23 +85,23 @@ async def test_label_retries_http_520_but_records_each_attempt(monkeypatch: pyte
     async def no_wait(*_: Any) -> None:
         return None
 
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
         nonlocal calls
         calls += 1
         if calls == 1:
-            return ClassifyOutcome(
+            return DecisionOutcome(
                 error_kind=JudgeError.API_STATUS,
                 error_exc=_api_status_error(520),
                 token_usage=Usage(input_tokens=3, calls=1),
             )
-        return ClassifyOutcome(
-            response=ClassifyResponse(answers={'sentiment': ClassifyAnswer(type='choice', choice='positive')}),
+        return DecisionOutcome(
+            response=DecisionResponse(answers={'sentiment': DecisionAnswer(type='choice', choice='positive')}),
             token_usage=Usage(input_tokens=5, calls=1),
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
     monkeypatch.setattr('evaluatorq.common.retry.asyncio.sleep', no_wait)
     ledger = UsageLedger()
     results = await label_traces(
@@ -126,18 +126,18 @@ async def test_label_retries_http_520_but_records_each_attempt(monkeypatch: pyte
 async def test_label_does_not_retry_http_400(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
         nonlocal calls
         calls += 1
-        return ClassifyOutcome(
+        return DecisionOutcome(
             error_kind=JudgeError.API_STATUS,
             error_exc=_api_status_error(400),
             token_usage=Usage(input_tokens=3, calls=1),
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
     ledger = UsageLedger()
     results = await label_traces(
         [make_trace('400')],
@@ -166,15 +166,15 @@ async def test_failure_taxonomy_keeps_clean_failure_and_unknown_answers(monkeypa
     replies = iter(['No failure', 'Hallucination', 'unsupported mode'])
     requested = []
 
-    async def fake_run_classify(*, request: ClassifyRequest, **kwargs: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, request: DecisionRequest, **kwargs: Any) -> DecisionOutcome:
         requested.append(request.questions['failure_taxonomy'])
-        return ClassifyOutcome(
-            response=ClassifyResponse(answers={
-                'failure_taxonomy': ClassifyAnswer(type='choice', choice=next(replies)),
+        return DecisionOutcome(
+            response=DecisionResponse(answers={
+                'failure_taxonomy': DecisionAnswer(type='choice', choice=next(replies)),
             }),
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
     clean = make_trace('clean').model_copy(update={'messages': (
         {'role': 'user', 'content': 'What is two plus two?'},
         {'role': 'assistant', 'content': 'Four.'},
@@ -202,23 +202,23 @@ async def test_failure_taxonomy_keeps_clean_failure_and_unknown_answers(monkeypa
 
 @pytest.mark.asyncio
 async def test_all_labels_answered_and_matched(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
         assert MATCH_KEY in request.questions
         assert 'sentiment' in request.questions
-        return ClassifyOutcome(
-            response=ClassifyResponse(
+        return DecisionOutcome(
+            response=DecisionResponse(
                 answers={
-                    MATCH_KEY: ClassifyAnswer(type='choice', choice='billing', confidence=0.8),
-                    'sentiment': ClassifyAnswer(
+                    MATCH_KEY: DecisionAnswer(type='choice', choice='billing', confidence=0.8),
+                    'sentiment': DecisionAnswer(
                         type='choice', choice='positive', confidence=0.9, probabilities={'positive': 0.9}
                     ),
                 }
             )
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
 
     trace = make_trace('t1')
     outcomes = await label_traces(
@@ -243,20 +243,20 @@ async def test_all_labels_answered_and_matched(monkeypatch: pytest.MonkeyPatch) 
 async def test_multiple_population_dimensions_must_all_match(monkeypatch: pytest.MonkeyPatch) -> None:
     second = INTENT_MATCH.model_copy(update={'name': 'customer sentiment'})
 
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
         assert set(request.questions) == {'__match_0__', '__match_1__'}
-        return ClassifyOutcome(
-            response=ClassifyResponse(
+        return DecisionOutcome(
+            response=DecisionResponse(
                 answers={
-                    '__match_0__': ClassifyAnswer(type='choice', choice='billing'),
-                    '__match_1__': ClassifyAnswer(type='choice', choice='technical'),
+                    '__match_0__': DecisionAnswer(type='choice', choice='billing'),
+                    '__match_1__': DecisionAnswer(type='choice', choice='technical'),
                 }
             )
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
     outcomes = await label_traces(
         [make_trace('t1')],
         labels=[],
@@ -271,19 +271,19 @@ async def test_multiple_population_dimensions_must_all_match(monkeypatch: pytest
 
 @pytest.mark.asyncio
 async def test_missing_label_answer_fails_only_that_label(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
-        return ClassifyOutcome(
-            response=ClassifyResponse(
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
+        return DecisionOutcome(
+            response=DecisionResponse(
                 answers={
-                    MATCH_KEY: ClassifyAnswer(type='choice', choice='billing'),
+                    MATCH_KEY: DecisionAnswer(type='choice', choice='billing'),
                     # 'sentiment' deliberately missing from the reply.
                 }
             )
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
 
     trace = make_trace('t1')
     outcomes = await label_traces(
@@ -306,19 +306,19 @@ async def test_missing_label_answer_fails_only_that_label(monkeypatch: pytest.Mo
 async def test_refused_label_answer_fails_only_that_label_and_says_it_was_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
-        return ClassifyOutcome(
-            response=ClassifyResponse(
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
+        return DecisionOutcome(
+            response=DecisionResponse(
                 answers={
-                    MATCH_KEY: ClassifyAnswer(type='choice', choice='billing'),
-                    'sentiment': ClassifyAnswer(type='refusal'),
+                    MATCH_KEY: DecisionAnswer(type='choice', choice='billing'),
+                    'sentiment': DecisionAnswer(type='refusal'),
                 }
             )
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
 
     outcomes = await label_traces(
         [make_trace('t1')],
@@ -336,12 +336,12 @@ async def test_refused_label_answer_fails_only_that_label_and_says_it_was_refuse
 
 @pytest.mark.asyncio
 async def test_outcome_failure_fails_every_answer_and_clears_match(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
-        return ClassifyOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
+        return DecisionOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
 
     trace = make_trace('t1')
     outcomes = await label_traces(
@@ -363,14 +363,14 @@ async def test_outcome_failure_fails_every_answer_and_clears_match(monkeypatch: 
 async def test_no_labels_and_no_compiled_query_skips_the_call(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
         nonlocal calls
         calls += 1
-        raise AssertionError('run_classify must not be called')
+        raise AssertionError('run_decision must not be called')
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
 
     trace = make_trace('t1')
     outcomes = await label_traces(
@@ -394,9 +394,9 @@ async def test_concurrency_never_exceeds_parallelism(monkeypatch: pytest.MonkeyP
     max_in_flight = 0
     lock = asyncio.Lock()
 
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
         nonlocal in_flight, max_in_flight
         async with lock:
             in_flight += 1
@@ -404,11 +404,11 @@ async def test_concurrency_never_exceeds_parallelism(monkeypatch: pytest.MonkeyP
         await asyncio.sleep(0.01)
         async with lock:
             in_flight -= 1
-        return ClassifyOutcome(
-            response=ClassifyResponse(answers={'sentiment': ClassifyAnswer(type='choice', choice='positive')})
+        return DecisionOutcome(
+            response=DecisionResponse(answers={'sentiment': DecisionAnswer(type='choice', choice='positive')})
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
 
     traces = [make_trace(f't{i}') for i in range(20)]
     outcomes = await label_traces(
@@ -446,14 +446,14 @@ async def test_unexpected_trace_failure_is_isolated_and_progress_continues(monke
 
     monkeypatch.setattr(labeling_module, 'to_chat_messages', sometimes_fail)
 
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
-        return ClassifyOutcome(
-            response=ClassifyResponse(answers={'sentiment': ClassifyAnswer(type='choice', choice='positive')})
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
+        return DecisionOutcome(
+            response=DecisionResponse(answers={'sentiment': DecisionAnswer(type='choice', choice='positive')})
         )
 
-    monkeypatch.setattr(labeling_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(labeling_module, 'run_decision', fake_run_decision)
     progress: list[tuple[int, int]] = []
     outcomes = await label_traces(
         [make_trace('bad'), make_trace('good')],
@@ -473,16 +473,16 @@ async def test_unexpected_trace_failure_is_isolated_and_progress_continues(monke
 
 @pytest.mark.asyncio
 async def test_noul_label_keeps_bool_value_and_raw_probability(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
-        return ClassifyOutcome(
-            response=ClassifyResponse(
-                answers={'made_errors': ClassifyAnswer(type='noul', noul=0.82, confidence=0.6)},
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
+        return DecisionOutcome(
+            response=DecisionResponse(
+                answers={'made_errors': DecisionAnswer(type='noul', noul=0.82, confidence=0.6)},
             )
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
 
     trace = make_trace('t1')
     outcomes = await label_traces(
@@ -502,17 +502,17 @@ async def test_noul_label_keeps_bool_value_and_raw_probability(monkeypatch: pyte
 
 @pytest.mark.asyncio
 async def test_unreadable_answer_logs_a_warning_naming_trace_and_label(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
-        return ClassifyOutcome(
-            response=ClassifyResponse(
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
+        return DecisionOutcome(
+            response=DecisionResponse(
                 # 'choice' answer for a 'noul' question: unreadable, not missing.
-                answers={'made_errors': ClassifyAnswer(type='choice', choice='true')},
+                answers={'made_errors': DecisionAnswer(type='choice', choice='true')},
             )
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
 
     trace = make_trace('t1')
     messages: list[str] = []
@@ -534,36 +534,36 @@ async def test_unreadable_answer_logs_a_warning_naming_trace_and_label(monkeypat
     assert any('t1' in message and 'made_errors' in message and 'unreadable' in message for message in messages)
 
 
-def _coding_fake(detect: ClassifyOutcome, calls: list[ClassifyRequest]) -> Any:
+def _coding_fake(detect: DecisionOutcome, calls: list[DecisionRequest]) -> Any:
     """A `/decisions` fake answering the coding check with `detect` and every other question with a fixed answer."""
 
-    async def fake_run_classify(
-        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
-    ) -> ClassifyOutcome:
+    async def fake_run_decision(
+        *, client: Any, model: str, cfg: Any, request: DecisionRequest, **_: Any
+    ) -> DecisionOutcome:
         calls.append(request)
         if 'coding_agent' in request.questions:
             return detect
-        answers: dict[str, ClassifyAnswer] = {}
+        answers: dict[str, DecisionAnswer] = {}
         for name, question in request.questions.items():
             if question.kind == 'noul':
-                answers[name] = ClassifyAnswer(type='noul', noul=0.8)
+                answers[name] = DecisionAnswer(type='noul', noul=0.8)
             elif question.kind == 'score':
-                answers[name] = ClassifyAnswer(type='score', score=1.0)
+                answers[name] = DecisionAnswer(type='score', score=1.0)
             else:
                 assert isinstance(question.criteria, dict)
-                answers[name] = ClassifyAnswer(type='choice', choice=next(iter(question.criteria)))
-        return ClassifyOutcome(response=ClassifyResponse(answers=answers))
+                answers[name] = DecisionAnswer(type='choice', choice=next(iter(question.criteria)))
+        return DecisionOutcome(response=DecisionResponse(answers=answers))
 
-    return fake_run_classify
+    return fake_run_decision
 
 
 @pytest.mark.asyncio
 async def test_coding_agent_gets_coding_labels_in_conversation_and_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
 
-    calls: list[ClassifyRequest] = []
-    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
-    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+    calls: list[DecisionRequest] = []
+    detect = DecisionOutcome(response=DecisionResponse(answers={'coding_agent': DecisionAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_decision', _coding_fake(detect, calls))
 
     [outcome] = await label_traces(
         [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='typesafe/jev-latest', coding=True
@@ -604,7 +604,7 @@ def _shell_trace(trace_id: str) -> TraceRecord:
     )
 
 
-def _tool_activity_states(calls: list[ClassifyRequest]) -> list[dict[str, Any]]:
+def _tool_activity_states(calls: list[DecisionRequest]) -> list[dict[str, Any]]:
     return [
         request.state for request in calls if 'unfixed_error' in request.questions and isinstance(request.state, dict)
     ]
@@ -616,9 +616,9 @@ async def test_shell_output_reaches_the_tool_activity_question_only_after_scrubb
 ) -> None:
     from evaluatorq.insights import labeling as labeling_module
 
-    calls: list[ClassifyRequest] = []
-    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
-    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+    calls: list[DecisionRequest] = []
+    detect = DecisionOutcome(response=DecisionResponse(answers={'coding_agent': DecisionAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_decision', _coding_fake(detect, calls))
     await label_traces(
         [_shell_trace('t')], labels=[], compiled=None, client=_client(), model='typesafe/jev-latest', coding=True
     )
@@ -644,7 +644,7 @@ async def test_shell_output_reaches_the_tool_activity_question_only_after_scrubb
 async def test_plain_text_request_reserves_serialized_questions_from_the_global_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from evaluatorq.common.llm_call import classify_request_body
+    from evaluatorq.common.llm_call import decision_request_body
     from evaluatorq.common.model_input import serialized_chars
 
     model = 'openai/gpt-6-luna'
@@ -657,17 +657,17 @@ async def test_plain_text_request_reserves_serialized_questions_from_the_global_
         instructions='Classify this request. ' + 'q' * 500,
         criteria={'resolved': 'Resolved.', 'unresolved': 'Unresolved.'},
     )
-    requests: list[ClassifyRequest] = []
+    requests: list[DecisionRequest] = []
 
-    async def fake_run_classify(*, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         requests.append(request)
-        return ClassifyOutcome(
-            response=ClassifyResponse(
-                answers={'cap_test': ClassifyAnswer(type='choice', choice='resolved')}
+        return DecisionOutcome(
+            response=DecisionResponse(
+                answers={'cap_test': DecisionAnswer(type='choice', choice='resolved')}
             )
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
     [outcome] = await label_traces(
         [trace],
         labels=[label],
@@ -680,7 +680,7 @@ async def test_plain_text_request_reserves_serialized_questions_from_the_global_
     [request] = requests
     assert outcome.error is None
     assert isinstance(request.state, str)
-    question_chars = serialized_chars(classify_request_body(model, '', request.questions)['questions'])
+    question_chars = serialized_chars(decision_request_body(model, '', request.questions)['questions'])
     assert len(request.state) + question_chars <= 1_500
     assert 'REQUEST-START-' in request.state
     assert 'REQUEST-END' in request.state
@@ -691,13 +691,13 @@ async def test_questions_over_the_global_cap_fail_before_a_classifier_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     label = LabelSpec(name='too_large', kind='noul', instructions='q' * 1_000)
-    requests: list[ClassifyRequest] = []
+    requests: list[DecisionRequest] = []
 
-    async def fake_run_classify(*, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         requests.append(request)
-        return ClassifyOutcome(response=ClassifyResponse(answers={}))
+        return DecisionOutcome(response=DecisionResponse(answers={}))
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
     [outcome] = await label_traces(
         [make_trace('question-over-cap')],
         labels=[label],
@@ -756,10 +756,10 @@ async def test_decision_tool_requests_keep_exact_edges_and_both_input_budgets(
     trace_messages.extend([{'role': 'assistant', 'tool_calls': tool_calls}, *tool_results])
     trace = make_trace('decision-tool-budget').model_copy(update={'messages': tuple(trace_messages)})
     question = UNFIXED_ERROR.model_copy(update={'instructions': 'Classify tool activity. ' + 'q' * question_size})
-    calls: list[ClassifyRequest] = []
+    calls: list[DecisionRequest] = []
     monkeypatch.setattr('evaluatorq.insights.labeling.CODING_TOOL_LABELS', (question,))
-    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', _coding_fake(detect, calls))
+    detect = DecisionOutcome(response=DecisionResponse(answers={'coding_agent': DecisionAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', _coding_fake(detect, calls))
 
     await label_traces(
         [trace],
@@ -873,9 +873,9 @@ async def test_selected_coding_labels_keep_gate_and_only_ask_selected_labels(mon
     from evaluatorq.insights import labeling as labeling_module
     from evaluatorq.insights.presets import TASK_TYPE, UNFIXED_ERROR
 
-    calls: list[ClassifyRequest] = []
-    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
-    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+    calls: list[DecisionRequest] = []
+    detect = DecisionOutcome(response=DecisionResponse(answers={'coding_agent': DecisionAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_decision', _coding_fake(detect, calls))
 
     [outcome] = await label_traces(
         [make_trace('t')],
@@ -892,13 +892,13 @@ async def test_selected_coding_labels_keep_gate_and_only_ask_selected_labels(mon
 
 
 @pytest.mark.asyncio
-async def test_conversation_only_coding_subset_skips_empty_tool_classify(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_conversation_only_coding_subset_skips_empty_tool_decision(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
     from evaluatorq.insights.presets import TASK_TYPE
 
-    calls: list[ClassifyRequest] = []
-    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
-    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+    calls: list[DecisionRequest] = []
+    detect = DecisionOutcome(response=DecisionResponse(answers={'coding_agent': DecisionAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_decision', _coding_fake(detect, calls))
 
     [outcome] = await label_traces(
         [make_trace('t')],
@@ -918,9 +918,9 @@ async def test_conversation_only_coding_subset_skips_empty_tool_classify(monkeyp
 async def test_non_coding_agent_is_not_asked_coding_labels(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
 
-    calls: list[ClassifyRequest] = []
-    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.1)}))
-    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+    calls: list[DecisionRequest] = []
+    detect = DecisionOutcome(response=DecisionResponse(answers={'coding_agent': DecisionAnswer(type='noul', noul=0.1)}))
+    monkeypatch.setattr(labeling_module, 'run_decision', _coding_fake(detect, calls))
 
     [outcome] = await label_traces(
         [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='typesafe/jev-latest', coding=True
@@ -935,9 +935,9 @@ async def test_non_coding_agent_is_not_asked_coding_labels(monkeypatch: pytest.M
 async def test_failed_coding_check_skips_coding_labels_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
 
-    calls: list[ClassifyRequest] = []
-    detect = ClassifyOutcome(error_kind=JudgeError.PARSE, error_message='bad reply')
-    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+    calls: list[DecisionRequest] = []
+    detect = DecisionOutcome(error_kind=JudgeError.PARSE, error_message='bad reply')
+    monkeypatch.setattr(labeling_module, 'run_decision', _coding_fake(detect, calls))
     messages: list[str] = []
     sink = logger.add(lambda message: messages.append(str(message)), level='WARNING')
     try:
@@ -962,8 +962,8 @@ async def test_failed_coding_check_skips_coding_labels_and_warns(monkeypatch: py
 async def test_coding_off_makes_one_call(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
 
-    calls: list[ClassifyRequest] = []
-    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(ClassifyOutcome(), calls))
+    calls: list[DecisionRequest] = []
+    monkeypatch.setattr(labeling_module, 'run_decision', _coding_fake(DecisionOutcome(), calls))
 
     await label_traces(
         [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='typesafe/jev-latest'
@@ -1024,15 +1024,15 @@ async def test_classifier_uses_decision_state_only_for_the_jev_family_and_the_co
         {'role': 'assistant', 'content': 'FINAL-ANSWER here is the result.'},
     )
     trace = make_trace('bounded').model_copy(update={'messages': messages})
-    requests: list[ClassifyRequest] = []
+    requests: list[DecisionRequest] = []
 
-    async def fake_run_classify(*, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_decision(*, request: DecisionRequest, **_: Any) -> DecisionOutcome:
         requests.append(request)
-        return ClassifyOutcome(
-            response=ClassifyResponse(answers={'sentiment': ClassifyAnswer(type='choice', choice='positive')})
+        return DecisionOutcome(
+            response=DecisionResponse(answers={'sentiment': DecisionAnswer(type='choice', choice='positive')})
         )
 
-    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_decision', fake_run_decision)
 
     await label_traces(
         [trace],

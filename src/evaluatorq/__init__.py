@@ -30,7 +30,8 @@ try:  # noqa: RUF067
 except importlib.metadata.PackageNotFoundError:  # ponytail: source checkout, not installed
     __version__ = '0.0.0.dev0'
 
-from .common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, run_classify
+from .common.deprecation import renamed_attributes
+from .common.judge import DecisionOutcome, DecisionQuestion, DecisionRequest, run_decision
 from .common.llm_limit import llm_concurrency_limit, llm_slot
 from .common.trace_input import fetch_traces
 from .contracts import AgentResponse
@@ -97,15 +98,15 @@ __all__ = [
     # Types
     'BTFit',
     'BTSigmaAggregation',
-    'ClassifyOutcome',
-    'ClassifyQuestion',
-    'ClassifyRequest',
     'DataPoint',
     'DataPointComplete',
     'DataPointDict',
     'DataPointInput',
     'DataPointResult',
     'DatasetIdInput',
+    'DecisionOutcome',
+    'DecisionQuestion',
+    'DecisionRequest',
     'DeploymentResponse',
     'EvaluationResult',
     'EvaluationResultCell',
@@ -158,8 +159,20 @@ __all__ = [
     'orq_evaluator',
     'repetition_consistency',
     'repetition_consistency_raw',
-    'run_classify',
+    'run_decision',
     'run_pairwise',
     # Built-in evaluators
     'string_contains_evaluator',
 ]
+
+# Names from before classify models were renamed to decision models: each still resolves, with a DeprecationWarning.
+__getattr__ = renamed_attributes(  # noqa: RUF067
+    __name__,
+    globals(),
+    {
+        'ClassifyOutcome': 'DecisionOutcome',
+        'ClassifyQuestion': 'DecisionQuestion',
+        'ClassifyRequest': 'DecisionRequest',
+        'run_classify': 'run_decision',
+    },
+)

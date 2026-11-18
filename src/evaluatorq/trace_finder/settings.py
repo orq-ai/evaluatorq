@@ -13,6 +13,8 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator, model_validator
 
+from evaluatorq.common.cli_choice import AliasedChoice
+from evaluatorq.common.deprecation import warn_deprecated_value
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_text
 from evaluatorq.common.file_lock import strict_file_lock
 
@@ -32,11 +34,29 @@ _LEGACY_MODEL_KEYS = frozenset({'compiler_model', 'apply_model', 'classifier_mod
 _LEGACY_DEFAULT_MODEL = 'openai/gpt-5.6-luna'
 _LEGACY_CLASSIFIER_MODEL = 'typesafe/jev-latest'
 LEGACY_FILTER_SELECTION = 'llm+jev'
+LEGACY_FILTER_SELECTION_WARNING = "Filter selection mode 'llm+jev' is deprecated; use 'llm+decision'."
 
 
 def normalize_filter_selection(value: object) -> object:
-    """Read the pre-rename ``llm+jev`` filter mode as ``llm+decision``; any other value passes through to validation."""
-    return 'llm+decision' if value == LEGACY_FILTER_SELECTION else value
+    """Read the pre-rename ``llm+jev`` filter mode as ``llm+decision``, with a deprecation warning.
+
+    Every path that accepts a filter mode (the ``--filter-selection`` option, a saved settings file,
+    `InsightsPopulation`, `plan_query` and `resolve_population`) goes through here, so the old name
+    warns the same way everywhere. Any other value passes through to validation.
+    """
+    if value != LEGACY_FILTER_SELECTION:
+        return value
+    warn_deprecated_value(LEGACY_FILTER_SELECTION_WARNING)
+    return 'llm+decision'
+
+
+# The ``--filter-selection`` option type for ``eq find`` and ``eq insights``: help lists only the current
+# modes, and the old ``llm+jev`` is still read, through `normalize_filter_selection`.
+FILTER_SELECTION_CLI_TYPE = AliasedChoice(
+    ['llm', 'llm+decision'],
+    {LEGACY_FILTER_SELECTION: 'llm+decision'},
+    on_alias=normalize_filter_selection,
+)
 
 
 CURRENT_SETTINGS_SCHEMA_VERSION = 1

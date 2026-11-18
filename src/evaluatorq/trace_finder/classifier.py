@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.judge import JudgeOutcome, judge_error_payload, run_classify_judges
+from evaluatorq.common.judge import JudgeOutcome, judge_error_payload, run_decision_judges
 from evaluatorq.common.jury import no_verdict_message
-from evaluatorq.common.llm_call import classify_request_body
+from evaluatorq.common.llm_call import decision_request_body
 from evaluatorq.common.model_input import effective_trace_input_chars, fit_classifier_input
 from evaluatorq.contracts import JuryRepetition, JuryResult, JuryVote, LLMCallConfig, TokenUsage
 from evaluatorq.evaluatorq import _AbortEvaluation, evaluatorq
@@ -57,7 +57,7 @@ def build_classifier_evaluator(
 ) -> Evaluator:
     """Configure one EvaluatorQ judge that asks every dimension about the exact projected state.
 
-    A classify model answers all dimensions in one call. The score's ``raw_output['dimensions']``
+    A decision model answers all dimensions in one call. The score's ``raw_output['dimensions']``
     keeps one single-seat jury result per dimension, in dimension order.
     """
 
@@ -79,9 +79,9 @@ def build_classifier_evaluator(
                 'Trace finder trace classifier request trace_id={} model={} input={}',
                 trace_id,
                 model,
-                json.dumps(classify_request_body(model, state, questions), ensure_ascii=False),
+                json.dumps(decision_request_body(model, state, questions), ensure_ascii=False),
             )
-        outcomes = await run_classify_judges(
+        outcomes = await run_decision_judges(
             client=client,
             model=model,
             cfg=cfg,
@@ -121,7 +121,7 @@ def build_classifier_evaluator(
 
 
 def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
-    """Keep the familiar single-seat jury result shape around a direct classify outcome."""
+    """Keep the familiar single-seat jury result shape around a direct `/decisions` outcome."""
 
     payload = outcome.payload
     payload_value = payload.value if payload is not None else None

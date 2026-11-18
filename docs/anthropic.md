@@ -42,7 +42,7 @@ Every entry point that takes an injected client accepts an Anthropic client dire
 
 ## Set a Claude model for every role
 
-An Anthropic client cannot serve evaluatorq's default models. The defaults are `openai/gpt-6-sol` for the `smart` role, `openai/gpt-6-luna` for `fast` and `typesafe/jev-latest` for `classifier`, and the adapter refuses any `provider/` prefix other than `anthropic/`. It raises `ModelClientMismatchError` before the request, with a message that names the role variable resolving to the bad model. It is a subclass of `LLMConfigurationError`, which is a `ValueError`. Judges, classify calls and the signal classifiers re-raise it instead of turning it into a judge error. The run does not stop yet, though: inside `red_team()` and `simulate()` each attack or row that hits it records it as that row's error and the batch carries on, so you see the same error on every row. Stopping the run on the first one is tracked as RES-1879.
+An Anthropic client cannot serve evaluatorq's default models. The defaults are `openai/gpt-6-sol` for the `smart` role, `openai/gpt-6-luna` for `fast` and `typesafe/jev-latest` for `classifier`, and the adapter refuses any `provider/` prefix other than `anthropic/`. It raises `ModelClientMismatchError` before the request, with a message that names the role variable resolving to the bad model. It is a subclass of `LLMConfigurationError`, which is a `ValueError`. Judges, decision-model calls and the signal classifiers re-raise it instead of turning it into a judge error. The run does not stop yet, though: inside `red_team()` and `simulate()` each attack or row that hits it records it as that row's error and the batch carries on, so you see the same error on every row. Stopping the run on the first one is tracked as RES-1879.
 
 ```pytb
 ModelClientMismatchError: An Anthropic client needs a Claude model id, got 'openai/gpt-6-sol'. Set the model explicitly, for example through the EVALUATORQ_SMART_MODEL role variable, to a name such as "claude-sonnet-5-5" or "anthropic/claude-sonnet-5-5".
@@ -56,7 +56,7 @@ export EVALUATORQ_FAST_MODEL=claude-haiku-5-5
 export EVALUATORQ_CLASSIFIER_MODEL=claude-sonnet-5-5
 ```
 
-The `smart` role runs red-team attacks, every judge and evaluator, and Insights summaries. The `fast` role runs the simulated user and the generators. The `classifier` role runs classify questions, see [Classify](#classify-without-the-orq-router). The model-only flags and per-call settings work too and win over the role variables: `--smart-model`, `--fast-model`, `--attack-model`, `--evaluator-model`, `--sim-model`, `LLMConfig(attacker=..., evaluator=...)` and `LLMCallConfig(model=...)`. See [Configuration](configuration.md#models) for the full precedence.
+The `smart` role runs red-team attacks, every judge and evaluator, and Insights summaries. The `fast` role runs the simulated user and the generators. The `classifier` role runs decision questions, see [Decision questions without the Orq router](#decision-questions-without-the-orq-router). The model-only flags and per-call settings work too and win over the role variables: `--smart-model`, `--fast-model`, `--attack-model`, `--evaluator-model`, `--sim-model`, `LLMConfig(attacker=..., evaluator=...)` and `LLMCallConfig(model=...)`. See [Configuration](configuration.md#models) for the full precedence.
 
 Bedrock inference-profile ARNs contain a slash and are passed through unchanged, so a Bedrock model id such as an `arn:aws:bedrock:...` profile works as a model.
 
@@ -185,11 +185,11 @@ The router accepts a bare id such as `claude-haiku-5-5` and the prefixed `anthro
 
 The router ignores the `fallbacks` request field, so `extra_kwargs={'fallbacks': 'default'}` from the previous section does nothing on this route and raises no error. Configure fallbacks for this endpoint in Orq's [routing rules](https://docs.orq.ai/ai-gateway/configuration/routing-rules) instead.
 
-Classify takes the structured judgement described in the next section on this route too, because the router's `/decisions` endpoint is only on `/v3/router`.
+Decision questions take the structured judgement described in the next section on this route too, because the router's `/decisions` endpoint is only on `/v3/router`.
 
-## Classify without the Orq router
+## Decision questions without the Orq router
 
-Classify questions normally go to the Orq router's `/decisions` endpoint. An Anthropic client does not route through Orq, so one structured judgement on the model you set for the classifier role answers all the questions in a classify request. A classify-only model such as `typesafe/jev-latest` cannot run there, so it is replaced by the fast role model, with one warning per model per process. When the fast role is not a Claude model id either, the call raises `ModelClientMismatchError` and logs no replacement.
+Decision questions normally go to the Orq router's `/decisions` endpoint. An Anthropic client does not route through Orq, so one structured judgement on the model you set for the classifier role answers all the questions in a `/decisions` request. A model that serves only `/decisions`, such as `typesafe/jev-latest`, cannot run there, so it is replaced by the fast role model, with one warning per model per process. When the fast role is not a Claude model id either, the call raises `ModelClientMismatchError` and logs no replacement.
 
 ## Insights needs an embedding client
 
@@ -227,4 +227,4 @@ Prompt-cache breakpoints are placed on every call that goes through an Anthropic
 
 Cost comes from the Orq model catalogue, fetched with `ORQ_API_KEY`, under the id `anthropic/<model>`. The adapter returns that id as the response model. A call whose model the catalogue does not list is left unpriced: its cost is `None`, not zero.
 
-The target backend behind `OpenAIModelTarget`, the judge and the classify path call the client with the SDK's own retries switched off, through `with_options(max_retries=0)` on a copy, so evaluatorq's retry loop is the only retry layer. Your injected client is never mutated.
+The target backend behind `OpenAIModelTarget`, the judge and the decision-model path call the client with the SDK's own retries switched off, through `with_options(max_retries=0)` on a copy, so evaluatorq's retry loop is the only retry layer. Your injected client is never mutated.

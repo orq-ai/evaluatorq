@@ -24,7 +24,7 @@ from typing import Any, Literal, NamedTuple, get_args
 
 
 from evaluatorq.common import structured_output as structured_mod
-from evaluatorq.common.judge import ClassifyAnswer, ClassifyOutcome, ClassifyResponse
+from evaluatorq.common.judge import DecisionAnswer, DecisionOutcome, DecisionResponse
 from evaluatorq.common.model_roles import role_model, role_source
 from evaluatorq.common.structured_output import StructuredResult, generate_structured, usage_from_exception
 from evaluatorq.contracts import Usage
@@ -181,7 +181,7 @@ def instrumented_generate(call: str, inner):
     return wrapper
 
 
-def instrumented_classify(inner):
+def instrumented_decision(inner):
     async def wrapper(*, client, model, cfg, request, **kwargs):
         started = time.perf_counter()
         try:
@@ -294,11 +294,11 @@ async def fake_generate(client, *, model, messages, response_format, **_: Any) -
     return StructuredResult(parsed, '', _fake_usage(1200, 150, cached=1000))
 
 
-async def fake_classify(*, client, model, cfg, request, **_: Any) -> ClassifyOutcome:
+async def fake_decision(*, client, model, cfg, request, **_: Any) -> DecisionOutcome:
     dp = _FAKE_DP.get() or {'expected': {}}
     wanted = dp['expected'].get('facets', {})
     await asyncio.sleep(random.uniform(0.005, 0.02))
-    answers: dict[str, ClassifyAnswer] = {}
+    answers: dict[str, DecisionAnswer] = {}
     for key, question in request.questions.items():
         if question.kind == 'choice':
             criteria = question.criteria or {}
@@ -314,13 +314,13 @@ async def fake_classify(*, client, model, cfg, request, **_: Any) -> ClassifyOut
                 (label for label in criteria if label.casefold().startswith('none')),
                 next(iter(criteria)),
             )
-            answers[key] = ClassifyAnswer(type='choice', choice=chosen)
+            answers[key] = DecisionAnswer(type='choice', choice=chosen)
         else:
             hit = any(repr(value) in question.instructions for values in wanted.values() for value in values)
-            answers[key] = ClassifyAnswer(type='noul', noul=1.0 if hit else 0.0)
+            answers[key] = DecisionAnswer(type='noul', noul=1.0 if hit else 0.0)
     usage = _fake_usage(3000, 40)
-    response = ClassifyResponse(answers=answers, usage={'total_cost': usage.total_cost}, model=model)
-    return ClassifyOutcome(response=response, token_usage=usage, raw_content=response.model_dump_json())
+    response = DecisionResponse(answers=answers, usage={'total_cost': usage.total_cost}, model=model)
+    return DecisionOutcome(response=response, token_usage=usage, raw_content=response.model_dump_json())
 
 
 def parse_time(value: str | None) -> datetime | None:
@@ -1428,11 +1428,11 @@ def main(argv: list[str] | None = None) -> int:
     models, model_sources, role_report, settings_snapshot = resolve_models(args)
     specs = [ArmSpec(mode, mode) for mode in args.arms]
     client, orq, resolved = build_clients(args)
-    real_classify = fake_classify if args.dry_run else selector_mod.run_classify
+    real_decision = fake_decision if args.dry_run else selector_mod.run_decision
     _GENERATE[0] = fake_generate if args.dry_run else generate_structured
     compiler_mod.generate_structured = instrumented_generate('compiler', _GENERATE[0])
     selector_mod.generate_structured = instrumented_generate('llm_filter', _GENERATE[0])
-    selector_mod.run_classify = instrumented_classify(real_classify)
+    selector_mod.run_decision = instrumented_decision(real_decision)
     patch_structured_output()
 
     offered_counts = {name: len(getattr(catalogue, name)) for name in FACET_NAMES}

@@ -243,7 +243,7 @@ def test_llm_calls_go_through_the_shared_helper() -> None:
 
 
 # The one module allowed to POST /decisions (or the deprecated /classify alias). Every other
-# call site goes through `execute_classify`, which owns the bounded call, trace headers,
+# call site goes through `execute_decision`, which owns the bounded call, trace headers,
 # span recording and usage extraction the same way the chat and Responses executors do.
 _DECISIONS_POST_OWNER = 'common/llm_call.py'
 _DECISIONS_POST_PATHS = ('/decisions', '/classify')
@@ -273,7 +273,7 @@ def _decisions_post_lines(source: str) -> list[int]:
     ]
 
 
-def test_decisions_posts_go_through_execute_classify() -> None:
+def test_decisions_posts_go_through_execute_decision() -> None:
     hits = [
         f'{path.relative_to(SRC).as_posix()}:{lineno}'
         for path in sorted(SRC.rglob('*.py'))
@@ -283,7 +283,7 @@ def test_decisions_posts_go_through_execute_classify() -> None:
     assert not hits, (
         'Direct POST to /decisions outside common/llm_call.py: '
         + ', '.join(hits)
-        + '. Use evaluatorq.common.llm_call.execute_classify — it owns the bounded '
+        + '. Use evaluatorq.common.llm_call.execute_decision — it owns the bounded '
         'call, trace-header injection, span input/output recording and usage extraction.'
     )
 

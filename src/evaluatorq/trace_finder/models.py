@@ -20,7 +20,7 @@ from pydantic import (
 )
 from typing_extensions import Self
 
-from evaluatorq.common.judge import ClassifyQuestion, ClassifyResponse  # noqa: TC001
+from evaluatorq.common.judge import DecisionQuestion, DecisionResponse  # noqa: TC001
 from evaluatorq.common.trace_document import TraceDocument  # noqa: TC001 - pydantic field type
 from evaluatorq.trace_finder.settings import MAX_TRACE_INPUT_CHARS
 
@@ -291,7 +291,7 @@ class CompiledQuery(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str = Field(default='AI match', min_length=1, max_length=40)
-    task: ClassifyQuestion
+    task: DecisionQuestion
     selection: SelectionRule
 
     @model_validator(mode='after')
@@ -341,7 +341,7 @@ class RunSnapshot:
     explicit_numeric: NumericFilters = field(default_factory=NumericFilters)
     generated_filters: FacetSelection = field(default_factory=FacetSelection)
     generated_numeric: NumericFilters = field(default_factory=NumericFilters)
-    filter_response: ClassifyResponse | None = None
+    filter_response: DecisionResponse | None = None
     filter_selection_error: str | None = None
     plan_warning: str | None = None
     trace_ids: tuple[str, ...] = ()
@@ -394,7 +394,7 @@ def selection_rule_text(compiled: CompiledQuery) -> tuple[str, str]:
     return 'Verdict', ' or '.join(str(value) for value in selection.values)
 
 
-def validate_compiled_query(task: ClassifyQuestion, selection: SelectionRule) -> None:
+def validate_compiled_query(task: DecisionQuestion, selection: SelectionRule) -> None:
     """Reject match rules that cannot be evaluated against their classifier task."""
 
     if task.state != {}:

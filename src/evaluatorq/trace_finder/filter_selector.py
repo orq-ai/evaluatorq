@@ -1,4 +1,4 @@
-"""One bounded classify request for selecting live metadata filters."""
+"""One bounded `/decisions` request for selecting live metadata filters."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from loguru import logger
 from pydantic import ConfigDict, StrictBool, create_model
 
-from evaluatorq.common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, ClassifyResponse, run_classify
-from evaluatorq.common.llm_call import classify_request_body
+from evaluatorq.common.judge import DecisionOutcome, DecisionQuestion, DecisionRequest, DecisionResponse, run_decision
+from evaluatorq.common.llm_call import decision_request_body
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.structured_output import generate_structured, sum_structured_usage
 from evaluatorq.contracts import LLMCallConfig, TokenUsage
@@ -43,7 +43,7 @@ class FilterSelectionResult:
     """Resolved metadata filters and the classifier's structured reply."""
 
     selection: FacetSelection
-    response: ClassifyResponse | None = None
+    response: DecisionResponse | None = None
     error: str | None = None
     numeric: NumericFilters | None = None
     time: TimeFilters | None = None
@@ -58,10 +58,10 @@ async def select_filters(
     *,
     cfg: LLMCallConfig | None = None,
 ) -> FacetSelection:
-    """Ask the classifier one classify request, with binary questions for explicit multi-value facets.
+    """Ask the classifier one `/decisions` request, with binary questions for explicit multi-value facets.
 
     Retry is owned by ``with_retry`` here; the SDK client's own retry budget is
-    disabled so this classify call has exactly one retry layer.
+    disabled so this `/decisions` call has exactly one retry layer.
     """
 
     result = await select_filters_with_response(client, model, catalogue, query, cfg=cfg)
@@ -92,17 +92,17 @@ async def select_filters_with_response(
         )
 
     # The rule travels once in the shared state rather than in each of up to 100 questions.
-    request = ClassifyRequest(state={'query': normalized, 'rule': FILTER_OR_JUDGMENT_RULE}, questions=questions)
+    request = DecisionRequest(state={'query': normalized, 'rule': FILTER_OR_JUDGMENT_RULE}, questions=questions)
     call_cfg = cfg if cfg is not None else LLMCallConfig(model=model, timeout_ms=FILTER_TIMEOUT_MS)
     if debug_enabled():
         logger.debug(
-            'Trace finder filter classify request model={} input={}',
+            'Trace finder filter /decisions request model={} input={}',
             model,
-            json.dumps(classify_request_body(model, request.state, request.questions), ensure_ascii=False),
+            json.dumps(decision_request_body(model, request.state, request.questions), ensure_ascii=False),
         )
 
-    async def classify_once() -> ClassifyOutcome:
-        outcome = await run_classify(
+    async def decision_once() -> DecisionOutcome:
+        outcome = await run_decision(
             client=without_client_retries(client),
             model=model,
             cfg=call_cfg,
@@ -110,7 +110,7 @@ async def select_filters_with_response(
         )
         if debug_enabled():
             logger.debug(
-                'Trace finder filter classify response model={} output={} error={}',
+                'Trace finder filter /decisions response model={} output={} error={}',
                 model,
                 outcome.raw_content or (outcome.response.model_dump_json() if outcome.response is not None else ''),
                 outcome.error_message,
@@ -123,7 +123,7 @@ async def select_filters_with_response(
 
     try:
         outcome = await with_retry(
-            classify_once,
+            decision_once,
             max_attempts=call_cfg.retry_count + 1,
             label=f'filter selection[{model}]',
         )
@@ -252,10 +252,10 @@ async def select_llm_filters_with_response(
 
 def _questions_for_catalogue(
     catalogue: FacetCatalogue, query: str
-) -> tuple[dict[str, dict[str, str | None]], dict[str, tuple[str, str]], dict[str, ClassifyQuestion]]:
+) -> tuple[dict[str, dict[str, str | None]], dict[str, tuple[str, str]], dict[str, DecisionQuestion]]:
     choices: dict[str, dict[str, str | None]] = {}
     binary_values: dict[str, tuple[str, str]] = {}
-    questions: dict[str, ClassifyQuestion] = {}
+    questions: dict[str, DecisionQuestion] = {}
     for name in FACET_NAMES:
         values = getattr(catalogue, name)
         if not values:
@@ -270,7 +270,7 @@ def _questions_for_catalogue(
             for index, value in mentioned:
                 question_key = f'{name}_{index}'
                 binary_values[question_key] = (name, value)
-                questions[question_key] = ClassifyQuestion(
+                questions[question_key] = DecisionQuestion(
                     kind='noul',
                     instructions=(
                         f'Does the query explicitly request {name.replace("_", " ")} value {value!r}? '
@@ -284,7 +284,7 @@ def _questions_for_catalogue(
         choice_map = _choice_map(values)
         choices[name] = choice_map
         no_filter_label = next(label for label, value in choice_map.items() if value is None)
-        questions[name] = ClassifyQuestion(
+        questions[name] = DecisionQuestion(
             kind='choice',
             instructions=(
                 f'Identify the {name.replace("_", " ")} value explicitly requested by the user query. '
@@ -300,10 +300,10 @@ def _questions_for_catalogue(
 
 
 def _selection_from_answers(
-    response: ClassifyResponse,
+    response: DecisionResponse,
     choices: dict[str, dict[str, str | None]],
     binary_values: dict[str, tuple[str, str]],
-    questions: dict[str, ClassifyQuestion],
+    questions: dict[str, DecisionQuestion],
 ) -> FacetSelection:
     selected: dict[str, set[str]] = {name: set() for name in FACET_NAMES}
     for question_key in questions:

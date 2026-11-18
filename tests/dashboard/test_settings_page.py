@@ -2183,7 +2183,7 @@ def test_non_fast_model_failure_does_not_duplicate_the_footer_notice(
 
 
 @pytest.mark.asyncio
-async def test_models_by_provider_groups_chat_and_classify_models(fake_catalogue) -> None:
+async def test_models_by_provider_groups_chat_and_decision_models(fake_catalogue) -> None:
     from evaluatorq.common import model_catalogue
 
     payload = [
@@ -2201,7 +2201,7 @@ async def test_models_by_provider_groups_chat_and_classify_models(fake_catalogue
         'openai': ['openai/gpt-5.6-luna'],
         'tensorix': ['tensorix/z-ai/glm-5.3-flash'],
     }
-    assert await model_catalogue.models_by_provider(kind='classify') == {
+    assert await model_catalogue.models_by_provider(kind='decision') == {
         'tensorix': ['tensorix/z-ai/glm-5.3-flash'],
         'typesafe': ['typesafe/jev-latest'],
     }
@@ -2226,7 +2226,7 @@ def test_model_field_filters_the_catalogue_by_the_fields_kind(client: TestClient
     for name in ('fast_model', 'smart_model', 'classifier_model', 'embedding_model'):
         client.get('/settings/models', params={'field': name})
 
-    assert kinds == ['chat', 'chat', 'classify', 'embedding']
+    assert kinds == ['chat', 'chat', 'decision', 'embedding']
 
 
 def test_model_field_offers_use_default_and_labels_an_empty_value(

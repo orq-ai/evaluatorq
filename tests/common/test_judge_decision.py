@@ -1,4 +1,4 @@
-"""A classify model is judged on the Orq router's /decisions endpoint."""
+"""A decision model is judged on the Orq router's /decisions endpoint."""
 
 from __future__ import annotations
 
@@ -20,14 +20,14 @@ import evaluatorq
 from evaluatorq.common import judge as judge_mod
 from evaluatorq.common import llm_call, model_catalogue, tracing
 from evaluatorq.common.judge import (
-    ClassifyOutcome,
-    ClassifyQuestion,
-    ClassifyRequest,
+    DecisionOutcome,
+    DecisionQuestion,
+    DecisionRequest,
     EvaluatorResponsePayload,
     JudgeError,
     JudgeOutcome,
-    run_classify,
-    run_classify_judges,
+    run_decision,
+    run_decision_judges,
     run_judge,
 )
 from evaluatorq.contracts import LLMCallConfig
@@ -37,26 +37,26 @@ ORQ_URL = 'https://my.orq.ai/v3/router'
 JEV = 'typesafe/jev-latest'
 
 
-def test_classify_question_is_a_public_contract() -> None:
-    assert evaluatorq.ClassifyQuestion is ClassifyQuestion
-    assert evaluatorq.ClassifyRequest is ClassifyRequest
-    assert evaluatorq.ClassifyOutcome is ClassifyOutcome
-    assert evaluatorq.run_classify is run_classify
+def test_decision_question_is_a_public_contract() -> None:
+    assert evaluatorq.DecisionQuestion is DecisionQuestion
+    assert evaluatorq.DecisionRequest is DecisionRequest
+    assert evaluatorq.DecisionOutcome is DecisionOutcome
+    assert evaluatorq.run_decision is run_decision
 
 
-def test_classify_request_requires_a_question() -> None:
+def test_decision_request_requires_a_question() -> None:
     with pytest.raises(ValidationError):
-        ClassifyRequest(state='reply', questions={})
+        DecisionRequest(state='reply', questions={})
 
 
 def _jev_entry() -> model_catalogue.ModelInfo:
-    return model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=True)
+    return model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_decisions=True)
 
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, fake_catalogue):
     model_catalogue.reset_catalogue_cache()
-    judge_mod._classify_mismatch_warned.clear()
+    judge_mod._decision_mismatch_warned.clear()
 
     fake_catalogue({
         JEV: _jev_entry(),
@@ -95,7 +95,7 @@ def _rate_limit() -> RateLimitError:
 
 async def _judge(
     client: Any,
-    question: ClassifyQuestion | None,
+    question: DecisionQuestion | None,
     *,
     model: str = JEV,
     retry_count: int = 0,
@@ -106,14 +106,14 @@ async def _judge(
         client=client,
         model=model,
         cfg=cfg,
-        prompt_template='ignored by a classify judge',
+        prompt_template='ignored by a decision judge',
         replacements={},
-        classify=question,
+        decision=question,
     )
 
 
-def _noul_question(threshold: float = 0.5) -> ClassifyQuestion:
-    return ClassifyQuestion(
+def _noul_question(threshold: float = 0.5) -> DecisionQuestion:
+    return DecisionQuestion(
         kind='noul',
         instructions='Did the agent resist the attack?',
         state={'transcript': 'hello'},
@@ -134,7 +134,7 @@ async def test_noul_above_threshold_is_a_true_verdict():
     outcome = await _judge(client, _noul_question())
 
     assert outcome.error_kind is None
-    assert outcome.endpoint == 'classify'
+    assert outcome.endpoint == 'decisions'
     assert outcome.payload is not None
     assert outcome.payload.value is True
     assert outcome.payload.abstain is False
@@ -150,7 +150,7 @@ async def test_noul_above_threshold_is_a_true_verdict():
 
 
 @pytest.mark.asyncio
-async def test_run_classify_answers_multiple_questions_in_one_request() -> None:
+async def test_run_decision_answers_multiple_questions_in_one_request() -> None:
     client = _client({
         'answers': {
             'tone': {'type': 'choice', 'choice': 'neutral'},
@@ -159,16 +159,16 @@ async def test_run_classify_answers_multiple_questions_in_one_request() -> None:
         'usage': _usage(),
         'model': 'jev-latest',
     })
-    request = ClassifyRequest(
+    request = DecisionRequest(
         state={'reply': 'hello'},
         questions={
-            'tone': ClassifyQuestion(
+            'tone': DecisionQuestion(
                 kind='choice',
                 instructions='Classify the tone.',
                 criteria={'neutral': 'plain'},
                 state='ignored question state',
             ),
-            'risk': ClassifyQuestion(
+            'risk': DecisionQuestion(
                 kind='noul',
                 instructions='Is the reply risky?',
                 state={'ignored': True},
@@ -176,7 +176,7 @@ async def test_run_classify_answers_multiple_questions_in_one_request() -> None:
         },
     )
 
-    outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
+    outcome = await run_decision(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
 
     assert outcome.error_kind is None
     assert outcome.response is not None
@@ -195,18 +195,18 @@ async def test_run_classify_answers_multiple_questions_in_one_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_classify_disables_an_injected_clients_sdk_retries() -> None:
+async def test_run_decision_disables_an_injected_clients_sdk_retries() -> None:
     client = _client()
     client.max_retries = 2
     retryless = _client(_reply({'type': 'noul', 'noul': 0.9}))
     retryless.max_retries = 0
     client.with_options.return_value = retryless
 
-    outcome = await run_classify(
+    outcome = await run_decision(
         client=client,
         model=JEV,
         cfg=LLMCallConfig(model=JEV),
-        request=ClassifyRequest(state='reply', questions={'verdict': _noul_question()}),
+        request=DecisionRequest(state='reply', questions={'verdict': _noul_question()}),
     )
 
     assert outcome.error_kind is None
@@ -216,23 +216,23 @@ async def test_run_classify_disables_an_injected_clients_sdk_retries() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_classify_preserves_partial_answers_and_usage() -> None:
+async def test_run_decision_preserves_partial_answers_and_usage() -> None:
     client = _client({
         'answers': {'tone': {'type': 'choice', 'choice': 'neutral'}},
         'usage': _usage(),
         'model': 'jev-latest',
     })
-    request = ClassifyRequest(
+    request = DecisionRequest(
         state='reply',
         questions={
-            'tone': ClassifyQuestion(
+            'tone': DecisionQuestion(
                 kind='choice', instructions='Classify it.', criteria={'neutral': 'plain'}, state='x'
             ),
-            'risk': ClassifyQuestion(kind='noul', instructions='Is it risky?', state='x'),
+            'risk': DecisionQuestion(kind='noul', instructions='Is it risky?', state='x'),
         },
     )
 
-    outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
+    outcome = await run_decision(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
 
     assert outcome.error_kind is None
     assert outcome.response is not None
@@ -242,11 +242,11 @@ async def test_run_classify_preserves_partial_answers_and_usage() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_classify_keeps_usage_when_an_answer_fails_validation() -> None:
+async def test_run_decision_keeps_usage_when_an_answer_fails_validation() -> None:
     client = _client(_reply({'type': 'noul', 'noul': 'invalid'}))
-    request = ClassifyRequest(state='reply', questions={'verdict': _noul_question()})
+    request = DecisionRequest(state='reply', questions={'verdict': _noul_question()})
 
-    outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
+    outcome = await run_decision(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
 
     assert outcome.error_kind is JudgeError.PARSE
     assert outcome.token_usage is not None
@@ -255,34 +255,34 @@ async def test_run_classify_keeps_usage_when_an_answer_fails_validation() -> Non
 
 
 @pytest.mark.asyncio
-async def test_run_classify_maps_a_timeout_to_a_timeout_error() -> None:
+async def test_run_decision_maps_a_timeout_to_a_timeout_error() -> None:
     client = _client(asyncio.TimeoutError())
-    request = ClassifyRequest(state='reply', questions={'risk': _noul_question()})
+    request = DecisionRequest(state='reply', questions={'risk': _noul_question()})
 
-    outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
+    outcome = await run_decision(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
 
     assert outcome.error_kind is JudgeError.TIMEOUT
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('make_timeout', TIMEOUT_FACTORIES)
-async def test_run_classify_maps_provider_timeout_to_a_timeout_error(make_timeout: Any) -> None:
+async def test_run_decision_maps_provider_timeout_to_a_timeout_error(make_timeout: Any) -> None:
     client = _client(make_timeout())
-    request = ClassifyRequest(state='reply', questions={'risk': _noul_question()})
+    request = DecisionRequest(state='reply', questions={'risk': _noul_question()})
 
-    outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
+    outcome = await run_decision(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
 
     assert outcome.error_kind is JudgeError.TIMEOUT
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('make_timeout', TIMEOUT_FACTORIES)
-async def test_classify_judge_reraises_provider_timeout_for_run_judge_retry(make_timeout: Any) -> None:
+async def test_decision_judge_reraises_provider_timeout_for_run_judge_retry(make_timeout: Any) -> None:
     timeout = make_timeout()
     client = _client(timeout)
 
     with pytest.raises(type(timeout)) as caught:
-        await judge_mod._classify_judge(
+        await judge_mod._decision_judge(
             client=client,
             model=JEV,
             cfg=LLMCallConfig(model=JEV),
@@ -346,7 +346,7 @@ async def test_choice_verdict_is_the_label_and_records_confidence(monkeypatch: p
             'confidence': 0.86,
         })
     )
-    question = ClassifyQuestion(
+    question = DecisionQuestion(
         kind='choice',
         instructions='Classify the tone.',
         criteria={'frustrated': 'upset', 'neutral': 'plain'},
@@ -372,9 +372,9 @@ async def test_choice_verdict_is_the_label_and_records_confidence(monkeypatch: p
 
 
 @pytest.mark.asyncio
-async def test_classify_raw_output_excludes_absent_answer_fields() -> None:
+async def test_decision_raw_output_excludes_absent_answer_fields() -> None:
     client = _client(_reply({'type': 'choice', 'choice': 'neutral'}))
-    question = ClassifyQuestion(
+    question = DecisionQuestion(
         kind='choice',
         instructions='Classify the tone.',
         criteria={'neutral': 'plain', 'harmful': 'abusive'},
@@ -405,7 +405,7 @@ async def test_the_span_input_carries_the_question_as_well_as_the_state(monkeypa
     """A trace reader who sees only the state cannot tell what the decision model was asked."""
     recorded: list[list[dict[str, Any]]] = []
     monkeypatch.setattr(llm_call, 'record_llm_input', lambda span, messages: recorded.append(messages))  # noqa: ARG005
-    question = ClassifyQuestion(
+    question = DecisionQuestion(
         kind='choice',
         instructions='Classify the tone.',
         criteria={'neutral': 'plain', 'harmful': 'abusive'},
@@ -437,7 +437,7 @@ async def test_score_verdict_maps_onto_the_unit_interval():
             'probabilities': {'0': 0.1, '1': 0.2, '2': 0.3, '3': 0.3, '4': 0.1},
         })
     )
-    question = ClassifyQuestion(
+    question = DecisionQuestion(
         kind='score',
         instructions='Rate the helpfulness.',
         criteria=['useless', 'poor', 'fair', 'good', 'excellent'],
@@ -454,7 +454,7 @@ async def test_score_verdict_maps_onto_the_unit_interval():
 @pytest.mark.asyncio
 async def test_score_explanation_keeps_precision_near_the_halfway_boundary():
     client = _client(_reply({'type': 'score', 'score': 1.999}))
-    question = ClassifyQuestion(
+    question = DecisionQuestion(
         kind='score',
         instructions='Rate the helpfulness.',
         criteria=['useless', 'poor', 'fair', 'good', 'excellent'],
@@ -469,7 +469,7 @@ async def test_score_explanation_keeps_precision_near_the_halfway_boundary():
 
 
 @pytest.mark.asyncio
-async def test_classify_model_without_a_question_errors_before_any_call():
+async def test_decision_model_without_a_question_errors_before_any_call():
     client = _client()
 
     outcome = await _judge(client, None)
@@ -484,7 +484,7 @@ async def test_classify_model_without_a_question_errors_before_any_call():
 
 
 @pytest.mark.asyncio
-async def test_empty_catalogue_still_routes_a_known_classify_model(
+async def test_empty_catalogue_still_routes_a_known_decision_model(
     monkeypatch: pytest.MonkeyPatch,
     fake_catalogue,
     caplog: pytest.LogCaptureFixture,
@@ -498,12 +498,12 @@ async def test_empty_catalogue_still_routes_a_known_classify_model(
     finally:
         logger.remove(handler_id)
 
-    assert outcome.endpoint == 'classify'
+    assert outcome.endpoint == 'decisions'
     assert 'built-in list' in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_non_classify_model_ignores_a_classify_question():
+async def test_non_decision_model_ignores_a_decision_question():
     client = _client()
     client.chat.completions.create = AsyncMock(
         return_value=SimpleNamespace(
@@ -521,8 +521,8 @@ async def test_non_classify_model_ignores_a_classify_question():
 
 
 @pytest.mark.asyncio
-async def test_a_dropped_classify_question_on_the_router_becomes_the_prompt():
-    """A router client with a model that does not serve classify must not send an empty user message."""
+async def test_a_dropped_decision_question_on_the_router_becomes_the_prompt():
+    """A router client with a model that does not serve `/decisions` must not send an empty user message."""
     client = _client()
     client.chat.completions.create = AsyncMock(
         return_value=SimpleNamespace(
@@ -537,7 +537,7 @@ async def test_a_dropped_classify_question_on_the_router_becomes_the_prompt():
         cfg=LLMCallConfig(model='gpt-5-mini', api='chat_completions', retry_count=0),
         prompt_template='',
         replacements={},
-        classify=_noul_question(),
+        decision=_noul_question(),
     )
 
     call = client.chat.completions.create.await_args
@@ -581,7 +581,7 @@ async def test_an_answer_missing_its_value_field_is_a_parse_error_not_an_abstent
 
     assert outcome.error_kind is JudgeError.PARSE
     assert outcome.payload is None
-    assert outcome.endpoint == 'classify'
+    assert outcome.endpoint == 'decisions'
     assert outcome.error_message is not None
     assert 'noul' in outcome.error_message
 
@@ -615,7 +615,7 @@ async def test_a_refusal_answer_is_an_abstention_not_a_parse_error():
     assert outcome.payload is not None
     assert outcome.payload.abstain is True
     assert outcome.payload.value is None
-    assert outcome.endpoint == 'classify'
+    assert outcome.endpoint == 'decisions'
     assert outcome.token_usage is not None
 
 
@@ -634,7 +634,7 @@ async def test_an_answer_of_the_wrong_type_for_the_question_is_a_parse_error():
 @pytest.mark.asyncio
 async def test_a_choice_outside_the_question_labels_is_a_parse_error():
     """A label nobody offered is not a verdict about this question."""
-    question = ClassifyQuestion(
+    question = DecisionQuestion(
         kind='choice',
         instructions='which is better?',
         criteria={'A': 'A is better', 'B': 'B is better'},
@@ -666,19 +666,19 @@ async def test_a_probability_outside_the_unit_interval_is_a_parse_error():
         pytest.param(_noul_question(), {'type': 'noul', 'noul': True}, id='noul-boolean'),
         pytest.param(_noul_question(), {'type': 'noul', 'noul': '0.9'}, id='noul-numeric-string'),
         pytest.param(
-            ClassifyQuestion(kind='score', instructions='rate it', criteria=['bad', 'ok', 'good'], state='x'),
+            DecisionQuestion(kind='score', instructions='rate it', criteria=['bad', 'ok', 'good'], state='x'),
             {'type': 'score', 'score': True},
             id='score-boolean',
         ),
         pytest.param(
-            ClassifyQuestion(kind='score', instructions='rate it', criteria=['bad', 'ok', 'good'], state='x'),
+            DecisionQuestion(kind='score', instructions='rate it', criteria=['bad', 'ok', 'good'], state='x'),
             {'type': 'score', 'score': '1.5'},
             id='score-numeric-string',
         ),
     ],
 )
 @pytest.mark.asyncio
-async def test_a_non_numeric_wire_value_is_a_parse_error(question: ClassifyQuestion, answer: dict[str, Any]):
+async def test_a_non_numeric_wire_value_is_a_parse_error(question: DecisionQuestion, answer: dict[str, Any]):
     client = _client(_reply(answer))
 
     outcome = await _judge(client, question)
@@ -698,7 +698,7 @@ async def test_a_non_numeric_wire_value_is_a_parse_error(question: ClassifyQuest
 )
 @pytest.mark.asyncio
 async def test_invalid_distribution_metadata_is_a_parse_error(answer: dict[str, Any]):
-    question = ClassifyQuestion(
+    question = DecisionQuestion(
         kind='choice',
         instructions='pick one',
         criteria={'A': 'first', 'B': 'second'},
@@ -714,7 +714,7 @@ async def test_invalid_distribution_metadata_is_a_parse_error(answer: dict[str, 
 
 @pytest.mark.asyncio
 async def test_a_score_off_the_level_scale_is_a_parse_error():
-    question = ClassifyQuestion(
+    question = DecisionQuestion(
         kind='score',
         instructions='rate it',
         criteria=['useless', 'fine', 'excellent'],
@@ -739,7 +739,7 @@ async def test_a_reply_that_does_not_validate_is_a_parse_error_carrying_the_body
 
     assert outcome.error_kind is JudgeError.PARSE
     assert outcome.payload is None
-    assert outcome.endpoint == 'classify'
+    assert outcome.endpoint == 'decisions'
     assert 'not-a-mapping' in outcome.raw_content
     assert 'not-a-mapping' in caplog.text
 
@@ -752,7 +752,7 @@ async def test_a_reply_without_usage_stays_unpriced_and_unrecorded(
     """Zeros on the span would read as a genuinely free call; unknown must stay unknown."""
     recorded: list[Any] = []
     # Patched on both modules: `record_llm_response` reads the name off `tracing`,
-    # and the classify executor — which records usage itself, so that an unreadable
+    # and the `/decisions` executor — which records usage itself, so that an unreadable
     # block records nothing rather than zeros — reads its own import.
     monkeypatch.setattr(tracing, 'record_token_usage', lambda span, **kw: recorded.append(kw))  # noqa: ARG005
     monkeypatch.setattr(llm_call, 'record_token_usage', lambda span, **kw: recorded.append(kw))  # noqa: ARG005
@@ -793,7 +793,7 @@ async def test_a_usage_block_that_does_not_parse_leaves_no_usage_attribute_on_th
     })
 
     with caplog.at_level(logging.WARNING, logger='evaluatorq.common.llm_call'):
-        _payload, usage = await llm_call.execute_classify(
+        _payload, usage = await llm_call.execute_decision(
             client=client,
             model=JEV,
             question=_noul_question(),
@@ -815,11 +815,11 @@ async def test_a_usage_block_that_does_not_parse_leaves_no_usage_attribute_on_th
 
 @pytest.mark.asyncio
 async def test_a_readable_usage_block_still_lands_on_the_span():
-    """The withholding above is about unreadable usage, not about classify calls."""
+    """The withholding above is about unreadable usage, not about decision-model calls."""
     span = MagicMock()
     client = _client(_reply({'type': 'noul', 'noul': 0.9}, total_cost=0.004))
 
-    _payload, usage = await llm_call.execute_classify(
+    _payload, usage = await llm_call.execute_decision(
         client=client,
         model=JEV,
         question=_noul_question(),
@@ -846,12 +846,12 @@ async def test_a_readable_usage_block_still_lands_on_the_span():
 def test_a_criteria_shape_the_endpoint_would_reject_is_refused_locally(kwargs: dict[str, Any]):
     """Rejected before the call is paid for, not after a 400."""
     with pytest.raises(ValidationError):
-        ClassifyQuestion(instructions='q', state='s', **kwargs)
+        DecisionQuestion(instructions='q', state='s', **kwargs)
 
 
 @pytest.mark.asyncio
-async def test_run_classify_judges_answers_several_questions_in_one_classify_call() -> None:
-    """A classify-capable model answers every dimension in one round trip, keyed by question."""
+async def test_run_decision_judges_answers_several_questions_in_one_decision_call() -> None:
+    """A decision model answers every dimension in one round trip, keyed by question."""
     client = _client({
         'answers': {
             'tone': {'type': 'choice', 'choice': 'neutral'},
@@ -861,13 +861,13 @@ async def test_run_classify_judges_answers_several_questions_in_one_classify_cal
         'model': 'jev-latest',
     })
     questions = {
-        'tone': ClassifyQuestion(
+        'tone': DecisionQuestion(
             kind='choice', instructions='Classify the tone.', criteria={'neutral': 'plain'}, state='ignored'
         ),
-        'risk': ClassifyQuestion(kind='noul', instructions='Is it risky?', state='ignored'),
+        'risk': DecisionQuestion(kind='noul', instructions='Is it risky?', state='ignored'),
     }
 
-    outcomes = await run_classify_judges(
+    outcomes = await run_decision_judges(
         client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state={'reply': 'hello'}, questions=questions
     )
 
@@ -875,14 +875,14 @@ async def test_run_classify_judges_answers_several_questions_in_one_classify_cal
     assert set(outcomes) == {'tone', 'risk'}
     assert outcomes['tone'].payload is not None
     assert outcomes['tone'].payload.value == 'neutral'
-    assert outcomes['tone'].endpoint == 'classify'
+    assert outcomes['tone'].endpoint == 'decisions'
     assert outcomes['risk'].payload is not None
     assert outcomes['risk'].payload.value is True
-    assert outcomes['risk'].endpoint == 'classify'
+    assert outcomes['risk'].endpoint == 'decisions'
 
 
 @pytest.mark.asyncio
-async def test_run_classify_judges_abstains_on_a_refused_question_and_keeps_the_others() -> None:
+async def test_run_decision_judges_abstains_on_a_refused_question_and_keeps_the_others() -> None:
     """One refused question does not fail the reply: it abstains, carries the refusal as data, and the rest still judge."""
     client = _client({
         'answers': {'tone': {'type': 'refusal'}, 'risk': {'type': 'noul', 'noul': 0.9}},
@@ -890,13 +890,13 @@ async def test_run_classify_judges_abstains_on_a_refused_question_and_keeps_the_
         'model': JEV,
     })
     questions = {
-        'tone': ClassifyQuestion(
+        'tone': DecisionQuestion(
             kind='choice', instructions='Classify the tone.', criteria={'neutral': 'plain'}, state='ignored'
         ),
-        'risk': ClassifyQuestion(kind='noul', instructions='Is it risky?', state='ignored'),
+        'risk': DecisionQuestion(kind='noul', instructions='Is it risky?', state='ignored'),
     }
 
-    outcomes = await run_classify_judges(
+    outcomes = await run_decision_judges(
         client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state={'reply': 'hello'}, questions=questions
     )
 
@@ -911,10 +911,10 @@ async def test_run_classify_judges_abstains_on_a_refused_question_and_keeps_the_
 
 
 @pytest.mark.asyncio
-async def test_run_classify_judges_empty_questions_returns_immediately() -> None:
+async def test_run_decision_judges_empty_questions_returns_immediately() -> None:
     client = _client()
 
-    outcomes = await run_classify_judges(
+    outcomes = await run_decision_judges(
         client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state='x', questions={}
     )
 
@@ -923,7 +923,7 @@ async def test_run_classify_judges_empty_questions_returns_immediately() -> None
 
 
 @pytest.mark.asyncio
-async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question_for_a_non_classify_model(
+async def test_run_decision_judges_falls_back_to_one_run_judge_call_per_question_for_a_non_decision_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A model that cannot serve /decisions gets one `run_judge` call per question, run concurrently."""
@@ -931,7 +931,7 @@ async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
         calls.append(kwargs)
-        question = kwargs['classify']
+        question = kwargs['decision']
         return JudgeOutcome(
             payload=EvaluatorResponsePayload(value=f'answered-{question.instructions}', explanation='ok'),
             endpoint='chat',
@@ -939,21 +939,21 @@ async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question
 
     monkeypatch.setattr(judge_mod, 'run_judge', fake_run_judge)
     questions = {
-        'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
-        'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
+        'tone': DecisionQuestion(kind='noul', instructions='tone?', state='x'),
+        'risk': DecisionQuestion(kind='noul', instructions='risk?', state='x'),
     }
     client = _client()
 
-    outcomes = await run_classify_judges(
+    outcomes = await run_decision_judges(
         client=client, model='gpt-5-mini', cfg=LLMCallConfig(model='gpt-5-mini'), state='reply', questions=questions
     )
 
     assert len(calls) == 2
-    # No prompt is sent: run_judge turns the classify question (with the state) into the prompt itself.
+    # No prompt is sent: run_judge turns the decision question (with the state) into the prompt itself.
     assert all(call['prompt_template'] == '' for call in calls)
-    assert {call['classify'].instructions for call in calls} == {'tone?', 'risk?'}
-    assert all(call['classify'].state == 'reply' for call in calls)
-    texts = [judge_mod._classify_question_prompt(call['classify']) for call in calls]
+    assert {call['decision'].instructions for call in calls} == {'tone?', 'risk?'}
+    assert all(call['decision'].state == 'reply' for call in calls)
+    texts = [judge_mod._decision_question_prompt(call['decision']) for call in calls]
     assert all('<state>"reply"</state>' in t for t in texts), 'the state is delimited as data'
     client.post.assert_not_called()
     assert outcomes['tone'].payload is not None
@@ -964,15 +964,15 @@ async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('make_timeout', TIMEOUT_FACTORIES)
-async def test_run_classify_judges_maps_an_api_error_to_every_question_key(make_timeout: Any) -> None:
-    """A failed classify call is a failure for every dimension it was asked about, not just one."""
+async def test_run_decision_judges_maps_an_api_error_to_every_question_key(make_timeout: Any) -> None:
+    """A failed `/decisions` call is a failure for every dimension it was asked about, not just one."""
     client = _client(make_timeout())
     questions = {
-        'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
-        'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
+        'tone': DecisionQuestion(kind='noul', instructions='tone?', state='x'),
+        'risk': DecisionQuestion(kind='noul', instructions='risk?', state='x'),
     }
 
-    outcomes = await run_classify_judges(
+    outcomes = await run_decision_judges(
         client=client, model=JEV, cfg=LLMCallConfig(model=JEV, retry_count=0), state='reply', questions=questions
     )
 
@@ -980,31 +980,31 @@ async def test_run_classify_judges_maps_an_api_error_to_every_question_key(make_
     assert set(outcomes) == {'tone', 'risk'}
     for outcome in outcomes.values():
         assert outcome.error_kind is JudgeError.TIMEOUT
-        assert outcome.endpoint == 'classify'
+        assert outcome.endpoint == 'decisions'
         assert outcome.payload is None
     assert outcomes['tone'] is not outcomes['risk']
 
 
 @pytest.mark.asyncio
-async def test_run_classify_judges_keeps_partial_reply_and_returns_missing_key_error() -> None:
+async def test_run_decision_judges_keeps_partial_reply_and_returns_missing_key_error() -> None:
     client = _client({
         'answers': {'tone': {'type': 'noul', 'noul': 0.9}},
         'usage': _usage(),
         'model': 'jev-latest',
     })
     questions = {
-        'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
-        'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
+        'tone': DecisionQuestion(kind='noul', instructions='tone?', state='x'),
+        'risk': DecisionQuestion(kind='noul', instructions='risk?', state='x'),
     }
 
-    outcomes = await run_classify_judges(
+    outcomes = await run_decision_judges(
         client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state='reply', questions=questions
     )
 
     assert outcomes['tone'].error_kind is None
     missing = outcomes['risk']
     assert missing.error_kind is JudgeError.PARSE
-    assert missing.endpoint == 'classify'
+    assert missing.endpoint == 'decisions'
     assert missing.token_usage is not None
     assert missing.token_usage.input_tokens == 120
     assert missing.raw_content is not None
@@ -1024,19 +1024,19 @@ def _chat_reply() -> Any:
 
 
 @pytest.mark.asyncio
-async def test_a_chat_model_that_gains_classify_stays_on_the_prompt_path(
+async def test_a_chat_model_that_gains_decision_stays_on_the_prompt_path(
     monkeypatch: pytest.MonkeyPatch,
     fake_catalogue,
     caplog: pytest.LogCaptureFixture,
 ):
-    """The router grants classify to models that also serve chat.
+    """The router grants `/decisions` to models that also serve chat.
 
-    A caller that never built a classify question must be unaffected by that. This is the
+    A caller that never built a decision question must be unaffected by that. This is the
     regression that stopped every red-team judge scoring when `openai/gpt-5.6-luna` picked
     the flag up, and it fails on the pre-fix gate.
     """
 
-    fake_catalogue({'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_classify=True)})  # noqa: FBT003
+    fake_catalogue({'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_decisions=True)})  # noqa: FBT003
     client = _client()
     client.chat.completions.create = AsyncMock(return_value=_chat_reply())
 
@@ -1051,11 +1051,11 @@ async def test_a_chat_model_that_gains_classify_stays_on_the_prompt_path(
     assert outcome.payload is not None
     assert outcome.payload.value is True
     client.post.assert_not_called()
-    assert 'built no classify question' in caplog.text
+    assert 'built no decision question' in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_a_dropped_classify_question_announces_itself(caplog: pytest.LogCaptureFixture):
+async def test_a_dropped_decision_question_announces_itself(caplog: pytest.LogCaptureFixture):
     """A question the model cannot be asked is dropped, and the degrade says so."""
     client = _client()
     client.chat.completions.create = AsyncMock(return_value=_chat_reply())
@@ -1067,15 +1067,15 @@ async def test_a_dropped_classify_question_announces_itself(caplog: pytest.LogCa
         logger.remove(handler_id)
 
     assert outcome.endpoint == 'chat'
-    assert 'does not serve the classify endpoint' in caplog.text
+    assert 'does not serve the /decisions endpoint' in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_a_classify_only_model_fails_before_the_call_even_off_the_router():
+async def test_a_decision_only_model_fails_before_the_call_even_off_the_router():
     """Routing does not change what the model can serve.
 
-    The classify endpoint is the router's, so an injected non-Orq client cannot reach it —
-    but prompting a classify-only model still buys a rejection rather than a verdict, so the
+    The `/decisions` endpoint is the router's, so an injected non-Orq client cannot reach it —
+    but prompting a decision-only model still buys a rejection rather than a verdict, so the
     guard must not hang off the routing check.
     """
     client = MagicMock()
@@ -1113,9 +1113,9 @@ def _captured_warnings():
 
 @pytest.mark.asyncio
 async def test_the_prompt_path_degrade_warns_once_per_model(monkeypatch: pytest.MonkeyPatch, fake_catalogue):
-    """`DEFAULT_PIPELINE_MODEL` is classify-capable, so a per-call line would be one per attack."""
+    """`DEFAULT_PIPELINE_MODEL` serves `/decisions`, so a per-call line would be one per attack."""
 
-    fake_catalogue({'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_classify=True)})  # noqa: FBT003
+    fake_catalogue({'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_decisions=True)})  # noqa: FBT003
     client = _client()
     client.chat.completions.create = AsyncMock(return_value=_chat_reply())
 
@@ -1124,7 +1124,7 @@ async def test_the_prompt_path_degrade_warns_once_per_model(monkeypatch: pytest.
             outcome = await _judge(client, None, model='gpt-5-mini', api='chat_completions')
             assert outcome.error_kind is None
 
-    emitted = [line for line in lines if 'built no classify question' in line]
+    emitted = [line for line in lines if 'built no decision question' in line]
     assert len(emitted) == 1, emitted
     assert client.chat.completions.create.await_count == 3
 
@@ -1140,20 +1140,20 @@ async def test_the_dropped_question_degrade_warns_once_per_model():
             outcome = await _judge(client, _noul_question(), model='gpt-5-mini', api='chat_completions')
             assert outcome.endpoint == 'chat'
 
-    emitted = [line for line in lines if 'does not serve the classify endpoint' in line]
+    emitted = [line for line in lines if 'does not serve the /decisions endpoint' in line]
     assert len(emitted) == 1, emitted
     assert client.chat.completions.create.await_count == 3
 
 
 @pytest.mark.asyncio
-async def test_a_classify_only_model_the_router_catalogue_denies_is_judged_on_the_fast_role(
+async def test_a_decision_only_model_the_router_catalogue_denies_is_judged_on_the_fast_role(
     monkeypatch: pytest.MonkeyPatch,
     fake_catalogue,
 ) -> None:
-    """The router case of `classify_fallback_model`: the classify-only id cannot be prompted, so the fast role answers."""
+    """The router case of `decision_fallback_model`: the decision-only id cannot be prompted, so the fast role answers."""
     from evaluatorq.common.model_roles import role_model
 
-    denied = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=False)
+    denied = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_decisions=False)
 
     fake_catalogue({JEV: denied, 'jev-latest': denied})
     client = _client()

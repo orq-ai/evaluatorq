@@ -123,7 +123,7 @@ def resolve_template_path(replacements: dict[str, Any], path: str, *, prefer_nes
     stores a few paths (``input.all_messages``, ``output.messages``,
     ``output.tools_called``, ``log.messages``) twice — nested as the live list,
     flat as the ``json.dumps`` string a prompt template interpolates. Template
-    rendering keeps the flat-first default; a classify judge, which ships the
+    rendering keeps the flat-first default; a decision-model judge, which ships the
     state as JSON, asks for the nested one so the transcript does not arrive as
     an escaped string inside JSON.
     """

@@ -7,6 +7,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.llm_client import as_llm_client
+from evaluatorq.common.model_catalogue import is_decision_model
 from evaluatorq.common.model_roles import role_model
 
 from .classifier import run_classifier
@@ -73,6 +74,8 @@ def build_run_store(
         )
 
     async def population_loader(request: PopulationRequest) -> Snapshot:
+        # Looked up before the traces are projected, so a decision model gets the decision state.
+        await is_decision_model(classifier_model, client)
         end = request.end or datetime.now(timezone.utc)
         start = request.start or end - timedelta(days=settings.window_days)
         return await source.load_async(

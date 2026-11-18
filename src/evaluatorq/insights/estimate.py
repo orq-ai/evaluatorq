@@ -240,13 +240,13 @@ def estimate_run(
     if coding:
         unknowns.append('cost: coding tool activity may require additional classifier chunks')
     label_basis = (
-        f'one classify call per trace: up to {label_in:,} estimated input tokens at four characters per token '
+        f'one /decisions call per trace: up to {label_in:,} estimated input tokens at four characters per token '
         'for combined state and serialized questions, '
         f'and {answers} answer{"s" if answers != 1 else ""} of {label_answer} output tokens'
         + (', including the population-match answer' if query else '')
     )
     coding_basis = (
-        f'baseline: one tool-activity classify request per coding trace ({label_in:,} input tokens, '
+        f'baseline: one tool-activity /decisions request per coding trace ({label_in:,} input tokens, '
         f'{label_answer} output tokens); long activity can split into additional chunks'
     )
     summary_basis = (

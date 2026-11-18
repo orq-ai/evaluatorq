@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
 
+from evaluatorq.common.model_catalogue import is_decision_model
 from evaluatorq.common.model_input import (
     DECISION_STATE_FORMAT,
     fit_classifier_input,
@@ -535,6 +536,9 @@ async def resolve_population(
 
     Only a query population calls models here; each call is recorded in *usage* under ``'population'``.
     """
+    # Looked up before any trace is projected, so a decision model gets the decision state.
+    for model in {classifier_model, label_classifier_model or classifier_model}:
+        await is_decision_model(model, client)
     if pop.snapshot_path is not None:
         resolved = _resolve_from_snapshot(pop)
     elif pop.finder_export is not None:

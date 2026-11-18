@@ -396,10 +396,10 @@ async def _settings_oauth_scope(req: Request) -> NotStr:
     )
 
 
-_MODEL_FIELD_KINDS: dict[str, Literal['chat', 'classify', 'embedding']] = {
+_MODEL_FIELD_KINDS: dict[str, Literal['chat', 'decision', 'embedding']] = {
     'fast_model': 'chat',
     'smart_model': 'chat',
-    'classifier_model': 'classify',
+    'classifier_model': 'decision',
     'embedding_model': 'embedding',
 }
 

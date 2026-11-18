@@ -59,14 +59,17 @@ def test_the_old_import_statement_still_works() -> None:
     ('value', 'expected'),
     [('llm+jev', 'llm+decision'), ('llm+decision', 'llm+decision'), ('llm', 'llm'), ('merged', 'merged'), (None, None)],
 )
+@pytest.mark.filterwarnings('ignore::DeprecationWarning')
 def test_only_the_old_filter_mode_name_is_rewritten(value: object, expected: object) -> None:
     assert normalize_filter_selection(value) == expected
 
 
 def test_a_population_accepts_the_old_filter_mode_name_with_a_warning() -> None:
-    with pytest.warns(DeprecationWarning, match=r"filter_selection='llm\+jev' is deprecated; use 'llm\+decision'\."):
+    with pytest.warns(DeprecationWarning, match=r"^Filter selection mode 'llm\+jev' is deprecated; use 'llm\+decision'\.$") as caught:
         old = InsightsPopulation(query='refunds', filter_selection='llm+jev')
     assert old.filter_selection == 'llm+decision'
+    # The warning names this file, not pydantic: Python's default filters hide a warning attributed to a library.
+    assert [warning.filename for warning in caught] == [__file__]
 
     with warnings.catch_warnings():
         warnings.simplefilter('error')

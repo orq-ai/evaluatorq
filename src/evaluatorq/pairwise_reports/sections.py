@@ -174,8 +174,8 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
     )
 
 
-def _classify_observations(vote: PairwiseVote, run: PairwiseRun) -> list[dict[str, Any]]:
-    """Resolve each classify call into display labels without changing stored answers."""
+def _decision_observations(vote: PairwiseVote, run: PairwiseRun) -> list[dict[str, Any]]:
+    """Resolve each `/decisions` call into display labels without changing stored answers."""
 
     def display_label(label: Any, ordering: str, *, disambiguate: bool = False) -> Any:
         if ordering == 'ba':
@@ -242,7 +242,7 @@ def _vote_cell(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> dict[
             'flipped': False,
             'explanation': '',
             'present': False,
-            'classify_observations': [],
+            'decision_observations': [],
         }
     return {
         'model': model,
@@ -251,7 +251,7 @@ def _vote_cell(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> dict[
         'flipped': bool(vote.flipped),
         'explanation': vote.explanation,
         'present': True,
-        'classify_observations': _classify_observations(vote, run),
+        'decision_observations': _decision_observations(vote, run),
     }
 
 

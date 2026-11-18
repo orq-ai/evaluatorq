@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from evaluatorq.common.judge import ClassifyQuestion
+from evaluatorq.common.judge import DecisionQuestion
 from evaluatorq.trace_finder.models import (
     FACET_NAMES,
     CompiledQuery,
@@ -132,7 +132,7 @@ def test_snapshot_has_no_file_path_or_filename_contract() -> None:
 )
 def test_compiled_query_accepts_each_supported_classifier_task(document: dict[str, object]) -> None:
     compiled = CompiledQuery.model_validate(document)
-    assert isinstance(compiled.task, ClassifyQuestion)
+    assert isinstance(compiled.task, DecisionQuestion)
     assert compiled.task.state == {}
 
 
@@ -216,7 +216,7 @@ def test_compiled_query_reports_actionable_validation_locations(
 def test_compiled_query_rejects_non_empty_classifier_state() -> None:
     with pytest.raises(ValidationError) as error:
         CompiledQuery(
-            task=ClassifyQuestion.model_validate(choice_task(state={'model_filter': 'gpt-5'})),
+            task=DecisionQuestion.model_validate(choice_task(state={'model_filter': 'gpt-5'})),
             selection=ValueSelection(kind='values', values=('billing',)),
         )
 

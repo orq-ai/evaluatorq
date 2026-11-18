@@ -473,7 +473,7 @@ _OLDER_GENERATION = (
     'An older generation than the seat in its lineage, first listed here late; '
     'a listing date is not a release date. Public catalogue 2026-11-10.'
 )
-_NOT_A_JUDGE = 'Not a general text judge (translation, vision, omni, image, speech or classify-only endpoint). Public catalogue 2026-11-10.'
+_NOT_A_JUDGE = 'Not a general text judge (translation, vision, omni, image, speech or decision-only endpoint). Public catalogue 2026-11-10.'
 _UNSCORED = (
     'No AA index on the public card and no card in the project-scoped /v2/models '
     '(2026-11-10), so there is nothing to rank it on. Review again once scored.'

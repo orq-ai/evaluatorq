@@ -13,9 +13,11 @@ Fetched once per process (per host) from ``GET /v2/models`` and used for four th
 * **Knowing which models serve Responses at all.** Entries carry
   ``metadata.supports_responses_api``, so a caller can ask before it calls
   instead of discovering it from a 400.
-* **Knowing which models serve ``/decisions``.** Entries carry
-  ``metadata.supports_classify``, which is how a judge is seated on the classify
-  endpoint instead of a chat one (`supports_classify`).
+* **Knowing which models are decision models.** A decision model serves the router's
+  ``/decisions`` endpoint. Entries carry the router's ``metadata.supports_classify`` flag,
+  read into `ModelInfo.supports_decisions`, which is how a judge is seated on ``/decisions``
+  instead of a chat endpoint (`is_decision_model`). ``EVALUATORQ_DECISION_MODELS`` overrides
+  the catalogue per model.
 
 A model absent from the catalogue stays unpriced — ``total_cost`` ``None``,
 ``priced_calls`` 0 — which the dashboard already renders as "no cost data"
@@ -36,12 +38,14 @@ import asyncio
 import hashlib
 import inspect
 import math
+import warnings
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import httpx
 from loguru import logger
 
-from evaluatorq.common.env_config import env_float
+from evaluatorq.common.deprecation import renamed_attributes
+from evaluatorq.common.env_config import env_float, env_text
 from evaluatorq.common.llm_client import (
     MissingLLMCredentialsError,
     orq_base_url,
@@ -67,9 +71,9 @@ class _ModelInfoFields(NamedTuple):
     # Accepted ``reasoning.effort`` values. ``None`` means the catalogue does not say
     # — absence is "unknown", never "empty".
     reasoning_efforts: frozenset[str] | None = None
-    # Whether the model serves the router's ``/decisions`` endpoint rather than a
-    # chat/responses one. Defaulted so the positional call sites keep working.
-    supports_classify: bool = False
+    # Whether the model is a decision model: it serves the router's ``/decisions`` endpoint
+    # (the catalogue's ``supports_classify`` flag). Defaulted so positional call sites keep working.
+    supports_decisions: bool = False
     # The catalogue's ``model_type`` (``chat``, ``embedding``, ``tts``, …); ``''`` when unstated.
     model_type: str = ''
     # The effort the provider applies when none is sent. ``None`` when the
@@ -108,7 +112,7 @@ class ModelInfo(_ModelInfoFields):
         provider: str,
         supports_responses: bool,  # noqa: FBT001 — positional to match the tuple field order
         reasoning_efforts: frozenset[str] | None = None,
-        supports_classify: bool = False,  # noqa: FBT001, FBT002 — positional to match the tuple field order
+        supports_decisions: bool = False,  # noqa: FBT001, FBT002 — positional to match the tuple field order
         model_type: str = '',
         default_reasoning_effort: str | None = None,
         extended_context_threshold: int | None = None,
@@ -119,6 +123,8 @@ class ModelInfo(_ModelInfoFields):
         audio_input_cost_per_1k: float | None = None,
         cache_read_cost_per_1k: float | None = None,
         cache_write_cost_per_1k: float | None = None,
+        *,
+        supports_classify: bool | None = None,
     ) -> ModelInfo:
         """Normalize an empty ``reasoning_efforts`` to ``None``.
 
@@ -131,6 +137,13 @@ class ModelInfo(_ModelInfoFields):
         collapses the two; doing it in the type closes the same hole for
         `register_model`, which takes whatever a caller hands it.
         """
+        if supports_classify is not None:
+            warnings.warn(
+                'ModelInfo(supports_classify=...) is deprecated; use supports_decisions.',
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            supports_decisions = supports_classify
         # One rate without the other cannot price a call; keep "unpriced" a single state.
         if input_cost_per_1k is None or output_cost_per_1k is None:
             input_cost_per_1k = output_cost_per_1k = None
@@ -141,7 +154,7 @@ class ModelInfo(_ModelInfoFields):
             provider,
             supports_responses,
             reasoning_efforts or None,
-            supports_classify,
+            supports_decisions,
             model_type,
             default_reasoning_effort,
             extended_context_threshold,
@@ -153,6 +166,14 @@ class ModelInfo(_ModelInfoFields):
             cache_read_cost_per_1k,
             cache_write_cost_per_1k,
         )
+
+    @property
+    def supports_classify(self) -> bool:
+        """Deprecated name of `supports_decisions`."""
+        warnings.warn(
+            'ModelInfo.supports_classify is deprecated; use supports_decisions.', DeprecationWarning, stacklevel=2
+        )
+        return self.supports_decisions
 
     @property
     def extended_tier_complete(self) -> bool:
@@ -202,21 +223,24 @@ _MAX_FETCH_FAILURES = 3
 # with no config object to thread.
 _CATALOGUE_TIMEOUT_S = env_float('EVALUATORQ_CATALOGUE_TIMEOUT_S')
 
-# Classify models by their fully qualified id, for the case where the catalogue is
+# Decision models by their fully qualified id, for the case where the catalogue is
 # empty or its fetch failed. Seating a judge is a construction-time decision, so
-# without this a catalogue outage would quietly demote a classify judge to a chat
+# without this a catalogue outage would quietly demote a decision-model judge to a chat
 # call the model cannot serve. Exact ids only — no ``typesafe/`` prefix matching.
-KNOWN_CLASSIFY_MODELS = frozenset({DEFAULT_CLASSIFIER_MODEL})
-# Models already warned about falling back to KNOWN_CLASSIFY_MODELS: the same judge
+KNOWN_DECISION_MODELS = frozenset({DEFAULT_CLASSIFIER_MODEL})
+# Models already warned about falling back to KNOWN_DECISION_MODELS: the same judge
 # is constructed once per datapoint, and one line per run is the useful volume.
-_classify_fallback_warned: set[str] = set()
+_decision_fallback_warned: set[str] = set()
+# The last catalogue answer `is_decision_model` gave per bare id, so `decided_decision_model` can
+# answer synchronously the same way once a run has looked the model up.
+_decision_answers: dict[str, bool] = {}
 
 
 def _bare_id(model: str) -> str:
     """``model`` without its ``provider/`` prefix.
 
     One spelling rule in one place: ``_overrides`` is keyed on the bare id, so
-    `register_model` (write), `_lookup` and `is_known_classify_model` (read) must
+    `register_model` (write), `_lookup` and `is_known_decision_model` (read) must
     strip the prefix identically or an override becomes a silent no-op.
     """
     return model.split('/', 1)[-1]
@@ -261,7 +285,8 @@ def reset_catalogue_cache() -> None:
     _raw_catalogues.clear()
     _failed_catalogues.clear()
     _fetch_failures.clear()
-    _classify_fallback_warned.clear()
+    _decision_fallback_warned.clear()
+    _decision_answers.clear()
     _lock = None
 
 
@@ -450,13 +475,13 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
             continue
         inp, out = _usd_price(entry, 'input'), _usd_price(entry, 'output')
         metadata = _entry_metadata(entry)
-        classify_flag = metadata.get('supports_classify')
-        if classify_flag is not None and not isinstance(classify_flag, bool):
+        decision_flag = metadata.get('supports_classify')
+        if decision_flag is not None and not isinstance(decision_flag, bool):
             logger.warning(
                 'Model catalogue entry {}/{} has non-boolean supports_classify={!r}; treating it as unsupported',
                 provider,
                 model_id,
-                classify_flag,
+                decision_flag,
             )
         threshold = _metadata_threshold(metadata)
         # The keys are literally named `above_200k`; under any other threshold they would be
@@ -481,7 +506,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
             # non-mapping took the whole catalogue down rather than one model.
             supports_responses=bool(metadata.get('supports_responses_api')),
             reasoning_efforts=_parse_reasoning_efforts(entry),
-            supports_classify=classify_flag is True,
+            supports_decisions=decision_flag is True,
             model_type=str(entry.get('model_type') or ''),
             default_reasoning_effort=_parse_default_reasoning_effort(entry),
             extended_context_threshold=threshold,
@@ -502,7 +527,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
         logger.warning(
             'Model catalogue returned {} entries but none parsed (payload shape change?); '
             'catalogue-based endpoint qualification and local pricing are unavailable, '
-            'though the built-in classify fallback still applies',
+            'though the built-in decision-model fallback still applies',
             len(payload),
         )
     return models
@@ -584,7 +609,7 @@ async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = F
             logger.warning(
                 'Orq model catalogue unavailable ({}: {}) at {}/v2/models (attempt {} of {}) — '
                 'catalogue-based endpoint qualification and local pricing are unavailable {} '
-                '(the built-in classify fallback still applies)',
+                '(the built-in decision-model fallback still applies)',
                 type(exc).__name__,
                 exc,
                 host,
@@ -652,19 +677,25 @@ async def model_cards(client: AsyncOpenAI | None = None) -> tuple[dict[str, obje
     return cards
 
 
-ModelKind = Literal['chat', 'classify', 'embedding']
+ModelKind = Literal['chat', 'decision', 'embedding']
 
 
 async def models_by_provider(
-    client: AsyncOpenAI | None = None, *, kind: ModelKind = 'chat', strict: bool = False
+    client: AsyncOpenAI | None = None, *, kind: ModelKind | Literal['classify'] = 'chat', strict: bool = False
 ) -> dict[str, list[str]]:
     """Catalogue ids as ``provider/model``, grouped by provider, both levels sorted.
 
-    ``kind='classify'`` lists the models that serve ``/decisions``, ``'embedding'`` the
-    embedding models and ``'chat'`` the chat models. Empty when the catalogue is unavailable, so a caller can fall back to
+    ``kind='decision'`` lists the decision models (the ``/decisions`` endpoint), ``'embedding'`` the
+    embedding models and ``'chat'`` the chat models. The old ``kind='classify'`` still works, with a
+    ``DeprecationWarning``. Empty when the catalogue is unavailable, so a caller can fall back to
     free text. Set ``strict=True`` to propagate request errors and raise ``ModelCatalogueError`` for malformed
     payloads; strict calls reuse successful non-OAuth cache entries and retry failed ones. OAuth results are never cached.
     """
+    if kind == 'classify':
+        warnings.warn(
+            "models_by_provider(kind='classify') is deprecated; use kind='decision'.", DeprecationWarning, stacklevel=2
+        )
+        kind = 'decision'
     # `_parse_catalogue` files each entry under its bare and its qualified key with
     # the same ModelInfo object; the qualified key is the longer of the two.
     qualified: dict[int, tuple[ModelInfo, str]] = {}
@@ -674,7 +705,7 @@ async def models_by_provider(
             qualified[id(info)] = (info, key)
     grouped: dict[str, list[str]] = {}
     for info, key in qualified.values():
-        if info.supports_classify if kind == 'classify' else info.model_type == kind:
+        if info.supports_decisions if kind == 'decision' else info.model_type == kind:
             grouped.setdefault(info.provider, []).append(key)
     return {provider: sorted(ids) for provider, ids in sorted(grouped.items())}
 
@@ -720,46 +751,102 @@ async def qualified_model(model: str, client: AsyncOpenAI | None = None) -> str 
     return f'{info.provider}/{model}'
 
 
-def is_known_classify_model(model: str) -> bool:
-    """Whether ``model`` is a built-in classify id, without touching the catalogue.
+def decision_model_override(model: str) -> bool | None:
+    """What ``EVALUATORQ_DECISION_MODELS`` says about ``model``, or ``None`` when it names it not at all.
 
-    The synchronous counterpart of `supports_classify`, for callers that decide how
-    to seat a judge before any await is available. `register_model` overrides answer
-    first — keyed on the bare id, exactly as `_lookup` reads them — and an override
-    that says ``supports_classify=False`` is believed even for a model in
-    `KNOWN_CLASSIFY_MODELS`, since a caller correcting an entry outranks this
-    package's built-in list. `KNOWN_CLASSIFY_MODELS` answers when there is no
-    override.
-
-    A model known only to the fetched catalogue reads as ``False`` here and ``True``
-    from `supports_classify`. Jury construction treats this function as an early hint
-    for validation and warnings; runtime routing still follows the catalogue, so no
-    registration is required for that model to work.
+    The variable is a comma-separated list of model ids. A listed id is a decision model; an id
+    prefixed with ``!`` is not one, whatever the catalogue says. Ids match with or without their
+    ``provider/`` prefix, the same spelling rule `register_model` uses. Read on every call, so a
+    test or a long-running dashboard sees a change without a restart.
     """
+    raw = env_text('EVALUATORQ_DECISION_MODELS')
+    if raw is None:
+        return None
+    bare = _bare_id(model)
+    answer: bool | None = None
+    for item in raw.split(','):
+        entry = item.strip()
+        forced_off = entry.startswith('!')
+        entry = entry.removeprefix('!').strip()
+        if entry and _bare_id(entry) == bare:
+            answer = not forced_off
+    return answer
+
+
+def is_known_decision_model(model: str) -> bool:
+    """Whether ``model`` is a decision model, without touching the catalogue.
+
+    The synchronous counterpart of `is_decision_model`, for callers that decide before any await is
+    available. ``EVALUATORQ_DECISION_MODELS`` answers first, then a `register_model` override (keyed on
+    the bare id, exactly as `_lookup` reads them; one that says ``supports_decisions=False`` is
+    believed even for a model in `KNOWN_DECISION_MODELS`), then `KNOWN_DECISION_MODELS`.
+
+    A model known only to the fetched catalogue reads as ``False`` here and ``True`` from
+    `is_decision_model`. Jury construction treats this function as an early hint for validation and
+    warnings; runtime routing still follows the catalogue, so no registration is required for that
+    model to work.
+    """
+    forced = decision_model_override(model)
+    if forced is not None:
+        return forced
     override = _overrides.get(_bare_id(model))
     if override is not None:
-        return override.supports_classify
-    return model in KNOWN_CLASSIFY_MODELS
+        return override.supports_decisions
+    return model in KNOWN_DECISION_MODELS
 
 
-async def supports_classify(model: str, client: AsyncOpenAI | None = None) -> bool:
-    """Whether ``model`` serves the router's ``/decisions`` endpoint.
+async def is_decision_model(model: str, client: AsyncOpenAI | None = None) -> bool:
+    """Whether ``model`` is a decision model, one that serves the router's ``/decisions`` endpoint.
 
-    The catalogue is the authority: an entry answers for itself, including saying
-    ``False``. `KNOWN_CLASSIFY_MODELS` answers only when there is no entry at all —
-    an empty or failed catalogue — and logs once per model when it does, because a
-    fallback that decided the endpoint silently is indistinguishable from a
-    catalogue that said so.
+    ``EVALUATORQ_DECISION_MODELS`` answers first. Otherwise the catalogue is the authority: an entry
+    answers for itself, including saying ``False``. `KNOWN_DECISION_MODELS` answers only when there is
+    no entry at all (an empty or failed catalogue) and logs once per model when it does, because a
+    fallback that decided the endpoint silently is indistinguishable from a catalogue that said so.
     """
+    forced = decision_model_override(model)
+    if forced is not None:
+        return forced
     info = await _lookup(model, client)
     if info is not None:
-        return info.supports_classify
-    if model in KNOWN_CLASSIFY_MODELS:
-        if model not in _classify_fallback_warned:
-            _classify_fallback_warned.add(model)
-            logger.warning('Model catalogue has no entry for {}; routing it to classify from the built-in list', model)
-        return True
-    return False
+        answer = info.supports_decisions
+    elif model in KNOWN_DECISION_MODELS:
+        if model not in _decision_fallback_warned:
+            _decision_fallback_warned.add(model)
+            logger.warning(
+                'Model catalogue has no entry for {}; treating it as a decision model from the built-in list', model
+            )
+        answer = True
+    else:
+        answer = False
+    _decision_answers[_bare_id(model)] = answer
+    return answer
+
+
+def decided_decision_model(model: str) -> bool:
+    """Whether ``model`` is a decision model, as far as this process already knows, without a fetch.
+
+    For synchronous code that shapes a model's input, such as the decision state. It answers in the
+    order of `is_decision_model`: ``EVALUATORQ_DECISION_MODELS``, a `register_model` override, then
+    the catalogue answer `is_decision_model` last gave for this model, then `KNOWN_DECISION_MODELS`.
+    A run looks its classifier up with `is_decision_model` before it builds any state, so the two
+    agree inside a run.
+
+    This is looser than `is_known_decision_model` on purpose: a chat model the catalogue also lists
+    as a decision model reads ``True`` here, because it will be asked on ``/decisions`` and must get
+    the decision state, while `is_known_decision_model` stays ``False`` so a judge never refuses to
+    prompt it.
+    """
+    forced = decision_model_override(model)
+    if forced is not None:
+        return forced
+    bare = _bare_id(model)
+    override = _overrides.get(bare)
+    if override is not None:
+        return override.supports_decisions
+    answer = _decision_answers.get(bare)
+    if answer is not None:
+        return answer
+    return model in KNOWN_DECISION_MODELS
 
 
 async def validate_reasoning_effort(effort: str, model: str, client: AsyncOpenAI | None = None) -> None:
@@ -956,18 +1043,31 @@ async def price_usage(
 
 
 __all__ = [
-    'KNOWN_CLASSIFY_MODELS',
+    'KNOWN_DECISION_MODELS',
     'CallCost',
     'ModelInfo',
     'clear_model_overrides',
     'cost_of',
+    'decided_decision_model',
+    'decision_model_override',
     'get_model_info',
-    'is_known_classify_model',
+    'is_decision_model',
+    'is_known_decision_model',
     'model_cards',
     'price_usage',
     'qualified_model',
     'register_model',
     'reset_catalogue_cache',
-    'supports_classify',
     'validate_reasoning_effort',
 ]
+
+
+# Names from before classify models were renamed to decision models: each still resolves, with a DeprecationWarning.
+_RENAMED = {
+    'KNOWN_CLASSIFY_MODELS': 'KNOWN_DECISION_MODELS',
+    'is_known_classify_model': 'is_known_decision_model',
+    'supports_classify': 'is_decision_model',
+}
+
+
+__getattr__ = renamed_attributes(__name__, globals(), _RENAMED)

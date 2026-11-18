@@ -53,14 +53,14 @@ def _one_call() -> Any:
 
 
 @pytest.mark.asyncio
-async def test_door_classification_checks_the_fast_model_the_classify_only_default_falls_back_to() -> None:
+async def test_door_classification_checks_the_fast_model_the_decision_only_default_falls_back_to() -> None:
     with pytest.raises(ModelClientMismatchError) as info:
         await classify_tool_doors(_one_call())
-    assert 'EVALUATORQ_FAST_MODEL (unset, built-in default), standing in for the classify-only' in str(info.value)
+    assert 'EVALUATORQ_FAST_MODEL (unset, built-in default), standing in for the decision-only' in str(info.value)
 
 
 @pytest.mark.asyncio
-async def test_tool_role_classification_checks_the_fast_model_the_classify_only_default_falls_back_to() -> None:
+async def test_tool_role_classification_checks_the_fast_model_the_decision_only_default_falls_back_to() -> None:
     with pytest.raises(ModelClientMismatchError, match='EVALUATORQ_FAST_MODEL'):
         await classify_tool_roles([_one_call()])
 

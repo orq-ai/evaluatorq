@@ -7,7 +7,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, cast
 
 import httpx
 import typer
@@ -25,7 +25,7 @@ from evaluatorq.common.orq_client import OrqProfile, close_orq_client, resolve_o
 from evaluatorq.trace_finder.cli import _facets, resolve_cli_profile
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import NumericFilters
-from evaluatorq.trace_finder.settings import effective_settings
+from evaluatorq.trace_finder.settings import FILTER_SELECTION_CLI_TYPE, effective_settings
 
 from . import presets
 from .models import DimensionName, InsightsPopulation, InsightsRun, LabelSpec, default_insights_models
@@ -458,10 +458,11 @@ def insights_cmd(
         int | None, typer.Option('--window-days', min=1, max=90, help='Recent days to scan.')
     ] = None,
     filter_selection: Annotated[
-        Literal['llm', 'llm+decision', 'llm+jev'] | None,
+        str | None,
         typer.Option(
             '--filter-selection',
-            help='Natural-language metadata filter mode: llm or llm+decision. The old name llm+jev still works.',
+            click_type=FILTER_SELECTION_CLI_TYPE,
+            help='Natural-language metadata filter mode: llm or llm+decision.',
         ),
     ] = None,
     limit: Annotated[

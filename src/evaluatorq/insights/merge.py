@@ -1,7 +1,7 @@
 """Classifier-based merge of near-duplicate clusters.
 
-One retry layer: mirrors `labeling.py`'s `_classify_with_retry` for a different
-call path — `run_classify` normally returns an outcome, so a retryable outcome
+One retry layer: mirrors `labeling.py`'s `_decision_with_retry` for a different
+call path — `run_decision` normally returns an outcome, so a retryable outcome
 (`JudgeError.TIMEOUT`/`API_CONNECTION`) re-raises its own `error_exc` for
 `with_retry` to retry; the final attempt's outcome is returned as-is. Do not
 add a second retry layer around this call path.
@@ -20,14 +20,14 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 
-from evaluatorq.common.judge import ClassifyQuestion, ClassifyRequest, JudgeError, run_classify
+from evaluatorq.common.judge import DecisionQuestion, DecisionRequest, JudgeError, run_decision
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import LLMCallConfig
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-    from evaluatorq.common.judge import ClassifyOutcome
+    from evaluatorq.common.judge import DecisionOutcome
     from evaluatorq.insights.describe import ClusterName
     from evaluatorq.insights.usage import UsageLedger
 
@@ -68,15 +68,15 @@ def _cluster_state(name: ClusterName, cluster_examples: list[str]) -> dict[str, 
     return {'name': name.name, 'description': name.description, 'examples': cluster_examples[:_MAX_EXAMPLES]}
 
 
-async def _classify_pair_with_retry(
-    *, client: AsyncOpenAI, model: str, cfg: LLMCallConfig, request: ClassifyRequest, usage: UsageLedger | None = None
-) -> ClassifyOutcome:
-    """Call `run_classify`, retrying only a transient failure — see module docstring."""
-    holder: list[ClassifyOutcome] = []
+async def _decision_pair_with_retry(
+    *, client: AsyncOpenAI, model: str, cfg: LLMCallConfig, request: DecisionRequest, usage: UsageLedger | None = None
+) -> DecisionOutcome:
+    """Call `run_decision`, retrying only a transient failure — see module docstring."""
+    holder: list[DecisionOutcome] = []
 
-    async def attempt() -> ClassifyOutcome:
+    async def attempt() -> DecisionOutcome:
         try:
-            outcome = await run_classify(client=client, model=model, cfg=cfg, request=request)
+            outcome = await run_decision(client=client, model=model, cfg=cfg, request=request)
         except Exception:
             if usage is not None:
                 usage.add('merge', None)
@@ -89,7 +89,7 @@ async def _classify_pair_with_retry(
         return outcome
 
     try:
-        return await with_retry(attempt, max_attempts=cfg.retry_count + 1, label='insights merge classify')
+        return await with_retry(attempt, max_attempts=cfg.retry_count + 1, label='insights merge decision')
     except Exception:
         if not holder:
             raise
@@ -156,7 +156,7 @@ async def merge_similar(
                 'cluster_a': _cluster_state(names[a], examples.get(a, [])),
                 'cluster_b': _cluster_state(names[b], examples.get(b, [])),
             }
-            question = ClassifyQuestion(
+            question = DecisionQuestion(
                 kind='noul',
                 instructions=(
                     'Do these two clusters describe the same specific activity on the same kind of object, so that '
@@ -165,24 +165,24 @@ async def merge_similar(
                 ),
                 state=state,
             )
-            request = ClassifyRequest(state=state, questions={_SAME_KEY: question})
+            request = DecisionRequest(state=state, questions={_SAME_KEY: question})
 
             async with semaphore:
-                outcome = await _classify_pair_with_retry(
+                outcome = await _decision_pair_with_retry(
                     client=client, model=model, cfg=cfg, request=request, usage=usage
                 )
 
             if outcome.error_kind is not None or outcome.response is None:
                 message = outcome.error_message or (
-                    outcome.error_kind.value if outcome.error_kind else 'classify reply produced no response'
+                    outcome.error_kind.value if outcome.error_kind else '/decisions reply produced no response'
                 )
-                logger.warning('Insights merge classify failed for clusters {} vs {}: {}', a, b, message)
+                logger.warning('Insights merge /decisions call failed for clusters {} vs {}: {}', a, b, message)
                 return False
 
             answer = outcome.response.answers.get(_SAME_KEY)
             if answer is None or answer.type != 'noul' or answer.noul is None:
                 logger.warning(
-                    'Insights merge classify reply for clusters {} vs {} has no {!r} probability', a, b, _SAME_KEY
+                    'Insights merge /decisions reply for clusters {} vs {} has no {!r} probability', a, b, _SAME_KEY
                 )
                 return False
 
@@ -190,7 +190,7 @@ async def merge_similar(
                 _union(parent, a, b)
             return True
         except Exception as exc:  # noqa: BLE001 — isolate unexpected pair failure; cancellation still propagates.
-            logger.warning('Insights merge classify failed for clusters {} vs {}: {}', a, b, exc)
+            logger.warning('Insights merge /decisions call failed for clusters {} vs {}: {}', a, b, exc)
             return False
 
     outcomes = await asyncio.gather(*starmap(_check_pair, pairs))

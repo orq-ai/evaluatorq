@@ -74,14 +74,14 @@ def orq_base_url() -> str:
 class LLMConfigurationError(ValueError):
     """A client, model or request setting that no call can succeed with, raised before any request is sent.
 
-    A run-wide configuration mistake: every call would fail the same way. Judge, classify and signals code re-raises it instead of turning it into a per-item judge error. A per-item handler further up (a red-team attack, a simulation row) still records it on that row and the batch carries on until RES-1879 lands, so the error appears once per row rather than stopping the run.
+    A run-wide configuration mistake: every call would fail the same way. Judge, decision and signals code re-raises it instead of turning it into a per-item judge error. A per-item handler further up (a red-team attack, a simulation row) still records it on that row and the batch carries on until RES-1879 lands, so the error appears once per row rather than stopping the run.
     """
 
 
 class ModelClientMismatchError(LLMConfigurationError):
     """A model id that the client it was sent to cannot serve, such as an OpenAI default model reaching an Anthropic client.
 
-    Judge, classify and signals code re-raises it like every `LLMConfigurationError`; a per-item handler further up still records it on each row until RES-1879 lands.
+    Judge, decision and signals code re-raises it like every `LLMConfigurationError`; a per-item handler further up still records it on each row until RES-1879 lands.
     """
 
 

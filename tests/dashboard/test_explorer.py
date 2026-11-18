@@ -399,11 +399,11 @@ def test_table_column_widths_are_fixed_per_header_and_stable_across_pages() -> N
 
 def test_table_shows_escaped_ai_match_text_and_aligns_numeric_columns() -> None:
     from evaluatorq.trace_finder import CompiledQuery, DimensionAnswer, RunSnapshot, TraceClassification, ValueSelection
-    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.common.judge import DecisionQuestion
 
     dimension = CompiledQuery(
         name='Refund<&',
-        task=ClassifyQuestion(
+        task=DecisionQuestion(
             kind='choice', instructions='Judge it.', criteria={'Refund <&>': 'x', 'other': 'y'}, state={}
         ),
         selection=ValueSelection(kind='values', values=('Refund <&>',)),
@@ -947,7 +947,7 @@ def test_traces_toolbar_offers_csv_download(explorer_client) -> None:
 
 
 def test_load_keeps_ai_results_and_renders_answers_for_loaded_rows(explorer_client) -> None:
-    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.common.judge import DecisionQuestion
     from evaluatorq.trace_finder import CompiledQuery, DimensionAnswer, RunSnapshot, TraceClassification, ValueSelection
 
     store, _, client = explorer_client
@@ -968,7 +968,7 @@ def test_load_keeps_ai_results_and_renders_answers_for_loaded_rows(explorer_clie
         within_results=True,
         dimensions=(
             CompiledQuery(
-                task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
+                task=DecisionQuestion(kind='noul', instructions='Judge.', state={}),
                 selection=ValueSelection(kind='values', values=(True,)),
             ),
         ),
@@ -1141,7 +1141,7 @@ def test_cancel_refreshes_ai_waiting_cells(explorer_client) -> None:
 
 def _judged_snapshot(**kwargs: Any) -> Any:
     """A completed within-results run whose classifier judged the given trace ids (a: match, b: no match)."""
-    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.common.judge import DecisionQuestion
     from evaluatorq.trace_finder import (
         CompiledQuery,
         DimensionAnswer,
@@ -1161,7 +1161,7 @@ def _judged_snapshot(**kwargs: Any) -> Any:
         for trace_id, matched in kwargs.pop('verdicts').items()
     }
     dimension = CompiledQuery(
-        task=ClassifyQuestion(kind='choice', instructions='Judge.', criteria={'yes': 'x', 'no': 'y'}, state={}),
+        task=DecisionQuestion(kind='choice', instructions='Judge.', criteria={'yes': 'x', 'no': 'y'}, state={}),
         selection=ValueSelection(kind='values', values=('yes',)),
     )
     kwargs.setdefault('explorer_generation', 1)
@@ -1559,7 +1559,7 @@ def test_columns_post_reports_unreadable_settings_without_changing_file_or_runti
 
 
 def test_match_column_choice_survives_a_columns_edit_made_before_any_ai_run(explorer_client) -> None:
-    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.common.judge import DecisionQuestion
     from evaluatorq.trace_finder import CompiledQuery, DimensionAnswer, RunSnapshot, TraceClassification, ValueSelection
 
     store, _, client = explorer_client
@@ -1588,7 +1588,7 @@ def test_match_column_choice_survives_a_columns_edit_made_before_any_ai_run(expl
         within_results=True,
         dimensions=(
             CompiledQuery(
-                task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
+                task=DecisionQuestion(kind='noul', instructions='Judge.', state={}),
                 selection=ValueSelection(kind='values', values=(True,)),
             ),
         ),

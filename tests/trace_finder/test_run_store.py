@@ -13,7 +13,7 @@ import pytest
 from evaluatorq.common.model_input import fit_classifier_input, serialized_question_chars
 from evaluatorq.trace_finder.classifier import classifier_questions
 
-from evaluatorq.common.judge import ClassifyAnswer, ClassifyResponse
+from evaluatorq.common.judge import DecisionAnswer, DecisionResponse
 from evaluatorq.trace_finder.compiler import CompiledPlan
 from evaluatorq.trace_finder.planner import PlanningResult
 from evaluatorq.trace_finder.models import (
@@ -322,8 +322,8 @@ async def test_compile_merges_generated_filters_and_numeric_constraints_with_man
 @pytest.mark.asyncio
 async def test_filter_response_survives_review_start_and_is_detached() -> None:
     runner = Runner()
-    response = ClassifyResponse(
-        model='jev-latest', answers={'provider': ClassifyAnswer(type='choice', choice='openai')}
+    response = DecisionResponse(
+        model='jev-latest', answers={'provider': DecisionAnswer(type='choice', choice='openai')}
     )
 
     async def select_filters(query: str, population: PopulationRequest) -> FilterSelectionResult:

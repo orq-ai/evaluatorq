@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, cast
 
 from loguru import logger
 
-from evaluatorq.common.judge import ClassifyQuestion, run_judge
+from evaluatorq.common.judge import DecisionQuestion, run_judge
 from evaluatorq.common.llm_client import LLMConfigurationError, as_llm_client, resolve_llm_client
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.signals.config import SignalsConfig, ToolRole, require_classifier_served
@@ -71,7 +71,7 @@ async def classify_tool_roles(
     roles: dict[str, ToolRole] = {}
     try:
         for name in names:
-            question = ClassifyQuestion(
+            question = DecisionQuestion(
                 kind='choice',
                 instructions='Choose the role that best describes this tool.',
                 criteria=_ROLE_CRITERIA,
@@ -85,7 +85,7 @@ async def classify_tool_roles(
                     prompt_template='',
                     replacements={},
                     span_attributes={'orq.llm.purpose': 'judge'},
-                    classify=question,
+                    decision=question,
                 )
                 value = outcome.payload.value if outcome.payload is not None else None
                 if outcome.error_kind is not None or outcome.payload is None or outcome.payload.abstain:

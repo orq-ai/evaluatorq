@@ -17,7 +17,7 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 from evaluatorq import cli as cli_module
-from evaluatorq.common.judge import ClassifyQuestion
+from evaluatorq.common.judge import DecisionQuestion
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.trace_finder import (
     CompiledQuery,
@@ -84,7 +84,7 @@ class FakeStore:
         trace = _trace()
         compiled = CompiledQuery(
             name='Refund',
-            task=ClassifyQuestion(
+            task=DecisionQuestion(
                 kind='choice',
                 instructions='Does the trace mention a refund?',
                 criteria={'yes': 'It mentions a refund.', 'no': 'It does not.'},
@@ -172,7 +172,7 @@ def test_find_shows_plan_and_classifies_without_prompt_when_not_a_tty(monkeypatc
     assert 'model: gpt-5.6-luna' in result.output
     assert 'Does the trace mention a refund?' in result.output
     assert 'Included when: Verdict yes' in result.output
-    assert 'Classify 1 trace?' not in result.output
+    assert 'Run the classifier on 1 trace?' not in result.output
     assert 'Matched traces' in result.output
 
 
@@ -224,7 +224,7 @@ def test_find_classifies_after_confirming_the_plan(monkeypatch: Any) -> None:
     result = CliRunner().invoke(_app(), ['find', 'refund requests'], input='y\n')
 
     assert result.exit_code == 0, result.output
-    assert 'Classify 1 trace?' in result.output
+    assert 'Run the classifier on 1 trace?' in result.output
     assert len(store.started) == 1
     assert 'Matched traces' in result.output
 
@@ -238,7 +238,7 @@ def test_find_declining_the_plan_classifies_nothing(monkeypatch: Any, tmp_path: 
 
     assert result.exit_code == 0, result.output
     assert store.started == []
-    assert 'no traces were classified' in result.output
+    assert 'no traces were sent to the classifier' in result.output
     assert not output.exists()
 
 
@@ -250,7 +250,7 @@ def test_find_yes_skips_the_prompt(monkeypatch: Any) -> None:
 
     assert result.exit_code == 0, result.output
     assert 'Find plan' in result.output
-    assert 'Classify 1 trace?' not in result.output
+    assert 'Run the classifier on 1 trace?' not in result.output
     assert len(store.started) == 1
 
 
@@ -261,7 +261,7 @@ def test_find_filter_only_plan_skips_the_prompt(monkeypatch: Any) -> None:
     result = CliRunner().invoke(_app(), ['find', 'gpt-5.6-luna traces'])
 
     assert result.exit_code == 0, result.output
-    assert 'Classify 1 trace?' not in result.output
+    assert 'Run the classifier on 1 trace?' not in result.output
     assert len(store.started) == 1
     assert store.started[0][1] == ()
 
@@ -269,7 +269,7 @@ def test_find_filter_only_plan_skips_the_prompt(monkeypatch: Any) -> None:
 def test_find_plan_shows_window_threshold_rule_and_reached_limit(monkeypatch: Any) -> None:
     scored = CompiledQuery(
         name='Frustration',
-        task=ClassifyQuestion(
+        task=DecisionQuestion(
             kind='score',
             instructions='How frustrated is the user?',
             criteria=['Calm.', 'Annoyed.', 'Very frustrated.'],

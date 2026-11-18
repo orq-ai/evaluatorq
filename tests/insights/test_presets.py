@@ -8,15 +8,15 @@ from typing import cast
 
 import pytest
 
-from evaluatorq.common.judge import ClassifyQuestion
+from evaluatorq.common.judge import DecisionQuestion
 from evaluatorq.insights import presets
 from evaluatorq.insights.models import LabelSpec
 
 
-def test_every_preset_is_a_valid_classify_question() -> None:
+def test_every_preset_is_a_valid_decision_question() -> None:
     for name, spec in presets.LABEL_PRESETS.items():
         assert spec.name == name
-        assert isinstance(spec.to_question({'messages': []}), ClassifyQuestion)
+        assert isinstance(spec.to_question({'messages': []}), DecisionQuestion)
 
 
 def test_concerning_preset_uses_classifier_level_indices() -> None:

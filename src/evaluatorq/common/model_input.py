@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import warnings
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -13,12 +12,13 @@ from typing import Any, SupportsIndex
 
 from typing_extensions import Self
 
+from evaluatorq.common.deprecation import renamed_attributes
 from evaluatorq.common.messages import MediaContent, iter_content_parts, match_tool_results
+from evaluatorq.common.model_catalogue import decided_decision_model
 from evaluatorq.common.redact import scrub_known_secrets
 
 CHARS_PER_ESTIMATED_TOKEN = 4
-# The decision-state ceilings are the input limits of the ``typesafe/jev`` models, the only models that take a
-# decision state today (`uses_decision_state`). A second decision model needs its own limits, not these.
+# The input limits of the router's ``/decisions`` endpoint, applied to every decision model (`uses_decision_state`).
 DECISION_STATE_CHARS = 28_000 * CHARS_PER_ESTIMATED_TOKEN
 DECISION_STATE_QUESTION_CHARS = 32_000 * CHARS_PER_ESTIMATED_TOKEN
 DECISION_STATE_ALL_QUESTIONS_CHARS = 64_000 * CHARS_PER_ESTIMATED_TOKEN
@@ -194,7 +194,7 @@ def serialized_chars(value: Any) -> int:
 
 
 def classifier_question_wire_payloads(questions: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    """Return the exact keyed question objects sent by ``classify_request_body``."""
+    """Return the exact keyed question objects sent by ``decision_request_body``."""
     wire: dict[str, dict[str, Any]] = {}
     for name, question in questions.items():
         if isinstance(question, Mapping):
@@ -233,8 +233,13 @@ def serialized_question_chars(questions: Sequence[Any] | Mapping[str, Any]) -> i
 
 
 def uses_decision_state(model: str) -> bool:
-    """Select only the Jev family for its structured state format."""
-    return model.casefold().startswith('typesafe/jev')
+    """Whether ``model`` gets the decision state: every decision model does, `typesafe/jev-latest` among them.
+
+    Answers from what the process already knows (`model_catalogue.decided_decision_model`), so a run
+    looks its classifier up with ``await model_catalogue.is_decision_model(...)`` before it builds any
+    state. Every other model gets the plain-text conversation view.
+    """
+    return decided_decision_model(model)
 
 
 def effective_trace_input_chars() -> int:
@@ -1043,9 +1048,4 @@ _RENAMED = {
 }
 
 
-def __getattr__(name: str) -> Any:
-    new_name = _RENAMED.get(name)
-    if new_name is None:
-        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
-    warnings.warn(f'{name} is deprecated; use {new_name}.', DeprecationWarning, stacklevel=2)
-    return globals()[new_name]
+__getattr__ = renamed_attributes(__name__, globals(), _RENAMED)

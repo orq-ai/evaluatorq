@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path  # noqa: TC003 — Typer resolves this annotation at runtime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 import typer
 from loguru import logger
@@ -48,7 +48,7 @@ from .models import (
 from .orq_source import OrqSourceError
 from .pipeline import build_run_store
 from .run_store import RunStore
-from .settings import effective_settings
+from .settings import FILTER_SELECTION_CLI_TYPE, effective_settings
 
 MAX_FIND_WAIT_SECONDS = 2 * 60 * 60
 
@@ -280,7 +280,7 @@ async def _poll(
 
 
 async def _run(store: Any, request: RunRequest, console: Console, *, yes: bool = False) -> RunSnapshot | None:
-    """Compile for review, confirm the plan, then classify; ``None`` when the user declines.
+    """Compile for review, confirm the plan, then run the classifier; ``None`` when the user declines.
 
     Planning and classification share one wait budget; time at the prompt does not count.
     """
@@ -297,8 +297,8 @@ async def _run(store: Any, request: RunRequest, console: Console, *, yes: bool =
         console,
         title='Find plan',
         rows=_plan_rows(snapshot),
-        prompt=f'Classify {snapshot.total:,} {noun}?',
-        # A zero-dimension plan makes no classify calls, so there is nothing to approve.
+        prompt=f'Run the classifier on {snapshot.total:,} {noun}?',
+        # A zero-dimension plan makes no classifier calls, so there is nothing to approve.
         skip_confirm=should_skip_confirm(yes) or not dimensions,
     )
     if not confirmed:
@@ -334,7 +334,7 @@ async def _close_clients(resolved: Any, orq: Any) -> None:
 
 
 def find(
-    query: Annotated[str, typer.Argument(help='Natural-language question to classify against recent traces.')],
+    query: Annotated[str, typer.Argument(help='Natural-language question the classifier answers about recent traces.')],
     debug: Annotated[  # noqa: FBT002 — named CLI flag
         bool,
         typer.Option('--debug', help='Show progress and model requests and responses, including trace content.'),
@@ -354,16 +354,19 @@ def find(
         typer.Option('--window-days', min=1, max=90, help='How many recent days to search.'),
     ] = None,
     filter_selection: Annotated[
-        Literal['llm', 'llm+decision', 'llm+jev'] | None,
+        str | None,
         typer.Option(
             '--filter-selection',
-            help='Natural-language metadata filter mode: llm or llm+decision. The old name llm+jev still works.',
+            click_type=FILTER_SELECTION_CLI_TYPE,
+            help='Natural-language metadata filter mode: llm or llm+decision.',
         ),
     ] = None,
-    limit: Annotated[int | None, typer.Option('--limit', min=1, max=5000, help='Maximum traces to classify.')] = None,
+    limit: Annotated[
+        int | None, typer.Option('--limit', min=1, max=5000, help='Maximum traces to run the classifier on.')
+    ] = None,
     parallelism: Annotated[
         int | None,
-        typer.Option('--parallelism', min=1, max=200, help='Concurrent classify calls.'),
+        typer.Option('--parallelism', min=1, max=200, help='Concurrent classifier calls.'),
     ] = None,
     compiler_model: Annotated[
         str | None,
@@ -480,7 +483,7 @@ def find(
             asyncio.run(_close_clients(resolved, orq))
 
     if snapshot is None:
-        console.print('Cancelled; no traces were classified.')
+        console.print('Cancelled; no traces were sent to the classifier.')
         return
     if snapshot.state != 'completed' or snapshot.failed:
         detail = (

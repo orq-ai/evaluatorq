@@ -88,18 +88,18 @@ def _projection() -> TraceProjection:
 
 @pytest.mark.asyncio
 async def test_trace_classifier_request_and_response_are_debug_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify_judges(**kwargs: Any) -> dict[str, JudgeOutcome]:
+    async def fake_run_decision_judges(**kwargs: Any) -> dict[str, JudgeOutcome]:
         questions = kwargs['questions']
         return {
             key: JudgeOutcome(
                 payload=EvaluatorResponsePayload(value='frustrated', explanation='The customer is frustrated.'),
                 raw_content='{"choice":"frustrated"}',
-                endpoint='classify',
+                endpoint='decisions',
             )
             for key in questions
         }
 
-    monkeypatch.setattr(classifier, 'run_classify_judges', fake_run_classify_judges)
+    monkeypatch.setattr(classifier, 'run_decision_judges', fake_run_decision_judges)
     monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
     messages: list[str] = []
     sink_id = logger.add(lambda message: messages.append(str(message)), format='{message}', level='DEBUG')
@@ -142,18 +142,18 @@ async def test_build_classifier_evaluator_passes_exact_question_and_state(
 ) -> None:
     calls: list[dict[str, Any]] = []
 
-    async def fake_run_classify_judges(**kwargs: Any) -> dict[str, JudgeOutcome]:
+    async def fake_run_decision_judges(**kwargs: Any) -> dict[str, JudgeOutcome]:
         calls.append(kwargs)
         value: str | bool | float = {'choice': 'frustrated', 'noul': True, 'score': 1.0}[kind]
         return {
             'd0': JudgeOutcome(
                 payload=EvaluatorResponsePayload(value=value, explanation='classified', abstain=False),
                 raw_output={'type': kind, kind: value},
-                endpoint='classify',
+                endpoint='decisions',
             )
         }
 
-    monkeypatch.setattr(classifier, 'run_classify_judges', fake_run_classify_judges)
+    monkeypatch.setattr(classifier, 'run_decision_judges', fake_run_decision_judges)
     compiled = _compiled(kind)
     evaluator = build_classifier_evaluator((compiled,), model='typesafe/jev-latest', client=cast(Any, 'client'))
 
@@ -193,13 +193,13 @@ async def test_run_classifier_scores_the_same_question_fitted_state_that_was_pro
     scorer_calls: list[dict[str, Any]] = []
     completed: list[TraceClassification] = []
 
-    async def fake_run_classify_judges(**kwargs: Any) -> dict[str, JudgeOutcome]:
+    async def fake_run_decision_judges(**kwargs: Any) -> dict[str, JudgeOutcome]:
         scorer_calls.append(kwargs)
         return {
             key: JudgeOutcome(
                 payload=EvaluatorResponsePayload(value=True, explanation='The customer asks to cancel.'),
                 raw_output={'type': 'noul', 'noul': True},
-                endpoint='classify',
+                endpoint='decisions',
             )
             for key in kwargs['questions']
         }
@@ -214,7 +214,7 @@ async def test_run_classifier_scores_the_same_question_fitted_state_that_was_pro
     async def on_complete(classification: TraceClassification) -> None:
         completed.append(classification)
 
-    monkeypatch.setattr(classifier, 'run_classify_judges', fake_run_classify_judges)
+    monkeypatch.setattr(classifier, 'run_decision_judges', fake_run_decision_judges)
     monkeypatch.setattr(classifier, 'evaluatorq', fake_evaluatorq)
 
     await run_classifier(
@@ -327,7 +327,7 @@ def test_outcome_result_maps_clean_abstention_to_an_inconclusive_classification(
         JudgeOutcome(
             payload=EvaluatorResponsePayload(value=None, explanation='Unable to classify.', abstain=True),
             raw_output={'abstain': True},
-            endpoint='classify',
+            endpoint='decisions',
         ),
         model='typesafe/jev-latest',
     )

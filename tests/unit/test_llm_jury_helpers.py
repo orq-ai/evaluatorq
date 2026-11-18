@@ -98,10 +98,10 @@ def test_outcome_to_prediction_success():
     assert not pred.abstained
 
 
-def test_outcome_to_prediction_retains_classify_raw_output_only():
+def test_outcome_to_prediction_retains_decision_raw_output_only():
     classify = JudgeOutcome(
         payload=EvaluatorResponsePayload(value='neutral', explanation="choice='neutral' (confidence 0.96)"),
-        endpoint='classify',
+        endpoint='decisions',
         raw_output={'type': 'choice', 'choice': 'neutral', 'confidence': 0.96},
     )
     assert _outcome_to_prediction(classify).raw_output == classify.raw_output

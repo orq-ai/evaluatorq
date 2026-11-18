@@ -47,12 +47,12 @@ def test_stage_plan_follows_source_labels_and_dimensions() -> None:
     priority_plan = dict(stage_plan(InsightsPopulation(), [CUSTOMER_SATISFACTION], ['intent']))
 
     assert query_plan['population'] == 'Find matching traces'
-    assert query_plan['label'] == 'Match and classify traces'
+    assert query_plan['label'] == 'Match and label traces'
     assert list(query_plan).count('dimension:intent') == 1
     assert 'dimension:failure' in query_plan
     assert 'dimension:sentiment' not in query_plan
     assert finder_plan['population'] == 'Load Finder matches'
-    assert finder_plan['label'] == 'Classify traces'
+    assert finder_plan['label'] == 'Label traces'
     assert snapshot_plan['population'] == 'Load local traces'
     assert priority_plan['priority'] == 'Build priority matrix'
 
@@ -392,7 +392,7 @@ def test_launch_persists_plan_before_spawning_worker(tmp_path: Path) -> None:
     assert manifest.run_id == run_id
     assert manifest.status == 'running'
     assert manifest.planned_stages == ['population', 'label', 'summary', 'dimension:intent', 'dimension:failure', 'priority', 'write']
-    assert manifest.stage_labels['label'] == 'Match and classify traces'
+    assert manifest.stage_labels['label'] == 'Match and label traces'
     assert manifest.parallelism == spec.parallelism
     command = spawn.call_args.args[0]
     assert command[1] == '-c'

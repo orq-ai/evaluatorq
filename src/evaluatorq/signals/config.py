@@ -88,7 +88,7 @@ class ClassifierConfig(BaseModel):
 def require_classifier_served(config: SignalsConfig) -> None:
     """Stop before any classification when the env-resolved client cannot serve the classifier model.
 
-    Only acts when ``ANTHROPIC_API_KEY`` is the one LLM key set (`require_models_served_by_provider`). The classify-only
+    Only acts when ``ANTHROPIC_API_KEY`` is the one LLM key set (`require_models_served_by_provider`). The decision-model
     default is checked as the fast role model it falls back to off the Orq router.
     """
     from evaluatorq.common.judge import models_called_off_router

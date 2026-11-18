@@ -280,7 +280,7 @@ def _body_html(
         f'<p>Global cap: <strong>{effective_settings().trace_input_chars:,}</strong> '
         'characters (500,000 by default). '
         'The decision state is capped at 112,000 characters; question-aware ceilings are '
-        '128,000 or 256,000 characters. '
+        '128,000 or 256,000 characters. These are the /decisions input limits, so they apply to every decision model. '
         'This preview includes no question, so its state count is not fitted to a question payload.</p>'
         '</section>'
         f'{preview_html}'

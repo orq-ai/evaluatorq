@@ -31,7 +31,7 @@ def _fake_judge(monkeypatch: pytest.MonkeyPatch, doors: dict[str, Any]) -> list[
     seen: list[dict[str, Any]] = []
 
     async def judge(**kwargs: Any) -> JudgeOutcome:
-        state = kwargs['classify'].state
+        state = kwargs['decision'].state
         seen.append(state)
         key = next(k for k in (state.get('command'), state.get('arguments'), state['tool_name']) if k in doors)
         answer = doors[key]
@@ -119,7 +119,7 @@ async def test_custom_shell_role_and_long_commands_are_clipped(monkeypatch: pyte
     seen: list[dict[str, Any]] = []
 
     async def judge(**kwargs: Any) -> JudgeOutcome:
-        seen.append(kwargs['classify'].state)
+        seen.append(kwargs['decision'].state)
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='one_way', explanation='classified'))
 
     monkeypatch.setattr('evaluatorq.signals.doors.run_judge', judge)
@@ -248,7 +248,7 @@ _ORQ_URL = 'https://my.orq.ai/v3/router'
 @pytest.fixture
 def decision_router(monkeypatch: pytest.MonkeyPatch, fake_catalogue) -> Iterator[list[float]]:
     """Route the classifier model to /decisions and record backoff waits instead of sleeping."""
-    entry = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=True)
+    entry = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_decisions=True)
     fake_catalogue({'typesafe/jev-latest': entry, 'jev-latest': entry})
 
     waits: list[float] = []
@@ -352,7 +352,7 @@ def _questions(monkeypatch: pytest.MonkeyPatch, answer: str = 'benign') -> list[
     seen: list[dict[str, Any]] = []
 
     async def judge(**kwargs: Any) -> JudgeOutcome:
-        seen.append(kwargs['classify'].state)
+        seen.append(kwargs['decision'].state)
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=answer, explanation='classified'))
 
     monkeypatch.setattr('evaluatorq.signals.doors.run_judge', judge)
@@ -366,7 +366,7 @@ async def test_secrets_in_a_command_reach_neither_the_decision_model_nor_the_log
     seen: list[dict[str, Any]] = []
 
     async def failing_judge(**kwargs: Any) -> JudgeOutcome:
-        seen.append(kwargs['classify'].state)
+        seen.append(kwargs['decision'].state)
         return JudgeOutcome(error_kind=JudgeError.PARSE, error_message='bad answer')  # logged with the subject
 
     monkeypatch.setattr('evaluatorq.signals.doors.run_judge', failing_judge)

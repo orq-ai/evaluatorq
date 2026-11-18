@@ -845,7 +845,7 @@ def task_panel(
             f'<input type="hidden" name="query" value="{esc(request.query)}">'
             '<input type="hidden" name="mode" value="review">'
         )
-    action = f'Apply + classify {total}' if dimensions else f'Apply + include {total}'
+    action = f'Apply + run classifier on {total}' if dimensions else f'Apply + include {total}'
     return (
         '<form id="finder-start-form" class="finder-tasks" hx-post="/find/start" hx-target="#finder-body" hx-swap="innerHTML" hx-disabled-elt="find button">'
         f'{hidden_request}{csrf_field()}{cards}'
@@ -854,7 +854,7 @@ def task_panel(
 
 
 def filter_output_panel(snapshot: RunSnapshot) -> str:
-    """Show the filter model's chosen values and its structured classify reply."""
+    """Show the filter model's chosen values and its structured `/decisions` reply."""
     selected = [
         (name.replace('_', ' '), value)
         for name in FACET_NAMES

@@ -246,8 +246,8 @@ def _percentage(value: Any) -> str | None:
     return f'{percent:.2f}'.rstrip('0').rstrip('.') + '%'
 
 
-def _classify_details(vote: dict[str, Any]) -> str:
-    observations = vote.get('classify_observations') or []
+def _decision_details(vote: dict[str, Any]) -> str:
+    observations = vote.get('decision_observations') or []
     if not observations:
         return ''
     rows: list[str] = []
@@ -269,9 +269,9 @@ def _classify_details(vote: dict[str, Any]) -> str:
                 if rendered is not None:
                     items.append(f'<span>{_esc(str(label))} {_esc(rendered)}</span>')
             if items:
-                probability_html = f'<div class="pw-classify__probabilities">{"".join(items)}</div>'
-        rows.append(f'<div class="pw-classify__observation">{" · ".join(facts)}{probability_html}</div>')
-    return '<details class="pw-classify"><summary>Classifier details</summary>' + ''.join(rows) + '</details>'
+                probability_html = f'<div class="pw-decision__probabilities">{"".join(items)}</div>'
+        rows.append(f'<div class="pw-decision__observation">{" · ".join(facts)}{probability_html}</div>')
+    return '<details class="pw-decision-details"><summary>Classifier details</summary>' + ''.join(rows) + '</details>'
 
 
 def _vote_row(vote: dict[str, Any]) -> str:
@@ -281,7 +281,7 @@ def _vote_row(vote: dict[str, Any]) -> str:
         f'<span class="pw-vote__model">{_esc(vote["model"])}</span>'
         f'{_vote_chip(vote)}{flip}'
         f'<span class="pw-vote__why">{_esc(vote.get("explanation") or "")}</span>'
-        f'{_classify_details(vote)}'
+        f'{_decision_details(vote)}'
         '</li>'
     )
 
@@ -360,12 +360,12 @@ _PAIRWISE_CSS = """
 .pw-vote{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;padding:6px 0;border-top:1px solid rgba(127,127,127,.15)}
 .pw-vote__model{width:200px;font-weight:600;flex:none}
 .pw-vote__why{flex:1;opacity:.85}
-.pw-classify{flex-basis:100%;min-width:0;margin-left:210px;font-size:.9em;overflow-wrap:anywhere}
-.pw-cmp .pw-classify>summary{display:list-item;cursor:pointer}
-.pw-classify__observation{padding:6px 0}
-.pw-classify__probabilities{display:flex;flex-wrap:wrap;gap:4px 16px;font-variant-numeric:tabular-nums}
+.pw-decision-details{flex-basis:100%;min-width:0;margin-left:210px;font-size:.9em;overflow-wrap:anywhere}
+.pw-cmp .pw-decision-details>summary{display:list-item;cursor:pointer}
+.pw-decision__observation{padding:6px 0}
+.pw-decision__probabilities{display:flex;flex-wrap:wrap;gap:4px 16px;font-variant-numeric:tabular-nums}
 @media (max-width:720px){.pw-responses{grid-template-columns:1fr}.pw-side__label{width:100px}
- .pw-classify{margin-left:0}.pw-classify__probabilities{flex-direction:column}}
+ .pw-decision-details{margin-left:0}.pw-decision__probabilities{flex-direction:column}}
 """
 
 

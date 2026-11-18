@@ -24,7 +24,7 @@ async def test_skips_tools_that_already_have_explicit_roles(
     requests: list[tuple[dict[str, Any], str]] = []
 
     async def judge(**kwargs: Any) -> JudgeOutcome:
-        question = kwargs['classify']
+        question = kwargs['decision']
         requests.append((question.state, kwargs['model']))
         role = 'bash' if question.state['tool_name'] == 'custom_shell' else 'webview'
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=role, explanation='classified'))
@@ -51,7 +51,7 @@ async def test_classifies_unknown_tool_without_sending_its_arguments(monkeypatch
     seen: list[tuple[dict[str, Any], str]] = []
 
     async def judge(**kwargs: Any) -> JudgeOutcome:
-        question = kwargs['classify']
+        question = kwargs['decision']
         seen.append((question.state, kwargs['model']))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='bash', explanation='classified'))
 

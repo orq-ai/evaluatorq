@@ -1,8 +1,8 @@
-"""A classify judge (Jev) can be seated on `llm_jury` / `llm_jury_pairwise` panels.
+"""A decision judge (Jev) can be seated on `llm_jury` / `llm_jury_pairwise` panels.
 
-The jury layer never calls ``/decisions`` itself: it builds the `ClassifyQuestion` and
+The jury layer never calls ``/decisions`` itself: it builds the `DecisionQuestion` and
 hands it to `run_judge`, which decides the endpoint. These tests therefore capture the
-``classify=`` keyword rather than any request body, and pin the one guarantee the change
+``decision=`` keyword rather than any request body, and pin the one guarantee the change
 had to keep — a panel with plain list labels and no ``levels`` produces exactly the
 verdict schema and system prompt it produced before.
 """
@@ -19,7 +19,7 @@ import pytest
 from pydantic import BaseModel
 
 from evaluatorq.common import model_catalogue, structured_output
-from evaluatorq.common.judge import ClassifyQuestion, EvaluatorResponsePayload, JudgeOutcome
+from evaluatorq.common.judge import DecisionQuestion, EvaluatorResponsePayload, JudgeOutcome
 from evaluatorq.contracts import AgentResponse, ToolCallOutputItem
 from evaluatorq.llm_jury import (
     DEFAULT_TEMPLATE,
@@ -43,7 +43,7 @@ JEV = 'typesafe/jev-latest'
 @pytest.fixture(autouse=True)
 def _catalogue_for_jury_tests(monkeypatch: pytest.MonkeyPatch, fake_catalogue):
     """Exercise jury routing as it runs through the Orq router, without network access."""
-    jev = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', False, supports_classify=True)  # noqa: FBT003
+    jev = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', False, supports_decisions=True)  # noqa: FBT003
     chat = model_catalogue.ModelInfo(0.0, 0.0, 'openai', True)
 
     fake_catalogue({JEV: jev, 'jev-latest': jev, 'gpt-5-mini': chat})
@@ -121,7 +121,7 @@ async def _run_and_capture(evaluator: Evaluator, sink: list[Any]) -> None:
     """Run the evaluator's scorer once with `run_judge` replaced by a capturing fake."""
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink.append(kwargs.get('classify'))
+        sink.append(kwargs.get('decision'))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
 
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
@@ -202,7 +202,7 @@ def test_no_warning_when_the_prompt_reads_criteria() -> None:
     assert not any('no judge reads it' in call.args[0] for call in warn.call_args_list)
 
 
-def test_no_unread_criteria_warning_for_a_classify_panel() -> None:
+def test_no_unread_criteria_warning_for_a_decision_panel() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury(name='x', criteria='c', prompt='judge {{output.response}}', judges=[JEV], client=MagicMock())
     assert not any('no judge reads it' in call.args[0] for call in warn.call_args_list)
@@ -222,7 +222,7 @@ def test_pairwise_is_quiet_when_the_prompt_reads_criteria() -> None:
     assert not any('no judge reads it' in call.args[0] for call in warn.call_args_list)
 
 
-def test_pairwise_classify_panel_never_warns_about_unread_criteria() -> None:
+def test_pairwise_decision_panel_never_warns_about_unread_criteria() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury_pairwise(
             criteria='c', prompt='compare {{response_a.output.response}}', judges=[JEV], client=MagicMock()
@@ -239,17 +239,17 @@ def test_levels_require_numeric_and_a_sane_length() -> None:
         llm_jury(name='x', criteria='c', verdict_kind='numeric', levels=[str(i) for i in range(11)])
 
 
-def test_classify_panel_requires_criteria() -> None:
+def test_decision_panel_requires_criteria() -> None:
     with pytest.raises(ValueError, match='criteria'):
         llm_jury(name='x', prompt='judge {{output.response}}', judges=[JEV])
 
 
-def test_classify_panel_numeric_requires_levels() -> None:
+def test_decision_panel_numeric_requires_levels() -> None:
     with pytest.raises(ValueError, match='levels'):
         llm_jury(name='x', criteria='c', verdict_kind='numeric', judges=[JEV])
 
 
-def test_classify_panel_requires_the_default_score_range() -> None:
+def test_decision_panel_requires_the_default_score_range() -> None:
     with pytest.raises(ValueError, match=r'score_range'):
         llm_jury(
             name='x',
@@ -262,15 +262,15 @@ def test_classify_panel_requires_the_default_score_range() -> None:
         )
 
 
-def test_classify_panel_allows_a_score_range_override_outside_numeric_mode() -> None:
-    """`score_range` is meaningless on a categorical panel, so the classify check skips it."""
+def test_decision_panel_allows_a_score_range_override_outside_numeric_mode() -> None:
+    """`score_range` is meaningless on a categorical panel, so the decision-model check skips it."""
     evaluator = llm_jury(
         name='x', criteria='c', labels=['a', 'b'], score_range=(1.0, 5.0), judges=[JEV], client=MagicMock()
     )
     assert evaluator['name'] == 'x'
 
 
-def test_classify_boolean_panel_requires_a_probability_threshold() -> None:
+def test_decision_boolean_panel_requires_a_probability_threshold() -> None:
     with pytest.raises(ValueError, match='threshold'):
         llm_jury(name='x', criteria='c', judges=[JEV], threshold=5)
     evaluator = llm_jury(name='x', criteria='c', judges=[JEV], threshold=0.7, client=MagicMock())
@@ -278,7 +278,7 @@ def test_classify_boolean_panel_requires_a_probability_threshold() -> None:
 
 
 @pytest.mark.asyncio
-async def test_prompted_panel_keeps_accepting_a_threshold_outside_the_classify_range() -> None:
+async def test_prompted_panel_keeps_accepting_a_threshold_outside_the_decision_range() -> None:
     """Prompted judges have always ignored the probability threshold until result mapping."""
     evaluator = llm_jury(
         name='x', criteria='c', judges=['gpt-5-mini'], threshold=5, client=MagicMock()
@@ -290,18 +290,18 @@ async def test_prompted_panel_keeps_accepting_a_threshold_outside_the_classify_r
     assert sink == [None]
 
 
-def test_a_replacement_classify_judge_seats_the_same_rules() -> None:
+def test_a_replacement_decision_judge_seats_the_same_rules() -> None:
     with pytest.raises(ValueError, match='criteria'):
         llm_jury(name='x', prompt='p', judges=['gpt-5-mini'], replacement_judges=[JEV])
 
 
-def test_classify_panel_warns_once_on_repetitions() -> None:
+def test_decision_panel_warns_once_on_repetitions() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury(name='x', criteria='c', judges=[JEV], repetitions=3, client=MagicMock())
     assert sum('repetitions' in call.args[0] for call in warn.call_args_list) == 1
 
 
-def test_pairwise_classify_panel_warns_once_on_repetitions() -> None:
+def test_pairwise_decision_panel_warns_once_on_repetitions() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury_pairwise(criteria='c', judges=[JEV], repetitions=3, client=MagicMock())
     messages = [call.args[0].format(*call.args[1:]) for call in warn.call_args_list]
@@ -309,7 +309,7 @@ def test_pairwise_classify_panel_warns_once_on_repetitions() -> None:
     assert 'each A/B ordering' in next(message for message in messages if 'repetitions' in message)
 
 
-def test_direct_pairwise_classify_panel_warns_about_repetitions_and_ignored_settings() -> None:
+def test_direct_pairwise_decision_panel_warns_about_repetitions_and_ignored_settings() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         PairwiseComparator(
             panel=[JEV],
@@ -335,17 +335,17 @@ def test_direct_pairwise_classify_panel_warns_about_repetitions_and_ignored_sett
 
 
 # ---------------------------------------------------------------------------
-# Settings a classify judge cannot read
+# Settings a decision judge cannot read
 # ---------------------------------------------------------------------------
 
 
-def test_a_classify_panel_that_sets_none_of_the_prompted_settings_is_quiet() -> None:
+def test_a_decision_panel_that_sets_none_of_the_prompted_settings_is_quiet() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury(name='x', criteria='c', judges=[JEV, 'gpt-5-mini'], client=MagicMock())
     assert not any('do not reach' in call.args[0] for call in warn.call_args_list)
 
 
-def test_a_classify_panel_names_the_settings_it_cannot_read_once() -> None:
+def test_a_decision_panel_names_the_settings_it_cannot_read_once() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury(
             name='x',
@@ -361,7 +361,7 @@ def test_a_classify_panel_names_the_settings_it_cannot_read_once() -> None:
     assert named[0].args[1] == JEV
 
 
-def test_a_panel_of_only_classify_judges_does_not_claim_a_prompted_judge_reads_them() -> None:
+def test_a_panel_of_only_decision_judges_does_not_claim_a_prompted_judge_reads_them() -> None:
     """There is no prompted judge on this panel, so the settings reach nobody at all."""
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury(name='x', criteria='c', judges=[JEV], temperature=0.3, client=MagicMock())
@@ -379,8 +379,8 @@ def test_a_mixed_panel_still_says_any_prompted_judges_read_them() -> None:
     assert named[0].args[3] == ' (they still apply to any prompted judges)'
 
 
-def test_the_config_fields_a_classify_judge_never_receives_are_named_too() -> None:
-    """`_run_single_judge` keeps these off the classify config, so nothing downstream reports them."""
+def test_the_config_fields_a_decision_judge_never_receives_are_named_too() -> None:
+    """`_run_single_judge` keeps these off the decision config, so nothing downstream reports them."""
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury(
             name='x',
@@ -396,7 +396,7 @@ def test_the_config_fields_a_classify_judge_never_receives_are_named_too() -> No
     assert named[0].args[2] == 'reasoning_effort, extra_kwargs, extra_body'
 
 
-def test_a_non_default_max_tokens_is_named_as_unread_by_the_classify_judge() -> None:
+def test_a_non_default_max_tokens_is_named_as_unread_by_the_decision_judge() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury(
             name='x',
@@ -423,13 +423,13 @@ def test_an_llm_only_panel_never_warns_about_unread_settings() -> None:
     assert not any('do not reach' in call.args[0] for call in warn.call_args_list)
 
 
-def test_a_pairwise_classify_panel_that_sets_none_of_the_prompted_settings_is_quiet() -> None:
+def test_a_pairwise_decision_panel_that_sets_none_of_the_prompted_settings_is_quiet() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury_pairwise(criteria='c', judges=[JEV, 'gpt-5-mini'], client=MagicMock())
     assert not any('do not reach' in call.args[0] for call in warn.call_args_list)
 
 
-def test_a_pairwise_classify_panel_names_the_settings_it_cannot_read_once() -> None:
+def test_a_pairwise_decision_panel_names_the_settings_it_cannot_read_once() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         llm_jury_pairwise(
             criteria='c', judges=[JEV, 'gpt-5-mini'], system_prompt='x', temperature=0.2, client=MagicMock()
@@ -451,7 +451,7 @@ async def test_boolean_panel_builds_a_noul_question_from_the_default_template() 
     await _run_and_capture(evaluator, sink)
 
     question = sink[0]
-    assert isinstance(question, ClassifyQuestion)
+    assert isinstance(question, DecisionQuestion)
     assert question.kind == 'noul'
     assert question.criteria is None
     assert question.instructions == 'is it right?'
@@ -506,7 +506,7 @@ async def test_a_state_that_resolves_to_nothing_warns() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         await _run_and_capture(evaluator, sink)
     messages = [call.args[0] for call in warn.call_args_list]
-    assert sum('classify state is empty' in message for message in messages) == 1
+    assert sum('decision state is empty' in message for message in messages) == 1
     assert cast(dict[str, Any], sink[0].state) == {}
 
 
@@ -524,11 +524,11 @@ async def test_an_llm_only_panel_builds_no_question_and_no_state() -> None:
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         await _run_and_capture(evaluator, sink)
     assert sink == [None]
-    assert not any('classify state' in call.args[0] for call in warn.call_args_list)
+    assert not any('decision state' in call.args[0] for call in warn.call_args_list)
 
 
 @pytest.mark.asyncio
-async def test_a_classify_panel_whose_prompt_renders_nothing_warns_about_the_empty_state() -> None:
+async def test_a_decision_panel_whose_prompt_renders_nothing_warns_about_the_empty_state() -> None:
     sink: list[Any] = []
     evaluator = llm_jury(
         name='x', criteria='c', prompt='judge against {{criteria}}', judges=[JEV], client=MagicMock()
@@ -536,7 +536,7 @@ async def test_a_classify_panel_whose_prompt_renders_nothing_warns_about_the_emp
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         await _run_and_capture(evaluator, sink)
     messages = [call.args[0] for call in warn.call_args_list]
-    assert sum('classify state is empty' in message for message in messages) == 1
+    assert sum('decision state is empty' in message for message in messages) == 1
     assert cast(dict[str, Any], sink[0].state) == {}
 
 
@@ -573,18 +573,18 @@ async def test_numeric_panel_builds_a_score_question_from_levels() -> None:
 
 
 @pytest.mark.asyncio
-async def test_only_the_classify_judge_on_a_mixed_panel_gets_the_question() -> None:
+async def test_only_the_decision_judge_on_a_mixed_panel_gets_the_question() -> None:
     sink: dict[str, Any] = {}
     evaluator = llm_jury(name='x', criteria='c', judges=[JEV, 'gpt-5-mini'], client=MagicMock())
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink[cast(str, kwargs['model'])] = kwargs.get('classify')
+        sink[cast(str, kwargs['model'])] = kwargs.get('decision')
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
 
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
         await evaluator['scorer'](_params())
 
-    assert isinstance(sink[JEV], ClassifyQuestion)
+    assert isinstance(sink[JEV], DecisionQuestion)
     assert sink['gpt-5-mini'] is None
 
 
@@ -605,17 +605,17 @@ async def test_labels_as_a_list_and_as_a_dict_build_the_same_verdict_literal() -
 
 
 # ---------------------------------------------------------------------------
-# The config a classify judge is handed
+# The config a decision judge is handed
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_a_vanilla_classify_panel_warns_about_no_unread_config_field(
+async def test_a_vanilla_decision_panel_warns_about_no_unread_config_field(
     fake_catalogue,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A caller who set nothing must not be told their settings were ignored — on every datapoint."""
-    jev = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', False, supports_classify=True)  # noqa: FBT003
+    jev = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', False, supports_decisions=True)  # noqa: FBT003
 
     fake_catalogue({JEV: jev, 'jev-latest': jev})
 
@@ -635,12 +635,12 @@ async def test_a_vanilla_classify_panel_warns_about_no_unread_config_field(
         result = await evaluator['scorer'](_params())
 
     assert cast('Any', result).value is True
-    assert 'run_judge[classify]' not in caplog.text
+    assert 'run_judge[decision]' not in caplog.text
     client.post.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_classify_detail_survives_in_the_serialized_jury_result() -> None:
+async def test_decision_detail_survives_in_the_serialized_jury_result() -> None:
     client = MagicMock()
     client.base_url = 'https://my.orq.ai/v3/router'
     client.post = AsyncMock(
@@ -675,11 +675,11 @@ async def test_classify_detail_survives_in_the_serialized_jury_result() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_catalogue_only_classify_model_is_seated_without_manual_registration(
+async def test_a_catalogue_only_decision_model_is_seated_without_manual_registration(
     fake_catalogue,
 ) -> None:
     model = 'acme/sorter'
-    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
+    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_decisions=True)  # noqa: FBT003
 
     fake_catalogue({model: info, 'sorter': info})
     client = MagicMock()
@@ -703,11 +703,11 @@ async def test_a_catalogue_only_classify_model_is_seated_without_manual_registra
 
 
 @pytest.mark.asyncio
-async def test_a_prompt_only_panel_prompts_a_catalogue_only_classify_model(
+async def test_a_prompt_only_panel_prompts_a_catalogue_only_decision_model(
     fake_catalogue,
 ) -> None:
     model = 'acme/sorter'
-    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
+    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_decisions=True)  # noqa: FBT003
 
     fake_catalogue({model: info, 'sorter': info})
     evaluator = llm_jury(name='x', prompt='judge {{output.response}}', judges=[model], client=MagicMock())
@@ -717,16 +717,16 @@ async def test_a_prompt_only_panel_prompts_a_catalogue_only_classify_model(
 
     run_judge.assert_awaited_once()
     kwargs = run_judge.call_args.kwargs
-    assert kwargs['classify'] is None
+    assert kwargs['decision'] is None
     assert kwargs['cfg'].api == 'responses'
 
 
 @pytest.mark.asyncio
-async def test_a_catalogue_only_numeric_classify_model_rejects_a_custom_score_range_at_runtime(
+async def test_a_catalogue_only_numeric_decision_model_rejects_a_custom_score_range_at_runtime(
     fake_catalogue,
 ) -> None:
     model = 'acme/sorter'
-    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
+    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_decisions=True)  # noqa: FBT003
 
     fake_catalogue({model: info, 'sorter': info})
     evaluator = llm_jury(
@@ -748,11 +748,11 @@ async def test_a_catalogue_only_numeric_classify_model_rejects_a_custom_score_ra
 
 
 @pytest.mark.asyncio
-async def test_a_catalogue_only_boolean_classify_model_rejects_an_invalid_threshold_at_runtime(
+async def test_a_catalogue_only_boolean_decision_model_rejects_an_invalid_threshold_at_runtime(
     fake_catalogue,
 ) -> None:
     model = 'acme/sorter'
-    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
+    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_decisions=True)  # noqa: FBT003
 
     fake_catalogue({model: info, 'sorter': info})
     evaluator = llm_jury(name='x', criteria='classify it', judges=[model], threshold=5, client=MagicMock())
@@ -767,19 +767,19 @@ async def test_a_catalogue_only_boolean_classify_model_rejects_an_invalid_thresh
 
 
 @pytest.mark.asyncio
-async def test_a_catalogue_only_classify_model_is_validated_once(
+async def test_a_catalogue_only_decision_model_is_validated_once(
     fake_catalogue,
 ) -> None:
     model = 'acme/sorter'
-    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
+    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_decisions=True)  # noqa: FBT003
 
     fake_catalogue({model: info, 'sorter': info})
     evaluator = llm_jury(name='x', criteria='classify it', judges=[model], client=MagicMock())
-    validation = MagicMock(wraps=llm_jury_mod._validate_classify_configuration)
+    validation = MagicMock(wraps=llm_jury_mod._validate_decision_configuration)
     outcome = JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
 
     with (
-        patch.object(llm_jury_mod, '_validate_classify_configuration', validation),
+        patch.object(llm_jury_mod, '_validate_decision_configuration', validation),
         patch.object(llm_jury_mod, 'run_judge', AsyncMock(return_value=outcome)),
     ):
         await evaluator['scorer'](_params())
@@ -792,7 +792,7 @@ async def test_a_catalogue_only_classify_model_is_validated_once(
 async def test_catalogue_false_overrides_the_built_in_hint_and_keeps_the_prompted_config(
     fake_catalogue,
 ) -> None:
-    info = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', True, supports_classify=False)  # noqa: FBT003
+    info = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', True, supports_decisions=False)  # noqa: FBT003
 
     fake_catalogue({JEV: info, 'jev-latest': info})
     sink: dict[str, Any] = {}
@@ -805,14 +805,14 @@ async def test_catalogue_false_overrides_the_built_in_hint_and_keeps_the_prompte
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
         await evaluator['scorer'](_params())
 
-    assert sink['classify'] is None
+    assert sink['decision'] is None
     assert sink['cfg'].api == 'responses'
     assert sink['cfg'].max_tokens == 1234
 
 
 @pytest.mark.asyncio
 async def test_a_prompted_judge_on_a_mixed_panel_keeps_the_full_config() -> None:
-    """Only the classify seat loses the sampling settings; the prompted judge still reads them."""
+    """Only the decision seat loses the sampling settings; the prompted judge still reads them."""
     sink: dict[str, Any] = {}
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
@@ -841,14 +841,14 @@ async def test_pairwise_builds_an_a_b_tie_choice_question() -> None:
     comparator = llm_jury_pairwise(criteria='which is better?', judges=[JEV], swap=False, client=MagicMock())
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink.append(kwargs.get('classify'))
+        sink.append(kwargs.get('decision'))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='ok'))
 
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
         await comparator.compare(question='q?', response_a='alpha', response_b='beta')
 
     question = sink[0]
-    assert isinstance(question, ClassifyQuestion)
+    assert isinstance(question, DecisionQuestion)
     assert question.kind == 'choice'
     assert question.instructions == 'which is better?'
     assert question.criteria == {
@@ -875,7 +875,7 @@ async def test_pairwise_state_fields_override() -> None:
     )
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink.append(kwargs.get('classify'))
+        sink.append(kwargs.get('decision'))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='tie', explanation='ok'))
 
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
@@ -888,12 +888,12 @@ async def test_pairwise_state_fields_override() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pairwise_swap_rebuilds_classify_state_for_each_ordering() -> None:
-    sink: list[ClassifyQuestion] = []
+async def test_pairwise_swap_rebuilds_decision_state_for_each_ordering() -> None:
+    sink: list[DecisionQuestion] = []
     comparator = llm_jury_pairwise(criteria='c', judges=[JEV], swap=True, client=MagicMock())
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink.append(cast(ClassifyQuestion, kwargs['classify']))
+        sink.append(cast(DecisionQuestion, kwargs['decision']))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='ok'))
 
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
@@ -912,7 +912,7 @@ async def test_pairwise_llm_only_panel_builds_no_question() -> None:
     comparator = llm_jury_pairwise(criteria='c', judges=['gpt-5-mini'], swap=False, client=MagicMock())
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink.append(kwargs.get('classify'))
+        sink.append(kwargs.get('decision'))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='ok'))
 
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
@@ -942,7 +942,7 @@ def test_pairwise_comparator_accepts_state_fields_directly() -> None:
     sink: list[Any] = []
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink.append(kwargs.get('classify'))
+        sink.append(kwargs.get('decision'))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='tie', explanation='ok'))
 
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
@@ -952,7 +952,7 @@ def test_pairwise_comparator_accepts_state_fields_directly() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Classify state carries values, not their prompt rendering
+# Decision state carries values, not their prompt rendering
 # ---------------------------------------------------------------------------
 
 
@@ -979,7 +979,7 @@ async def test_a_tool_call_state_field_is_the_list_of_calls() -> None:
     )
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink.append(kwargs.get('classify'))
+        sink.append(kwargs.get('decision'))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
 
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
@@ -1004,7 +1004,7 @@ async def test_a_pairwise_state_field_with_both_spellings_resolves_to_the_value(
     )
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink.append(kwargs.get('classify'))
+        sink.append(kwargs.get('decision'))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='ok'))
 
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
@@ -1027,7 +1027,7 @@ async def test_the_empty_state_warning_fires_once_per_evaluator_not_once_per_dat
     )
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink.append(kwargs.get('classify'))
+        sink.append(kwargs.get('decision'))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
 
     with patch.object(llm_jury_mod.logger, 'warning') as warn, patch.object(
@@ -1037,7 +1037,7 @@ async def test_the_empty_state_warning_fires_once_per_evaluator_not_once_per_dat
         await evaluator['scorer'](_params('a second answer'))
 
     messages = [call.args[0] for call in warn.call_args_list]
-    assert sum('classify state is empty' in message for message in messages) == 1
+    assert sum('decision state is empty' in message for message in messages) == 1
     assert len(sink) == 2
     assert all(cast(dict[str, Any], question.state) == {} for question in sink)
 
@@ -1054,7 +1054,7 @@ async def test_the_pairwise_empty_state_warning_fires_once_per_comparator() -> N
     )
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        sink.append(kwargs.get('classify'))
+        sink.append(kwargs.get('decision'))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='ok'))
 
     with patch.object(llm_jury_mod.logger, 'warning') as warn, patch.object(
@@ -1064,5 +1064,5 @@ async def test_the_pairwise_empty_state_warning_fires_once_per_comparator() -> N
         await comparator.compare(question='q2?', response_a='gamma', response_b='delta')
 
     messages = [call.args[0] for call in warn.call_args_list]
-    assert sum('classify state is empty' in message for message in messages) == 1
+    assert sum('decision state is empty' in message for message in messages) == 1
     assert len(sink) == 2

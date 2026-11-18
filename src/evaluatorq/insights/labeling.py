@@ -1,11 +1,11 @@
 """Label pass: one `/decisions` request per trace, carrying every requested label plus the optional population-match question.
 
-One retry layer: `with_retry` wraps `run_classify`, retried only for
+One retry layer: `with_retry` wraps `run_decision`, retried only for
 `JudgeError.TIMEOUT`/`JudgeError.API_CONNECTION` outcomes (mirroring their
-underlying `error_exc`, since `run_classify` itself never raises — see
-`_classify_with_retry`). `trace_finder/classifier.py` does not retry at all,
+underlying `error_exc`, since `run_decision` itself never raises — see
+`_decision_with_retry`). `trace_finder/classifier.py` does not retry at all,
 so there is nothing else to mirror there; this is the one retry layer for
-this call path (`run_classify` already disarms the client's own retries).
+this call path (`run_decision` already disarms the client's own retries).
 """
 
 from __future__ import annotations
@@ -18,13 +18,14 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.judge import (
-    ClassifyAnswer,
-    ClassifyOutcome,
-    ClassifyQuestion,
-    ClassifyRequest,
+    DecisionAnswer,
+    DecisionOutcome,
+    DecisionQuestion,
+    DecisionRequest,
     JudgeError,
-    run_classify,
+    run_decision,
 )
+from evaluatorq.common.model_catalogue import is_decision_model
 from evaluatorq.common.model_input import (
     cap_text,
     decision_state,
@@ -73,16 +74,16 @@ class LabelOutcome:
 
 
 def _default_cfg(model: str) -> LLMCallConfig:
-    """Mirror `trace_finder.classifier.build_classifier_evaluator`'s default classify config."""
+    """Mirror `trace_finder.classifier.build_classifier_evaluator`'s default decision-model config."""
     return LLMCallConfig(model=model, timeout_ms=90_000)
 
 
-def _map_answer(question: ClassifyQuestion, answer: ClassifyAnswer) -> LabelAnswer:
-    """Read the field matching `question.kind`, mirroring `judge._classify_verdict` so labels and the finder agree.
+def _map_answer(question: DecisionQuestion, answer: DecisionAnswer) -> LabelAnswer:
+    """Read the field matching `question.kind`, mirroring `judge._decision_verdict` so labels and the finder agree.
 
     `noul` -> the threshold-derived boolean verdict (`noul_threshold` is exactly
     what turns the probability into that boolean, matching the finder's own
-    classify -> value mapping), with the raw probability preserved as
+    decision answer -> value mapping), with the raw probability preserved as
     `probabilities={'true': answer.noul, 'false': 1 - answer.noul}` rather than
     discarded. `choice` -> the label string plus its probability distribution.
     `score` -> the level index normalized to [0, 1]. Any shape mismatch (wrong
@@ -94,14 +95,14 @@ def _map_answer(question: ClassifyQuestion, answer: ClassifyAnswer) -> LabelAnsw
             value=None,
             confidence=None,
             probabilities=None,
-            error=f'classify model refused to answer the {question.kind} question',
+            error=f'decision model refused to answer the {question.kind} question',
         )
     if answer.type != question.kind:
         return LabelAnswer(
             value=None,
             confidence=None,
             probabilities=None,
-            error=f'classify answer type {answer.type!r} does not match question kind {question.kind!r}',
+            error=f'decision answer type {answer.type!r} does not match question kind {question.kind!r}',
         )
     if question.kind == 'noul':
         if answer.noul is None:
@@ -142,27 +143,27 @@ def _map_answer(question: ClassifyQuestion, answer: ClassifyAnswer) -> LabelAnsw
     )
 
 
-async def _classify_with_retry(
+async def _decision_with_retry(
     *,
     client: AsyncOpenAI,
     model: str,
     cfg: LLMCallConfig,
-    request: ClassifyRequest,
+    request: DecisionRequest,
     usage: UsageLedger | None = None,
-) -> ClassifyOutcome:
-    """Call `run_classify`, retrying only a transient failure.
+) -> DecisionOutcome:
+    """Call `run_decision`, retrying only a transient failure.
 
-    `run_classify` never raises — every failure comes back as a `ClassifyOutcome`
+    `run_decision` never raises — every failure comes back as a `DecisionOutcome`
     with `error_kind` set. To reuse `with_retry` (the canonical backoff loop)
     without a second, hand-rolled retry layer, a retryable outcome re-raises its
     own `error_exc` so `with_retry`'s exception classifier can see it; the final
     attempt's outcome (success or not) is returned as-is.
     """
-    holder: list[ClassifyOutcome] = []
+    holder: list[DecisionOutcome] = []
 
-    async def attempt() -> ClassifyOutcome:
+    async def attempt() -> DecisionOutcome:
         try:
-            outcome = await run_classify(client=client, model=model, cfg=cfg, request=request)
+            outcome = await run_decision(client=client, model=model, cfg=cfg, request=request)
         except Exception:
             if usage is not None:
                 usage.add('label', None)
@@ -175,7 +176,7 @@ async def _classify_with_retry(
         return outcome
 
     try:
-        return await with_retry(attempt, max_attempts=cfg.retry_count + 1, label='insights label classify')
+        return await with_retry(attempt, max_attempts=cfg.retry_count + 1, label='insights label decision')
     except Exception:
         if not holder:
             raise
@@ -208,14 +209,14 @@ async def _ask(
     )
     questions = {spec.name: spec.to_question(state) for spec in specs}
     async with semaphore:
-        outcome = await _classify_with_retry(
-            client=client, model=model, cfg=cfg, request=ClassifyRequest(state=state, questions=questions), usage=usage
+        outcome = await _decision_with_retry(
+            client=client, model=model, cfg=cfg, request=DecisionRequest(state=state, questions=questions), usage=usage
         )
     if outcome.error_kind is not None or outcome.response is None:
         message = outcome.error_message or (
-            outcome.error_kind.value if outcome.error_kind else 'classify reply produced no response'
+            outcome.error_kind.value if outcome.error_kind else '/decisions reply produced no response'
         )
-        logger.warning('Insights {} classify failed for trace {}: {}', what, trace.trace_id, message)
+        logger.warning('Insights {} /decisions call failed for trace {}: {}', what, trace.trace_id, message)
         failed = LabelAnswer(value=None, confidence=None, probabilities=None, error=message)
         return {spec.name: failed for spec in specs}, message
     return _read_answers(trace, questions, outcome.response.answers), None
@@ -268,7 +269,7 @@ def _merge_chunks(name: str, answers: list[LabelAnswer]) -> LabelAnswer:
 
 
 def _read_answers(
-    trace: TraceRecord | TraceDocument, questions: dict[str, ClassifyQuestion], answers: dict[str, ClassifyAnswer]
+    trace: TraceRecord | TraceDocument, questions: dict[str, DecisionQuestion], answers: dict[str, DecisionAnswer]
 ) -> dict[str, LabelAnswer]:
     read: dict[str, LabelAnswer] = {}
     for name, question in questions.items():
@@ -277,7 +278,7 @@ def _read_answers(
         answer = answers.get(name)
         if answer is None:
             logger.warning(
-                'Insights label classify reply for trace {} is missing the {!r} answer', trace.trace_id, name
+                'Insights label /decisions reply for trace {} is missing the {!r} answer', trace.trace_id, name
             )
             read[name] = LabelAnswer(
                 value=None, confidence=None, probabilities=None, error=f'no answer returned for label {name!r}'
@@ -286,7 +287,7 @@ def _read_answers(
         mapped = _map_answer(question, answer)
         if mapped.error is not None:
             logger.warning(
-                'Insights label classify answer for trace {} label {!r} is unreadable: {}',
+                'Insights label /decisions answer for trace {} label {!r} is unreadable: {}',
                 trace.trace_id,
                 name,
                 mapped.error,
@@ -297,8 +298,8 @@ def _read_answers(
 
 def _population_match(
     trace: TraceRecord | TraceDocument,
-    questions: dict[str, ClassifyQuestion],
-    raw: dict[str, ClassifyAnswer],
+    questions: dict[str, DecisionQuestion],
+    raw: dict[str, DecisionAnswer],
     keys: Sequence[str],
     compiled: Sequence[CompiledQuery],
 ) -> bool | None:
@@ -308,7 +309,7 @@ def _population_match(
         answer = raw.get(key)
         if answer is None:
             logger.warning(
-                'Insights label classify reply for trace {} is missing population-match answer {!r}',
+                'Insights label /decisions reply for trace {} is missing population-match answer {!r}',
                 trace.trace_id,
                 dimension.name,
             )
@@ -316,7 +317,7 @@ def _population_match(
         mapped = _map_answer(questions[key], answer)
         if mapped.error is not None:
             logger.warning(
-                'Insights label classify population-match answer for trace {} dimension {!r} is unreadable: {}',
+                'Insights label /decisions population-match answer for trace {} dimension {!r} is unreadable: {}',
                 trace.trace_id,
                 dimension.name,
                 mapped.error,
@@ -388,7 +389,7 @@ async def _label_one(
 
     state = prepare_classifier_state(trace, model=model, char_cap=trace_input_chars)
     conversation_specs = [*labels, *(conversation_coding if is_coding else ())]
-    questions: dict[str, ClassifyQuestion] = {spec.name: spec.to_question(state) for spec in conversation_specs}
+    questions: dict[str, DecisionQuestion] = {spec.name: spec.to_question(state) for spec in conversation_specs}
     match_keys: list[str] = []
     if compiled:
         for index, dimension in enumerate(compiled):
@@ -406,20 +407,20 @@ async def _label_one(
     for index, dimension in enumerate(compiled or ()):
         questions[_match_key(index, len(compiled or ()))] = dimension.task.model_copy(update={'state': state})
 
-    async def conversation_call() -> tuple[dict[str, ClassifyAnswer] | None, str | None]:
+    async def conversation_call() -> tuple[dict[str, DecisionAnswer] | None, str | None]:
         if not questions:
             return None, None
         async with semaphore:
-            outcome = await _classify_with_retry(
+            outcome = await _decision_with_retry(
                 client=client,
                 model=model,
                 cfg=cfg,
-                request=ClassifyRequest(state=state, questions=questions),
+                request=DecisionRequest(state=state, questions=questions),
                 usage=usage,
             )
         if outcome.error_kind is not None or outcome.response is None:
             return None, outcome.error_message or (
-                outcome.error_kind.value if outcome.error_kind else 'classify reply produced no response'
+                outcome.error_kind.value if outcome.error_kind else '/decisions reply produced no response'
             )
         return outcome.response.answers, None
 
@@ -458,7 +459,7 @@ async def _label_one(
     answers.update(tool_answers)
 
     if error is not None:
-        logger.warning('Insights label classify failed for trace {}: {}', trace.trace_id, error)
+        logger.warning('Insights label /decisions call failed for trace {}: {}', trace.trace_id, error)
         failed = LabelAnswer(value=None, confidence=None, probabilities=None, error=error)
         answers.update({spec.name: failed for spec in conversation_specs})
         return LabelOutcome(trace=trace, answers=answers, matched=None, error=error)
@@ -501,6 +502,8 @@ async def label_traces(
     `error` set and every answer failed, per the "per-trace failures never
     fail a run" house rule.
     """
+    # Looked up before any state is built, so a decision model gets the decision state.
+    await is_decision_model(model, client)
     resolved_cfg = cfg if cfg is not None else _default_cfg(model)
     if parallelism <= 0:
         raise ValueError('parallelism must be greater than zero')

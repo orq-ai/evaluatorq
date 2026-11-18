@@ -710,7 +710,7 @@ def _run_request(
 
 def _compiled_from_form(current: CompiledQuery, form: Any, *, prefix: str) -> CompiledQuery:
     """Rebuild one reviewed dimension from its ``prefix``-named form fields, keeping current values for blanks."""
-    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.common.judge import DecisionQuestion
     from evaluatorq.trace_finder import ThresholdSelection, ValueSelection
 
     current_task = current.task
@@ -751,7 +751,7 @@ def _compiled_from_form(current: CompiledQuery, form: Any, *, prefix: str) -> Co
 
     raw_noul_threshold = form.get(f'{prefix}noul_threshold')
     threshold = float(current_task.noul_threshold if raw_noul_threshold in (None, '') else raw_noul_threshold)
-    task = ClassifyQuestion(
+    task = DecisionQuestion(
         kind=kind,
         instructions=instructions,
         criteria=criteria,
