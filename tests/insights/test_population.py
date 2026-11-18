@@ -297,7 +297,7 @@ async def test_live_population_reports_the_same_projection_coverage(monkeypatch:
 
 
 
-def test_projection_coverage_uses_the_actual_non_jev_insights_classifier_state() -> None:
+def test_projection_coverage_uses_the_actual_text_state_insights_classifier_state() -> None:
     from evaluatorq.insights.labeling import prepare_classifier_state
 
     trace = make_trace('input').model_copy(
@@ -360,7 +360,7 @@ def test_projection_coverage_does_not_mistake_literal_markers_for_truncation(cla
     assert coverage['classifier_request_chars'] <= cap
 
 
-def test_projection_coverage_applies_available_jev_question_reserve() -> None:
+def test_projection_coverage_applies_available_decision_question_reserve() -> None:
     from evaluatorq.common.model_input import (
         DECISION_STATE_ALL_QUESTIONS_CHARS,
         DECISION_STATE_CHARS,

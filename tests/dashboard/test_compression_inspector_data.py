@@ -144,7 +144,7 @@ def test_preview_renders_media_markers_without_fetching_urls() -> None:
     assert image_url not in str(preview.compressed)
 
 
-def test_preview_document_uses_whole_transcript_budget_beside_one_jev_state(
+def test_preview_document_uses_whole_transcript_budget_beside_one_decision_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state_calls: list[tuple[list[dict[str, Any]], int]] = []

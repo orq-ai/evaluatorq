@@ -167,9 +167,9 @@ def describe_projection_coverage(coverage: dict[str, Any]) -> str:
     avg_classifier_request = int(coverage.get('classifier_request_chars', 0)) // max(traces, 1)
     detail = (
         f'{int(coverage.get("n_omitted_messages", 0)):,} of {int(coverage.get("n_source_messages", 0)):,} '
-        'source messages were omitted from the Jev classifier state.'
+        'source messages were omitted from the decision state.'
         if is_decision_state_format(coverage.get('classifier_state_format'))
-        else 'The non-Jev classifier receives a readable transcript shortened as needed to fit its questions.'
+        else 'The text-state classifier receives a readable transcript shortened as needed to fit its questions.'
     )
     return (
         f'{affected:,} of {traces:,} traces hit a summary or classifier input cap of {input_cap:,} characters. '

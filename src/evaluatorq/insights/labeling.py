@@ -238,7 +238,7 @@ def _prepare_state(
 
 
 def prepare_classifier_state(trace: TraceRecord | TraceDocument, *, model: str, char_cap: int) -> str | dict[str, Any]:
-    """Build the main Insights classifier state before any Jev question-capacity fit."""
+    """Build the main Insights classifier state before any decision-state question-capacity fit."""
     if uses_decision_state(model):
         return decision_state(to_chat_messages(trace), global_char_cap=char_cap)
     return _prepare_state(full_conversation_view(trace, char_cap, DETAILED), model, char_cap)
@@ -491,7 +491,7 @@ async def label_traces(
 ) -> list[LabelOutcome]:
     """Label every trace, bounded by `parallelism` concurrent `/decisions` calls.
 
-    Per trace: prepare the classifier state from the full transcript or indexed Jev messages, ask
+    Per trace: prepare the classifier state from the full transcript or indexed decision-state messages, ask
     every label's question plus (when `compiled` is given) the population-match
     question in a single request, and skip that call when neither is present.
     With `coding` on, each trace also gets the coding-agent check and, when it

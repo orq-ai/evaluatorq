@@ -65,7 +65,7 @@ On `/traces`, press `/` to focus and select Ask AI, `?` to open the keyboard sho
 Above the table, **Ask AI** plans a natural-language question and creates zero to three classifier dimensions. Traces with dimensions get one classifier call per trace that evaluates them all; a zero-dimension plan makes no per-trace classifier calls:
 
 1. You enter a question, such as `Conversations over 20k tokens where the customer was frustrated.`
-2. The compiler runs first, producing zero to three named classifier dimensions, numeric constraints for total tokens or duration, and (when requested) calendar bounds. The filter selector then uses the live catalogue of up to 50 values per facet to choose metadata filters; the two steps are sequential, not concurrent. Choose **LLM only** to have the configured fast `finder.filters` model select facets, numeric bounds and time bounds, or **LLM + Jev** to use the configured `finder.classifier` for facets while the compiler supplies numeric and calendar bounds. Both modes use the same compiler for dimensions. Literal-name assistance recognizes `model X`, `provider X`, `agent X`, `tool X`, `project X`, slash-qualified model names, and quoted values; a name outside the catalogue is used only after an exact scoped trace query confirms it. Boolean selections accept either `yes`/`no` or `true`/`false` labels.
+2. The compiler runs first, producing zero to three named classifier dimensions, numeric constraints for total tokens or duration, and (when requested) calendar bounds. The filter selector then uses the live catalogue of up to 50 values per facet to choose metadata filters; the two steps are sequential, not concurrent. Choose **LLM only** to have the configured fast `finder.filters` model select facets, numeric bounds and time bounds, or **LLM + decision model** to use the configured `finder.classifier` for facets while the compiler supplies numeric and calendar bounds. Both modes use the same compiler for dimensions. Literal-name assistance recognizes `model X`, `provider X`, `agent X`, `tool X`, `project X`, slash-qualified model names, and quoted values; a name outside the catalogue is used only after an exact scoped trace query confirms it. Boolean selections accept either `yes`/`no` or `true`/`false` labels.
 3. The finder merges those selections with any filters you chose explicitly and builds an OQL query. The base filter excludes `generate_content` operations, so the compiler and classifier traces do not crowd the population being searched. A model or provider filter drops the base filter, because a bare model call is itself a `generate_content` trace and would otherwise never match.
 4. The classifier judges each projected trace through evaluatorq, asking every dimension in one classify call per trace. A trace is included only when it matches every dimension. Results stream into one table column per dimension as each trace finishes, including the final poll after the run ends. With zero dimensions, every trace the filters keep is included without a classifier call.
 
@@ -112,9 +112,9 @@ The compiler runs before facet selection, so the selector can use its generated 
 | Step | Produces |
 |---|---|
 | **Compiler** | Zero to three named classifier dimensions, each with a question and match rule, plus [numeric bounds](#numeric-ranges) for total tokens and duration. |
-| **Facet selector** | Categorical metadata filters from the live [facet catalogue](#facets), using either the `llm` structured selector or `llm+jev` classifier mode. |
+| **Facet selector** | Categorical metadata filters from the live [facet catalogue](#facets), using either the `llm` structured selector or `llm+decision` classifier mode. |
 
-In `llm+jev` mode, the facet selector asks one question per non-empty facet dimension. When your query names several available values in one dimension, it asks a yes/no question for each named value in the same request. The `llm` mode uses structured output instead.
+In `llm+decision` mode, the facet selector asks one question per non-empty facet dimension. When your query names several available values in one dimension, it asks a yes/no question for each named value in the same request. The `llm` mode uses structured output instead.
 
 ### 2. Fetch the population
 
@@ -128,11 +128,11 @@ The finder merges the generated filters with any you chose explicitly and builds
 
 ### 3. Project each trace
 
-The classifier's exact serialized questions share the trace-input cap from Dashboard Settings with its state, defaulting to 500,000 total characters. Jev state is additionally capped at 112,000 characters, and reduced as needed to keep state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. For rough cost estimates, character counts are divided by about four to estimate tokens; this is not the model tokenizer or an exact token-count guarantee.
+The classifier's exact serialized questions share the trace-input cap from Dashboard Settings with its state, defaulting to 500,000 total characters. Decision state is additionally capped at 112,000 characters, and reduced as needed to keep state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. For rough cost estimates, character counts are divided by about four to estimate tokens; this is not the model tokenizer or an exact token-count guarantee.
 
-??? info "What the Jev state keeps and drops"
+??? info "What the decision state keeps and drops"
     - **Keeps** indexed role/type entries, full tool names, paired tool inputs/results, and recorded status and exit/error codes.
-    - Tool input and result excerpts keep up to 100 source-text characters at each end; assistant text keeps 500 per edge, user text 1,000 per edge, and system/developer text 4,000 per edge. A generated omission marker is added beyond those retained characters; its count is omitted source text, and the marker's own characters count toward the serialized Jev-state cap.
+    - Tool input and result excerpts keep up to 100 source-text characters at each end; assistant text keeps 500 per edge, user text 1,000 per edge, and system/developer text 4,000 per edge. A generated omission marker is added beyond those retained characters; its count is omitted source text, and the marker's own characters count toward the serialized decision-state cap.
     - **Drops** reasoning content and known `<system-reminder>` harness sections; arbitrary XML remains untouched. Credentials are scrubbed before excerpting.
     - Images become `[image, N KB]` when their size is known or `[image, size unknown]`; remote media is never fetched.
     - Omitted messages use explicit `[... N messages left out ...]` markers. The full trace remains unchanged.
@@ -226,7 +226,7 @@ Dashboard Settings saves patch the existing JSON file; resolved runtime values a
 
 | Trace search parallelism default | 100 (max 200) | `EVALUATORQ_FINDER_PARALLELISM` |
 
-Natural-language metadata filters have exactly two modes. **LLM only** uses the configured fast `finder.filters` task to select facets, numeric bounds and time bounds. **LLM + Jev** uses the configured `finder.classifier` task for facets; the compiler supplies numeric bounds and calendar bounds in both modes. The mode setting defaults to `llm+jev` and can be overridden for `eq find` and query-based `eq insights` with `--filter-selection llm|llm+jev`. Neither mode changes the compiler's semantic dimensions.
+Natural-language metadata filters have exactly two modes. **LLM only** uses the configured fast `finder.filters` task to select facets, numeric bounds and time bounds. **LLM + decision model** uses the configured `finder.classifier` task for facets; the compiler supplies numeric bounds and calendar bounds in both modes. The mode setting defaults to `llm+decision` and can be overridden for `eq find` and query-based `eq insights` with `--filter-selection llm|llm+decision`. Neither mode changes the compiler's semantic dimensions.
 
 Query-generated calendar bounds are restricted to the rolling 30 days ending at the planner's current time. For a default window, generated bounds replace the default search window, and an open generated bound uses the corresponding edge of that 30-day window. Explicit window controls remain authoritative: `eq find --window-days` is explicit only when supplied, and on the dashboard the initial date window is a default while a chosen preset or applied exact dates is explicit. Within-results questions narrow only the already-loaded rows and do not reload a broader population.
 
@@ -260,7 +260,7 @@ For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`
 | `--yes`, `-y` | Skip the plan confirmation prompt. |
 | `--debug` | Print changed progress and compiler and classifier request and response data, including trace content. |
 | `--window-days INTEGER` (`1`–`90`) | How many recent days to search. |
-| `--filter-selection llm|llm+jev` | Override the saved metadata-filter selection mode for this run. |
+| `--filter-selection llm|llm+decision` | Override the saved metadata-filter selection mode for this run. The old name `llm+jev` still works. |
 | `--limit INTEGER` (`1`–`5000`) | Maximum traces to classify. |
 | `--parallelism INTEGER` (`1`–`200`) | Concurrent classify calls. |
 | `--compiler-model TEXT` | Model that compiles the search question through the Orq router. Pins the `finder.compiler` task; default is the `fast` role, `openai/gpt-6-luna`. |
@@ -286,7 +286,7 @@ The facet and numeric options are explicit OQL constraints. The question supplie
 
 ## Limits and cost
 
-The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. The configured global character cap bounds classifier state plus exact serialized questions. Jev receives an indexed structured state with paired tool results, also subject to a 112,000-character state cap and its 128,000/256,000-character state-plus-question ceilings.
+The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. The configured global character cap bounds classifier state plus exact serialized questions. A decision model receives an indexed structured state with paired tool results, also subject to a 112,000-character state cap and its 128,000/256,000-character state-plus-question ceilings.
 
 | Limit | Value |
 |---|---|

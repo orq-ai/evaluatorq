@@ -142,10 +142,10 @@ def _decision_group(values: Values, defaults: Values) -> str:
     )
     return (
         '<fieldset class="compression-knob-group">'
-        '<legend>Output (Jev state)</legend>'
+        '<legend>Output (decision state)</legend>'
         '<div class="compression-knob-grid">'
         f'{_number("global_char_cap", "Global character cap", values, defaults)}'
-        f'{_number("decision_state_chars", "Jev state limit", values, defaults)}'
+        f'{_number("decision_state_chars", "decision state limit", values, defaults)}'
         '</div>'
         f'<div class="compression-knob-grid">{limits}</div>'
         '<p class="compression-knob-title">Include</p>'
@@ -211,10 +211,10 @@ def knobs_form_html(knobs: CompressionKnobs, defaults: CompressionKnobs, token: 
         '<div class="compression-knobs-footer">'
         f'<button type="button" class="compression-reset" onclick="{_RESET_SCRIPT}">Reset to defaults</button>'
         '<p class="compression-count-note">The Original is the canonical ATIF JSON, the raw session file or the readable '
-        'text, which uses the Insights full_conversation_view options. The Output uses the classifier Jev limits. '
+        'text, which uses the Insights full_conversation_view options. The Output uses the decision-state limits of the classifier. '
         'Every original is scrubbed of known secrets and cut to 2,000,000 characters, and a raw session file is read '
         'up to 5,000,000 bytes; a note says when anything is cut. Coverage is added to the readable '
-        'text and Jev state, not ATIF or raw-source originals. Format switches start on here only; production '
+        'text and decision state, not ATIF or raw-source originals. Format switches start on here only; production '
         'Insights and classifier defaults are unchanged. Changes update the preview as you make them.</p>'
         '</div></form>'
     )

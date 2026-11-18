@@ -21,7 +21,7 @@ The built-in dimensions are `intent` (`request`), `failure` (`assistant_errors`)
 
 The `failure_taxonomy` label includes `No failure` for traces the classifier judges clean. A clean answer is a normal label value, not a failed classification. Reports saved with a taxonomy that did not offer this option keep their original answers and counts; the dashboard marks those counts as possibly including clean traces. The discovered `failure` dimension separately groups errors extracted by the summary step.
 
-The view is shortened from the middle when needed to fit the input cap. The summary model does not use the classifier's compact Jev state.
+The view is shortened from the middle when needed to fit the input cap. The summary model does not use the classifier's compact decision state.
 
 Reports are written to `.evaluatorq/insights-runs/`, with manifests under `.evaluatorq/insights-runs/.manifests/`. Set `EVALUATORQ_DIR` to change the base directory. Run JSON does not contain message bodies or embedding vectors.
 
@@ -150,7 +150,7 @@ A minimum above its maximum is rejected before any trace loads. `--from-finder`,
 eq insights --agent support-bot --agent billing-bot --tokens-min 20000 --duration-ms-min 30000 --window-days 14 --dimension failure
 ```
 
-For query-based population selection, `--filter-selection llm|llm+jev` overrides the saved dashboard mode (default `llm+jev`) and requires `--query`. `llm` uses the configured fast `finder.filters` task for facets, numeric bounds and time bounds; `llm+jev` uses the configured `finder.classifier` for facets while the shared compiler supplies numeric and time bounds in both modes. The compiler runs before facet selection. Each catalogue request supplies up to 50 values per facet for its actual time window. Candidate extraction is limited to eight values from `model`, `provider`, `agent`, `tool`, or `project` mentions, slash-qualified model names, and quoted strings up to 100 characters; a candidate outside the catalogue is used only after exact trace confirmation. Generated calendar dates may narrow or replace the configured default window; explicitly supplied windows keep their bounds. The mode and generated-window behavior are the same whether or not you pass `--filter-selection`.
+For query-based population selection, `--filter-selection llm|llm+decision` overrides the saved dashboard mode (default `llm+decision`) and requires `--query`. `llm` uses the configured fast `finder.filters` task for facets, numeric bounds and time bounds; `llm+decision` uses the configured `finder.classifier` for facets while the shared compiler supplies numeric and time bounds in both modes. The compiler runs before facet selection. Each catalogue request supplies up to 50 values per facet for its actual time window. Candidate extraction is limited to eight values from `model`, `provider`, `agent`, `tool`, or `project` mentions, slash-qualified model names, and quoted strings up to 100 characters; a candidate outside the catalogue is used only after exact trace confirmation. Generated calendar dates may narrow or replace the configured default window; explicitly supplied windows keep their bounds. The mode and generated-window behavior are the same whether or not you pass `--filter-selection`.
 
 The five-minute facet-catalogue cache is scoped to the Orq host, credentials, workspace/project scope and limit. Exact time bounds distinguish explicit-window entries; default-window entries are grouped by window duration.
 
@@ -343,17 +343,17 @@ Pass `--coding` (or `coding_analysis=True` in Python, or tick individual **Codin
 
 The conversation labels are asked in the same classifier call as your selected labels. The tool-call labels get their own call.
 
-Non-Jev tool views read the first 300 characters of each input; non-shell result bodies are omitted except for a diagnostic category, while shell results also keep fixed failure markers and their first and last 150 characters.
+Plain-text tool views read the first 300 characters of each input; non-shell result bodies are omitted except for a diagnostic category, while shell results also keep fixed failure markers and their first and last 150 characters.
 
-Jev tool views keep the first and last 100 characters of each input and result, plus recorded status, exit code, and error code; shell failure markers are checked across the full scrubbed output. Jev inputs and results are scrubbed before excerpting, and non-Jev shell outputs are scrubbed before their excerpts.
+Decision-state tool views keep the first and last 100 characters of each input and result, plus recorded status, exit code, and error code; shell failure markers are checked across the full scrubbed output. Decision-state inputs and results are scrubbed before excerpting, and plain-text shell outputs are scrubbed before their excerpts.
 
-If a non-Jev tool view is too long, Insights cuts the middle only when at most 30% is lost; otherwise it splits calls into ordered parts. Jev splits complete tool records into chunks that reserve the exact serialized selected questions under the global input cap and fit the Jev state-plus-question ceilings.
+If a plain-text tool view is too long, Insights cuts the middle only when at most 30% is lost; otherwise it splits calls into ordered parts. A decision-state view splits complete tool records into chunks that reserve the exact serialized selected questions under the global input cap and fit the decision state-plus-question ceilings.
 
 `risky_action` takes the most confident answer other than `none` from any part, and `unfixed_error` takes the answer from the last part, because an error only counts as unfixed if it is still broken at the end. If a part fails and no other part found anything, the label fails rather than reading as no.
 
 You cannot name your own label after one of these. A coding label a trace was not asked counts as not asked, not as failed.
 
-Jev coding-tool requests use filtered structured states containing user messages, calls, paired results, and orphan results. Each chunk reserves the exact serialized coding question payload from the configured total input cap, then keeps complete call/result records together under the resulting Jev state ceiling. Final request fitting cannot drop calls from the middle of a chunk.
+Decision-model coding-tool requests use filtered structured states containing user messages, calls, paired results, and orphan results. Each chunk reserves the exact serialized coding question payload from the configured total input cap, then keeps complete call/result records together under the resulting decision state ceiling. Final request fitting cannot drop calls from the middle of a chunk.
 
 ```bash
 eq insights --from-snapshot claude-traces.json --label sentiment --label user_frustration --coding
@@ -400,7 +400,7 @@ Sending 3 traces (290.5 KB) from sessions.json to models: summary openai/gpt-6-s
 
 The size is the snapshot file on disk, not the amount sent. Summaries receive the [conversation view](#the-conversation-view), cut further as needed so the whole summary prompt fits `trace_input_chars` (500,000 characters by default).
 
-Classification uses the model-specific state and question budget described in [What the classifier reads](#what-the-classifier-reads); Jev uses structured excerpts rather than the full summary transcript. The embedding model reads the summaries.
+Classification uses the model-specific state and question budget described in [What the classifier reads](#what-the-classifier-reads); a decision model reads structured excerpts rather than the full summary transcript. The embedding model reads the summaries.
 
 Known credential patterns are scrubbed locally before rendering, but this does not remove all personal or confidential content. There is no confirmation prompt. Check the models named in that line before you run.
 
@@ -411,11 +411,11 @@ eq insights --from-snapshot sessions.json --preview-input
 ```
 
 ```console
-Model input coverage: 0 of 2 traces hit a summary or classifier input cap of 500,000 characters. Average rendered inputs: summary 3,053 characters; classifier request 768 (state 412, questions 356). 0 of 8 source messages were omitted from the Jev classifier state.
+Model input coverage: 0 of 2 traces hit a summary or classifier input cap of 500,000 characters. Average rendered inputs: summary 3,053 characters; classifier request 768 (state 412, questions 356). 0 of 8 source messages were omitted from the decision state.
 A run would send 2 traces (3.9 KB) from sessions.json to models: summary openai/gpt-6-sol, classifier typesafe/jev-latest, embedding openai/text-embedding-3-small.
 ```
 
-The coverage line reports how many traces hit a summary or classifier cap, average rendered character counts for the summary and combined classifier request, and messages omitted from Jev state. These are character counts, not exact tokenizer counts. You can preview a fresh selection without exporting it first:
+The coverage line reports how many traces hit a summary or classifier cap, average rendered character counts for the summary and combined classifier request, and messages omitted from decision state. These are character counts, not exact tokenizer counts. You can preview a fresh selection without exporting it first:
 
 ```bash
 eq insights --sessions --project-dir . --from 2026-10-01 --preview-input
@@ -482,9 +482,9 @@ The model-input cap applies separately to the retained session content: a long s
 
 The classifier does not read the summary. `trace_input_chars`, saved in Dashboard Settings and defaulting to 500,000, caps classifier state and the exact serialized question payloads together.
 
-For `typesafe/jev` models, the state is indexed and structured; tool calls are grouped with matching results, recorded status and error codes are retained, and text excerpts keep the first and last 100 characters for tool inputs/results, 500 for assistant messages, 1,000 for user messages, and 4,000 for system/developer messages.
+A **decision model** is a classifier served through the router's classify endpoint that reads structured input instead of a transcript. Today that means the `typesafe/jev` models. For those, the state is indexed and structured, and this page calls it the **decision state**; tool calls are grouped with matching results, recorded status and error codes are retained, and text excerpts keep the first and last 100 characters for tool inputs/results, 500 for assistant messages, 1,000 for user messages, and 4,000 for system/developer messages.
 
-Jev state is also capped at 112,000 characters; state plus the longest question stays within 128,000 characters and state plus all questions within 256,000 characters. Credentials are scrubbed before excerpting; reasoning and known `<system-reminder>` sections are removed. Inline images show their size when known, and remote media is never fetched.
+Decision state is also capped at 112,000 characters; state plus the longest question stays within 128,000 characters and state plus all questions within 256,000 characters. Credentials are scrubbed before excerpting; reasoning and known `<system-reminder>` sections are removed. Inline images show their size when known, and remote media is never fetched.
 
 Other classifiers receive the `DETAILED` [conversation view](#the-conversation-view), shortened as needed to leave room for their selected questions. Known media parts render as placeholders, while unrelated structured content remains JSON. The source trace stays unchanged.
 
@@ -492,7 +492,7 @@ Every trace also records how often it called each tool, shell program, and skill
 
 ### The conversation view
 
-The **conversation view** is the plain-text transcript that summaries, non-Jev classifiers and Trace Finder read. Read this when you call `full_conversation_view` from Python, or when you need to know what a summary or label was based on. It does not apply to `typesafe/jev` models, which read the structured state above, or to the coding-agent tool labels, which read a separate one-line-per-call tool activity list.
+The **conversation view** is the plain-text transcript that summaries, plain-text classifiers and Trace Finder read. Read this when you call `full_conversation_view` from Python, or when you need to know what a summary or label was based on. It does not apply to `typesafe/jev` models, which read the structured state above, or to the coding-agent tool labels, which read a separate one-line-per-call tool activity list.
 
 Each entry starts with `#<message index> <kind>:` at the left edge. A line break inside a message is indented two spaces, so text a user pasted cannot pose as a new turn. A tool call and its result both name the call as `<tool> (call <message>.<n>)`, and both carry `[error]` or `[pending]` when the call did not complete. Credentials are scrubbed and each `<system-reminder>` block becomes `[harness reminder omitted]` before anything is cut.
 
@@ -753,7 +753,7 @@ The estimate is computed before any request is made. Trace counts and configured
 | Estimate | Basis and limits |
 |---|---|
 | Traces | A local trace file gives its exact count. Orq gives `up to N`, the smaller of the trace limit and estimated count. With no filters, the estimate uses workspace status counts. With multiple facets, it uses the smallest per-facet sum because a trace must match every facet. If Orq truncated facet values or cannot count a project id, the estimate falls back to the trace limit and says why. If a file count cannot be read, it shows `unknown`. |
-| Cost | Per stage, the estimate multiplies traces by estimated input and output tokens and the Orq catalogue price. It divides the configured character cap by about four for a rough token estimate; this is not the model tokenizer. Classifier state and serialized questions share the cap. Jev also limits state to 112,000 characters, state plus the longest question to 128,000, and state plus all questions to 256,000. The estimate uses the smaller of the configured cap and the 256,000-character ceiling. Summary prompts fit the configured cap by shortening the conversation as needed. Long coding activity may need extra chunks, so that cost is unknown. Unpriced stages show `unknown` and are excluded from the total, which is marked `(priced stages only)`. |
+| Cost | Per stage, the estimate multiplies traces by estimated input and output tokens and the Orq catalogue price. It divides the configured character cap by about four for a rough token estimate; this is not the model tokenizer. Classifier state and serialized questions share the cap. A decision model also limits state to 112,000 characters, state plus the longest question to 128,000, and state plus all questions to 256,000. The estimate uses the smaller of the configured cap and the 256,000-character ceiling. Summary prompts fit the configured cap by shortening the conversation as needed. Long coding activity may need extra chunks, so that cost is unknown. Unpriced stages show `unknown` and are excluded from the total, which is marked `(priced stages only)`. |
 | Time | Median per-trace stage times from completed Insights runs, scaled to the parallelism used in those runs. Before the first completed run, it says `estimated after your first run`. If some stages have no prior timing, the total says `(timed stages only)`. Treat the figure as rough. |
 
 For a query run, every trace in range is labeled, but only matching traces reach summary and embedding stages. Their estimated count therefore ranges from zero to the full population, and the total is shown as `$low to $high`.
@@ -845,7 +845,7 @@ Trace IDs must be unique across `traces` and `documents`; a duplicate fails the 
 
 Its conversation portion keeps the full readable conversation, tool inputs, and tool results as far as that cap allows. For classification, the exact serialized selected questions share the cap with state.
 
-The Jev preview uses the same structured state renderer as the request. These size estimates count characters, not tokenizer tokens; the Jev limits are described in [What the classifier reads](#what-the-classifier-reads).
+The decision-state preview uses the same structured state renderer as the request. These size estimates count characters, not tokenizer tokens; the decision-state limits are described in [What the classifier reads](#what-the-classifier-reads).
 
 The source trace stays intact on disk. Each run has a state file under `.evaluatorq/insights-runs/.manifests/<run-id>.json` and a report in `.evaluatorq/insights-runs/`. The state file records the stage plan, current stage, outcomes, errors, and report path.
 

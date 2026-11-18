@@ -110,7 +110,7 @@ def test_question_wire_payloads_count_exact_fields_and_are_idempotent() -> None:
     assert classifier_question_wire_payloads(expected) == expected
     assert serialized_question_chars(questions) == serialized_chars(expected)
 
-def test_jev_state_keeps_user_edges_and_does_not_mutate_source() -> None:
+def test_decision_state_keeps_user_edges_and_does_not_mutate_source() -> None:
     source = [{'role': 'user', 'content': 'x' * 3_000}]
 
     state = decision_state(source, global_char_cap=500_000)
@@ -119,7 +119,7 @@ def test_jev_state_keeps_user_edges_and_does_not_mutate_source() -> None:
     assert source[0]['content'] == 'x' * 3_000
 
 
-def test_jev_tool_call_pairs_every_matching_result_and_retains_status() -> None:
+def test_decision_tool_call_pairs_every_matching_result_and_retains_status() -> None:
     source = [
         {'role': 'assistant', 'tool_calls': [{'id': 'call-1', 'function': {'name': 'shell.exec', 'arguments': 'x' * 300}}]},
         {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'b' * 300, 'status': 'failed', 'exit_code': 7},
@@ -138,7 +138,7 @@ def test_jev_tool_call_pairs_every_matching_result_and_retains_status() -> None:
     assert any(item['type'] == 'orphan_result' for item in state['messages'])
 
 
-def test_jev_duplicate_tool_call_ids_pair_results_in_source_order() -> None:
+def test_decision_duplicate_tool_call_ids_pair_results_in_source_order() -> None:
     source = [
         {
             'role': 'assistant',
@@ -161,7 +161,7 @@ def test_jev_duplicate_tool_call_ids_pair_results_in_source_order() -> None:
     ]
 
 
-def test_jev_reused_tool_call_id_uses_latest_assistant_group() -> None:
+def test_decision_reused_tool_call_id_uses_latest_assistant_group() -> None:
     source = [
         {
             'role': 'assistant',
@@ -183,7 +183,7 @@ def test_jev_reused_tool_call_id_uses_latest_assistant_group() -> None:
 
 
 
-def test_jev_model_gate_and_question_capacity_validation() -> None:
+def test_decision_state_gate_and_question_capacity_validation() -> None:
     assert uses_decision_state('typesafe/jev-latest')
     assert not uses_decision_state('openai/gpt-6-luna')
 
@@ -191,7 +191,7 @@ def test_jev_model_gate_and_question_capacity_validation() -> None:
         fit_decision_state({'messages': []}, [{'instructions': 'q' * DECISION_STATE_ALL_QUESTIONS_CHARS}])
 
 
-def test_jev_global_cap_keeps_complete_head_and_tail_messages() -> None:
+def test_decision_global_cap_keeps_complete_head_and_tail_messages() -> None:
     source = [{'role': 'user', 'content': f'message-{index}-' + 'x' * 100} for index in range(20)]
 
     state = decision_state(source, global_char_cap=1_000)
@@ -217,7 +217,7 @@ def test_long_question_reserves_state_capacity() -> None:
     ('role', 'excerpt_chars', 'edge_chars'),
     [('system', 8_000, 4_000), ('developer', 8_000, 4_000), ('user', 2_000, 1_000), ('assistant', 1_000, 500)],
 )
-def test_jev_role_excerpts_keep_exact_edges_without_mutating_source(
+def test_decision_role_excerpts_keep_exact_edges_without_mutating_source(
     role: str, excerpt_chars: int, edge_chars: int
 ) -> None:
     original = 'begin-' + 'x' * (excerpt_chars + 100) + '-end'
@@ -231,7 +231,7 @@ def test_jev_role_excerpts_keep_exact_edges_without_mutating_source(
     assert source[0]['content'] == original
 
 
-def test_jev_global_cap_keeps_edges_of_one_oversized_user_message_before_role_excerpt() -> None:
+def test_decision_global_cap_keeps_edges_of_one_oversized_user_message_before_role_excerpt() -> None:
     original = 'user-head:' + 'x' * 600_000 + ':user-tail'
     source = [{'role': 'user', 'content': original}]
 
@@ -247,7 +247,7 @@ def test_jev_global_cap_keeps_edges_of_one_oversized_user_message_before_role_ex
     assert source[0]['content'] == original
 
 
-def test_jev_global_cap_keeps_oversized_tool_output_edges_and_result_metadata() -> None:
+def test_decision_global_cap_keeps_oversized_tool_output_edges_and_result_metadata() -> None:
     output = 'tool-head:' + 'y' * 600_000 + ':tool-tail'
     arguments = 'arg-head-' + 'x' * 600_000 + '-arg-tail'
     source = [
@@ -281,7 +281,7 @@ def test_jev_global_cap_keeps_oversized_tool_output_edges_and_result_metadata() 
     assert source[1]['content'] == output
 
 
-def test_jev_omission_marker_counts_unrepresented_source_messages_and_fits_global_cap() -> None:
+def test_decision_omission_marker_counts_unrepresented_source_messages_and_fits_global_cap() -> None:
     source = [{'role': 'user', 'content': f'message-{index}-' + 'x' * 100} for index in range(20)]
 
     state = decision_state(source, global_char_cap=1_000)
@@ -292,7 +292,7 @@ def test_jev_omission_marker_counts_unrepresented_source_messages_and_fits_globa
     assert serialized_chars(state) <= 1_000
 
 
-def test_jev_final_omission_marker_stays_within_question_limited_state_budget() -> None:
+def test_decision_final_omission_marker_stays_within_question_limited_state_budget() -> None:
     source = [{'role': 'user', 'content': f'message-{index}-' + 'x' * 2_000} for index in range(80)]
     questions = [{'instructions': 'q' * 30_000}]
 
@@ -305,7 +305,7 @@ def test_jev_final_omission_marker_stays_within_question_limited_state_budget() 
     assert state['omission'] == f'[... {omitted} messages left out ...]'
 
 
-def test_jev_removes_harness_reminders_and_typed_reasoning_but_keeps_business_json() -> None:
+def test_decision_removes_harness_reminders_and_typed_reasoning_but_keeps_business_json() -> None:
     source = [
         {
             'role': 'assistant',
@@ -338,7 +338,7 @@ def test_structured_text_data_and_url_fields_are_not_mislabeled_as_media() -> No
     assert '"/records/7"' in message['text']
 
 
-def test_literal_omission_marker_does_not_inflate_jev_excerpt_count() -> None:
+def test_literal_omission_marker_does_not_inflate_decision_excerpt_count() -> None:
     literal = '[... 100000 chars left out ...]'
     source = literal + 'x' * 600_000
 
@@ -352,7 +352,7 @@ def test_literal_omission_marker_does_not_inflate_jev_excerpt_count() -> None:
 
 
 
-def test_jev_inline_base64_media_reports_decoded_size_without_copying_payload() -> None:
+def test_decision_inline_base64_media_reports_decoded_size_without_copying_payload() -> None:
     import base64
 
     payload = b'\x89PNG' + b'x' * 130_000
@@ -365,7 +365,7 @@ def test_jev_inline_base64_media_reports_decoded_size_without_copying_payload() 
     assert encoded not in str(state)
 
 
-def test_jev_message_and_tool_results_preserve_multimodal_order() -> None:
+def test_decision_message_and_tool_results_preserve_multimodal_order() -> None:
     content = [
         {'type': 'text', 'text': 'refer to'},
         {'type': 'image_url', 'image_url': {'url': 'https://example.test/image.png'}},
@@ -391,7 +391,7 @@ def test_jev_message_and_tool_results_preserve_multimodal_order() -> None:
 
 
 
-def test_question_limited_jev_state_preserves_and_counts_top_level_metadata() -> None:
+def test_question_limited_decision_state_preserves_and_counts_top_level_metadata() -> None:
     state = {
         'trace_status': 'completed',
         'messages': [{'index': index, 'role': 'user', 'type': 'message', 'text': 'x' * 2_000} for index in range(80)],
@@ -424,7 +424,7 @@ def test_question_fit_keeps_the_full_state_ceiling_and_respects_question_limits(
     assert serialized_chars(bounded) <= DECISION_STATE_CHARS - question_chars
     assert serialized_chars(bounded) + longest_question <= DECISION_STATE_QUESTION_CHARS
     assert serialized_chars(bounded) + question_chars <= DECISION_STATE_ALL_QUESTIONS_CHARS
-def test_jev_role_excerpt_accumulates_global_and_role_omissions() -> None:
+def test_decision_role_excerpt_accumulates_global_and_role_omissions() -> None:
     original = 'x' * 600_000
     state = fit_decision_state(decision_state([{'role': 'user', 'content': original}], global_char_cap=500_000), [])
 
@@ -445,13 +445,13 @@ _OPTION_SOURCE = [
 ]
 
 
-def test_default_jev_options_leave_the_state_unchanged() -> None:
+def test_default_decision_options_leave_the_state_unchanged() -> None:
     assert decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=DEFAULT_DECISION_OPTIONS) == decision_state(
         _OPTION_SOURCE, global_char_cap=500_000
     )
 
 
-def test_jev_edge_limits_change_how_each_part_is_trimmed() -> None:
+def test_decision_edge_limits_change_how_each_part_is_trimmed() -> None:
     options = DecisionOptions(user=EdgeLimit(400, 100), tool_input=EdgeLimit(40, 10), tool_result=EdgeLimit(60, 20))
 
     messages = decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=options)['messages']
@@ -489,7 +489,7 @@ def test_excluding_tool_results_keeps_calls_without_results_and_drops_orphans() 
     assert state['omission'] == '[... 2 messages left out ...]'
 
 
-def test_jev_state_limit_option_lowers_the_ceiling_under_the_global_cap() -> None:
+def test_decision_state_limit_option_lowers_the_ceiling_under_the_global_cap() -> None:
     source = [{'role': 'user', 'content': f'message-{index}-' + 'x' * 100} for index in range(40)]
 
     state = decision_state(source, global_char_cap=500_000, options=DecisionOptions(state_chars=3_000))
@@ -498,14 +498,14 @@ def test_jev_state_limit_option_lowers_the_ceiling_under_the_global_cap() -> Non
     assert 'omission' in state
 
 
-def test_jev_coverage_is_off_by_default_and_leaves_the_state_identical() -> None:
+def test_decision_coverage_is_off_by_default_and_leaves_the_state_identical() -> None:
     assert decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=DecisionOptions(coverage=False)) == decision_state(
         _OPTION_SOURCE, global_char_cap=500_000
     )
     assert 'context' not in decision_state(_OPTION_SOURCE, global_char_cap=500_000)
 
 
-def test_jev_coverage_puts_the_context_first_and_says_reasoning_is_not_included() -> None:
+def test_decision_coverage_puts_the_context_first_and_says_reasoning_is_not_included() -> None:
     state = decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=DecisionOptions(coverage=True))
 
     assert next(iter(state)) == 'context'
@@ -522,7 +522,7 @@ def test_jev_coverage_puts_the_context_first_and_says_reasoning_is_not_included(
     assert state['messages'] == decision_state(_OPTION_SOURCE, global_char_cap=500_000)['messages']
 
 
-def test_jev_state_never_reads_reasoning_even_when_the_source_carries_it() -> None:
+def test_decision_state_never_reads_reasoning_even_when_the_source_carries_it() -> None:
     source = [
         {'role': 'user', 'content': 'question'},
         {
@@ -538,7 +538,7 @@ def test_jev_state_never_reads_reasoning_even_when_the_source_carries_it() -> No
     assert state['context']['reasoning'] == 'not included'
 
 
-def test_jev_coverage_follows_the_include_flags_and_the_trim_limits() -> None:
+def test_decision_coverage_follows_the_include_flags_and_the_trim_limits() -> None:
     off = DecisionOptions(
         coverage=True, include_user=False, include_tool_results=False, user=EdgeLimit(10, 5), assistant=EdgeLimit(90, 30)
     )
@@ -552,7 +552,7 @@ def test_jev_coverage_follows_the_include_flags_and_the_trim_limits() -> None:
     assert context != decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=DecisionOptions(coverage=True))['context']
 
 
-def test_jev_coverage_says_only_call_less_results_remain_when_tool_calls_are_off() -> None:
+def test_decision_coverage_says_only_call_less_results_remain_when_tool_calls_are_off() -> None:
     context = decision_state(
         _OPTION_SOURCE, global_char_cap=500_000, options=DecisionOptions(coverage=True, include_tool_calls=False)
     )['context']
@@ -561,7 +561,7 @@ def test_jev_coverage_says_only_call_less_results_remain_when_tool_calls_are_off
     assert any(item.startswith('tool_results (only') for item in context['includes'])
 
 
-def test_jev_coverage_counts_inside_the_state_cap() -> None:
+def test_decision_coverage_counts_inside_the_state_cap() -> None:
     source = [{'role': 'user', 'content': f'message {n} ' + 'w' * 300} for n in range(40)]
     cap = 3_000
 
@@ -626,7 +626,7 @@ def test_located_caps_count_unique_source_indexes_and_marker_metadata(cap: int) 
     assert serialized_chars(fitted) <= cap
 
 
-def test_jev_layout_options_preserve_type_and_status_without_empty_call_fields() -> None:
+def test_decision_layout_options_preserve_type_and_status_without_empty_call_fields() -> None:
     messages = [
         {'role': 'assistant', 'content': '', 'tool_calls': [
             {'id': 'a', 'function': {'name': 'shell', 'arguments': ''}},

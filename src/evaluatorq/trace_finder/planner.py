@@ -485,7 +485,7 @@ async def _select_recorded(model_calls: list[Usage | None], *args: Any, **kwargs
     except Exception:
         model_calls.append(None)
         raise
-    # The jev path makes no call when the catalogue offers nothing to classify, and then has no response.
+    # The decision path makes no call when the catalogue offers nothing to classify, and then has no response.
     if kwargs['filter_selection'] == 'llm' or selected.response is not None:
         model_calls.append(selected.usage)
     return selected

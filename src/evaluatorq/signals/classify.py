@@ -1,4 +1,4 @@
-"""Opt-in Jev classification for tool names missing from a signals config."""
+"""Opt-in decision-model classification for tool names missing from a signals config."""
 
 from __future__ import annotations
 
@@ -33,10 +33,10 @@ async def classify_tool_roles(
     *,
     client: LLMClient | None = None,
 ) -> SignalsConfig:
-    """Classify unknown tool names with Jev and return a config with merged roles.
+    """Classify unknown tool names with a decision model and return a config with merged roles.
 
     Existing ``tool_roles`` entries always win. Each unknown name is sent once;
-    tool arguments are not sent to Jev. Failed, abstained, or invalid classifications
+    tool arguments are not sent to the decision model. Failed, abstained, or invalid classifications
     are recorded as ``'other'`` and logged. The resolved client is closed when this
     function creates it; an injected client remains caller-owned.
     """

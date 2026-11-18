@@ -641,14 +641,14 @@ async def test_shell_output_reaches_the_tool_activity_question_only_after_scrubb
 
 
 @pytest.mark.asyncio
-async def test_non_jev_request_reserves_serialized_questions_from_the_global_cap(
+async def test_text_state_request_reserves_serialized_questions_from_the_global_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from evaluatorq.common.llm_call import classify_request_body
     from evaluatorq.common.model_input import serialized_chars
 
     model = 'openai/gpt-6-luna'
-    trace = make_trace('non-jev-question-cap').model_copy(
+    trace = make_trace('text-state-question-cap').model_copy(
         update={'messages': ({'role': 'user', 'content': 'REQUEST-START-' + 'x' * 10_000 + '-REQUEST-END'},)}
     )
     label = LabelSpec(
@@ -716,7 +716,7 @@ async def test_questions_over_the_global_cap_fail_before_a_classifier_request(
     ('trace_input_chars', 'question_size', 'call_count'),
     [(4_096, 0, 12), (500_000, 0, 250), (100_000, 55_000, 250)],
 )
-async def test_jev_tool_requests_keep_exact_edges_and_both_input_budgets(
+async def test_decision_tool_requests_keep_exact_edges_and_both_input_budgets(
     monkeypatch: pytest.MonkeyPatch, trace_input_chars: int, question_size: int, call_count: int
 ) -> None:
     from evaluatorq.common.model_input import (
@@ -754,7 +754,7 @@ async def test_jev_tool_requests_keep_exact_edges_and_both_input_budgets(
             'content': output,
         })
     trace_messages.extend([{'role': 'assistant', 'tool_calls': tool_calls}, *tool_results])
-    trace = make_trace('jev-tool-budget').model_copy(update={'messages': tuple(trace_messages)})
+    trace = make_trace('decision-tool-budget').model_copy(update={'messages': tuple(trace_messages)})
     question = UNFIXED_ERROR.model_copy(update={'instructions': 'Classify tool activity. ' + 'q' * question_size})
     calls: list[ClassifyRequest] = []
     monkeypatch.setattr('evaluatorq.insights.labeling.CODING_TOOL_LABELS', (question,))
@@ -807,7 +807,7 @@ async def test_jev_tool_requests_keep_exact_edges_and_both_input_budgets(
         assert 'o' * 400 not in result['text']
 
 
-def test_jev_activity_pairs_repeated_ids_and_preserves_orphan_results() -> None:
+def test_decision_activity_pairs_repeated_ids_and_preserves_orphan_results() -> None:
     from evaluatorq.insights.transcript import tool_activity_chunks
 
     messages = (
@@ -830,7 +830,7 @@ def test_jev_activity_pairs_repeated_ids_and_preserves_orphan_results() -> None:
         },
         {'role': 'tool', 'tool_call_id': 'duplicate', 'content': 'third result'},
     )
-    trace = make_trace('jev-duplicate-tools').model_copy(update={'messages': messages})
+    trace = make_trace('decision-duplicate-tools').model_copy(update={'messages': messages})
 
     [state] = tool_activity_chunks(trace, model='typesafe/jev-latest', trace_input_chars=10_000)
 
@@ -844,7 +844,7 @@ def test_jev_activity_pairs_repeated_ids_and_preserves_orphan_results() -> None:
     assert activity[3]['results'][0]['text'] == 'third result'
     assert any(entry['type'] == 'orphan_result' and entry['text'] == 'orphan result' for entry in entries)
 
-def test_jev_activity_keeps_orphan_results_without_assistant_calls() -> None:
+def test_decision_activity_keeps_orphan_results_without_assistant_calls() -> None:
     from evaluatorq.insights.transcript import tool_activity_chunks
 
     trace = make_trace('orphan-only-tools').model_copy(
@@ -858,7 +858,7 @@ def test_jev_activity_keeps_orphan_results_without_assistant_calls() -> None:
     assert entry['type'] == 'orphan_result'
     assert entry['text'] == 'orphan result'
 
-def test_jev_activity_uses_no_calls_sentinel_only_for_empty_activity() -> None:
+def test_decision_activity_uses_no_calls_sentinel_only_for_empty_activity() -> None:
     from evaluatorq.insights.transcript import tool_activity_chunks
 
     [chunk] = tool_activity_chunks(
@@ -1005,7 +1005,7 @@ def test_merge_chunks_last_chunk_decides_unfixed_error() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(('model', 'structured'), [('typesafe/jev-latest', True), ('openai/gpt-6-luna', False)])
-async def test_classifier_uses_jev_state_only_for_jev_and_the_conversation_view_otherwise(
+async def test_classifier_uses_decision_state_only_for_the_jev_family_and_the_conversation_view_otherwise(
     monkeypatch: pytest.MonkeyPatch, model: str, structured: bool
 ) -> None:
     messages = (

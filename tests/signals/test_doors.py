@@ -153,7 +153,7 @@ async def test_run_without_tool_calls_makes_no_requests(monkeypatch: pytest.Monk
         JudgeOutcome(error_kind=JudgeError.PARSE, error_message='bad answer'),
         JudgeOutcome(payload=EvaluatorResponsePayload(value=None, explanation='abstained', abstain=True)),
         JudgeOutcome(payload=EvaluatorResponsePayload(value='maybe', explanation='invalid')),
-        JudgeOutcome(payload=EvaluatorResponsePayload(value='unknown', explanation='not a label Jev may choose')),
+        JudgeOutcome(payload=EvaluatorResponsePayload(value='unknown', explanation='not a label the decision model may choose')),
     ],
 )
 async def test_failed_classification_is_unknown_and_counts_are_kept(
@@ -344,7 +344,7 @@ async def test_unavailable_client_leaves_every_call_unclassified(
     assert 'no credentials' in caplog.text
 
 
-# --- Redaction: what reaches Jev, the logs and the evidence. ---
+# --- Redaction: what reaches the decision model, the logs and the evidence. ---
 
 
 def _questions(monkeypatch: pytest.MonkeyPatch, answer: str = 'benign') -> list[dict[str, Any]]:
@@ -360,7 +360,7 @@ def _questions(monkeypatch: pytest.MonkeyPatch, answer: str = 'benign') -> list[
 
 
 @pytest.mark.asyncio
-async def test_secrets_in_a_command_reach_neither_jev_nor_the_logs_nor_the_evidence(
+async def test_secrets_in_a_command_reach_neither_the_decision_model_nor_the_logs_nor_the_evidence(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     seen: list[dict[str, Any]] = []
@@ -384,7 +384,7 @@ async def test_secrets_in_a_command_reach_neither_jev_nor_the_logs_nor_the_evide
 
 
 @pytest.mark.asyncio
-async def test_secrets_in_tool_arguments_are_scrubbed_before_jev(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_secrets_in_tool_arguments_are_scrubbed_before_the_decision_model(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _questions(monkeypatch)
     trajectory = traj([user(), agent(calls=[call('http_request', {'url': 'https://x.test', 'key': _SECRET}, 'a')])])
 

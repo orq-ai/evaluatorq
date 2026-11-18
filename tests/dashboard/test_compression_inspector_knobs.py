@@ -29,7 +29,7 @@ def _posted(knobs: CompressionKnobs) -> dict[str, str]:
     return {name: '1' if value is True else str(value) for name, value in knobs.as_form().items() if value is not False}
 
 
-def test_default_knobs_reproduce_the_whole_readable_view_beside_the_classifier_jev_state() -> None:
+def test_default_knobs_reproduce_the_whole_readable_view_beside_the_classifier_decision_state() -> None:
     assert DEFAULTS.budget == DEFAULTS.global_char_cap == 500_000
     assert DEFAULTS.include == WHOLE.include
     assert DEFAULTS.tools == 'per_call'
@@ -212,7 +212,7 @@ def test_a_user_limit_shortens_a_long_user_message_in_the_readable_view(client: 
     assert len(capped) < len(whole) - 2_500
 
 
-def test_a_jev_edge_limit_changes_the_trimmed_user_text(client: TestClient) -> None:
+def test_a_decision_edge_limit_changes_the_trimmed_user_text(client: TestClient) -> None:
     token = _load(client)
 
     default = _pane(_preview(client, token).text, 'compression-decision-title')
@@ -242,7 +242,7 @@ def test_invalid_knobs_show_an_inline_error_without_a_preview(client: TestClient
     assert 'compression-panels' not in response.text
 
 
-def test_limits_too_small_for_the_jev_state_are_shown_as_a_notice(client: TestClient) -> None:
+def test_limits_too_small_for_the_decision_state_are_shown_as_a_notice(client: TestClient) -> None:
     token = _load(client)
 
     response = _preview(client, token, global_char_cap=5)
@@ -438,7 +438,7 @@ def test_coverage_checkbox_is_in_the_form_and_restored_by_reset(client: TestClie
     assert re.search(r'name="coverage"[^>]*checked[^>]*data-default="1"', page)
 
 
-def test_coverage_adds_a_header_to_the_readable_text_and_a_context_to_the_jev_state(client: TestClient) -> None:
+def test_coverage_adds_a_header_to_the_readable_text_and_a_context_to_the_decision_state(client: TestClient) -> None:
     token = _load(client)
 
     on = _preview(client, token, original_view='readable')
@@ -487,7 +487,7 @@ def test_each_readable_style_checkbox_round_trips_and_absence_disables_it(flag: 
 
 
 @pytest.mark.parametrize('flag', inspector_data.DECISION_FORMAT_FLAGS)
-def test_each_jev_format_checkbox_round_trips_and_absence_disables_it(flag: str) -> None:
+def test_each_decision_format_checkbox_round_trips_and_absence_disables_it(flag: str) -> None:
     form = _posted(DEFAULTS)
     assert getattr(CompressionKnobs.from_form(form).decision, flag) is True
     del form[f'decision_{flag}']
@@ -520,7 +520,7 @@ def test_preview_route_reports_empty_body_even_when_coverage_header_remains(clie
     assert 'No readable input or output is available for this source.' in pane
 
 
-def test_preview_route_switches_jev_omission_format_without_changing_count(client: TestClient) -> None:
+def test_preview_route_switches_decision_omission_format_without_changing_count(client: TestClient) -> None:
     token = _load(client)
     states = []
     for located in (True, False):

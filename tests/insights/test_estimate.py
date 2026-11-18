@@ -160,7 +160,7 @@ def test_token_estimates_follow_character_caps_and_stage_output_caps() -> None:
     assert _row(result, 'dimension:intent').tokens_in == summarize.SUMMARY_MAX_TOKENS
 
 
-def test_jev_classifier_estimate_observes_its_combined_request_character_ceiling() -> None:
+def test_decision_classifier_estimate_observes_its_combined_request_character_ceiling() -> None:
     result = _estimate(
         models=StageModels(summary='summary-m', classifier='typesafe/jev-latest', embedding='embedding-m'),
         trace_input_chars=500_000,

@@ -1,4 +1,4 @@
-"""Build local-only Jev compression previews and load one Orq trace safely."""
+"""Build local-only decision-state compression previews and load one Orq trace safely."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ ORIGINAL_VIEW_LABELS: dict[OriginalView, str] = {
 # The original pane is cut to this many characters; a raw session file is read up to this many bytes.
 ORIGINAL_CHARS = 2_000_000
 SOURCE_BYTES = 5_000_000
-# Posted (total, edge) field names of each Jev edge limit.
+# Posted (total, edge) field names of each decision-state edge limit.
 DECISION_EDGE_FIELDS: dict[str, tuple[str, str]] = {
     'assistant': ('decision_assistant_total', 'decision_assistant_edge'),
     'user': ('decision_user_total', 'decision_user_edge'),
@@ -93,7 +93,7 @@ class KnobError(ValueError):
 
 @dataclass(frozen=True)
 class CompressionKnobs:
-    """Every compression setting the inspector exposes: the Jev state limits and the readable-view options."""
+    """Every compression setting the inspector exposes: the decision state limits and the readable-view options."""
 
     global_char_cap: int
     decision: DecisionOptions = DEFAULT_DECISION_OPTIONS
@@ -149,7 +149,7 @@ class CompressionKnobs:
     def from_form(cls, form: Mapping[str, Any]) -> CompressionKnobs:
         """Parse and validate the posted fields; every number must be present and in range."""
         decision = DecisionOptions(
-            state_chars=_whole(form, 'decision_state_chars', 'Jev state limit'),
+            state_chars=_whole(form, 'decision_state_chars', 'decision state limit'),
             assistant=_edge_limit(form, 'assistant'),
             user=_edge_limit(form, 'user'),
             system=_edge_limit(form, 'system'),
@@ -219,7 +219,7 @@ def _choice(form: Mapping[str, Any], name: str, label: str, options: tuple[_Choi
 
 def _edge_limit(form: Mapping[str, Any], attribute: str) -> EdgeLimit:
     total_name, edge_name = DECISION_EDGE_FIELDS[attribute]
-    label = f'Jev {attribute.replace("_", " ")} limit'
+    label = f'Decision state {attribute.replace("_", " ")} limit'
     total = _whole(form, total_name, f'{label} total')
     edge = _whole(form, edge_name, f'{label} edge')
     if edge * 2 > total:
@@ -229,7 +229,7 @@ def _edge_limit(form: Mapping[str, Any], attribute: str) -> EdgeLimit:
 
 @dataclass(frozen=True)
 class CompressionPreview:
-    """The readable view and the structured Jev state of one document under a set of knobs."""
+    """The readable view and the structured decision state of one document under a set of knobs."""
 
     readable: str
     original: str
@@ -271,11 +271,11 @@ def preview_document(
 
     The original is the canonical ATIF JSON, the raw session file (`source_path`, local sessions only) or the
     readable text, as `knobs.original_view` says; every original is scrubbed of known secrets and cut to
-    ``ORIGINAL_CHARS``. The readable text uses the Insights ``full_conversation_view`` options and the Jev state the
-    classifier's Jev limits, and neither downloads media URLs or changes the document. The transcript character
+    ``ORIGINAL_CHARS``. The readable text uses the Insights ``full_conversation_view`` options and the decision state the
+    classifier's decision-state limits, and neither downloads media URLs or changes the document. The transcript character
     count is that of the uncapped readable transcript. `knobs.coverage` adds the opt-in coverage description to both
     compressed formats, a leading `[context: ...]` line in the readable text and a leading `context` object in the
-    Jev state, and never to the original pane. Limits too small for either renderer, and a source that is
+    decision state, and never to the original pane. Limits too small for either renderer, and a source that is
     unavailable, raise ``ValueError`` with a fixed message.
     """
     messages = to_chat_messages(document)
