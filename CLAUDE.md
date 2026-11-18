@@ -112,7 +112,7 @@ uv run pytest -m 'not integration'
 
 **Do not scope `ty` to a path.** The configured bare check covers `tests/`, `src/`, root Python files, and docs Python files. A scoped run can pass while CI fails on a type error elsewhere. CI runs the bare check once, on Ubuntu with Python 3.10.
 
-CI adds `-n auto` to the pytest step, which runs the same tests on every core through `pytest-xdist`. Adding it locally is optional. Serial stays the default because each worker collects the whole suite, so on a laptop running several worktrees it multiplies CPU and memory.
+**Never run pytest with xdist locally: no `-n auto`, no `-n <N>`.** Each xdist worker collects the whole suite, so on a laptop running several worktrees at once it multiplies CPU and memory and slows every other session. CI adds `-n auto` on its own runners; that is the only place it belongs. This applies to every subagent you dispatch, so say it in the dispatch prompt. To go faster, scope the run to the test files your change touches first, then run the full serial suite once before pushing.
 
 Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **ty** is not scoped. Match CI, not intuition.
 
