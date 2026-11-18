@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -425,10 +425,13 @@ async def test_invalid_local_snapshot_reports_population_failure(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('mode', ['llm', 'llm+jev'])
+@pytest.mark.parametrize('given', ['llm', 'llm+decision', 'llm+jev'])
 async def test_query_path_uses_shared_planner_and_generated_default_time(
-    mode: Literal['llm', 'llm+jev'], monkeypatch: pytest.MonkeyPatch
+    given: Literal['llm', 'llm+decision', 'llm+jev'], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The old name arrives as the function argument here, the one path a population's own validator does not cover.
+    legacy = given == 'llm+jev'
+    mode = 'llm+decision' if legacy else given
     from evaluatorq.common.judge import ClassifyQuestion
 
     compiled_query = CompiledQuery(
@@ -474,10 +477,11 @@ async def test_query_path_uses_shared_planner_and_generated_default_time(
     pop = InsightsPopulation(
         query='refund requests',
         facets=FacetSelection(agent_name=frozenset({'explicit-bot'})),
-        filter_selection=mode, limit=50
+        filter_selection=None if legacy else mode, limit=50
     )
     resolved = await resolve_population(
-        pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
+        pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier',
+        filter_selection=cast(Any, given) if legacy else None,
     )
 
     assert resolved.compiled == (compiled_query,)

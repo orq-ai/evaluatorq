@@ -232,7 +232,7 @@ def test_ai_limits_are_per_run_trace_search_controls(client: TestClient) -> None
     assert 'name="parallelism"' in search_html
     assert '<option value="immediate" selected>Just proceed</option>' in settings_html
     assert 'name="filter_selection"' in settings_html
-    assert '<option value="llm+jev" selected>LLM + Jev</option>' in settings_html
+    assert '<option value="llm+decision" selected>LLM + decision model</option>' in settings_html
 
 
 def test_settings_ignores_per_run_ai_limits(client: TestClient, settings_file: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -315,6 +316,13 @@ class DecisionOptions:
 
 
 DEFAULT_DECISION_OPTIONS = DecisionOptions()
+
+DECISION_STATE_FORMAT = 'decision'
+
+
+def is_decision_state_format(value: object) -> bool:
+    """Whether a saved ``classifier_state_format`` names the decision state; reports saved before the rename say ``jev``."""
+    return value in (DECISION_STATE_FORMAT, 'jev')
 
 
 def _edge_phrase(limit: EdgeLimit) -> str:
@@ -1015,3 +1023,27 @@ def tool_result_metadata(message: dict[str, Any]) -> tuple[Any, Any, Any]:
         if error_code is None:
             error_code = source.get('error_code')
     return status, exit_code, error_code
+
+
+# Names from before "Jev" was renamed to "decision": each still resolves, with a DeprecationWarning.
+_RENAMED = {
+    'JEV_STATE_CHARS': 'DECISION_STATE_CHARS',
+    'JEV_STATE_QUESTION_CHARS': 'DECISION_STATE_QUESTION_CHARS',
+    'JEV_STATE_ALL_QUESTIONS_CHARS': 'DECISION_STATE_ALL_QUESTIONS_CHARS',
+    'DEFAULT_JEV_OPTIONS': 'DEFAULT_DECISION_OPTIONS',
+    'JevOptions': 'DecisionOptions',
+    'is_jev_model': 'uses_decision_state',
+    'jev_coverage': 'decision_coverage',
+    'jev_state': 'decision_state',
+    'jev_text_state': 'decision_text_state',
+    'jev_state_char_limit': 'decision_state_char_limit',
+    'fit_jev_state': 'fit_decision_state',
+}
+
+
+def __getattr__(name: str) -> Any:
+    new_name = _RENAMED.get(name)
+    if new_name is None:
+        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+    warnings.warn(f'{name} is deprecated; use {new_name}.', DeprecationWarning, stacklevel=2)
+    return globals()[new_name]
