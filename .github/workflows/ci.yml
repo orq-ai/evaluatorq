@@ -21,7 +21,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync --frozen --all-extras --all-groups
+        run: uv sync --locked --all-extras --all-groups
 
       - name: Ruff lint
         run: uv run ruff check src
@@ -66,7 +66,7 @@ jobs:
           python-version: "${{ matrix.python-version }}"
 
       - name: Install dependencies
-        run: uv sync --frozen --all-extras --all-groups
+        run: uv sync --locked --all-extras --all-groups
 
       # Type results do not depend on the host OS or runtime version, so only
       # the minimum-version Linux leg pays for it.
@@ -109,7 +109,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync --frozen --all-extras --all-groups
+        run: uv sync --locked --all-extras --all-groups
 
       # Parses examples and notebooks, resolves every evaluatorq import against
       # the installed package. No execution, no credentials, no API spend —
@@ -177,7 +177,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync --frozen --all-extras --all-groups
+        run: uv sync --locked --all-extras --all-groups
 
       - name: Install latest allowed Typer
         run: uv pip install --upgrade typer
@@ -206,7 +206,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync --frozen --all-extras --all-groups
+        run: uv sync --locked --all-extras --all-groups
 
       - name: Install the lowest allowed fasthtml
         run: |
