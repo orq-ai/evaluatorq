@@ -65,7 +65,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync --frozen --all-extras --all-groups
+        run: uv sync --locked --all-extras --all-groups
 
       - name: Run live preset checks
         id: drift

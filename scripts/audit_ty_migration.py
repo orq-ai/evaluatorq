@@ -1,4 +1,9 @@
-"""Audit effective BasedPyright-to-ty coverage from a committed offline snapshot."""
+"""Audit effective BasedPyright-to-ty coverage from a committed offline snapshot.
+
+The snapshot is a frozen record of the migration, taken from the docs of the ty release in
+`ty.version`. It is not refreshed on ty bumps; the offline audit still fails when a ty or Ruff
+config change drops a former BasedPyright check.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +24,9 @@ else:
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / 'scripts/data/ty_migration_audit.json'
+TY_MAPPING_PATH = 'docs/coming-from-mypy-or-pyright.md'
+TY_RULES_PATH = 'docs/reference/rules.md'
+BASEDPYRIGHT_DEFAULTS_PATH = 'packages/pyright-internal/src/common/configOptions.ts'
 
 SURFACES = {
     'src': 'src/evaluatorq/contracts.py',
@@ -136,6 +144,10 @@ def _download(url: str) -> str:
         return response.read().decode()
 
 
+def _raw_url(repo: str, commit: str, path: str) -> str:
+    return f'https://raw.githubusercontent.com/{repo}/{commit}/{path}'
+
+
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -222,9 +234,9 @@ def verify_upstream(baseline: dict[str, Any]) -> None:
     """Fetch pinned primary sources and prove the committed derivation still matches."""
     ty = baseline['ty']
     based = baseline['basedpyright']
-    mapping = _download(ty['mapping_url'])
-    rules = _download(ty['rules_url'])
-    defaults = _download(based['defaults_url'])
+    mapping = _download(_raw_url('astral-sh/ty', ty['commit'], TY_MAPPING_PATH))
+    rules = _download(_raw_url('astral-sh/ty', ty['commit'], TY_RULES_PATH))
+    defaults = _download(_raw_url('DetachHead/basedpyright', based['commit'], BASEDPYRIGHT_DEFAULTS_PATH))
     _require(_sha256(mapping) == ty['mapping_sha256'], 'pinned ty mapping source changed')
     _require(_sha256(rules) == ty['rules_sha256'], 'pinned ty rule source changed')
     _require(_sha256(defaults) == based['defaults_sha256'], 'pinned BasedPyright source changed')

@@ -69,7 +69,6 @@
     ],
     "commit": "ecea0a681818fc8b90a1314b7d2f844fef8f53c0",
     "defaults_sha256": "7441133e0d6b4c71b16e926121a9326f993630f7e48f52991700ee0d1cc10312",
-    "defaults_url": "https://raw.githubusercontent.com/DetachHead/basedpyright/ecea0a681818fc8b90a1314b7d2f844fef8f53c0/packages/pyright-internal/src/common/configOptions.ts",
     "global_rules": {
       "reportAny": "none",
       "reportDeprecated": "none",
@@ -381,9 +380,8 @@
   },
   "schema": 1,
   "ty": {
-    "mapping_commit": "6c90fe0aff166318cf13fc18fd797f91a5d5d552",
+    "commit": "6c90fe0aff166318cf13fc18fd797f91a5d5d552",
     "mapping_sha256": "2fcc0db7015f948f6e4ac1b1d68ce3fb8475dd765597482caa23160f71bc675a",
-    "mapping_url": "https://raw.githubusercontent.com/astral-sh/ty/6c90fe0aff166318cf13fc18fd797f91a5d5d552/docs/coming-from-mypy-or-pyright.md",
     "rule_defaults": {
       "abstract-method-in-final-class": "error",
       "blanket-ignore-comment": "ignore",
@@ -497,7 +495,6 @@
       ]
     },
     "rules_sha256": "0b9ff4208f390e6e8f302ed4d6cb96a96c0945cd1dfe79336ba5fd63a388a7ca",
-    "rules_url": "https://raw.githubusercontent.com/astral-sh/ty/6c90fe0aff166318cf13fc18fd797f91a5d5d552/docs/reference/rules.md",
     "version": "0.0.100"
   }
 }
