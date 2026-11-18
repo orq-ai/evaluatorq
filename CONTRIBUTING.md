@@ -119,6 +119,6 @@ Add integration modules under `src/evaluatorq/integrations/`. Add the dependency
 
 - Branch from `main`
 - Run the complete `uv run pytest -m 'not integration'` profile and `uv run ty check` before pushing; the bare local pytest command also excludes deliberately slow tests, while CI runs the complete non-integration profile and runs the configured source, test, root, and docs ty check once on Ubuntu with Python 3.10
-- When changing the exact ty pin, run `uv lock`, then fix every rule ty reports as renamed or split, in `pyproject.toml` and in `ty: ignore` comments. `test_ty_config_names_only_current_rules` and the `renamed-rule-in-ignore-comment` rule fail on any old name. Do not refresh `scripts/data/ty_migration_audit.json`: it is a frozen record of the BasedPyright migration, and `uv run python scripts/audit_ty_migration.py` keeps checking that config changes do not drop a former BasedPyright check.
+- When changing the exact ty pin, follow the ty upgrade rules in `CLAUDE.md`.
 - Use conventional commit format for commit messages (e.g., `feat(redteam): ...`, `fix(evaluatorq): ...`)
 - Keep PRs focused — one feature or fix per PR when possible
