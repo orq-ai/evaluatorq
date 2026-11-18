@@ -372,6 +372,35 @@ async def test_each_clone_gets_its_own_copy_of_the_workdir_and_close_removes_it(
 
 
 @pytest.mark.asyncio
+async def test_a_failed_copy_of_the_workdir_is_still_removed_by_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / 'project'
+    source.mkdir()
+    roots: list[Path] = []
+
+    def failing_copytree(src: Any, dst: Any, **kwargs: Any) -> None:
+        roots.append(Path(dst).parent)
+        Path(dst).mkdir()  # a partial copy
+        raise OSError('disk full')
+
+    monkeypatch.setattr(target_module.shutil, 'copytree', failing_copytree)
+    target = ClaudeAgentSDKTarget(ClaudeAgentOptions(), workdir=source)
+    with pytest.raises(OSError, match='disk full'):
+        target.turn_options()
+    assert roots[0].exists()
+    await target.close()
+    assert not roots[0].exists()
+
+
+def test_a_clone_keeps_the_isolation_and_keep_workdir_of_its_original() -> None:
+    first = ClaudeAgentSDKTarget(ClaudeAgentOptions(), isolation='none', keep_workdir=True)
+    clone = first.new()
+    assert clone._isolation == 'none'
+    assert clone._keep_workdir is True
+
+
+@pytest.mark.asyncio
 async def test_symbolic_links_in_the_workdir_are_not_copied(tmp_path: Path) -> None:
     """A link would still point at the host; following it would copy host files nobody put in the project."""
     secret = tmp_path / 'host-secret.txt'
