@@ -119,6 +119,26 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+### Name a run and choose where it is saved
+
+`insights()` takes two arguments for this. The CLI has neither: `eq insights` names the run itself and saves it in the default directory, and `--json PATH` writes a copy of the report to a path you choose. The dashboard run form has its own name field.
+
+| Argument | Accepts | Left unset |
+|---|---|---|
+| `run_name` | Any string. The dashboard lists the run under it and uses it as the title of the review page. | `insights-<date>-<time>` in UTC, such as `insights-20261118-030259`. An empty string counts as unset. |
+| `runs_dir` | A `pathlib.Path`, absolute or relative to the working directory. The report is written directly into it and the state file into its `.manifests/` folder. Missing folders are created. | `.evaluatorq/insights-runs/`, or `insights-runs/` inside `EVALUATORQ_DIR` when that is set. |
+
+The report file is `insights_<timestamp>_<name>.json`. The timestamp is the UTC start time. `<name>` is the run name in lower case, with every run of characters other than `a` to `z` and `0` to `9` replaced by one hyphen, hyphens at either end removed, cut to 64 characters. A name with none of those characters is saved as `insights`. `run_name="Weekly: Support Bot #3!"` is saved as `insights_20261118-030259_weekly-support-bot-3.json`. A name does not have to be unique: a second report with the same name in the same second gets `-2` before `.json`, and the report's `run_id` is what identifies the run.
+
+`runs_dir` wins over `EVALUATORQ_DIR`. When you pass it, the report and the state file go there and `EVALUATORQ_DIR` is not used for them. Pass a `Path`: a plain string raises `TypeError`.
+
+Two things do not follow `runs_dir`:
+
+- **The dashboard.** It reads only the directory a run uses when `runs_dir` is unset, so a run saved somewhere else is missing from the dashboard, with no warning. To move your runs and still review them, set `EVALUATORQ_DIR` for both the run and `eq dashboard`, and leave `runs_dir` unset.
+- **The cache.** Summaries and embeddings stay in `.evaluatorq/cache/insights.sqlite`, or in `cache/` inside `EVALUATORQ_DIR`. Runs saved to different directories share it. Pass `cache=False` to keep a run out of it.
+
+[Ask only some coding questions](#ask-only-some-coding-questions) has an example that passes both.
+
 ## Run from the CLI
 
 The `eq insights` command accepts population filters, label presets or JSON files, and discovered dimensions. Install `evaluatorq[insights]` before running it.
@@ -328,7 +348,7 @@ for value in (0, 200, 500):
 
 ## Analyze coding agents
 
-Pass `--coding` (or `coding_analysis=True` in Python, or tick individual **Coding agent questions** in the dashboard run form) to add coding-agent labels to a run. Insights first asks the classifier whether each trace comes from a coding agent, using only a count of the tools, shell programs, and skills the trace called. Traces it answers yes for get two more sets of questions; other traces get only the labels you selected.
+Pass `--coding` (or `coding_analysis=True` in Python, or tick individual **Coding agent questions** in the dashboard run form) to add coding-agent labels to a run. To ask only some of them from Python, see [Ask only some coding questions](#ask-only-some-coding-questions). Insights first asks the classifier whether each trace comes from a coding agent, using only a count of the tools, shell programs, and skills the trace called. Traces it answers yes for get two more sets of questions; other traces get only the labels you selected.
 
 | Label | Kind | Read from | Answers |
 |---|---|---|---|
@@ -358,6 +378,38 @@ Jev coding-tool requests use filtered structured states containing user messages
 ```bash
 eq insights --from-snapshot claude-traces.json --label sentiment --label user_frustration --coding
 ```
+
+### Ask only some coding questions
+
+`--coding` and `coding_analysis=True` ask all seven coding questions. To ask fewer from Python, pass their names as `coding_labels`. This example asks two of them about a snapshot exported with `eq agent-sessions --export sessions.json`, and saves the report under a name and in a directory you choose. It makes model requests, so set `ORQ_API_KEY` first. The example keeps the default dimensions, so the run also summarizes and clusters the sessions; add `dimensions=[]` to ask the questions and skip clustering.
+
+```python
+import asyncio
+from pathlib import Path
+
+from evaluatorq.insights import InsightsPopulation, insights
+
+
+async def main() -> None:
+    run = await insights(
+        population=InsightsPopulation.from_snapshot("sessions.json"),
+        coding_labels=["outcome", "verified"],
+        run_name="Coding sessions, week 47",
+        runs_dir=Path("reports/coding"),
+    )
+    print(run.run_name, run.status)
+
+
+asyncio.run(main())
+```
+
+`coding_labels` accepts any of `task_type`, `outcome`, `verified`, `scope_creep`, `user_corrections`, `unfixed_error` and `risky_action`. `coding_agent` is not one of them: it is the gate, and Insights adds it whenever you select at least one coding question. Left unset, or given an empty list, no coding question is asked unless `coding_analysis=True`.
+
+A name that is not in that list, or a name given twice, raises `ValueError` before any trace is loaded or any file is written. Names are case-sensitive, so `Outcome` is rejected. Pass a list even for one name: a bare string such as `"outcome"` is read one character at a time and rejected.
+
+One combination is silent. With `coding_analysis=True`, `coding_labels` is ignored: all seven questions are asked, and a misspelled name in the list raises nothing. Leave `coding_analysis` unset when you pass `coding_labels`.
+
+`run_name` and `runs_dir` are described in [Name a run and choose where it is saved](#name-a-run-and-choose-where-it-is-saved).
 
 ## Local coding-agent sessions
 
@@ -876,6 +928,6 @@ For the finder’s **Analyze matches** handoff, see [Trace Finder](trace-finder.
 
 The CLI exits 1 for an `error` run and 0 for a completed run, even when individual traces failed. Check the failed count and stage message before treating a result as complete. Placeholder answers such as “no errors” provide no failure text, so those traces have no signal for the failure dimension.
 
-Summaries and embeddings are cached per item in `.evaluatorq/cache/insights.sqlite`. Summary keys include trace, span, model, and prompt hash; embedding keys include model and text hash. The cache is local to the working directory. Pass `cache=False` to Python `insights()` or `--no-cache` to the CLI to bypass it.
+Summaries and embeddings are cached per item in `.evaluatorq/cache/insights.sqlite`. Summary keys include trace, span, model, and prompt hash; embedding keys include model and text hash. The cache is in the working directory unless `EVALUATORQ_DIR` is set. Pass `cache=False` to Python `insights()` or `--no-cache` to the CLI to bypass it.
 
 The `insights` extra installs numpy, scipy, and umap-learn for vector processing, clustering, and the 3D map; the embedding requests go through the Orq router. Add the `dashboard` extra to the Insights extra to review saved runs locally with `eq dashboard`.
