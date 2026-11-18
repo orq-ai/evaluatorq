@@ -547,10 +547,11 @@ Reach for it when your agent is Python code written against that SDK. To test th
 uv add "evaluatorq[claude-agent-sdk,redteam]"
 ```
 
-The SDK drives the Claude Code runtime, which the package bundles on most platforms. Set `ANTHROPIC_API_KEY`, or point `options.env` at a gateway.
+The SDK drives the Claude Code runtime, which the package bundles on most platforms. This example sends the agent's model calls through the Orq router with your `ORQ_API_KEY`, so they are traced and billed in your Orq workspace. To call Anthropic directly, drop `env` and set `ANTHROPIC_API_KEY`.
 
 ```python
 import asyncio
+import os
 
 from claude_agent_sdk import ClaudeAgentOptions
 
@@ -564,6 +565,11 @@ async def main() -> None:
         model="claude-sonnet-5-5",
         tools=["Read", "Grep"],
         max_turns=8,
+        env={
+            "ANTHROPIC_BASE_URL": "https://my.orq.ai/v3/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": os.environ["ORQ_API_KEY"],
+            "ANTHROPIC_API_KEY": "",  # empty, so the runtime sends the token above
+        },
     )
     report = await red_team(target=ClaudeAgentSDKTarget(options), max_dynamic_datapoints=5)
     print(report.summary)
@@ -592,12 +598,13 @@ Each instance works in two private temporary directories, removed when the run c
 
 | `isolation=` | What it sets |
 |---|---|
-| `"sandbox"` (default) | The private directories, plus: the SDK's command sandbox on, unsandboxed commands refused, and the host user's settings, memory files and account connectors not loaded. A `setting_sources` you set yourself is kept. |
+| `"sandbox"` (default) | The private directories, plus: the SDK's command sandbox on, unsandboxed commands refused, the file tools refusing any path outside the working directory, and the host user's settings, memory files and account connectors not loaded. A `setting_sources` you set yourself is kept, and so are your other `settings`. |
 | `"none"` | The private directories only. Your options are otherwise used as given. |
 
-Three limits to know before you rely on it:
+Four limits to know before you rely on it:
 
-- **The working directory is where the agent starts, not a wall.** The SDK's sandbox confines shell commands on macOS and Linux. File tools follow the SDK's permission rules, not the sandbox.
+- **With `isolation="none"` the working directory is where the agent starts, not a wall.** In a test run, an agent allowed to use `Bash` and `Write` wrote files elsewhere on the machine. The default closes both routes: the command sandbox stops shell commands, and a permissions setting stops the file tools.
+- **The command sandbox exists on macOS and Linux only**, according to the SDK's documentation. This target has been run live on macOS.
 - **Python tools you define in-process run in your process.** A custom tool function or hook has the access your script has. Nothing here confines it.
 - **A `claude` login stored under `~/.claude` is not seen**, because the configuration directory is private. Use an API key or a gateway.
 
@@ -610,6 +617,7 @@ When the agent must not be able to reach the host at all, run the whole evaluati
 | Code | Meaning |
 |---|---|
 | `agent_sdk.cli_not_found` | The Claude Code runtime is not installed. Not retried. |
+| `agent_sdk.api_error` | The model request failed, for example a wrong gateway address or a model the key cannot use. |
 | `agent_sdk.<subtype>`, such as `agent_sdk.error_max_turns` | The run ended on an error result; the subtype is the SDK's own. |
 | `agent_sdk.no_result` | The run ended without a final assistant message. |
 | `agent_sdk.sdk_error` | The SDK raised for another reason, such as a lost process. |

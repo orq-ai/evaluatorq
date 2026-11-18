@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,7 +31,7 @@ from evaluatorq.integrations.claude_agent_sdk_integration import (
     ClaudeAgentSDKUnavailableError,
 )
 from evaluatorq.integrations.claude_agent_sdk_integration import target as target_module
-from evaluatorq.integrations.claude_agent_sdk_integration.target import message_to_event
+from evaluatorq.integrations.claude_agent_sdk_integration.target import message_to_event, settings_with_file_tool_blocks
 
 
 def _result(session: str, *, text: str | None = 'done', error: str | None = None, **extra: Any) -> ResultMessage:
@@ -189,6 +190,13 @@ async def test_a_failed_turn_leaves_the_session_where_it_was_so_a_retry_starts_f
             'budget spent',
         ),
         ([ClaudeSDKError('pipe closed')], ClaudeAgentSDKError, 'agent_sdk.sdk_error', 'ClaudeSDKError: pipe closed'),
+        # What a wrong gateway address looks like: the runtime reports subtype ``success`` with ``is_error`` set.
+        (
+            [_assistant(TextBlock(text='API Error: Invalid URL')), _result('s', text='API Error: Invalid URL', error='success')],
+            ClaudeAgentSDKError,
+            'agent_sdk.api_error',
+            'API Error: Invalid URL',
+        ),
         ([CLINotFoundError('Claude Code not found')], ClaudeAgentSDKUnavailableError, 'agent_sdk.cli_not_found', None),
         ([_assistant(TextBlock(text='   ')), _result('s', text='  ')], ClaudeAgentSDKError, 'agent_sdk.no_result', None),
     ],
@@ -259,6 +267,9 @@ async def test_sandbox_isolation_moves_the_agent_off_the_host_configuration() ->
         }
         assert turn.setting_sources == []
         assert turn.sandbox == {'enabled': True, 'allowUnsandboxedCommands': False, 'excludedCommands': ['git']}
+        assert json.loads(turn.settings or '') == {
+            'permissions': {'blockWritesOutsideWorkingDirectories': True, 'blockReadsOutsideWorkingDirectories': True}
+        }
         # The caller's options are not changed.
         assert (options.cwd, options.setting_sources) == ('/somewhere/real', None)
         assert options.sandbox['enabled'] is False
@@ -289,8 +300,40 @@ async def test_no_isolation_only_moves_the_two_directories() -> None:
         assert turn.cwd == root / 'workdir'
         assert turn.setting_sources is None
         assert turn.sandbox is None
+        assert turn.settings is None
     finally:
         await target.close()
+
+
+BLOCKS = {'blockWritesOutsideWorkingDirectories': True, 'blockReadsOutsideWorkingDirectories': True}
+
+
+def test_file_tool_blocks_are_forced_on_and_the_callers_other_settings_are_kept(tmp_path: Path) -> None:
+    assert json.loads(settings_with_file_tool_blocks(None)) == {'permissions': BLOCKS}
+
+    own = {'model': 'x', 'permissions': {'allow': ['Read'], 'blockWritesOutsideWorkingDirectories': False}}
+    expected = {'model': 'x', 'permissions': {'allow': ['Read'], **BLOCKS}}
+    assert json.loads(settings_with_file_tool_blocks(json.dumps(own))) == expected
+
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps(own), encoding='utf-8')
+    assert json.loads(settings_with_file_tool_blocks(str(path))) == expected
+
+
+@pytest.mark.parametrize(
+    ('settings', 'message'),
+    [
+        ('/no/such/settings.json', 'is not JSON and could not be read as a file'),
+        ('{not json', 'is not valid JSON'),
+        ('{"permissions": ["Read"]}', 'must be a JSON object whose "permissions" is an object'),
+    ],
+)
+def test_settings_that_cannot_carry_the_blocks_are_refused_before_any_turn(settings: str, message: str) -> None:
+    target = ClaudeAgentSDKTarget(ClaudeAgentOptions(settings=settings))
+    with pytest.raises(ValueError, match=message):
+        target.turn_options()
+    # Without isolation the settings are passed through untouched, valid or not.
+    assert ClaudeAgentSDKTarget(ClaudeAgentOptions(settings=settings), isolation='none').turn_options().settings == settings
 
 
 def test_isolation_and_workdir_are_checked_at_construction(tmp_path: Path) -> None:

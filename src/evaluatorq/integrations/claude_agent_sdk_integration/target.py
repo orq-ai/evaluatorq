@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -55,13 +56,18 @@ ISOLATION_ENV = {
     'ENABLE_CLAUDEAI_MCP_SERVERS': 'false',
 }
 
+# The command sandbox covers shell commands only. These two make the file tools (Read, Write, Edit) refuse a path
+# outside the working directory; without them a live run wrote and read files elsewhere on the host.
+FILE_TOOL_BLOCKS = {'blockWritesOutsideWorkingDirectories': True, 'blockReadsOutsideWorkingDirectories': True}
+
 
 class ClaudeAgentSDKError(Exception):
     """A Claude Agent SDK turn failed. ``code`` is one of the ``agent_sdk.*`` codes ``map_error`` reports.
 
     Codes: ``agent_sdk.cli_not_found`` (non-retryable, see `ClaudeAgentSDKUnavailableError`),
-    ``agent_sdk.sdk_error`` (the SDK raised), ``agent_sdk.<subtype>`` for a run that ended on an error result
-    (for example ``agent_sdk.error_max_turns``) and ``agent_sdk.no_result`` (the run ended with no final text).
+    ``agent_sdk.sdk_error`` (the SDK raised), ``agent_sdk.api_error`` (the model request failed, for example a wrong
+    gateway address), ``agent_sdk.<subtype>`` for a run that ended on another error result (for example
+    ``agent_sdk.error_max_turns``) and ``agent_sdk.no_result`` (the run ended with no final text).
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -136,9 +142,9 @@ class ClaudeAgentSDKTarget(AgentTarget):
     carry the same options and get their own, so parallel attacks never share files or a session. ``close()`` removes
     both unless ``keep_workdir`` is set; the runner calls it through ``common.target_call.close_target``.
 
-    ``isolation='sandbox'`` (the default) turns on the SDK's command sandbox and refuses unsandboxed commands. It
-    also stops the runtime loading the host user's settings, memory files and account connectors, unless the options
-    already set ``setting_sources``. ``isolation='none'`` leaves the options as given and only moves the two
+    ``isolation='sandbox'`` (the default) turns on the SDK's command sandbox, refuses unsandboxed commands, and makes
+    the file tools refuse paths outside the working directory. It also stops the runtime loading the host user's
+    settings, memory files and account connectors, unless the options already set ``setting_sources``. ``isolation='none'`` leaves the options as given and only moves the two
     directories. Neither confines Python tools the options define in-process: those run in this process, with its
     access. Run the whole evaluation in a container when the agent must not be able to reach the host at all.
 
@@ -209,6 +215,7 @@ class ClaudeAgentSDKTarget(AgentTarget):
                 'enabled': True,
                 'allowUnsandboxedCommands': False,
             }
+            changes['settings'] = settings_with_file_tool_blocks(self._options.settings)
         return dataclasses.replace(self._options, **changes)
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
@@ -289,4 +296,34 @@ def _error_result(events: list[dict[str, Any]]) -> tuple[str, str] | None:
         return None
     subtype = str(result['subtype'] or 'error')
     detail = result['result'] if isinstance(result['result'], str) and result['result'] else subtype
-    return f'agent_sdk.{subtype}', detail
+    # A failed model request ends the run with subtype ``success`` and ``is_error`` set; name it for what it is.
+    return f'agent_sdk.{"api_error" if subtype == "success" else subtype}', detail
+
+
+def settings_with_file_tool_blocks(settings: str | None) -> str:
+    """Return ``settings`` as a JSON string with `FILE_TOOL_BLOCKS` forced on under ``permissions``.
+
+    ``ClaudeAgentOptions.settings`` is a JSON string or a path to a settings file. Either is read, so the caller's
+    other settings are kept.
+
+    Raises:
+        ValueError: ``settings`` is neither a JSON object nor a readable JSON settings file.
+    """
+    loaded: Any = {}
+    if settings is not None:
+        text = settings
+        if not settings.lstrip().startswith('{'):
+            try:
+                text = Path(settings).read_text(encoding='utf-8')
+            except OSError as exc:
+                raise ValueError(
+                    f'options.settings {settings!r} is not JSON and could not be read as a file: {exc}'
+                ) from exc
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f'options.settings is not valid JSON: {exc}') from exc
+    if not isinstance(loaded, dict) or not isinstance(loaded.get('permissions', {}), dict):
+        # ValueError like the two refusals above: all three mean the caller's settings cannot carry the blocks.
+        raise ValueError('options.settings must be a JSON object whose "permissions" is an object')  # noqa: TRY004
+    return json.dumps({**loaded, 'permissions': {**loaded.get('permissions', {}), **FILE_TOOL_BLOCKS}})
