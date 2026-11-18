@@ -221,7 +221,7 @@ def _build_classify_state(*, paths: list[str], replacements: dict[str, Any]) -> 
     catalogue confirms that this model really uses the classify endpoint.
 
     Values are resolved nested-first (``prefer_nested=True``): the state is serialised as
-    JSON, so the live list behind ``input.all_messages`` is what Jev should read, not the
+    JSON, so the live list behind ``input.all_messages`` is what the decision model should read, not the
     ``json.dumps`` string the same path carries flat for prompt interpolation. A path that
     exists only flat still resolves.
 

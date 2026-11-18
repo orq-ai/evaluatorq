@@ -10,7 +10,7 @@ import pytest
 
 from evaluatorq.common.model_input import (
     CHARS_PER_ESTIMATED_TOKEN,
-    JEV_STATE_ALL_QUESTIONS_CHARS,
+    DECISION_STATE_ALL_QUESTIONS_CHARS,
     effective_trace_input_chars,
 )
 from evaluatorq.common.model_catalogue import ModelInfo, cost_of
@@ -160,13 +160,13 @@ def test_token_estimates_follow_character_caps_and_stage_output_caps() -> None:
     assert _row(result, 'dimension:intent').tokens_in == summarize.SUMMARY_MAX_TOKENS
 
 
-def test_jev_classifier_estimate_observes_its_combined_request_character_ceiling() -> None:
+def test_decision_classifier_estimate_observes_its_combined_request_character_ceiling() -> None:
     result = _estimate(
         models=StageModels(summary='summary-m', classifier='typesafe/jev-latest', embedding='embedding-m'),
         trace_input_chars=500_000,
     )
 
-    assert _row(result, 'label').tokens_in == JEV_STATE_ALL_QUESTIONS_CHARS // estimate.CHARS_PER_TOKEN
+    assert _row(result, 'label').tokens_in == DECISION_STATE_ALL_QUESTIONS_CHARS // estimate.CHARS_PER_TOKEN
 
 
 @pytest.mark.parametrize(

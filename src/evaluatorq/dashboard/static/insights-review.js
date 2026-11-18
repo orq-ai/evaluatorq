@@ -435,7 +435,7 @@ function renderHeader() {
   if (p.classifier_question_reserve === 'not_available') {
     reserveText = ' Selected classifier questions were not included in this preview; the final request may reserve more of the input cap.';
   } else if (p.classifier_question_reserve === 'applied') {
-    reserveText = ' Exact serialized question payloads share the configured cap with classifier state; Jev also applies its model-specific ceilings.';
+    reserveText = ' Exact serialized question payloads share the configured cap with classifier state; a decision model also applies its model-specific ceilings.';
   }
   const projectionPct = projectionKnown ? Math.min(100, pct(requestChars, sourceChars)) : 0;
   $('details').innerHTML = `<h4>Stages</h4><div class="stages">${stageHtml}</div>

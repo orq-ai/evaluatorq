@@ -81,9 +81,9 @@ Both orderings run concurrently, so swapping does not add wall-clock latency, on
 | `min_successful_judges` | `1` | Minimum decisive reconciled votes, otherwise the comparison is **inconclusive**. Must not exceed the panel size. |
 | `state_fields` | `None` | Classify judges only: which template paths are handed to the judge as the material to compare. Defaults to every placeholder the template renders, minus `criteria`. |
 
-### Jev on a pairwise panel
+### A decision model on a pairwise panel
 
-`typesafe/jev-latest` can also sit on a pairwise panel. It receives a three-option **choice** question, `A` / `B` / `tie`, whose question is your `criteria` and whose options carry fixed descriptions ("Response A is better", "Response B is better", "Neither is clearly better"). See [Jev as a judge](llm-as-a-jury.md#jev-as-a-judge) for the full classify contract.
+`typesafe/jev-latest` can also sit on a pairwise panel. It receives a three-option **choice** question, `A` / `B` / `tie`, whose question is your `criteria` and whose options carry fixed descriptions ("Response A is better", "Response B is better", "Neither is clearly better"). See [A decision model as a judge](llm-as-a-jury.md#a-decision-model-as-a-judge) for the full classify contract.
 
 ```python
 comparator = llm_jury_pairwise(

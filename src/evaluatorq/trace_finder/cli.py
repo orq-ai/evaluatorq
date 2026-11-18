@@ -354,8 +354,11 @@ def find(
         typer.Option('--window-days', min=1, max=90, help='How many recent days to search.'),
     ] = None,
     filter_selection: Annotated[
-        Literal['llm', 'llm+jev'] | None,
-        typer.Option('--filter-selection', help='Natural-language metadata filter mode: llm or llm+jev.'),
+        Literal['llm', 'llm+decision', 'llm+jev'] | None,
+        typer.Option(
+            '--filter-selection',
+            help='Natural-language metadata filter mode: llm or llm+decision. The old name llm+jev still works.',
+        ),
     ] = None,
     limit: Annotated[int | None, typer.Option('--limit', min=1, max=5000, help='Maximum traces to classify.')] = None,
     parallelism: Annotated[

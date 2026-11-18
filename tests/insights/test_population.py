@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -297,7 +297,7 @@ async def test_live_population_reports_the_same_projection_coverage(monkeypatch:
 
 
 
-def test_projection_coverage_uses_the_actual_non_jev_insights_classifier_state() -> None:
+def test_projection_coverage_uses_the_actual_plain_text_insights_classifier_state() -> None:
     from evaluatorq.insights.labeling import prepare_classifier_state
 
     trace = make_trace('input').model_copy(
@@ -360,11 +360,11 @@ def test_projection_coverage_does_not_mistake_literal_markers_for_truncation(cla
     assert coverage['classifier_request_chars'] <= cap
 
 
-def test_projection_coverage_applies_available_jev_question_reserve() -> None:
+def test_projection_coverage_applies_available_decision_question_reserve() -> None:
     from evaluatorq.common.model_input import (
-        JEV_STATE_ALL_QUESTIONS_CHARS,
-        JEV_STATE_CHARS,
-        JEV_STATE_QUESTION_CHARS,
+        DECISION_STATE_ALL_QUESTIONS_CHARS,
+        DECISION_STATE_CHARS,
+        DECISION_STATE_QUESTION_CHARS,
         fit_classifier_input,
         serialized_chars,
         serialized_question_chars,
@@ -389,11 +389,13 @@ def test_projection_coverage_applies_available_jev_question_reserve() -> None:
     state_chars = serialized_chars(state)
     question_chars = serialized_question_chars(questions)
     longest_question = max(serialized_chars(question) for question in questions.values())
+    # New reports name the format by the concept; `is_decision_state_format` still reads the older `jev`.
+    assert coverage['classifier_state_format'] == 'decision'
     assert coverage['classifier_question_reserve'] == 'applied'
     assert coverage['classifier_state_chars'] == state_chars
-    assert state_chars <= JEV_STATE_CHARS
-    assert state_chars + longest_question <= JEV_STATE_QUESTION_CHARS
-    assert state_chars + question_chars <= JEV_STATE_ALL_QUESTIONS_CHARS
+    assert state_chars <= DECISION_STATE_CHARS
+    assert state_chars + longest_question <= DECISION_STATE_QUESTION_CHARS
+    assert state_chars + question_chars <= DECISION_STATE_ALL_QUESTIONS_CHARS
     assert state_chars + question_chars <= 500_000
 @pytest.mark.asyncio
 async def test_live_population_rejects_duplicate_trace_ids_before_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -425,10 +427,13 @@ async def test_invalid_local_snapshot_reports_population_failure(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('mode', ['llm', 'llm+jev'])
+@pytest.mark.parametrize('given', ['llm', 'llm+decision', 'llm+jev'])
 async def test_query_path_uses_shared_planner_and_generated_default_time(
-    mode: Literal['llm', 'llm+jev'], monkeypatch: pytest.MonkeyPatch
+    given: Literal['llm', 'llm+decision', 'llm+jev'], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The old name arrives as the function argument here, the one path a population's own validator does not cover.
+    legacy = given == 'llm+jev'
+    mode = 'llm+decision' if legacy else given
     from evaluatorq.common.judge import ClassifyQuestion
 
     compiled_query = CompiledQuery(
@@ -474,10 +479,11 @@ async def test_query_path_uses_shared_planner_and_generated_default_time(
     pop = InsightsPopulation(
         query='refund requests',
         facets=FacetSelection(agent_name=frozenset({'explicit-bot'})),
-        filter_selection=mode, limit=50
+        filter_selection=None if legacy else mode, limit=50
     )
     resolved = await resolve_population(
-        pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
+        pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier',
+        filter_selection=cast(Any, given) if legacy else None,
     )
 
     assert resolved.compiled == (compiled_query,)
