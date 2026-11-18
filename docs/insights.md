@@ -353,7 +353,7 @@ If a plain-text tool view is too long, Insights cuts the middle only when at mos
 
 You cannot name your own label after one of these. A coding label a trace was not asked counts as not asked, not as failed.
 
-Decision-model coding-tool requests use filtered structured states containing user messages, calls, paired results, and orphan results. Each chunk reserves the exact serialized coding question payload from the configured total input cap, then keeps complete call/result records together under the resulting decision state ceiling. Final request fitting cannot drop calls from the middle of a chunk.
+Decision-state coding-tool requests use filtered structured states containing user messages, calls, paired results, and orphan results. Each chunk reserves the exact serialized coding question payload from the configured total input cap, then keeps complete call/result records together under the resulting decision state ceiling. Final request fitting cannot drop calls from the middle of a chunk.
 
 ```bash
 eq insights --from-snapshot claude-traces.json --label sentiment --label user_frustration --coding
@@ -400,7 +400,7 @@ Sending 3 traces (290.5 KB) from sessions.json to models: summary openai/gpt-6-s
 
 The size is the snapshot file on disk, not the amount sent. Summaries receive the [conversation view](#the-conversation-view), cut further as needed so the whole summary prompt fits `trace_input_chars` (500,000 characters by default).
 
-Classification uses the model-specific state and question budget described in [What the classifier reads](#what-the-classifier-reads); a decision model reads structured excerpts rather than the full summary transcript. The embedding model reads the summaries.
+Classification uses the model-specific state and question budget described in [What the classifier reads](#what-the-classifier-reads); a model that gets the decision state reads structured excerpts rather than the full summary transcript. The embedding model reads the summaries.
 
 Known credential patterns are scrubbed locally before rendering, but this does not remove all personal or confidential content. There is no confirmation prompt. Check the models named in that line before you run.
 
@@ -482,7 +482,7 @@ The model-input cap applies separately to the retained session content: a long s
 
 The classifier does not read the summary. `trace_input_chars`, saved in Dashboard Settings and defaulting to 500,000, caps classifier state and the exact serialized question payloads together.
 
-A **decision model** is a classifier served through the router's classify endpoint that reads structured input instead of a transcript. Today that means the `typesafe/jev` models. For those, the state is indexed and structured, and this page calls it the **decision state**; tool calls are grouped with matching results, recorded status and error codes are retained, and text excerpts keep the first and last 100 characters for tool inputs/results, 500 for assistant messages, 1,000 for user messages, and 4,000 for system/developer messages.
+A **decision model** is a model served through the Orq router's classify endpoint: it is never prompted, it is handed the material and one question, and it answers with a probability distribution; see [A decision model as a judge](llm-as-a-jury.md#a-decision-model-as-a-judge). Only the `typesafe/jev` models get the **decision state** today. For those, the state is indexed and structured; tool calls are grouped with matching results, recorded status and error codes are retained, and text excerpts keep the first and last 100 characters for tool inputs/results, 500 for assistant messages, 1,000 for user messages, and 4,000 for system/developer messages.
 
 For the `typesafe/jev` models the decision state is also capped at 112,000 characters; state plus the longest question stays within 128,000 characters and state plus all questions within 256,000 characters. Credentials are scrubbed before excerpting; reasoning and known `<system-reminder>` sections are removed. Inline images show their size when known, and remote media is never fetched.
 

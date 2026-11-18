@@ -286,7 +286,7 @@ The facet and numeric options are explicit OQL constraints. The question supplie
 
 ## Limits and cost
 
-The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. The configured global character cap bounds classifier state plus exact serialized questions. A decision model receives an indexed structured state with paired tool results; for the `typesafe/jev` models it is also subject to a 112,000-character state cap and its 128,000/256,000-character state-plus-question ceilings.
+The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. The configured global character cap bounds classifier state plus exact serialized questions. The `typesafe/jev` models receive the decision state, an indexed structured state with paired tool results, which is also subject to a 112,000-character state cap and its 128,000/256,000-character state-plus-question ceilings.
 
 | Limit | Value |
 |---|---|

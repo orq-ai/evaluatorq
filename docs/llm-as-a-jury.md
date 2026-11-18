@@ -89,7 +89,7 @@ helpfulness = llm_jury(
 
 ## A decision model as a judge
 
-`typesafe/jev-latest` (Jev) is a **decision model**, which this page also calls a classify model: it is never prompted. It is handed the material to judge and one question about it, and answers with a probability distribution instead of prose. On a panel it takes a seat beside prompted LLM judges and casts an ordinary vote.
+A **decision model**, which this page also calls a classify model, is a model served through the Orq router's classify endpoint. `typesafe/jev-latest` (Jev) is one: it is never prompted. It is handed the material to judge and one question about it, and answers with a probability distribution instead of prose. On a panel it takes a seat beside prompted LLM judges and casts an ordinary vote.
 
 See [Classify judges](classify-judges.md) for the task-focused guide to question shapes, state selection, routing, warnings and failure modes.
 
