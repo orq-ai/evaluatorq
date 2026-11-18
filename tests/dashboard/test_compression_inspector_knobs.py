@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
-from evaluatorq.common.model_input import EdgeLimit, JevOptions
+from evaluatorq.common.model_input import EdgeLimit, DecisionOptions
 from evaluatorq.dashboard import compression_inspector, compression_inspector_data as inspector_data
 from evaluatorq.dashboard.compression_inspector_data import CompressionKnobs, KnobError
 from evaluatorq.dashboard.app import build_app
@@ -35,13 +35,13 @@ def test_default_knobs_reproduce_the_whole_readable_view_beside_the_classifier_j
     assert DEFAULTS.tools == 'per_call'
     assert {DEFAULTS.system_chars, DEFAULTS.user_chars, DEFAULTS.assistant_edge} == {-1}
     assert {DEFAULTS.reasoning_chars, DEFAULTS.tool_input_chars, DEFAULTS.tool_max_chars} == {-1}
-    assert DEFAULTS.jev == JevOptions(located_omission=True, field_order=True, drop_empty=True)
+    assert DEFAULTS.decision == DecisionOptions(located_omission=True, field_order=True, drop_empty=True)
 
 
 def test_valid_form_values_round_trip() -> None:
     knobs = CompressionKnobs(
         global_char_cap=40_000,
-        jev=JevOptions(
+        decision=DecisionOptions(
             state_chars=30_000,
             user=EdgeLimit(900, 300),
             tool_result=EdgeLimit(50, 25),
@@ -73,12 +73,12 @@ def test_absent_checkboxes_read_as_unchecked() -> None:
     assert knobs.include == frozenset()
     assert not any(
         (
-            knobs.jev.include_system,
-            knobs.jev.include_developer,
-            knobs.jev.include_user,
-            knobs.jev.include_assistant,
-            knobs.jev.include_tool_calls,
-            knobs.jev.include_tool_results,
+            knobs.decision.include_system,
+            knobs.decision.include_developer,
+            knobs.decision.include_user,
+            knobs.decision.include_assistant,
+            knobs.decision.include_tool_calls,
+            knobs.decision.include_tool_results,
         )
     )
 
@@ -92,14 +92,14 @@ def test_absent_checkboxes_read_as_unchecked() -> None:
         pytest.param('global_char_cap', '0', id='cap-below-one'),
         pytest.param('global_char_cap', '-1', id='cap-cannot-be-whole'),
         pytest.param('global_char_cap', '5000001', id='cap-above-maximum'),
-        pytest.param('jev_state_chars', '0', id='state-limit-below-one'),
+        pytest.param('decision_state_chars', '0', id='state-limit-below-one'),
         pytest.param('view_budget', '-1', id='budget-cannot-be-whole'),
         pytest.param('view_user_chars', '0', id='user-limit-zero'),
         pytest.param('view_user_chars', '-2', id='user-limit-below-whole'),
         pytest.param('view_tool_max_chars', '-2', id='result-limit-below-whole'),
-        pytest.param('jev_user_edge', '0', id='edge-below-one'),
-        pytest.param('jev_user_edge', '1001', id='edge-over-half-the-total'),
-        pytest.param('jev_user_total', '1999', id='total-under-twice-the-edge'),
+        pytest.param('decision_user_edge', '0', id='edge-below-one'),
+        pytest.param('decision_user_edge', '1001', id='edge-over-half-the-total'),
+        pytest.param('decision_user_total', '1999', id='total-under-twice-the-edge'),
         pytest.param('view_tools', 'everything', id='unknown-tool-mode'),
         pytest.param('original_view', 'pdf', id='unknown-original-view'),
         pytest.param('original_view', '', id='blank-original-view'),
@@ -196,7 +196,7 @@ def test_excluding_a_message_kind_removes_it_from_the_readable_view_only(client:
 
     assert response.status_code == 200
     assert 'ANSWER-TEXT' not in _pane(response.text, 'compression-original-title')
-    assert 'ANSWER-TEXT' in _pane(response.text, 'compression-jev-title')
+    assert 'ANSWER-TEXT' in _pane(response.text, 'compression-decision-title')
 
 
 def test_a_user_limit_shortens_a_long_user_message_in_the_readable_view(client: TestClient) -> None:
@@ -215,9 +215,9 @@ def test_a_user_limit_shortens_a_long_user_message_in_the_readable_view(client: 
 def test_a_jev_edge_limit_changes_the_trimmed_user_text(client: TestClient) -> None:
     token = _load(client)
 
-    default = _pane(_preview(client, token).text, 'compression-jev-title')
+    default = _pane(_preview(client, token).text, 'compression-decision-title')
     narrowed = _pane(
-        _preview(client, token, jev=JevOptions(user=EdgeLimit(400, 100))).text, 'compression-jev-title'
+        _preview(client, token, decision=DecisionOptions(user=EdgeLimit(400, 100))).text, 'compression-decision-title'
     )
 
     assert 'P' * 1_000 in default
@@ -445,11 +445,11 @@ def test_coverage_adds_a_header_to_the_readable_text_and_a_context_to_the_jev_st
     off = _preview(client, token, original_view='readable', coverage=False)
 
     assert '[context: includes' in _pane(on.text, 'compression-original-title')
-    assert '&quot;context&quot;' in _pane(on.text, 'compression-jev-title') or '"context"' in _pane(
-        on.text, 'compression-jev-title'
+    assert '&quot;context&quot;' in _pane(on.text, 'compression-decision-title') or '"context"' in _pane(
+        on.text, 'compression-decision-title'
     )
     assert '[context:' not in off.text
-    assert 'context' not in _pane(off.text, 'compression-jev-title')
+    assert 'context' not in _pane(off.text, 'compression-decision-title')
 
 
 def test_unchecking_a_message_kind_changes_the_coverage_in_both_panes(client: TestClient) -> None:
@@ -460,12 +460,12 @@ def test_unchecking_a_message_kind_changes_the_coverage_in_both_panes(client: Te
         token,
         original_view='readable',
         include=WHOLE.include - {'assistant'},
-        jev=replace(DEFAULTS.jev, include_assistant=False),
+        decision=replace(DEFAULTS.decision, include_assistant=False),
     )
 
     original = _pane(response.text, 'compression-original-title')
     assert 'left out: assistant, reasoning' in original
-    assert 'assistant' in _pane(response.text, 'compression-jev-title').split('left_out')[1][:80]
+    assert 'assistant' in _pane(response.text, 'compression-decision-title').split('left_out')[1][:80]
 
 
 def test_the_atif_original_carries_no_coverage_header(client: TestClient) -> None:
@@ -486,14 +486,14 @@ def test_each_readable_style_checkbox_round_trips_and_absence_disables_it(flag: 
     assert getattr(ReadableStyle(), flag) is False
 
 
-@pytest.mark.parametrize('flag', inspector_data.JEV_FORMAT_FLAGS)
+@pytest.mark.parametrize('flag', inspector_data.DECISION_FORMAT_FLAGS)
 def test_each_jev_format_checkbox_round_trips_and_absence_disables_it(flag: str) -> None:
     form = _posted(DEFAULTS)
-    assert getattr(CompressionKnobs.from_form(form).jev, flag) is True
-    del form[f'jev_{flag}']
-    assert getattr(CompressionKnobs.from_form(form).jev, flag) is False
-    assert DEFAULTS.as_form()[f'jev_{flag}'] is True
-    assert getattr(JevOptions(), flag) is False
+    assert getattr(CompressionKnobs.from_form(form).decision, flag) is True
+    del form[f'decision_{flag}']
+    assert getattr(CompressionKnobs.from_form(form).decision, flag) is False
+    assert DEFAULTS.as_form()[f'decision_{flag}'] is True
+    assert getattr(DecisionOptions(), flag) is False
 
 
 def test_preview_route_applies_block_layout_and_degrades_pairing_without_blocks(client: TestClient) -> None:
@@ -526,10 +526,10 @@ def test_preview_route_switches_jev_omission_format_without_changing_count(clien
     for located in (True, False):
         response = _preview(
             client, token, coverage=False,
-            jev=replace(DEFAULTS.jev, include_assistant=False, located_omission=located),
+            decision=replace(DEFAULTS.decision, include_assistant=False, located_omission=located),
         )
         assert response.status_code == 200
-        pane = _pane_text(response, 'compression-jev-title')
+        pane = _pane_text(response, 'compression-decision-title')
         match = re.search(r'<pre>(.*?)</pre>', pane, re.DOTALL)
         assert match is not None
         states.append(json.loads(match.group(1)))

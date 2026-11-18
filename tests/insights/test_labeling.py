@@ -720,9 +720,9 @@ async def test_jev_tool_requests_keep_exact_edges_and_both_input_budgets(
     monkeypatch: pytest.MonkeyPatch, trace_input_chars: int, question_size: int, call_count: int
 ) -> None:
     from evaluatorq.common.model_input import (
-        JEV_STATE_ALL_QUESTIONS_CHARS,
-        JEV_STATE_QUESTION_CHARS,
-        JEV_STATE_CHARS,
+        DECISION_STATE_ALL_QUESTIONS_CHARS,
+        DECISION_STATE_QUESTION_CHARS,
+        DECISION_STATE_CHARS,
         classifier_question_wire_payloads,
         serialized_chars,
         serialized_question_chars,
@@ -782,9 +782,9 @@ async def test_jev_tool_requests_keep_exact_edges_and_both_input_budgets(
         longest_question = max(serialized_chars(item) for item in question_payloads.values())
         question_chars = serialized_question_chars(request.questions)
         assert state_chars + question_chars <= trace_input_chars
-        assert state_chars <= JEV_STATE_CHARS
-        assert state_chars + longest_question <= JEV_STATE_QUESTION_CHARS
-        assert state_chars + question_chars <= JEV_STATE_ALL_QUESTIONS_CHARS
+        assert state_chars <= DECISION_STATE_CHARS
+        assert state_chars + longest_question <= DECISION_STATE_QUESTION_CHARS
+        assert state_chars + question_chars <= DECISION_STATE_ALL_QUESTIONS_CHARS
         states.append(request.state)
 
     entries = [entry for state in states for entry in state['messages']]

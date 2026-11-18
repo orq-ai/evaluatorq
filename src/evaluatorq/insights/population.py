@@ -39,9 +39,9 @@ from loguru import logger
 from evaluatorq.common.model_input import (
     fit_classifier_input,
     has_truncated_source_text,
-    is_jev_model,
     serialized_chars,
     serialized_question_chars,
+    uses_decision_state,
 )
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, to_chat_messages
@@ -93,7 +93,7 @@ def projection_coverage(
     settings = effective_settings()
     cap = trace_input_chars if trace_input_chars is not None else settings.trace_input_chars
     model = classifier_model or role_model('classifier', task='insights.labels')
-    state_format = 'jev' if is_jev_model(model) else 'text'
+    state_format = 'jev' if uses_decision_state(model) else 'text'
     reserve = 'applied' if classifier_questions is not None else 'not_available'
     coverage: dict[str, Any] = {
         'n_traces': len(traces),

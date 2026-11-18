@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, get_args
 from loguru import logger
 
 from evaluatorq.common.model_input import (
-    DEFAULT_JEV_OPTIONS,
+    DEFAULT_DECISION_OPTIONS,
+    DecisionOptions,
     EdgeLimit,
-    JevOptions,
     cap_text,
-    jev_state,
+    decision_state,
     serialized_chars,
     state_omitted_messages,
 )
@@ -54,15 +54,15 @@ ORIGINAL_VIEW_LABELS: dict[OriginalView, str] = {
 ORIGINAL_CHARS = 2_000_000
 SOURCE_BYTES = 5_000_000
 # Posted (total, edge) field names of each Jev edge limit.
-JEV_EDGE_FIELDS: dict[str, tuple[str, str]] = {
-    'assistant': ('jev_assistant_total', 'jev_assistant_edge'),
-    'user': ('jev_user_total', 'jev_user_edge'),
-    'system': ('jev_system_total', 'jev_system_edge'),
-    'tool_input': ('jev_tool_input_total', 'jev_tool_input_edge'),
-    'tool_result': ('jev_tool_result_total', 'jev_tool_result_edge'),
+DECISION_EDGE_FIELDS: dict[str, tuple[str, str]] = {
+    'assistant': ('decision_assistant_total', 'decision_assistant_edge'),
+    'user': ('decision_user_total', 'decision_user_edge'),
+    'system': ('decision_system_total', 'decision_system_edge'),
+    'tool_input': ('decision_tool_input_total', 'decision_tool_input_edge'),
+    'tool_result': ('decision_tool_result_total', 'decision_tool_result_edge'),
 }
-JEV_FLAGS = ('system', 'developer', 'user', 'assistant', 'tool_calls', 'tool_results')
-JEV_FORMAT_FLAGS = ('located_omission', 'field_order', 'drop_empty')
+DECISION_FLAGS = ('system', 'developer', 'user', 'assistant', 'tool_calls', 'tool_results')
+DECISION_FORMAT_FLAGS = ('located_omission', 'field_order', 'drop_empty')
 READABLE_STYLE_FLAGS = (
     'blocks',
     'pair_results',
@@ -96,7 +96,7 @@ class CompressionKnobs:
     """Every compression setting the inspector exposes: the Jev state limits and the readable-view options."""
 
     global_char_cap: int
-    jev: JevOptions = DEFAULT_JEV_OPTIONS
+    decision: DecisionOptions = DEFAULT_DECISION_OPTIONS
     budget: int = 0
     include: frozenset[MessageKind] = WHOLE.include
     system_chars: int = -1
@@ -118,7 +118,7 @@ class CompressionKnobs:
             global_char_cap=global_char_cap,
             budget=global_char_cap,
             coverage=True,
-            jev=replace(DEFAULT_JEV_OPTIONS, **dict.fromkeys(JEV_FORMAT_FLAGS, True)),
+            decision=replace(DEFAULT_DECISION_OPTIONS, **dict.fromkeys(DECISION_FORMAT_FLAGS, True)),
             style=ReadableStyle(**dict.fromkeys(READABLE_STYLE_FLAGS, True)),
         )
 
@@ -126,18 +126,20 @@ class CompressionKnobs:
         """Flatten to the form fields the inspector posts; ``from_form`` reads them back."""
         values: dict[str, int | str | bool] = {
             'global_char_cap': self.global_char_cap,
-            'jev_state_chars': self.jev.state_chars,
+            'decision_state_chars': self.decision.state_chars,
             'view_budget': self.budget,
             'view_tools': self.tools,
             'original_view': self.original_view,
             'wrap': self.wrap,
             'coverage': self.coverage,
         }
-        for attribute, (total_name, edge_name) in JEV_EDGE_FIELDS.items():
-            limit: EdgeLimit = getattr(self.jev, attribute)
+        for attribute, (total_name, edge_name) in DECISION_EDGE_FIELDS.items():
+            limit: EdgeLimit = getattr(self.decision, attribute)
             values[total_name], values[edge_name] = limit.total, limit.edge
-        values.update({f'jev_include_{flag}': getattr(self.jev, f'include_{flag}') for flag in JEV_FLAGS})
-        values.update({f'jev_{flag}': getattr(self.jev, flag) for flag in JEV_FORMAT_FLAGS})
+        values.update({
+            f'decision_include_{flag}': getattr(self.decision, f'include_{flag}') for flag in DECISION_FLAGS
+        })
+        values.update({f'decision_{flag}': getattr(self.decision, flag) for flag in DECISION_FORMAT_FLAGS})
         values.update({f'view_{flag}': getattr(self.style, flag) for flag in READABLE_STYLE_FLAGS})
         values.update({f'view_include_{kind}': kind in self.include for kind in sorted(MESSAGE_KINDS)})
         values.update({name: getattr(self, attribute) for name, attribute in VIEW_CAP_FIELDS.items()})
@@ -146,20 +148,20 @@ class CompressionKnobs:
     @classmethod
     def from_form(cls, form: Mapping[str, Any]) -> CompressionKnobs:
         """Parse and validate the posted fields; every number must be present and in range."""
-        jev = JevOptions(
-            state_chars=_whole(form, 'jev_state_chars', 'Jev state limit'),
+        decision = DecisionOptions(
+            state_chars=_whole(form, 'decision_state_chars', 'Jev state limit'),
             assistant=_edge_limit(form, 'assistant'),
             user=_edge_limit(form, 'user'),
             system=_edge_limit(form, 'system'),
             tool_input=_edge_limit(form, 'tool_input'),
             tool_result=_edge_limit(form, 'tool_result'),
-            include_system=_checked(form, 'jev_include_system'),
-            include_developer=_checked(form, 'jev_include_developer'),
-            include_user=_checked(form, 'jev_include_user'),
-            include_assistant=_checked(form, 'jev_include_assistant'),
-            include_tool_calls=_checked(form, 'jev_include_tool_calls'),
-            include_tool_results=_checked(form, 'jev_include_tool_results'),
-            **{flag: _checked(form, f'jev_{flag}') for flag in JEV_FORMAT_FLAGS},
+            include_system=_checked(form, 'decision_include_system'),
+            include_developer=_checked(form, 'decision_include_developer'),
+            include_user=_checked(form, 'decision_include_user'),
+            include_assistant=_checked(form, 'decision_include_assistant'),
+            include_tool_calls=_checked(form, 'decision_include_tool_calls'),
+            include_tool_results=_checked(form, 'decision_include_tool_results'),
+            **{flag: _checked(form, f'decision_{flag}') for flag in DECISION_FORMAT_FLAGS},
         )
         caps = {
             attribute: _whole(
@@ -173,7 +175,7 @@ class CompressionKnobs:
         }
         return cls(
             global_char_cap=_whole(form, 'global_char_cap', 'Global character cap'),
-            jev=jev,
+            decision=decision,
             budget=_whole(form, 'view_budget', 'Readable view budget'),
             include=frozenset(kind for kind in sorted(MESSAGE_KINDS) if _checked(form, f'view_include_{kind}')),
             tools=_choice(form, 'view_tools', 'Readable view tool display', TOOLS_MODES),
@@ -216,7 +218,7 @@ def _choice(form: Mapping[str, Any], name: str, label: str, options: tuple[_Choi
 
 
 def _edge_limit(form: Mapping[str, Any], attribute: str) -> EdgeLimit:
-    total_name, edge_name = JEV_EDGE_FIELDS[attribute]
+    total_name, edge_name = DECISION_EDGE_FIELDS[attribute]
     label = f'Jev {attribute.replace("_", " ")} limit'
     total = _whole(form, total_name, f'{label} total')
     edge = _whole(form, edge_name, f'{label} edge')
@@ -250,7 +252,7 @@ class CompressionPreview:
         return 100 * (1 - self.readable_chars / self.full_json_chars)
 
     @property
-    def jev_reduction_percent(self) -> float:
+    def decision_reduction_percent(self) -> float:
         """Character reduction against the complete compact trace JSON; negative means expansion."""
         return 100 * (1 - self.compressed_chars / self.full_json_chars)
 
@@ -277,8 +279,8 @@ def preview_document(
     unavailable, raise ``ValueError`` with a fixed message.
     """
     messages = to_chat_messages(document)
-    compressed = jev_state(
-        messages, global_char_cap=knobs.global_char_cap, options=replace(knobs.jev, coverage=knobs.coverage)
+    compressed = decision_state(
+        messages, global_char_cap=knobs.global_char_cap, options=replace(knobs.decision, coverage=knobs.coverage)
     )
     full, _, message_count = full_conversation_view_with_message_spans(document)
 

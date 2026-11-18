@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.model_input import (
-    JEV_STATE_CHARS,
+    DECISION_STATE_CHARS,
+    decision_state,
     effective_trace_input_chars,
     fit_classifier_input,
-    is_jev_model,
-    jev_state,
     source_text_ranges,
+    uses_decision_state,
 )
 from evaluatorq.common.trace_document import to_chat_messages
 from evaluatorq.contracts import tool_result_to_text
@@ -62,14 +62,14 @@ def project_trace(
         raise ValueError(
             f'trace_input_chars must be between {MIN_TRACE_INPUT_CHARS} and {MAX_TRACE_INPUT_CHARS} characters'
         )
-    if is_jev_model(model):
+    if uses_decision_state(model):
         source = to_chat_messages(trace)
         empty_state = {'messages': []}
         state_overhead = len(serialize_projection({'trace_status': trace.status, **empty_state})) - len(
             serialize_projection(empty_state)
         )
-        state_cap = min(JEV_STATE_CHARS, character_cap - state_overhead)
-        payload = {'trace_status': trace.status, **jev_state(source, global_char_cap=state_cap)}
+        state_cap = min(DECISION_STATE_CHARS, character_cap - state_overhead)
+        payload = {'trace_status': trace.status, **decision_state(source, global_char_cap=state_cap)}
         if question_payloads is not None:
             fitted_payload = fit_classifier_input(
                 payload,

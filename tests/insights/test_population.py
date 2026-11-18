@@ -362,9 +362,9 @@ def test_projection_coverage_does_not_mistake_literal_markers_for_truncation(cla
 
 def test_projection_coverage_applies_available_jev_question_reserve() -> None:
     from evaluatorq.common.model_input import (
-        JEV_STATE_ALL_QUESTIONS_CHARS,
-        JEV_STATE_CHARS,
-        JEV_STATE_QUESTION_CHARS,
+        DECISION_STATE_ALL_QUESTIONS_CHARS,
+        DECISION_STATE_CHARS,
+        DECISION_STATE_QUESTION_CHARS,
         fit_classifier_input,
         serialized_chars,
         serialized_question_chars,
@@ -391,9 +391,9 @@ def test_projection_coverage_applies_available_jev_question_reserve() -> None:
     longest_question = max(serialized_chars(question) for question in questions.values())
     assert coverage['classifier_question_reserve'] == 'applied'
     assert coverage['classifier_state_chars'] == state_chars
-    assert state_chars <= JEV_STATE_CHARS
-    assert state_chars + longest_question <= JEV_STATE_QUESTION_CHARS
-    assert state_chars + question_chars <= JEV_STATE_ALL_QUESTIONS_CHARS
+    assert state_chars <= DECISION_STATE_CHARS
+    assert state_chars + longest_question <= DECISION_STATE_QUESTION_CHARS
+    assert state_chars + question_chars <= DECISION_STATE_ALL_QUESTIONS_CHARS
     assert state_chars + question_chars <= 500_000
 @pytest.mark.asyncio
 async def test_live_population_rejects_duplicate_trace_ids_before_analysis(monkeypatch: pytest.MonkeyPatch) -> None:

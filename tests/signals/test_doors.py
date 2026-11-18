@@ -246,7 +246,7 @@ _ORQ_URL = 'https://my.orq.ai/v3/router'
 
 
 @pytest.fixture
-def jev_router(monkeypatch: pytest.MonkeyPatch, fake_catalogue) -> Iterator[list[float]]:
+def decision_router(monkeypatch: pytest.MonkeyPatch, fake_catalogue) -> Iterator[list[float]]:
     """Route the classifier model to /decisions and record backoff waits instead of sleeping."""
     entry = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=True)
     fake_catalogue({'typesafe/jev-latest': entry, 'jev-latest': entry})
@@ -284,7 +284,7 @@ def _one_shell_call() -> Any:
 
 
 @pytest.mark.asyncio
-async def test_transient_errors_are_retried_then_succeed(jev_router: list[float]) -> None:
+async def test_transient_errors_are_retried_then_succeed(decision_router: list[float]) -> None:
     client = _router_client(
         _status_error(RateLimitError, 429), _status_error(InternalServerError, 503), _choice('one_way')
     )
@@ -292,20 +292,20 @@ async def test_transient_errors_are_retried_then_succeed(jev_router: list[float]
     results = await classify_tool_doors(_one_shell_call(), client=client)
 
     assert client.post.await_count == 3
-    assert len(jev_router) == 2
-    assert jev_router[1] > jev_router[0]
+    assert len(decision_router) == 2
+    assert decision_router[1] > decision_router[0]
     assert results['one_way_call_count'].value == 1
     assert results['unknown_call_count'].value == 0
 
 
 @pytest.mark.asyncio
-async def test_exhausted_retries_become_unknown_with_counts_returned(jev_router: list[float]) -> None:
+async def test_exhausted_retries_become_unknown_with_counts_returned(decision_router: list[float]) -> None:
     client = _router_client(*(_status_error(InternalServerError, 500) for _ in range(4)))
 
     results = await classify_tool_doors(_one_shell_call(), client=client)
 
     assert client.post.await_count == 4
-    assert len(jev_router) == 3
+    assert len(decision_router) == 3
     assert {name: r.value for name, r in results.items()} == {
         'one_way_call_count': 0,
         'two_way_call_count': 0,
@@ -315,14 +315,14 @@ async def test_exhausted_retries_become_unknown_with_counts_returned(jev_router:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('first', ['bad_request', 'off_label_reply'])
-async def test_non_transient_error_is_not_retried(jev_router: list[float], first: str) -> None:
+async def test_non_transient_error_is_not_retried(decision_router: list[float], first: str) -> None:
     failure = _status_error(BadRequestError, 400) if first == 'bad_request' else _choice('maybe')
     client = _router_client(failure, _choice('one_way'))
 
     results = await classify_tool_doors(_one_shell_call(), client=client)
 
     assert client.post.await_count == 1
-    assert jev_router == []
+    assert decision_router == []
     assert results['unknown_call_count'].value == 1
 
 

@@ -16,9 +16,9 @@ from evaluatorq.common.messages import MediaContent, iter_content_parts, match_t
 from evaluatorq.common.redact import scrub_known_secrets
 
 CHARS_PER_ESTIMATED_TOKEN = 4
-JEV_STATE_CHARS = 28_000 * CHARS_PER_ESTIMATED_TOKEN
-JEV_STATE_QUESTION_CHARS = 32_000 * CHARS_PER_ESTIMATED_TOKEN
-JEV_STATE_ALL_QUESTIONS_CHARS = 64_000 * CHARS_PER_ESTIMATED_TOKEN
+DECISION_STATE_CHARS = 28_000 * CHARS_PER_ESTIMATED_TOKEN
+DECISION_STATE_QUESTION_CHARS = 32_000 * CHARS_PER_ESTIMATED_TOKEN
+DECISION_STATE_ALL_QUESTIONS_CHARS = 64_000 * CHARS_PER_ESTIMATED_TOKEN
 _REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.DOTALL)
 _REASONING = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 
@@ -229,7 +229,7 @@ def serialized_question_chars(questions: Sequence[Any] | Mapping[str, Any]) -> i
     return serialized_chars(payloads) if payloads else 0
 
 
-def is_jev_model(model: str) -> bool:
+def uses_decision_state(model: str) -> bool:
     """Select only the Jev family for its structured state format."""
     return model.casefold().startswith('typesafe/jev')
 
@@ -279,8 +279,8 @@ class EdgeLimit:
 
 
 @dataclass(frozen=True)
-class JevOptions:
-    """Per-part trimming limits and message-kind switches for ``jev_state``; defaults are the classifier's.
+class DecisionOptions:
+    """Per-part trimming limits and message-kind switches for ``decision_state``; defaults are the classifier's.
 
     `system` also applies to developer messages and `tool_result` to orphan results. Excluding tool calls drops
     their paired results; excluding tool results keeps each call with no results and drops orphan results.
@@ -296,7 +296,7 @@ class JevOptions:
     not plain messages, and a `call_index` of 0 when the message has one call.
     """
 
-    state_chars: int = JEV_STATE_CHARS
+    state_chars: int = DECISION_STATE_CHARS
     assistant: EdgeLimit = EdgeLimit(1000, 500)
     user: EdgeLimit = EdgeLimit(2000, 1000)
     system: EdgeLimit = EdgeLimit(8000, 4000)
@@ -314,17 +314,17 @@ class JevOptions:
     drop_empty: bool = False
 
 
-DEFAULT_JEV_OPTIONS = JevOptions()
+DEFAULT_DECISION_OPTIONS = DecisionOptions()
 
 
 def _edge_phrase(limit: EdgeLimit) -> str:
     return f'whole up to {limit.total} chars, longer keeps {limit.edge} at each end'
 
 
-def jev_coverage(options: JevOptions) -> dict[str, Any]:
+def decision_coverage(options: DecisionOptions) -> dict[str, Any]:
     """Describe what a Jev state built with `options` holds and what it leaves out.
 
-    Reasoning is never part of the state: `jev_state` reads only message content, which renderers strip of reasoning
+    Reasoning is never part of the state: `decision_state` reads only message content, which renderers strip of reasoning
     parts, and never a message's `reasoning_content`.
     """
     switches = (
@@ -363,8 +363,8 @@ def _edge(text: str, limit: EdgeLimit) -> str:
     return edge_text(text, limit.total, limit.edge)
 
 
-def jev_state(
-    messages: list[dict[str, Any]], *, global_char_cap: int, options: JevOptions = DEFAULT_JEV_OPTIONS
+def decision_state(
+    messages: list[dict[str, Any]], *, global_char_cap: int, options: DecisionOptions = DEFAULT_DECISION_OPTIONS
 ) -> dict[str, Any]:
     """Build scrubbed, indexed message entries with each tool call grouped with its results."""
     call_records, orphan_records = pair_tool_call_results(messages)
@@ -443,7 +443,7 @@ def jev_state(
             entry['text'] = _edge(entry['text'], options.tool_result)
     omitted_before = len(messages) - len(_represented_indexes(bounded.get('messages', [])))
     cap = min(global_char_cap, options.state_chars)
-    metadata = {'context': jev_coverage(options)} if options.coverage else None
+    metadata = {'context': decision_coverage(options)} if options.coverage else None
     if options.located_omission:
         state = _located_state(
             bounded.get('messages', []),
@@ -562,41 +562,41 @@ def _with_omission_markers(kept: list[dict[str, Any]], total: int) -> list[dict[
     return located
 
 
-def jev_text_state(text: str, *, global_char_cap: int) -> dict[str, Any]:
+def decision_text_state(text: str, *, global_char_cap: int) -> dict[str, Any]:
     """Encode an already-scoped text view as a Jev message without replacing its content."""
     entry = {'index': 0, 'role': 'user', 'type': 'message', 'text': clean_model_text(text)}
     return _cap_messages([entry], global_char_cap)
 
 
-def jev_state_char_limit(
-    questions: Sequence[Any] | Mapping[str, Any], *, global_char_cap: int = JEV_STATE_CHARS
+def decision_state_char_limit(
+    questions: Sequence[Any] | Mapping[str, Any], *, global_char_cap: int = DECISION_STATE_CHARS
 ) -> int:
     """Return the Jev state ceiling after global and model-specific question reserves."""
     question_payloads = _question_payloads(questions)
     values = list(question_payloads.values()) if isinstance(question_payloads, Mapping) else question_payloads
     longest = max((serialized_chars(question) for question in values), default=0)
     all_question_chars = serialized_chars(question_payloads) if values else 0
-    if all_question_chars > JEV_STATE_ALL_QUESTIONS_CHARS:
+    if all_question_chars > DECISION_STATE_ALL_QUESTIONS_CHARS:
         raise ValueError('classification questions alone exceed the 256000-character limit')
     limit = min(
-        JEV_STATE_CHARS,
+        DECISION_STATE_CHARS,
         global_char_cap - all_question_chars,
-        JEV_STATE_QUESTION_CHARS - longest,
-        JEV_STATE_ALL_QUESTIONS_CHARS - all_question_chars,
+        DECISION_STATE_QUESTION_CHARS - longest,
+        DECISION_STATE_ALL_QUESTIONS_CHARS - all_question_chars,
     )
     if limit <= 0:
         raise ValueError('classification questions leave no Jev state budget under the configured input cap')
     return limit
 
 
-def fit_jev_state(
+def fit_decision_state(
     state: dict[str, Any],
     questions: Sequence[Any] | Mapping[str, Any],
     *,
-    global_char_cap: int = JEV_STATE_CHARS,
+    global_char_cap: int = DECISION_STATE_CHARS,
 ) -> dict[str, Any]:
     """Fit the complete Jev state object to the global and question-aware ceilings."""
-    limit = jev_state_char_limit(questions, global_char_cap=global_char_cap)
+    limit = decision_state_char_limit(questions, global_char_cap=global_char_cap)
     original = state.get('messages', [])
     omitted_before = omission_count(state.get('omission'))
     metadata = {key: value for key, value in state.items() if key not in {'messages', 'omission'}}
@@ -617,10 +617,10 @@ def fit_classifier_input(
     global_char_cap: int,
 ) -> str | dict[str, Any]:
     """Fit state and selected question payloads within the configured model-input cap."""
-    if is_jev_model(model):
+    if uses_decision_state(model):
         if not isinstance(state, dict):
             raise TypeError('Jev classifier state must be an object')
-        return fit_jev_state(state, questions, global_char_cap=global_char_cap)
+        return fit_decision_state(state, questions, global_char_cap=global_char_cap)
     question_payloads = _question_payloads(questions)
     question_chars = serialized_chars(question_payloads) if question_payloads else 0
 

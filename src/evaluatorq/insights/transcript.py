@@ -30,15 +30,15 @@ from evaluatorq.common.messages import coerce_content_text, contains_media_conte
 from evaluatorq.common.model_input import (
     cap_text,
     clean_model_text,
+    decision_state,
+    decision_state_char_limit,
     effective_trace_input_chars,
-    is_jev_model,
-    jev_state,
-    jev_state_char_limit,
     message_lines,
     pair_tool_call_results,
     serialized_chars,
     serialized_question_chars,
     tool_result_metadata,
+    uses_decision_state,
 )
 from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.trace_document import TraceDocument, to_chat_messages
@@ -942,16 +942,16 @@ def tool_activity_chunks(
     if request_budget < 1:
         raise ValueError('trace input character cap must be positive')
     questions = question_payloads or []
-    jev = is_jev_model(model) if model is not None else False
+    decision = uses_decision_state(model) if model is not None else False
     messages = to_chat_messages(trace)
-    if jev:
-        units = _jev_activity_units(messages)
-        state_budget = jev_state_char_limit(questions, global_char_cap=request_budget)
+    if decision:
+        units = _decision_activity_units(messages)
+        state_budget = decision_state_char_limit(questions, global_char_cap=request_budget)
         if not units:
             if len('No tool calls.') > state_budget:
                 raise ValueError('classifier questions leave no Jev state budget for tool activity')
             return ['No tool calls.']
-        return _jev_tool_activity_chunks(messages, state_budget=state_budget, units=units)
+        return _decision_tool_activity_chunks(messages, state_budget=state_budget, units=units)
 
     chunk_budget = request_budget - serialized_question_chars(questions)
     if chunk_budget <= 0:
@@ -987,31 +987,31 @@ def tool_activity_chunks(
     return _chunk(lines, chunk_budget)
 
 
-def _jev_tool_activity_chunks(
+def _decision_tool_activity_chunks(
     messages: list[dict[str, Any]], *, state_budget: int, units: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """Split paired tool activity into Jev states without dropping complete call records."""
     if not units:
         return []
     context = [message for message in messages if message.get('role') == 'user']
-    groups = _jev_group_activity_units(context, units, state_budget)
+    groups = _decision_group_activity_units(context, units, state_budget)
     chunks = []
     for number, group in enumerate(groups, start=1):
-        state = _jev_activity_state(context, group, state_budget, part=number, total=len(groups))
+        state = _decision_activity_state(context, group, state_budget, part=number, total=len(groups))
         if state is None:
             raise ValueError('Jev tool-activity chunk exceeded its reserved classifier state budget')
         chunks.append(state)
     return chunks
 
 
-def _jev_activity_units(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _decision_activity_units(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     call_records, orphan_records = pair_tool_call_results(messages)
     units = [
         {
             'kind': 'call',
             'index': record['index'],
             'order': record['call_index'],
-            'record': {**record, 'call': _jev_activity_call(record['call'])},
+            'record': {**record, 'call': _decision_activity_call(record['call'])},
         }
         for record in call_records
     ]
@@ -1020,28 +1020,28 @@ def _jev_activity_units(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return units
 
 
-def _jev_group_activity_units(
+def _decision_group_activity_units(
     context: list[dict[str, Any]], units: list[dict[str, Any]], state_budget: int
 ) -> list[list[dict[str, Any]]]:
     groups: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
     for unit in units:
         candidate = [*current, unit]
-        if _jev_activity_state(context, candidate, state_budget, part=999_999_999, total=999_999_999) is not None:
+        if _decision_activity_state(context, candidate, state_budget, part=999_999_999, total=999_999_999) is not None:
             current = candidate
             continue
         if not current:
             raise ValueError('one Jev tool-activity record exceeds the reserved classifier state budget')
         groups.append(current)
         current = [unit]
-        if _jev_activity_state(context, current, state_budget, part=999_999_999, total=999_999_999) is None:
+        if _decision_activity_state(context, current, state_budget, part=999_999_999, total=999_999_999) is None:
             raise ValueError('one Jev tool-activity record exceeds the reserved classifier state budget')
     if current:
         groups.append(current)
     return groups
 
 
-def _jev_activity_call(call: dict[str, Any]) -> dict[str, Any]:
+def _decision_activity_call(call: dict[str, Any]) -> dict[str, Any]:
     """Keep the coding command itself as the bounded input for shell tools."""
     if _call_name(call) not in SHELL_TOOLS:
         return call
@@ -1052,7 +1052,7 @@ def _jev_activity_call(call: dict[str, Any]) -> dict[str, Any]:
     return {**call, 'arguments': _shell_command(arguments)}
 
 
-def _jev_activity_source(
+def _decision_activity_source(
     context: list[dict[str, Any]], units: list[dict[str, Any]]
 ) -> tuple[
     list[dict[str, Any]],
@@ -1106,7 +1106,7 @@ def _jev_activity_source(
     return source, call_metadata, result_metadata, expected_calls, expected_results
 
 
-def _annotate_jev_activity_state(
+def _annotate_decision_activity_state(
     state: dict[str, Any],
     call_metadata: dict[tuple[int, int], dict[str, Any]],
     result_metadata: dict[int, dict[str, Any]],
@@ -1142,7 +1142,7 @@ def _clean_result_codes(result: dict[str, Any]) -> None:
             result[key] = clean_model_text(str(result[key]))
 
 
-def _jev_activity_state(
+def _decision_activity_state(
     context: list[dict[str, Any]],
     units: list[dict[str, Any]],
     state_budget: int,
@@ -1150,10 +1150,10 @@ def _jev_activity_state(
     part: int,
     total: int,
 ) -> dict[str, Any] | None:
-    source, call_metadata, result_metadata, expected_calls, expected_results = _jev_activity_source(context, units)
-    state = jev_state(source, global_char_cap=state_budget)
+    source, call_metadata, result_metadata, expected_calls, expected_results = _decision_activity_source(context, units)
+    state = decision_state(source, global_char_cap=state_budget)
     state['activity_chunk'] = {'part': part, 'total': total}
-    visible_calls, visible_results = _annotate_jev_activity_state(state, call_metadata, result_metadata)
+    visible_calls, visible_results = _annotate_decision_activity_state(state, call_metadata, result_metadata)
     if visible_calls != expected_calls or visible_results != expected_results:
         return None
     return state if serialized_chars(state) <= state_budget else None
