@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -16,14 +17,15 @@ from evaluatorq.common.messages import MediaContent, iter_content_parts, match_t
 from evaluatorq.common.redact import scrub_known_secrets
 
 CHARS_PER_ESTIMATED_TOKEN = 4
-# Jev states are JSON with tool output, which tokenizes denser than prose. On 98 Claude Code
-# sessions the decider-4b (Qwen3.5) tokenizer measured 3.1 characters per token pooled, 3.0
-# median near the state cap and 2.75 at the lowest (RES-1882). 3 is a typical figure, not a
-# bound: at 2.75 a full state is about 30,500 tokens.
-JEV_CHARS_PER_TOKEN = 3
-JEV_STATE_CHARS = 28_000 * JEV_CHARS_PER_TOKEN
-JEV_STATE_QUESTION_CHARS = 32_000 * JEV_CHARS_PER_TOKEN
-JEV_STATE_ALL_QUESTIONS_CHARS = 64_000 * JEV_CHARS_PER_TOKEN
+# The decision-state ceilings are the input limits of the ``typesafe/jev`` models, the only models that take a
+# decision state today (`uses_decision_state`). A second decision model needs its own limits, not these.
+# A decision state is JSON with tool output, which tokenizes denser than prose. On 98 Claude Code sessions the
+# decider-4b (Qwen3.5) tokenizer measured 3.1 characters per token pooled, 3.0 median near the state cap and 2.75 at
+# the lowest (RES-1882). 3 is a typical figure, not a bound: at 2.75 a full state is about 30,500 tokens.
+DECISION_STATE_CHARS_PER_TOKEN = 3
+DECISION_STATE_CHARS = 28_000 * DECISION_STATE_CHARS_PER_TOKEN
+DECISION_STATE_QUESTION_CHARS = 32_000 * DECISION_STATE_CHARS_PER_TOKEN
+DECISION_STATE_ALL_QUESTIONS_CHARS = 64_000 * DECISION_STATE_CHARS_PER_TOKEN
 _REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.DOTALL)
 _REASONING = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 
@@ -234,14 +236,14 @@ def serialized_question_chars(questions: Sequence[Any] | Mapping[str, Any]) -> i
     return serialized_chars(payloads) if payloads else 0
 
 
-def is_jev_model(model: str) -> bool:
+def uses_decision_state(model: str) -> bool:
     """Select only the Jev family for its structured state format."""
     return model.casefold().startswith('typesafe/jev')
 
 
 def chars_per_token(model: str) -> int:
-    """Characters per estimated token for `model`: denser for Jev's JSON state than for prose."""
-    return JEV_CHARS_PER_TOKEN if is_jev_model(model) else CHARS_PER_ESTIMATED_TOKEN
+    """Characters per estimated token for `model`: denser for a decision state than for prose."""
+    return DECISION_STATE_CHARS_PER_TOKEN if uses_decision_state(model) else CHARS_PER_ESTIMATED_TOKEN
 
 
 def effective_trace_input_chars() -> int:
@@ -289,8 +291,8 @@ class EdgeLimit:
 
 
 @dataclass(frozen=True)
-class JevOptions:
-    """Per-part trimming limits and message-kind switches for ``jev_state``; defaults are the classifier's.
+class DecisionOptions:
+    """Per-part trimming limits and message-kind switches for ``decision_state``; defaults are the classifier's.
 
     `system` also applies to developer messages and `tool_result` to orphan results. Excluding tool calls drops
     their paired results; excluding tool results keeps each call with no results and drops orphan results.
@@ -306,7 +308,7 @@ class JevOptions:
     not plain messages, and a `call_index` of 0 when the message has one call.
     """
 
-    state_chars: int = JEV_STATE_CHARS
+    state_chars: int = DECISION_STATE_CHARS
     assistant: EdgeLimit = EdgeLimit(1000, 500)
     user: EdgeLimit = EdgeLimit(2000, 1000)
     system: EdgeLimit = EdgeLimit(8000, 4000)
@@ -324,17 +326,24 @@ class JevOptions:
     drop_empty: bool = False
 
 
-DEFAULT_JEV_OPTIONS = JevOptions()
+DEFAULT_DECISION_OPTIONS = DecisionOptions()
+
+DECISION_STATE_FORMAT = 'decision'
+
+
+def is_decision_state_format(value: object) -> bool:
+    """Whether a saved ``classifier_state_format`` names the decision state; reports saved before the rename say ``jev``."""
+    return value in (DECISION_STATE_FORMAT, 'jev')
 
 
 def _edge_phrase(limit: EdgeLimit) -> str:
     return f'whole up to {limit.total} chars, longer keeps {limit.edge} at each end'
 
 
-def jev_coverage(options: JevOptions) -> dict[str, Any]:
-    """Describe what a Jev state built with `options` holds and what it leaves out.
+def decision_coverage(options: DecisionOptions) -> dict[str, Any]:
+    """Describe what a decision state built with `options` holds and what it leaves out.
 
-    Reasoning is never part of the state: `jev_state` reads only message content, which renderers strip of reasoning
+    Reasoning is never part of the state: `decision_state` reads only message content, which renderers strip of reasoning
     parts, and never a message's `reasoning_content`.
     """
     switches = (
@@ -373,8 +382,8 @@ def _edge(text: str, limit: EdgeLimit) -> str:
     return edge_text(text, limit.total, limit.edge)
 
 
-def jev_state(
-    messages: list[dict[str, Any]], *, global_char_cap: int, options: JevOptions = DEFAULT_JEV_OPTIONS
+def decision_state(
+    messages: list[dict[str, Any]], *, global_char_cap: int, options: DecisionOptions = DEFAULT_DECISION_OPTIONS
 ) -> dict[str, Any]:
     """Build scrubbed, indexed message entries with each tool call grouped with its results."""
     call_records, orphan_records = pair_tool_call_results(messages)
@@ -453,7 +462,7 @@ def jev_state(
             entry['text'] = _edge(entry['text'], options.tool_result)
     omitted_before = len(messages) - len(_represented_indexes(bounded.get('messages', [])))
     cap = min(global_char_cap, options.state_chars)
-    metadata = {'context': jev_coverage(options)} if options.coverage else None
+    metadata = {'context': decision_coverage(options)} if options.coverage else None
     if options.located_omission:
         state = _located_state(
             bounded.get('messages', []),
@@ -521,7 +530,7 @@ def _located_state(
     """Fit entries and located markers together without overshooting the available entry budget."""
     best = {**(metadata or {}), 'messages': _with_omission_markers([], total)}
     if serialized_chars(best) > cap:
-        raise ValueError('model input character cap cannot fit Jev state metadata and its omission marker')
+        raise ValueError('model input character cap cannot fit decision state metadata and its omission marker')
     low, high = 1, cap
     while low <= high:
         entry_cap = (low + high) // 2
@@ -572,41 +581,43 @@ def _with_omission_markers(kept: list[dict[str, Any]], total: int) -> list[dict[
     return located
 
 
-def jev_text_state(text: str, *, global_char_cap: int) -> dict[str, Any]:
-    """Encode an already-scoped text view as a Jev message without replacing its content."""
+def decision_text_state(text: str, *, global_char_cap: int) -> dict[str, Any]:
+    """Encode an already-scoped text view as a decision-state message without replacing its content."""
     entry = {'index': 0, 'role': 'user', 'type': 'message', 'text': clean_model_text(text)}
     return _cap_messages([entry], global_char_cap)
 
 
-def jev_state_char_limit(
-    questions: Sequence[Any] | Mapping[str, Any], *, global_char_cap: int = JEV_STATE_CHARS
+def decision_state_char_limit(
+    questions: Sequence[Any] | Mapping[str, Any], *, global_char_cap: int = DECISION_STATE_CHARS
 ) -> int:
-    """Return the Jev state ceiling after global and model-specific question reserves."""
+    """Return the decision state ceiling after global and model-specific question reserves."""
     question_payloads = _question_payloads(questions)
     values = list(question_payloads.values()) if isinstance(question_payloads, Mapping) else question_payloads
     longest = max((serialized_chars(question) for question in values), default=0)
     all_question_chars = serialized_chars(question_payloads) if values else 0
-    if all_question_chars > JEV_STATE_ALL_QUESTIONS_CHARS:
-        raise ValueError(f'classification questions alone exceed the {JEV_STATE_ALL_QUESTIONS_CHARS}-character limit')
+    if all_question_chars > DECISION_STATE_ALL_QUESTIONS_CHARS:
+        raise ValueError(
+            f'classification questions alone exceed the {DECISION_STATE_ALL_QUESTIONS_CHARS}-character limit'
+        )
     limit = min(
-        JEV_STATE_CHARS,
+        DECISION_STATE_CHARS,
         global_char_cap - all_question_chars,
-        JEV_STATE_QUESTION_CHARS - longest,
-        JEV_STATE_ALL_QUESTIONS_CHARS - all_question_chars,
+        DECISION_STATE_QUESTION_CHARS - longest,
+        DECISION_STATE_ALL_QUESTIONS_CHARS - all_question_chars,
     )
     if limit <= 0:
-        raise ValueError('classification questions leave no Jev state budget under the configured input cap')
+        raise ValueError('classification questions leave no decision state budget under the configured input cap')
     return limit
 
 
-def fit_jev_state(
+def fit_decision_state(
     state: dict[str, Any],
     questions: Sequence[Any] | Mapping[str, Any],
     *,
-    global_char_cap: int = JEV_STATE_CHARS,
+    global_char_cap: int = DECISION_STATE_CHARS,
 ) -> dict[str, Any]:
-    """Fit the complete Jev state object to the global and question-aware ceilings."""
-    limit = jev_state_char_limit(questions, global_char_cap=global_char_cap)
+    """Fit the complete decision state object to the global and question-aware ceilings."""
+    limit = decision_state_char_limit(questions, global_char_cap=global_char_cap)
     original = state.get('messages', [])
     omitted_before = omission_count(state.get('omission'))
     metadata = {key: value for key, value in state.items() if key not in {'messages', 'omission'}}
@@ -627,10 +638,10 @@ def fit_classifier_input(
     global_char_cap: int,
 ) -> str | dict[str, Any]:
     """Fit state and selected question payloads within the configured model-input cap."""
-    if is_jev_model(model):
+    if uses_decision_state(model):
         if not isinstance(state, dict):
-            raise TypeError('Jev classifier state must be an object')
-        return fit_jev_state(state, questions, global_char_cap=global_char_cap)
+            raise TypeError('decision state must be an object')
+        return fit_decision_state(state, questions, global_char_cap=global_char_cap)
     question_payloads = _question_payloads(questions)
     question_chars = serialized_chars(question_payloads) if question_payloads else 0
 
@@ -659,7 +670,12 @@ def _fit_conversation_payload(state: dict[str, Any], limit: int) -> dict[str, An
     best: dict[str, Any] | None = None
     while low <= high:
         text_limit = (low + high) // 2
-        candidate = {**state, 'conversation': cap_text(conversation, text_limit)[0]}
+        capped = _cut_text(conversation, text_limit)
+        if capped is None:
+            # Too small to hold the marker; only a larger cap can work.
+            low = text_limit + 1
+            continue
+        candidate = {**state, 'conversation': capped}
         if serialized_chars(candidate) <= limit:
             best = candidate
             low = text_limit + 1
@@ -808,17 +824,37 @@ def _cap_messages(
 
     fill_unused_budget()
 
-    omitted = omitted_before + len(source_indexes) - selection.selected_unique
-    bounded = _state_payload(selection.left + selection.right, omitted, fixed)
+    kept = _whole_turns(selection.left + selection.right, entries)
+    kept_unique = len(_represented_indexes(kept))
+    omitted = omitted_before + len(source_indexes) - kept_unique
+    bounded = _state_payload(kept, omitted, fixed)
     if serialized_chars(bounded) > cap:
-        omitted += selection.selected_unique
+        omitted += kept_unique
         bounded = _state_payload([], omitted, fixed)
         if serialized_chars(bounded) > cap:
-            raise ValueError('model input character cap cannot fit Jev state metadata and its omission marker')
+            raise ValueError('model input character cap cannot fit decision state metadata and its omission marker')
     return bounded
 
 
+def _whole_turns(kept: list[dict[str, Any]], entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop the kept entries of a source message that lost one of its entries.
+
+    An assistant message with tool calls becomes a `message` entry and one
+    `tool_call` entry per call, all under the message's index. The omission
+    count is by index, so keeping the text while dropping a call would show a
+    turn with no call and count nothing as left out.
+    """
+    total = Counter(entry.get('index') for entry in entries)
+    present = Counter(entry.get('index') for entry in kept)
+    return [entry for entry in kept if present[entry.get('index')] == total[entry.get('index')]]
+
+
 def _fit_entry(entry: dict[str, Any], char_budget: int) -> dict[str, Any] | None:
+    """The entry with its texts cut to the largest cap that fits `char_budget`, or `None` when no cap does.
+
+    `None` means the entry is dropped. `_whole_turns` then drops the other
+    entries of the same source message, so the message is counted as left out.
+    """
     if char_budget < 1:
         return None
     low, high = 0, char_budget
@@ -826,7 +862,10 @@ def _fit_entry(entry: dict[str, Any], char_budget: int) -> dict[str, Any] | None
     while low <= high:
         text_cap = (low + high) // 2
         candidate = _entry_with_text_cap(entry, text_cap)
-        if serialized_chars(candidate) <= char_budget:
+        if candidate is None:
+            # Too small to hold a marker; only a larger cap can work.
+            low = text_cap + 1
+        elif serialized_chars(candidate) <= char_budget:
             best = candidate
             low = text_cap + 1
         else:
@@ -834,26 +873,41 @@ def _fit_entry(entry: dict[str, Any], char_budget: int) -> dict[str, Any] | None
     return best
 
 
-def _entry_with_text_cap(entry: dict[str, Any], limit: int) -> dict[str, Any]:
+def _cut_text(text: str, limit: int) -> str | None:
+    """`text` within `limit`, cut with its omission marker. `None` when `limit` cannot hold that marker.
+
+    `cap_text` owns the marker and decides whether it fits; this only turns its
+    refusal into a value, so a caller searching for a cap can try a larger one.
+    """
+    if len(text) <= limit:
+        return text
+    try:
+        return cap_text(text, limit)[0]
+    except ValueError:
+        return None
+
+
+def _entry_with_text_cap(entry: dict[str, Any], limit: int) -> dict[str, Any] | None:
+    """The entry with every text cut to `limit`. `None` when a text that must be cut cannot hold its marker."""
     bounded = dict(entry)
-    marker_length = len('[... 0 chars left out ...]')
-    if isinstance(bounded.get('text'), str):
-        bounded['text'] = cap_text(bounded['text'], limit)[0] if limit >= marker_length else ''
-    if isinstance(bounded.get('input'), str):
-        bounded['input'] = cap_text(bounded['input'], limit)[0] if limit >= marker_length else ''
+    for key in ('text', 'input'):
+        if isinstance(bounded.get(key), str):
+            cut = _cut_text(bounded[key], limit)
+            if cut is None:
+                return None
+            bounded[key] = cut
     results = bounded.get('results')
     if isinstance(results, list):
-        bounded['results'] = [
-            {
-                **result,
-                'text': cap_text(result['text'], limit)[0]
-                if isinstance(result, dict) and isinstance(result.get('text'), str) and limit >= marker_length
-                else '',
-            }
-            if isinstance(result, dict)
-            else result
-            for result in results
-        ]
+        cut_results: list[Any] = []
+        for result in results:
+            if not isinstance(result, dict):
+                cut_results.append(result)
+                continue
+            cut = _cut_text(result['text'], limit) if isinstance(result.get('text'), str) else ''
+            if cut is None:
+                return None
+            cut_results.append({**result, 'text': cut})
+        bounded['results'] = cut_results
     return bounded
 
 
@@ -871,7 +925,7 @@ def _represented_indexes(entries: list[dict[str, Any]]) -> set[int]:
 
 
 def state_omitted_messages(state: Mapping[str, Any]) -> int:
-    """Count the messages a Jev state leaves out, from its omission string or from its in-place `omission` entries."""
+    """Count the messages a decision state leaves out, from its omission string or from its in-place `omission` entries."""
     placed = sum(
         entry.get('messages_left_out', 0)
         for entry in state.get('messages', [])
@@ -881,7 +935,7 @@ def state_omitted_messages(state: Mapping[str, Any]) -> int:
 
 
 def omission_count(marker: Any) -> int:
-    """Parse the omitted-message count from a Jev omission marker string."""
+    """Parse the omitted-message count from a decision-state omission marker string."""
     if not isinstance(marker, str):
         return 0
     match = re.fullmatch(r'\[\.\.\. (\d+) messages left out \.\.\.\]', marker)
@@ -982,3 +1036,27 @@ def tool_result_metadata(message: dict[str, Any]) -> tuple[Any, Any, Any]:
         if error_code is None:
             error_code = source.get('error_code')
     return status, exit_code, error_code
+
+
+# Names from before "Jev" was renamed to "decision": each still resolves, with a DeprecationWarning.
+_RENAMED = {
+    'JEV_STATE_CHARS': 'DECISION_STATE_CHARS',
+    'JEV_STATE_QUESTION_CHARS': 'DECISION_STATE_QUESTION_CHARS',
+    'JEV_STATE_ALL_QUESTIONS_CHARS': 'DECISION_STATE_ALL_QUESTIONS_CHARS',
+    'DEFAULT_JEV_OPTIONS': 'DEFAULT_DECISION_OPTIONS',
+    'JevOptions': 'DecisionOptions',
+    'is_jev_model': 'uses_decision_state',
+    'jev_coverage': 'decision_coverage',
+    'jev_state': 'decision_state',
+    'jev_text_state': 'decision_text_state',
+    'jev_state_char_limit': 'decision_state_char_limit',
+    'fit_jev_state': 'fit_decision_state',
+}
+
+
+def __getattr__(name: str) -> Any:
+    new_name = _RENAMED.get(name)
+    if new_name is None:
+        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+    warnings.warn(f'{name} is deprecated; use {new_name}.', DeprecationWarning, stacklevel=2)
+    return globals()[new_name]

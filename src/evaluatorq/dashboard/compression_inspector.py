@@ -1,4 +1,4 @@
-"""Local-only Settings inspector for readable traces and their Jev state."""
+"""Local-only Settings inspector for readable traces and their decision state."""
 
 from __future__ import annotations
 
@@ -16,7 +16,11 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import Response
 from starlette.routing import Route
 
-from evaluatorq.common.model_input import JEV_STATE_ALL_QUESTIONS_CHARS, JEV_STATE_CHARS, JEV_STATE_QUESTION_CHARS
+from evaluatorq.common.model_input import (
+    DECISION_STATE_ALL_QUESTIONS_CHARS,
+    DECISION_STATE_CHARS,
+    DECISION_STATE_QUESTION_CHARS,
+)
 from evaluatorq.dashboard.compression_inspector_data import (
     ORIGINAL_VIEW_LABELS,
     CompressionKnobs,
@@ -145,21 +149,21 @@ def _output_html(*, preview: CompressionPreview | None = None, notice: str | Non
         f'<div><dt>Readable view characters</dt><dd>{preview.readable_chars:,}</dd></div>'
         f'<div><dt>Plaintext reduction vs JSON</dt><dd>{preview.readable_reduction_percent:.1f}%</dd></div>'
         f'<div><dt>Source messages</dt><dd>{preview.message_count:,}</dd></div>'
-        f'<div><dt>Serialized Jev state characters</dt><dd>{preview.compressed_chars:,}</dd></div>'
-        f'<div><dt>Jev reduction vs JSON</dt><dd>{preview.jev_reduction_percent:.1f}%</dd></div>'
-        f'<div><dt>Messages omitted from Jev state</dt><dd>{preview.omitted_messages:,}</dd></div>'
+        f'<div><dt>Serialized decision state characters</dt><dd>{preview.compressed_chars:,}</dd></div>'
+        f'<div><dt>Decision state reduction vs JSON</dt><dd>{preview.decision_reduction_percent:.1f}%</dd></div>'
+        f'<div><dt>Messages omitted from the decision state</dt><dd>{preview.omitted_messages:,}</dd></div>'
         f'<div><dt>Global character cap</dt><dd>{preview.global_cap:,}</dd></div>'
         '</dl>'
         '<p class="compression-count-note">Reduction compares character counts with the full uncapped trace document '
-        'as compact JSON, including metadata and null fields. Display whitespace is excluded for Jev; '
+        'as compact JSON, including metadata and null fields. Display whitespace is excluded for the decision state; '
         'negative reduction means a larger output. These are not token savings.</p>'
         '<div class="compression-panels">'
         '<section class="compression-panel" aria-labelledby="compression-original-title">'
         f'<h3 id="compression-original-title">Original, {label}</h3>'
         f'{original_html}{note_html}'
         '</section>'
-        '<section class="compression-panel" aria-labelledby="compression-jev-title">'
-        '<h3 id="compression-jev-title">Output (Jev state)</h3>'
+        '<section class="compression-panel" aria-labelledby="compression-decision-title">'
+        '<h3 id="compression-decision-title">Output (decision state)</h3>'
         f'<pre>{html.escape(str(state), quote=True)}</pre>'
         '<p class="compression-count-note">The state character count uses compact serialization; this readable display adds formatting whitespace.</p>'
         '</section>'
@@ -173,7 +177,7 @@ def _preview_html(loaded: _Loaded) -> str:
         '<section class="compression-preview" aria-labelledby="compression-preview-title">'
         '<div class="compression-preview-heading"><div>'
         '<h2 id="compression-preview-title">Preview</h2>'
-        '<p>The original and its Jev state, with known sensitive values scrubbed; the canonical ATIF source is unchanged.</p>'
+        '<p>The original and its decision state, with known sensitive values scrubbed; the canonical ATIF source is unchanged.</p>'
         '</div><p class="compression-question-note">No question included.</p></div>'
         f'{knobs_form_html(loaded.knobs, defaults, loaded.token, has_source=loaded.has_source)}'
         f'{_output_html(preview=loaded.preview, wrapped=loaded.knobs.wrap)}'
@@ -244,7 +248,7 @@ def _body_html(
         '<div class="dash-wrap compression-inspector">'
         '<header class="compression-intro">'
         '<h2>Inspect trace compression</h2>'
-        '<p>Compare the readable conversation with the structured Jev state '
+        '<p>Compare the readable conversation with the structured decision state '
         'without sending a question or calling a model.</p>'
         '</header>'
         f'{notice_html}'
@@ -280,8 +284,8 @@ def _body_html(
         '<h3 id="compression-limits-title">Character limits</h3>'
         f'<p>Global cap: <strong>{effective_settings().trace_input_chars:,}</strong> '
         'characters (500,000 by default). '
-        f'Jev state is capped at {JEV_STATE_CHARS:,} characters; question-aware ceilings are '
-        f'{JEV_STATE_QUESTION_CHARS:,} or {JEV_STATE_ALL_QUESTIONS_CHARS:,} characters. '
+        f'The decision state is capped at {DECISION_STATE_CHARS:,} characters; question-aware ceilings are '
+        f'{DECISION_STATE_QUESTION_CHARS:,} or {DECISION_STATE_ALL_QUESTIONS_CHARS:,} characters. '
         'This preview includes no question, so its state count is not fitted to a question payload.</p>'
         '</section>'
         f'{preview_html}'

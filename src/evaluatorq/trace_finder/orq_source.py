@@ -1136,7 +1136,7 @@ def build_oql(
 ) -> str:
     """Compile selected categorical and numeric filters into deterministic OQL."""
 
-    # A bare model call (jev, the compiler, any router call) is a generate_content trace, so the base filter
+    # A bare model call (the decision model, the compiler, any router call) is a generate_content trace, so the base filter
     # would hide every trace of the model or provider the user just picked; drop it for those.
     clauses = [] if facets.model or facets.provider else [BASE_FILTER]
     if facets.project_id:

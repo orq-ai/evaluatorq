@@ -68,6 +68,10 @@ class AsyncAnthropicVertex(FakeClient):
     pass
 
 
+class AsyncAnthropicFoundry(FakeClient):
+    pass
+
+
 def text(body: str, **kwargs: Any) -> Any:
     from anthropic.types import TextBlock
 
@@ -375,8 +379,8 @@ class _CallerClient(AsyncAnthropicBedrock):
     """A caller's subclass whose own name names no platform."""
 
 
-@pytest.mark.parametrize('cls', [AsyncAnthropicBedrock, AsyncAnthropicVertex, _CallerClient])
-def test_fallbacks_on_bedrock_or_vertex_raise_value_error(cls: type[FakeClient]) -> None:
+@pytest.mark.parametrize('cls', [AsyncAnthropicBedrock, AsyncAnthropicVertex, AsyncAnthropicFoundry, _CallerClient])
+def test_fallbacks_on_bedrock_vertex_or_foundry_raise_value_error(cls: type[FakeClient]) -> None:
     fake = cls()
     client = AnthropicLLMClient(fake)
     with pytest.raises(ValueError, match='Claude API only'):
@@ -386,3 +390,15 @@ def test_fallbacks_on_bedrock_or_vertex_raise_value_error(cls: type[FakeClient])
             )
         )
     assert fake.messages.calls == [] and fake.beta.messages.calls == []
+
+
+def test_fallbacks_on_the_real_foundry_client_raise_before_any_request() -> None:
+    import anthropic
+
+    client = AnthropicLLMClient(anthropic.AsyncAnthropicFoundry(api_key='k', resource='r'))
+    with pytest.raises(ValueError, match='Microsoft Foundry'):
+        asyncio.run(
+            client.chat.completions.create(
+                model='claude-opus-5-5', messages=[{'role': 'user', 'content': 'x'}], fallbacks='default'
+            )
+        )

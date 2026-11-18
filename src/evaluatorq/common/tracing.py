@@ -103,7 +103,7 @@ def capture_message_content() -> bool:
 
     Gates ``gen_ai.input.messages``, ``gen_ai.output.messages``, the bare
     ``input`` / ``output`` keys, and the ``orq.openresponses.request/response``
-    payloads, job ``gen_ai.input/output`` and evaluator ``orq.evaluation.input/output``.
+    payloads, job ``gen_ai.input/output`` and evaluator ``orq.evaluation.input/output`` (mirrored to ``gen_ai.input/output``).
     Public so domain span builders (redteam/openresponses) can gate
     input-message capture too.
     """
@@ -114,8 +114,13 @@ def capture_message_content() -> bool:
 _capture_message_content = capture_message_content
 
 
+# Evaluator payloads also go to gen_ai.input/output, which generic trace readers use.
+EVALUATION_INPUT_KEYS = ('orq.evaluation.input', 'gen_ai.input')
+EVALUATION_OUTPUT_KEYS = ('orq.evaluation.output', 'gen_ai.output')
+
+
 def record_span_payload(
-    span: Span | None, *, key: str, payload: Any, optional_fields: dict[str, Any] | None = None
+    span: Span | None, *, key: str | tuple[str, ...], payload: Any, optional_fields: dict[str, Any] | None = None
 ) -> None:
     """Record structured diagnostic data without affecting job execution.
 
@@ -124,6 +129,7 @@ def record_span_payload(
     their fields; unsupported values use the existing result JSON fallback.
     Object payloads may carry optional fields serialized separately from the
     required payload. Invalid optional fields are omitted without losing it.
+    A tuple of keys writes the same encoded payload under each key.
     """
     if span is None or not capture_message_content():
         return
@@ -157,7 +163,9 @@ def record_span_payload(
                 )
             else:
                 normalized.update(optional)
-        span.set_attribute(key, json.dumps(normalized, ensure_ascii=False))
+        encoded = json.dumps(normalized, ensure_ascii=False)
+        for attribute_key in (key,) if isinstance(key, str) else key:
+            span.set_attribute(attribute_key, encoded)
     except Exception as exc:
         logger.warning(
             'Could not record span payload {} ({}); continuing without this payload', key, type(exc).__name__

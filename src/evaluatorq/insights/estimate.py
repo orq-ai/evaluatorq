@@ -17,10 +17,10 @@ from loguru import logger
 from evaluatorq.common.model_catalogue import cost_of
 from evaluatorq.common.model_input import (
     CHARS_PER_ESTIMATED_TOKEN,
-    JEV_STATE_ALL_QUESTIONS_CHARS,
+    DECISION_STATE_ALL_QUESTIONS_CHARS,
     chars_per_token,
     effective_trace_input_chars,
-    is_jev_model,
+    uses_decision_state,
 )
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.contracts import ManifestStatus
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 TraceSource = Literal['recent', 'query', 'finder', 'snapshot']
 
-# Character caps divided by `chars_per_token` (four, or three for Jev) are estimates, not tokenizer counts.
+# Character caps divided by `chars_per_token` (four, or three for a decision state) are estimates, not tokenizer counts.
 CHARS_PER_TOKEN = CHARS_PER_ESTIMATED_TOKEN
 LABEL_ANSWER_TOKENS = 4
 SUMMARY_OUTPUT_TOKENS = SUMMARY_MAX_TOKENS
@@ -228,7 +228,9 @@ def estimate_run(
     later_low = 0 if query else high
 
     label_chars = (
-        min(trace_input_chars, JEV_STATE_ALL_QUESTIONS_CHARS) if is_jev_model(models.classifier) else trace_input_chars
+        min(trace_input_chars, DECISION_STATE_ALL_QUESTIONS_CHARS)
+        if uses_decision_state(models.classifier)
+        else trace_input_chars
     )
     label_chars_per_token = chars_per_token(models.classifier)
     label_in = label_chars // label_chars_per_token

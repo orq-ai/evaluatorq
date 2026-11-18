@@ -8,6 +8,7 @@ from math import isfinite
 from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
+from evaluatorq.common.model_input import is_decision_state_format
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SCALE_HEAT, QUALITATIVE
 from evaluatorq.common.reports.vega import render_embed
@@ -343,8 +344,8 @@ def projection_notice(coverage: dict[str, Any]) -> str:
     if coverage.get('classifier_question_reserve') == 'not_available':
         reserve_note = '<p>The preview did not include selected classifier questions; the final request may reserve more of the input cap for them.</p>'
     elif coverage.get('classifier_question_reserve') == 'applied':
-        reserve_note = '<p>Exact serialized selected questions share the configured input cap with classifier state; Jev also applies its model-specific state and question ceilings.</p>'
-    if coverage.get('classifier_state_format') == 'jev':
+        reserve_note = '<p>Exact serialized selected questions share the configured input cap with classifier state; a decision model also applies its model-specific state and question ceilings.</p>'
+    if is_decision_state_format(coverage.get('classifier_state_format')):
         excerpt_note = '<p>Text inside kept messages may also be shortened. Tool inputs and results retain bounded excerpts; source traces are not changed.</p>'
     else:
         excerpt_note = (

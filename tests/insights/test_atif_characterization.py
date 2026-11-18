@@ -113,7 +113,7 @@ def test_current_classifier_views_match_characterization_snapshots(use_atif: boo
 
 @pytest.mark.parametrize('use_atif', [False, True], ids=['legacy-source', 'canonical-document'])
 def test_classifier_state_uses_current_input_builder(use_atif: bool) -> None:
-    from evaluatorq.common.model_input import JEV_STATE_CHARS, serialized_chars
+    from evaluatorq.common.model_input import DECISION_STATE_CHARS, serialized_chars
     from evaluatorq.insights.labeling import prepare_classifier_state
 
     trace = _fixtures()[0]
@@ -124,6 +124,6 @@ def test_classifier_state_uses_current_input_builder(use_atif: bool) -> None:
 
     assert isinstance(state, dict)
     assert 'Inspect the deployment.' in serialized
-    assert serialized_chars(state) <= JEV_STATE_CHARS
+    assert serialized_chars(state) <= DECISION_STATE_CHARS
     assert 'sk-live-secret-value' not in serialized
     assert 'secret reminder' not in serialized

@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
-from evaluatorq.common.model_input import JEV_STATE_ALL_QUESTIONS_CHARS, JEV_STATE_CHARS, JEV_STATE_QUESTION_CHARS
+from evaluatorq.common.model_input import DECISION_STATE_ALL_QUESTIONS_CHARS, DECISION_STATE_CHARS, DECISION_STATE_QUESTION_CHARS
 from evaluatorq.common.trace_document import TraceDocument
 from evaluatorq.dashboard import compression_inspector
 from evaluatorq.dashboard.compression_inspector import TRACE_ID_MAX_LENGTH, SESSION_REF_MAX_LENGTH
@@ -99,8 +99,8 @@ def test_get_offers_orq_and_local_sources_with_limits_and_no_question_notice(cli
     assert 'Local sessions' in response.text
     assert 'most recent 7 days' in response.text
     assert '500,000' in response.text
-    assert f'{JEV_STATE_CHARS:,}' in response.text
-    assert f'{JEV_STATE_QUESTION_CHARS:,}' in response.text and f'{JEV_STATE_ALL_QUESTIONS_CHARS:,}' in response.text
+    assert f'{DECISION_STATE_CHARS:,}' in response.text
+    assert f'{DECISION_STATE_QUESTION_CHARS:,}' in response.text and f'{DECISION_STATE_ALL_QUESTIONS_CHARS:,}' in response.text
     assert 'includes no question' in response.text.lower()
 
 
@@ -147,7 +147,7 @@ def test_orq_load_uses_recent_seven_day_window_and_renders_actual_preview(
     assert '&lt;script&gt;alert(1)&lt;/script&gt;' in response.text
     assert '<script>alert(1)</script>' not in response.text
     assert 'Readable view' in response.text
-    assert 'Jev state' in response.text
+    assert 'decision state' in response.text
     assert 'trace-42' not in response.text
 
 
@@ -249,8 +249,8 @@ def test_local_search_and_load_use_real_claude_and_codex_readers_and_escape_cont
     assert html.escape(answer) in loaded.text
     assert '<script>alert(' not in loaded.text
     assert '<img src=x onerror=' not in loaded.text
-    assert 'Jev state' in loaded.text
-    assert 'serialized jev state characters' in loaded.text.lower()
+    assert 'decision state' in loaded.text
+    assert 'serialized decision state characters' in loaded.text.lower()
     assert 'global character cap' in loaded.text.lower()
     assert 'question-aware' in loaded.text.lower()
 

@@ -21,7 +21,7 @@ The built-in dimensions are `intent` (`request`), `failure` (`assistant_errors`)
 
 The `failure_taxonomy` label includes `No failure` for traces the classifier judges clean. A clean answer is a normal label value, not a failed classification. Reports saved with a taxonomy that did not offer this option keep their original answers and counts; the dashboard marks those counts as possibly including clean traces. The discovered `failure` dimension separately groups errors extracted by the summary step.
 
-The view is shortened from the middle when needed to fit the input cap. The summary model does not use the classifier's compact Jev state.
+The view is shortened from the middle when needed to fit the input cap. The summary model does not use the classifier's compact decision state.
 
 Reports are written to `.evaluatorq/insights-runs/`, with manifests under `.evaluatorq/insights-runs/.manifests/`. Set `EVALUATORQ_DIR` to change the base directory. Run JSON does not contain message bodies or embedding vectors.
 
@@ -119,6 +119,26 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+### Name a run and choose where it is saved
+
+`insights()` takes two arguments for this. The CLI has neither: `eq insights` names the run itself and saves it in the default directory, and `--json PATH` writes a copy of the report to a path you choose. The dashboard run form has its own name field.
+
+| Argument | Accepts | Left unset |
+|---|---|---|
+| `run_name` | Any string. The dashboard lists the run under it and uses it as the title of the review page. | `insights-<date>-<time>` in UTC, such as `insights-20261118-030259`. An empty string counts as unset. |
+| `runs_dir` | A `pathlib.Path`, absolute or relative to the working directory. The report is written directly into it and the state file into its `.manifests/` folder. Missing folders are created. | `.evaluatorq/insights-runs/`, or `insights-runs/` inside `EVALUATORQ_DIR` when that is set. |
+
+The report file is `insights_<timestamp>_<name>.json`. The timestamp is the UTC start time. `<name>` is the run name in lower case, with every run of characters other than `a` to `z` and `0` to `9` replaced by one hyphen, hyphens at either end removed, cut to 64 characters. A name with none of those characters is saved as `insights`. `run_name="Weekly: Support Bot #3!"` is saved as `insights_20261118-030259_weekly-support-bot-3.json`. A name does not have to be unique: a second report with the same name in the same second gets `-2` before `.json`, and the report's `run_id` is what identifies the run.
+
+`runs_dir` wins over `EVALUATORQ_DIR`. When you pass it, the report and the state file go there and `EVALUATORQ_DIR` is not used for them. Pass a `Path`: a plain string raises `TypeError`.
+
+Two things do not follow `runs_dir`:
+
+- **The dashboard.** It reads only the directory a run uses when `runs_dir` is unset, so a run saved somewhere else is missing from the dashboard, with no warning. To move your runs and still review them, set `EVALUATORQ_DIR` for both the run and `eq dashboard`, and leave `runs_dir` unset.
+- **The cache.** Summaries and embeddings stay in `.evaluatorq/cache/insights.sqlite`, or in `cache/` inside `EVALUATORQ_DIR`. Runs saved to different directories share it. Pass `cache=False` to keep a run out of it.
+
+[Ask only some coding questions](#ask-only-some-coding-questions) has an example that passes both.
+
 ## Run from the CLI
 
 The `eq insights` command accepts population filters, label presets or JSON files, and discovered dimensions. Install `evaluatorq[insights]` before running it.
@@ -150,7 +170,7 @@ A minimum above its maximum is rejected before any trace loads. `--from-finder`,
 eq insights --agent support-bot --agent billing-bot --tokens-min 20000 --duration-ms-min 30000 --window-days 14 --dimension failure
 ```
 
-For query-based population selection, `--filter-selection llm|llm+jev` overrides the saved dashboard mode (default `llm+jev`) and requires `--query`. `llm` uses the configured fast `finder.filters` task for facets, numeric bounds and time bounds; `llm+jev` uses the configured `finder.classifier` for facets while the shared compiler supplies numeric and time bounds in both modes. The compiler runs before facet selection. Each catalogue request supplies up to 50 values per facet for its actual time window. Candidate extraction is limited to eight values from `model`, `provider`, `agent`, `tool`, or `project` mentions, slash-qualified model names, and quoted strings up to 100 characters; a candidate outside the catalogue is used only after exact trace confirmation. Generated calendar dates may narrow or replace the configured default window; explicitly supplied windows keep their bounds. The mode and generated-window behavior are the same whether or not you pass `--filter-selection`.
+For query-based population selection, `--filter-selection llm|llm+decision` overrides the saved dashboard mode (default `llm+decision`) and requires `--query`. `llm` uses the configured fast `finder.filters` task for facets, numeric bounds and time bounds; `llm+decision` uses the configured `finder.classifier` for facets while the shared compiler supplies numeric and time bounds in both modes. The compiler runs before facet selection. Each catalogue request supplies up to 50 values per facet for its actual time window. Candidate extraction is limited to eight values from `model`, `provider`, `agent`, `tool`, or `project` mentions, slash-qualified model names, and quoted strings up to 100 characters; a candidate outside the catalogue is used only after exact trace confirmation. Generated calendar dates may narrow or replace the configured default window; explicitly supplied windows keep their bounds. The mode and generated-window behavior are the same whether or not you pass `--filter-selection`.
 
 The five-minute facet-catalogue cache is scoped to the Orq host, credentials, workspace/project scope and limit. Exact time bounds distinguish explicit-window entries; default-window entries are grouped by window duration.
 
@@ -163,6 +183,7 @@ The command prints cluster and label summaries, failed-trace counts, projection 
 | File-source limits | Finder exports and snapshots reject other population filters, `--window-days`, and `--limit`. |
 | `--preview-input` | With `--from-snapshot PATH`, measure truncation without model requests or an Orq credential. Full runs still need an Orq credential for model requests. |
 | `--no-cache` | Bypass the local summary and embedding cache. |
+| `--parallelism N` | Traces each stage works on at once, `1` to `200`. It is not the ceiling on in-flight requests; see [Pace a run against a rate limit](#pace-a-run-against-a-rate-limit). |
 
 The priority matrix uses `intent` when selected, otherwise the first `--dimension`. `--priority-dimension` must name one of the selected dimensions.
 
@@ -266,9 +287,68 @@ At the other end, a clustered population of more than 5000 traces fails rather t
 
 Bad values are rejected before any model is called: the CLI rejects an out-of-range number while parsing the command, and `insights()` raises before it fetches a trace.
 
+## Pace a run against a rate limit
+
+When a provider starts rate-limiting an Insights run — traces landing in the failed-trace count after their retries run out — the lever is `--parallelism`, turned **down**: add `--parallelism 4` to the `eq insights` command you already run, and raise it again once the run completes clean.
+
+Down, not up, because two different numbers are at work and the flag is not the one most people assume. `--parallelism` bounds how many **traces a stage works on at once**. How many **requests are in flight** is bounded separately by `llm_parallelism`, which defaults to 10 for every evaluatorq run — see [Bounding LLM requests](evaluation-reference.md#bounding-llm-requests). Ten slots are shared across the process, so a stage handed 100 traces still has ten calls out at a time, and the two defaults that look five times apart — `100` on the CLI and in Python, `20` in the dashboard's form — meet the same ceiling. Only below ten does `--parallelism` become the binding constraint and genuinely thin the traffic. Lowering it does not make a run cheaper: the same requests are made, more slowly.
+
+| Surface | Control | Default | Accepted |
+|---|---|---|---|
+| CLI | `--parallelism N` | `100`, after the precedence below | `1`–`200`; outside that the command exits `2` before loading a trace |
+| Python | `parallelism=N` on `insights()` / `insights_sync()` | `100` | `1` and above, with nothing capping the top end; below `1` is rejected before any model call |
+| Dashboard | **Parallel requests**, step 3 of the run form | `20` | `1`–`200` |
+
+**Moving the request ceiling itself takes Python, because `eq insights` has no flag for it.** `llm_concurrency_limit` accepts either `with` or `async with`:
+
+```python
+import asyncio
+
+from evaluatorq import llm_concurrency_limit
+from evaluatorq.insights import insights
+
+
+async def main(population):
+    # Five in flight instead of the default ten, with `parallelism` matched to it
+    # so the stages do not queue work the ceiling will not let through.
+    async with llm_concurrency_limit(5):
+        return await insights(population, parallelism=5)
+```
+
+Build `population` as [Run from Python](#run-from-python) shows, then `asyncio.run(main(population))`.
+
+**On the CLI the `--parallelism` default is not a literal.** The flag is unset by default and resolves in precedence order: the flag, then `EVALUATORQ_FINDER_PARALLELISM`, then a value saved in the dashboard settings file, then `100`. That variable's name says finder and it governs an `eq insights` run all the same. An out-of-range or unparseable value in it is ignored with a logged warning instead of failing the command, so a typo leaves the run at the next source down rather than at the value you meant — pass the flag when that matters, because the flag is validated and exits `2`. The dashboard's run form does not take part in that chain: its `20` is a literal.
+
+The cap is applied per stage, to each stage that works through its traces a model call at a time: the label questions, the trace summaries, the cluster descriptions, the cluster-merge checks and the top-level cluster descriptions. Labels and summaries dominate the request count because they visit every trace, and `--coding` adds more per trace, where the tool-call labels get their own call (see [Analyze coding agents](#analyze-coding-agents)). The calls that plan the population, such as query compilation and facet selection, sit outside the cap. What a run does when a stage's retries are exhausted is in [Failures and cache](#failures-and-cache).
+
+**Embeddings are outside both knobs.** They go to `client.embeddings.create` in sequential batches of 256 texts, so that stage is already one request at a time and no number makes it faster or gentler; [a separate embedding client](#embed-with-a-separate-client) moves it to another endpoint instead.
+
+A finished run records the `--parallelism` it used in its saved report, readable as `.config.parallelism`; the command prints the report's path when it finishes. The in-flight ceiling is not recorded there, so check it in the process instead:
+
+```python
+import inspect
+
+from evaluatorq import llm_concurrency_limit
+from evaluatorq.common.llm_limit import active_llm_parallelism
+from evaluatorq.insights import InsightsConfig, insights
+
+print("insights() parallelism default:", inspect.signature(insights).parameters["parallelism"].default)
+print("in-flight request ceiling, nothing set:", active_llm_parallelism())
+with llm_concurrency_limit(5):
+    print("in-flight request ceiling, lowered:", active_llm_parallelism())
+
+for value in (0, 200, 500):
+    try:
+        InsightsConfig(labels=(), dimensions=("intent",), parallelism=value)
+    except Exception as exc:
+        print(f"parallelism={value} rejected: {type(exc).__name__}")
+    else:
+        print(f"parallelism={value} accepted")
+```
+
 ## Analyze coding agents
 
-Pass `--coding` (or `coding_analysis=True` in Python, or tick individual **Coding agent questions** in the dashboard run form) to add coding-agent labels to a run. Insights first asks the classifier whether each trace comes from a coding agent, using only a count of the tools, shell programs, and skills the trace called. Traces it answers yes for get two more sets of questions; other traces get only the labels you selected.
+Pass `--coding` (or `coding_analysis=True` in Python, or tick individual **Coding agent questions** in the dashboard run form) to add coding-agent labels to a run. To ask only some of them from Python, see [Ask only some coding questions](#ask-only-some-coding-questions). Insights first asks the classifier whether each trace comes from a coding agent, using only a count of the tools, shell programs, and skills the trace called. Traces it answers yes for get two more sets of questions; other traces get only the labels you selected.
 
 | Label | Kind | Read from | Answers |
 |---|---|---|---|
@@ -283,21 +363,53 @@ Pass `--coding` (or `coding_analysis=True` in Python, or tick individual **Codin
 
 The conversation labels are asked in the same classifier call as your selected labels. The tool-call labels get their own call.
 
-Non-Jev tool views read the first 300 characters of each input; non-shell result bodies are omitted except for a diagnostic category, while shell results also keep fixed failure markers and their first and last 150 characters.
+Plain-text tool views read the first 300 characters of each input; non-shell result bodies are omitted except for a diagnostic category, while shell results also keep fixed failure markers and their first and last 150 characters.
 
-Jev tool views keep the first and last 100 characters of each input and result, plus recorded status, exit code, and error code; shell failure markers are checked across the full scrubbed output. Jev inputs and results are scrubbed before excerpting, and non-Jev shell outputs are scrubbed before their excerpts.
+Decision-state tool views keep the first and last 100 characters of each input and result, plus recorded status, exit code, and error code; shell failure markers are checked across the full scrubbed output. Decision-state inputs and results are scrubbed before excerpting, and plain-text shell outputs are scrubbed before their excerpts.
 
-If a non-Jev tool view is too long, Insights cuts the middle only when at most 30% is lost; otherwise it splits calls into ordered parts. Jev splits complete tool records into chunks that reserve the exact serialized selected questions under the global input cap and fit the Jev state-plus-question ceilings.
+If a plain-text tool view is too long, Insights cuts the middle only when at most 30% is lost; otherwise it splits calls into ordered parts. A decision-state view splits complete tool records into chunks that reserve the exact serialized selected questions under the global input cap and fit the decision-state and question ceilings.
 
 `risky_action` takes the most confident answer other than `none` from any part, and `unfixed_error` takes the answer from the last part, because an error only counts as unfixed if it is still broken at the end. If a part fails and no other part found anything, the label fails rather than reading as no.
 
 You cannot name your own label after one of these. A coding label a trace was not asked counts as not asked, not as failed.
 
-Jev coding-tool requests use filtered structured states containing user messages, calls, paired results, and orphan results. Each chunk reserves the exact serialized coding question payload from the configured total input cap, then keeps complete call/result records together under the resulting Jev state ceiling. Final request fitting cannot drop calls from the middle of a chunk.
+Decision-state coding-tool requests use filtered structured states containing user messages, calls, paired results, and orphan results. Each chunk reserves the exact serialized coding question payload from the configured total input cap, then keeps complete call/result records together under the resulting decision state ceiling. Final request fitting cannot drop calls from the middle of a chunk.
 
 ```bash
 eq insights --from-snapshot claude-traces.json --label sentiment --label user_frustration --coding
 ```
+
+### Ask only some coding questions
+
+`--coding` and `coding_analysis=True` ask all seven coding questions. To ask fewer from Python, pass their names as `coding_labels`. This example asks two of them about a snapshot exported with `eq agent-sessions --export sessions.json`, and saves the report under a name and in a directory you choose. It makes model requests, so set `ORQ_API_KEY` first. The example keeps the default dimensions, so the run also summarizes and clusters the sessions; add `dimensions=[]` to ask the questions and skip clustering.
+
+```python
+import asyncio
+from pathlib import Path
+
+from evaluatorq.insights import InsightsPopulation, insights
+
+
+async def main() -> None:
+    run = await insights(
+        population=InsightsPopulation.from_snapshot("sessions.json"),
+        coding_labels=["outcome", "verified"],
+        run_name="Coding sessions, week 47",
+        runs_dir=Path("reports/coding"),
+    )
+    print(run.run_name, run.status)
+
+
+asyncio.run(main())
+```
+
+`coding_labels` accepts any of `task_type`, `outcome`, `verified`, `scope_creep`, `user_corrections`, `unfixed_error` and `risky_action`. `coding_agent` is not one of them: it is the gate, and Insights adds it whenever you select at least one coding question. Left unset, or given an empty list, no coding question is asked unless `coding_analysis=True`.
+
+A name that is not in that list, or a name given twice, raises `ValueError` before any trace is loaded or any file is written. Names are case-sensitive, so `Outcome` is rejected. Pass a list even for one name: a bare string such as `"outcome"` is read one character at a time and rejected.
+
+One combination is silent. With `coding_analysis=True`, `coding_labels` is ignored: all seven questions are asked, and a misspelled name in the list raises nothing. Leave `coding_analysis` unset when you pass `coding_labels`.
+
+`run_name` and `runs_dir` are described in [Name a run and choose where it is saved](#name-a-run-and-choose-where-it-is-saved).
 
 ## Local coding-agent sessions
 
@@ -340,7 +452,7 @@ Sending 3 traces (290.5 KB) from sessions.json to models: summary openai/gpt-6-s
 
 The size is the snapshot file on disk, not the amount sent. Summaries receive the [conversation view](#the-conversation-view), cut further as needed so the whole summary prompt fits `trace_input_chars` (500,000 characters by default).
 
-Classification uses the model-specific state and question budget described in [What the classifier reads](#what-the-classifier-reads); Jev uses structured excerpts rather than the full summary transcript. The embedding model reads the summaries.
+Classification uses the model-specific state and question budget described in [What the classifier reads](#what-the-classifier-reads); a model that gets the decision state reads structured excerpts rather than the full summary transcript. The embedding model reads the summaries.
 
 Known credential patterns are scrubbed locally before rendering, but this does not remove all personal or confidential content. There is no confirmation prompt. Check the models named in that line before you run.
 
@@ -351,11 +463,11 @@ eq insights --from-snapshot sessions.json --preview-input
 ```
 
 ```console
-Model input coverage: 0 of 2 traces hit a summary or classifier input cap of 500,000 characters. Average rendered inputs: summary 3,053 characters; classifier request 768 (state 412, questions 356). 0 of 8 source messages were omitted from the Jev classifier state.
+Model input coverage: 0 of 2 traces hit a summary or classifier input cap of 500,000 characters. Average rendered inputs: summary 3,053 characters; classifier request 768 (state 412, questions 356). 0 of 8 source messages were omitted from the decision state.
 A run would send 2 traces (3.9 KB) from sessions.json to models: summary openai/gpt-6-sol, classifier typesafe/jev-latest, embedding openai/text-embedding-3-small.
 ```
 
-The coverage line reports how many traces hit a summary or classifier cap, average rendered character counts for the summary and combined classifier request, and messages omitted from Jev state. These are character counts, not exact tokenizer counts. You can preview a fresh selection without exporting it first:
+The coverage line reports how many traces hit a summary or classifier cap, average rendered character counts for the summary and combined classifier request, and messages omitted from the decision state. These are character counts, not exact tokenizer counts. You can preview a fresh selection without exporting it first:
 
 ```bash
 eq insights --sessions --project-dir . --from 2026-10-01 --preview-input
@@ -422,9 +534,9 @@ The model-input cap applies separately to the retained session content: a long s
 
 The classifier does not read the summary. `trace_input_chars`, saved in Dashboard Settings and defaulting to 500,000, caps classifier state and the exact serialized question payloads together.
 
-For `typesafe/jev` models, the state is indexed and structured; tool calls are grouped with matching results, recorded status and error codes are retained, and text excerpts keep the first and last 100 characters for tool inputs/results, 500 for assistant messages, 1,000 for user messages, and 4,000 for system/developer messages.
+A **decision model** is a model served through the Orq router's classify endpoint: it is never prompted, it is handed the material and one question, and it answers with a probability distribution; see [A decision model as a judge](llm-as-a-jury.md#a-decision-model-as-a-judge). Only the `typesafe/jev` models get the **decision state** today. For those, the state is indexed and structured; tool calls are grouped with matching results, recorded status and error codes are retained, and text excerpts keep the first and last 100 characters for tool inputs/results, 500 for assistant messages, 1,000 for user messages, and 4,000 for system/developer messages.
 
-Jev state is also capped at 84,000 characters; state plus the longest question stays within 96,000 characters and state plus all questions within 192,000 characters. Credentials are scrubbed before excerpting; reasoning and known `<system-reminder>` sections are removed. Inline images show their size when known, and remote media is never fetched.
+For the `typesafe/jev` models the decision state is also capped at 84,000 characters; state plus the longest question stays within 96,000 characters and state plus all questions within 192,000 characters. Credentials are scrubbed before excerpting; reasoning and known `<system-reminder>` sections are removed. Inline images show their size when known, and remote media is never fetched.
 
 Other classifiers receive the `DETAILED` [conversation view](#the-conversation-view), shortened as needed to leave room for their selected questions. Known media parts render as placeholders, while unrelated structured content remains JSON. The source trace stays unchanged.
 
@@ -432,7 +544,7 @@ Every trace also records how often it called each tool, shell program, and skill
 
 ### The conversation view
 
-The **conversation view** is the plain-text transcript that summaries, non-Jev classifiers and Trace Finder read. Read this when you call `full_conversation_view` from Python, or when you need to know what a summary or label was based on. It does not apply to `typesafe/jev` models, which read the structured state above, or to the coding-agent tool labels, which read a separate one-line-per-call tool activity list.
+The **conversation view** is the plain-text transcript that summaries, plain-text classifiers and Trace Finder read. Read this when you call `full_conversation_view` from Python, or when you need to know what a summary or label was based on. It does not apply to `typesafe/jev` models, which read the structured state above, or to the coding-agent tool labels, which read a separate one-line-per-call tool activity list.
 
 Each entry starts with `#<message index> <kind>:` at the left edge. A line break inside a message is indented two spaces, so text a user pasted cannot pose as a new turn. A tool call and its result both name the call as `<tool> (call <message>.<n>)`, and both carry `[error]` or `[pending]` when the call did not complete. Credentials are scrubbed and each `<system-reminder>` block becomes `[harness reminder omitted]` before anything is cut.
 
@@ -693,7 +805,7 @@ The estimate is computed before any request is made. Trace counts and configured
 | Estimate | Basis and limits |
 |---|---|
 | Traces | A local trace file gives its exact count. Orq gives `up to N`, the smaller of the trace limit and estimated count. With no filters, the estimate uses workspace status counts. With multiple facets, it uses the smallest per-facet sum because a trace must match every facet. If Orq truncated facet values or cannot count a project id, the estimate falls back to the trace limit and says why. If a file count cannot be read, it shows `unknown`. |
-| Cost | Per stage, the estimate multiplies traces by estimated input and output tokens and the Orq catalogue price. It divides the configured character cap by about four for a rough token estimate (about three for a Jev classifier); this is not the model tokenizer. Classifier state and serialized questions share the cap. Jev also limits state to 84,000 characters, state plus the longest question to 96,000, and state plus all questions to 192,000. The estimate uses the smaller of the configured cap and the 192,000-character ceiling, divided by about three, because Jev's JSON state packs fewer characters into each token than prose. Summary prompts fit the configured cap by shortening the conversation as needed. Long coding activity may need extra chunks, so that cost is unknown. Unpriced stages show `unknown` and are excluded from the total, which is marked `(priced stages only)`. |
+| Cost | Per stage, the estimate multiplies traces by estimated input and output tokens and the Orq catalogue price. It divides the configured character cap by about four for a rough token estimate, or by about three for a `typesafe/jev` classifier's decision state; this is not the model tokenizer. Classifier state and serialized questions share the cap. The `typesafe/jev` models also limit state to 84,000 characters, state plus the longest question to 96,000, and state plus all questions to 192,000. The estimate uses the smaller of the configured cap and the 192,000-character ceiling. Summary prompts fit the configured cap by shortening the conversation as needed. Long coding activity may need extra chunks, so that cost is unknown. Unpriced stages show `unknown` and are excluded from the total, which is marked `(priced stages only)`. |
 | Time | Median per-trace stage times from completed Insights runs, scaled to the parallelism used in those runs. Before the first completed run, it says `estimated after your first run`. If some stages have no prior timing, the total says `(timed stages only)`. Treat the figure as rough. |
 
 For a query run, every trace in range is labeled, but only matching traces reach summary and embedding stages. Their estimated count therefore ranges from zero to the full population, and the total is shown as `$low to $high`.
@@ -785,7 +897,7 @@ Trace IDs must be unique across `traces` and `documents`; a duplicate fails the 
 
 Its conversation portion keeps the full readable conversation, tool inputs, and tool results as far as that cap allows. For classification, the exact serialized selected questions share the cap with state.
 
-The Jev preview uses the same structured state renderer as the request. These size estimates count characters, not tokenizer tokens; the Jev limits are described in [What the classifier reads](#what-the-classifier-reads).
+The decision-state preview uses the same structured state renderer as the request. These size estimates count characters, not tokenizer tokens; the decision-state limits are described in [What the classifier reads](#what-the-classifier-reads).
 
 The source trace stays intact on disk. Each run has a state file under `.evaluatorq/insights-runs/.manifests/<run-id>.json` and a report in `.evaluatorq/insights-runs/`. The state file records the stage plan, current stage, outcomes, errors, and report path.
 
@@ -816,6 +928,6 @@ For the finder’s **Analyze matches** handoff, see [Trace Finder](trace-finder.
 
 The CLI exits 1 for an `error` run and 0 for a completed run, even when individual traces failed. Check the failed count and stage message before treating a result as complete. Placeholder answers such as “no errors” provide no failure text, so those traces have no signal for the failure dimension.
 
-Summaries and embeddings are cached per item in `.evaluatorq/cache/insights.sqlite`. Summary keys include trace, span, model, and prompt hash; embedding keys include model and text hash. The cache is local to the working directory. Pass `cache=False` to Python `insights()` or `--no-cache` to the CLI to bypass it.
+Summaries and embeddings are cached per item in `.evaluatorq/cache/insights.sqlite`. Summary keys include trace, span, model, and prompt hash; embedding keys include model and text hash. The cache is in the working directory unless `EVALUATORQ_DIR` is set. Pass `cache=False` to Python `insights()` or `--no-cache` to the CLI to bypass it.
 
 The `insights` extra installs numpy, scipy, and umap-learn for vector processing, clustering, and the 3D map; the embedding requests go through the Orq router. Add the `dashboard` extra to the Insights extra to review saved runs locally with `eq dashboard`.

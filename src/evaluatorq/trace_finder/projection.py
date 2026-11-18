@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.model_input import (
-    JEV_STATE_CHARS,
+    DECISION_STATE_CHARS,
     chars_per_token,
+    decision_state,
     effective_trace_input_chars,
     fit_classifier_input,
-    is_jev_model,
-    jev_state,
     source_text_ranges,
+    uses_decision_state,
 )
 from evaluatorq.common.trace_document import to_chat_messages
 from evaluatorq.contracts import tool_result_to_text
@@ -63,14 +63,14 @@ def project_trace(
         raise ValueError(
             f'trace_input_chars must be between {MIN_TRACE_INPUT_CHARS} and {MAX_TRACE_INPUT_CHARS} characters'
         )
-    if is_jev_model(model):
+    if uses_decision_state(model):
         source = to_chat_messages(trace)
         empty_state = {'messages': []}
         state_overhead = len(serialize_projection({'trace_status': trace.status, **empty_state})) - len(
             serialize_projection(empty_state)
         )
-        state_cap = min(JEV_STATE_CHARS, character_cap - state_overhead)
-        payload = {'trace_status': trace.status, **jev_state(source, global_char_cap=state_cap)}
+        state_cap = min(DECISION_STATE_CHARS, character_cap - state_overhead)
+        payload = {'trace_status': trace.status, **decision_state(source, global_char_cap=state_cap)}
         if question_payloads is not None:
             fitted_payload = fit_classifier_input(
                 payload,
@@ -79,7 +79,7 @@ def project_trace(
                 global_char_cap=character_cap,
             )
             if not isinstance(fitted_payload, dict):
-                raise TypeError('Jev classifier state must be an object')
+                raise TypeError('decision state must be an object')
             payload = fitted_payload
         serialized = serialize_projection(payload)
         represented = {entry['index'] for entry in payload.get('messages', []) if isinstance(entry, dict)}
@@ -112,7 +112,7 @@ def _project_full_conversation(
     model: str,
     question_payloads: Mapping[str, Any] | None,
 ) -> TraceProjection:
-    """Render the complete readable conversation for non-Jev classifiers under the saved cap."""
+    """Render the complete readable conversation for plain-text classifiers under the saved cap."""
     from evaluatorq.insights.transcript import full_conversation_view_with_message_spans
 
     original_conversation, message_spans, source_message_count = full_conversation_view_with_message_spans(trace)
@@ -124,7 +124,7 @@ def _project_full_conversation(
         global_char_cap=character_cap,
     )
     if not isinstance(fitted_payload, dict):
-        raise TypeError('non-Jev classifier state must be an object')
+        raise TypeError('plain-text classifier state must be an object')
     payload = fitted_payload
     conversation = payload['conversation']
     serialized = serialize_projection(payload)
