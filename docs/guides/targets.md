@@ -594,7 +594,7 @@ File changes are visible as the write, edit and shell calls that made them. The 
 
 ### Isolation, and what it does not cover
 
-Each instance works in two private temporary directories, removed when the run closes it: the agent's working directory and its Claude configuration directory. Pass `workdir=` to start from a copy of a project; the original is never touched. Pass `keep_workdir=True` to keep the directories for inspection.
+Each instance works in two private temporary directories, removed when the run closes it: the agent's working directory and its Claude configuration directory. Pass `workdir=` to start from a copy of a project; the original is never touched. Symbolic links in it are not copied, because a link would still point at its target on the host. Pass `keep_workdir=True` to keep the directories for inspection.
 
 | `isolation=` | What it sets |
 |---|---|

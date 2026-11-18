@@ -138,7 +138,7 @@ class ClaudeAgentSDKTarget(AgentTarget):
     ```
 
     Each instance owns one conversation and two private temp directories: the agent's working directory (empty, or
-    a copy of ``workdir``) and its Claude configuration directory, where the SDK keeps the session. ``new()`` clones
+    a copy of ``workdir``, without its symbolic links) and its Claude configuration directory, where the SDK keeps the session. ``new()`` clones
     carry the same options and get their own, so parallel attacks never share files or a session. ``close()`` removes
     both unless ``keep_workdir`` is set; the runner calls it through ``common.target_call.close_target``.
 
@@ -190,7 +190,7 @@ class ClaudeAgentSDKTarget(AgentTarget):
         if self._root is None:
             root = Path(tempfile.mkdtemp(prefix='evq-agent-sdk-'))
             if self._source_workdir is not None:
-                shutil.copytree(self._source_workdir, root / 'workdir', symlinks=True)
+                shutil.copytree(self._source_workdir, root / 'workdir', ignore=_symlinks)
             else:
                 (root / 'workdir').mkdir()
             (root / 'config').mkdir()
@@ -287,6 +287,22 @@ class ClaudeAgentSDKTarget(AgentTarget):
         root, self._root, self._session_id = self._root, None, None
         if root is not None and not self._keep_workdir:
             await asyncio.to_thread(shutil.rmtree, root, ignore_errors=True)
+
+
+def _symlinks(directory: str, names: list[str]) -> list[str]:
+    """The entries of ``directory`` that are symbolic links, for `shutil.copytree` to leave out.
+
+    A link copied as a link would still point at its target on the host, a way out of the private working
+    directory. Following it would copy host files the caller never put in the project. So links are not copied.
+    """
+    links = [name for name in names if (Path(directory) / name).is_symlink()]
+    if links:
+        logger.warning(
+            'ClaudeAgentSDKTarget: not copying {} symbolic link(s) from {} into the working directory',
+            len(links),
+            directory,
+        )
+    return links
 
 
 def _error_result(events: list[dict[str, Any]]) -> tuple[str, str] | None:

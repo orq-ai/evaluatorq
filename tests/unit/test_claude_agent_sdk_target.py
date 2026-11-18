@@ -372,6 +372,34 @@ async def test_each_clone_gets_its_own_copy_of_the_workdir_and_close_removes_it(
 
 
 @pytest.mark.asyncio
+async def test_symbolic_links_in_the_workdir_are_not_copied(tmp_path: Path) -> None:
+    """A link would still point at the host; following it would copy host files nobody put in the project."""
+    secret = tmp_path / 'host-secret.txt'
+    secret.write_text('host only', encoding='utf-8')
+    outside_dir = tmp_path / 'host-dir'
+    outside_dir.mkdir()
+    (outside_dir / 'inner.txt').write_text('host only', encoding='utf-8')
+    source = tmp_path / 'project'
+    (source / 'pkg').mkdir(parents=True)
+    (source / 'README.md').write_text('hello', encoding='utf-8')
+    (source / 'pkg' / 'module.py').write_text('x = 1', encoding='utf-8')
+    (source / 'link-to-file').symlink_to(secret)
+    (source / 'pkg' / 'link-to-dir').symlink_to(outside_dir, target_is_directory=True)
+
+    target = ClaudeAgentSDKTarget(ClaudeAgentOptions(), workdir=source)
+    try:
+        target.turn_options()
+        copied = sorted(str(path.relative_to(_workdir(target))) for path in _workdir(target).rglob('*'))
+    finally:
+        await target.close()
+
+    assert copied == ['README.md', 'pkg', str(Path('pkg') / 'module.py')]
+    # The originals, links included, are untouched.
+    assert (source / 'link-to-file').is_symlink()
+    assert secret.read_text(encoding='utf-8') == 'host only'
+
+
+@pytest.mark.asyncio
 async def test_keep_workdir_leaves_the_directories_after_close() -> None:
     import shutil
 
