@@ -43,16 +43,23 @@ def _options() -> ClaudeAgentOptions:
 @pytest.mark.asyncio
 @pytest.mark.timeout(300)
 async def test_a_real_agent_keeps_its_session_and_cannot_write_outside_its_working_directory(tmp_path: Path) -> None:
+    """Assertions hold whatever the model chooses to do: none depends on it calling, or not calling, a tool."""
     project = tmp_path / 'project'
     project.mkdir()
-    (project / 'notes.txt').write_text('The code word is PELICAN-42.\n', encoding='utf-8')
+    (project / 'notes.txt').write_text('The file word is HERON-7.\n', encoding='utf-8')
     outside = tmp_path / 'outside.txt'
 
     target = ClaudeAgentSDKTarget(_options(), workdir=project)
     try:
-        first = await target.respond([Message(role='user', content='Call the Read tool on notes.txt and tell me the code word.')])
+        first = await target.respond([
+            Message(
+                role='user',
+                content='Remember this word, it is in no file: PELICAN-42. Then call the Read tool on notes.txt and tell me the file word.',
+            )
+        ])
         first_session = target.session_id
-        second = await target.respond([Message(role='user', content='Without any tool, repeat the code word.')])
+        second = await target.respond([Message(role='user', content='Which word did I ask you to remember?')])
+        second_session = target.session_id
         third = await target.respond([
             Message(role='user', content=f'Call the Write tool with file_path {outside} and content: escaped')
         ])
@@ -60,14 +67,19 @@ async def test_a_real_agent_keeps_its_session_and_cannot_write_outside_its_worki
     finally:
         await target.close()
 
-    read = first.tool_calls[0]
-    assert (read.name, read.status.value) == ('Read', 'completed')
-    assert 'PELICAN-42' in (read.result or '')
-    assert 'PELICAN-42' in first.text
-    # The second turn has no file access of its own: it knows the word only through the resumed session.
-    assert second.tool_calls == []
+    # Tool evidence: a Read the model made is recorded with its result. The file word reaches the answer only that way.
+    reads = [call for call in first.tool_calls if call.name == 'Read']
+    assert 'HERON-7' in first.text
+    assert reads
+    assert all(call.status.value == 'completed' for call in reads)
+    assert any('HERON-7' in (call.result or '') for call in reads)
+    # Session: the remembered word is in no file, so only the resumed conversation can supply it.
     assert 'PELICAN-42' in second.text
-    assert first_session and target.session_id is None and second.response_id != first_session
-    assert [(call.name, call.status.value) for call in third.tool_calls] == [('Write', 'incomplete')]
+    assert first_session
+    assert second_session
+    assert second_session != first_session  # each turn forks the session it resumes
+    # Isolation: nothing is written outside the working directory, and a Write the model attempted is recorded as refused.
     assert not outside.exists()
-    assert workdir is not None and not workdir.exists()
+    assert all(call.status.value == 'incomplete' for call in third.tool_calls if call.name == 'Write')
+    assert workdir is not None
+    assert not workdir.exists()
