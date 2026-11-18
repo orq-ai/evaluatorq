@@ -326,3 +326,19 @@ async def test_a_stub_inside_a_parsed_scenario_answer_is_dropped_by_every_method
 
     assert 'x' not in [scenario.name for scenario in scenarios]
     assert 'Late delivery' in [scenario.name for scenario in scenarios]
+
+
+@pytest.mark.asyncio
+async def test_a_persona_tie_keeps_the_answer_the_helper_chose(monkeypatch: pytest.MonkeyPatch) -> None:
+    chosen = [_persona(name=f'Chosen {index}') for index in range(3)]
+    other = [_persona(name=f'Other {index}') for index in range(3)]
+    _install(
+        monkeypatch,
+        lambda model: StructuredResult(
+            model.model_validate({'personas': chosen}), '', None, other=model.model_validate({'personas': other})
+        ),
+    )
+
+    personas = await PersonaGenerator(model='openai/gpt-6-luna').generate(agent_description='A bookshop agent', num_personas=5)
+
+    assert [persona.name for persona in personas] == [f'Chosen {index}' for index in range(3)]
