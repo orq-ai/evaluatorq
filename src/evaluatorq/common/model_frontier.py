@@ -444,6 +444,10 @@ def _headline_rung(
 def scored_model_from_card(card: Mapping[str, Any]) -> ScoredModel | None:
     """A ScoredModel from one public `/v2/model-catalog` card, or None if it has no index or rates.
 
+    A card whose default effort rung names another AA index version is None
+    too, with a warning: its headline carries no version, so it cannot stand
+    in for the off-version rung the card would be ranked on.
+
     The headline is `artificial_intelligence.artificial_analysis_intelligence_index`;
     `_headline_rung` says which rung it was measured at, when that is known. A
     card whose `location` is only `eu` is EU-pinned (`region='europe'`); every
@@ -460,6 +464,18 @@ def scored_model_from_card(card: Mapping[str, Any]) -> ScoredModel | None:
     default = card.get('default_effort')
     default_effort = default if effort_parameter and isinstance(default, str) and default else None
     rungs = _rung_indices(router_id, card)
+    default_rung = _effort_ladder(card).get(default_effort) if default_effort is not None else None
+    if default_rung is not None and _rung_version(default_rung) != REQUIRED_INDEX_VERSION:
+        # The headline carries no version, so falling back to it would rank the
+        # off-version default rung's score after all.
+        logger.warning(
+            '{}: default effort rung {!r} is on AA index {!r}, not {}; the card is left out',
+            router_id,
+            default_effort,
+            default_rung.get('index_version'),
+            REQUIRED_INDEX_VERSION,
+        )
+        return None
     location = card.get('location')
     provider = card.get('provider')
     return ScoredModel(
@@ -551,7 +567,8 @@ async def load_garden() -> dict[str, ScoredModel]:
     benchmark version.
 
     A card whose ladder names no REQUIRED_INDEX_VERSION rung is left out with
-    a warning, since its scores sit on another scale. A card with no ladder
+    a warning, since its scores sit on another scale, and so is one whose
+    default effort rung names another version. A card with no ladder
     carries no version and is kept, with one warning naming them. A scored card
     left out for its price, which is not a USD per-token one, is named in a
     warning too.

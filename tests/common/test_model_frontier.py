@@ -682,7 +682,24 @@ class TestLiveGarden:
 
     @pytest.mark.asyncio
     async def test_a_kept_card_ranks_on_its_v5_rungs_only(self, monkeypatch):
-        """{medium: v5, high: v4.3} on a high default must not rank at the v4.3 score."""
+        """{medium: v5, high: v4.3} on a medium default ranks on the v5 rung, never the v4.3 one."""
+        mixed = {
+            'reasoning_efforts': {
+                'medium': {'intelligence_index': 24.6, 'index_version': 'v5'},
+                'high': {'intelligence_index': 34.5, 'index_version': 'v4.3'},
+            },
+            'supported_parameters': ['reasoning_effort'],
+            'default_effort': 'medium',
+        }
+        _serve(monkeypatch, [{'data': [card('a', 'mixed', index=34.5, **mixed)], 'has_more': False}])
+
+        mixed_model = (await load_garden())['a/mixed']
+        assert mixed_model.effort_indices == {'medium': 24.6}
+        assert mixed_model.default_index == 24.6
+
+    @pytest.mark.asyncio
+    async def test_a_card_whose_default_rung_is_off_version_is_left_out(self, monkeypatch):
+        """{medium: v5, high: v4.3} on a high default, headline 34.5: the headline must not stand in for the v4.3 rung."""
         mixed = {
             'reasoning_efforts': {
                 'medium': {'intelligence_index': 24.6, 'index_version': 'v5'},
@@ -691,9 +708,19 @@ class TestLiveGarden:
             'supported_parameters': ['reasoning_effort'],
             'default_effort': 'high',
         }
-        _serve(monkeypatch, [{'data': [card('a', 'mixed', **mixed)], 'has_more': False}])
+        _serve(
+            monkeypatch,
+            [{'data': [card('a', 'mixed', index=34.5, **mixed), card('b', 'new', **V5_RUNG)], 'has_more': False}],
+        )
+        messages: list[str] = []
+        sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+        try:
+            garden = await load_garden()
+        finally:
+            logger.remove(sink_id)
 
-        assert (await load_garden())['a/mixed'].effort_indices == {'medium': 24.6}
+        assert set(garden) == {'b/new'}
+        assert any('a/mixed' in m and "'high'" in m and "'v4.3'" in m for m in messages)
 
     @pytest.mark.asyncio
     async def test_cards_left_out_for_price_and_kept_without_a_ladder_are_logged(self, monkeypatch):
