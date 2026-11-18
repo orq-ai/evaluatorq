@@ -326,6 +326,47 @@ def test_ty_migration_audit_matches_effective_offline_coverage(monkeypatch: pyte
     }
 
 
+_RULES_EXCERPT = """\
+<a id="old-name"></a>
+
+## `new-name`
+
+Default level: <code>error</code>
+
+<a id="split-rule"></a>
+
+## `part-one`
+
+Default level: <code>error</code>
+
+**Migrating from `split-rule`**
+
+
+`split-rule` was split into [`part-one`](#part-one) and [`part-two`](#part-two), see also [`split-rule`](#split-rule).
+
+**References**
+
+## `part-two`
+
+Default level: <code>warn</code>
+
+## `current-rule`
+
+Default level: <code>error</code>
+"""
+
+
+def test_rule_successors_derive_renames_and_splits_from_the_rule_reference() -> None:
+    derived = audit_ty_migration._rule_successors(_RULES_EXCERPT, {'old-name', 'split-rule', 'current-rule'})
+
+    assert derived == {'old-name': ['new-name'], 'split-rule': ['part-one', 'part-two']}
+
+
+def test_rule_successors_reject_a_name_the_rule_reference_does_not_explain() -> None:
+    with pytest.raises(RuntimeError, match='does not explain mystery-rule'):
+        audit_ty_migration._rule_successors(_RULES_EXCERPT, {'mystery-rule', 'old-name'})
+
+
 @pytest.mark.parametrize(
     ('diagnostic', 'mutation'),
     [
@@ -688,6 +729,16 @@ def test_ty_promotes_contract_diagnostics_to_errors() -> None:
     assert _string(rules, 'blanket-ignore-comment') == 'error'
     assert _string(rules, 'missing-type-argument') == 'error'
     assert _string(rules, 'possibly-unresolved-reference') == 'error'
+    assert _string(rules, 'renamed-rule-in-ignore-comment') == 'error'
+
+
+def test_ty_config_names_no_renamed_rule() -> None:
+    # ty only warns about a renamed rule in its config, and an old name can stop covering a split-off rule.
+    ty = audit_ty_migration._project_config()['tool']['ty']
+    renamed = set(audit_ty_migration._load(audit_ty_migration.BASELINE)['ty']['rule_successors'])
+    configured = set(ty.get('rules', {})).union(*(override.get('rules', {}) for override in ty.get('overrides', [])))
+
+    assert configured & renamed == set()
 
 
 def test_ty_dashboard_overrides_match_the_diagnostic_baseline() -> None:
