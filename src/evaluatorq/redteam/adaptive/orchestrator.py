@@ -31,6 +31,7 @@ from evaluatorq.common.content_filter import (
 )
 from evaluatorq.common.judge import run_judge
 from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.llm_client import LLMConfigurationError
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.sanitize import delimit, xml_escape
@@ -848,6 +849,8 @@ class MultiTurnOrchestrator:
                     logger.debug(f'Tool-chaining: capping {len(valid_steps)} steps to max_turns={max_turns}')
                     valid_steps = valid_steps[:max_turns]
                 return format_plan_for_prompt(valid_steps), planner_usage
+        except LLMConfigurationError:
+            raise
         except Exception as e:  # noqa: BLE001
             # repr-style detail: str(asyncio.TimeoutError()) is '' on 3.10+, so log
             # the type to keep timeouts/cancellations identifiable in the fallback.
@@ -1071,6 +1074,8 @@ class MultiTurnOrchestrator:
                 consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
                 retry=True,
             )
+        except LLMConfigurationError:
+            raise
         except Exception as e:  # noqa: BLE001
             # A provider can block the attacker prompt at the moderation layer
             # and raise (e.g. Azure → HTTP 400 code='content_filter') instead

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
-from evaluatorq.common.llm_client import as_llm_client
+from evaluatorq.common.llm_client import LLMConfigurationError, as_llm_client
 from evaluatorq.common.messages import pair_tool_rows, tool_call_text
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
@@ -864,6 +864,8 @@ class SimulationRunner:
                             },
                         )
                         raise
+        except LLMConfigurationError:
+            raise
         except Exception as e:
             logger.error('SimulationRunner.run() failed: %s', e, exc_info=True)
             error_msg = str(e)
@@ -1257,6 +1259,10 @@ class SimulationRunner:
 
         tasks = [run_single(dp) for dp in datapoints]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        # A configuration error is the same for every datapoint: end the batch on it, do not record it per row.
+        for result in results:
+            if isinstance(result, LLMConfigurationError):
+                raise result
 
         final_results: list[SimulationResult] = []
         for i, result in enumerate(results):

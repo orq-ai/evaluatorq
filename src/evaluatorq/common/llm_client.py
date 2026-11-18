@@ -74,14 +74,14 @@ def orq_base_url() -> str:
 class LLMConfigurationError(ValueError):
     """A client, model or request setting that no call can succeed with, raised before any request is sent.
 
-    A run-wide configuration mistake: every call would fail the same way. Judge, classify and signals code re-raises it instead of turning it into a per-item judge error. A per-item handler further up (a red-team attack, a simulation row) still records it on that row and the batch carries on, so an error that reaches one appears once per row. The entry points stop the commonest case, a model the client cannot serve, before the first call (`require_models_served`).
+    A run-wide configuration mistake: every call would fail the same way. Judge, classify and signals code re-raises it instead of turning it into a per-item judge error, and so does every handler that isolates one failing item: a row or an evaluator in `evaluatorq()`, a jury judge, a simulation conversation, a red-team attack, an Insights trace, cluster or dimension. The run ends on the first one. The entry points stop the commonest case, a model the client cannot serve, earlier still, before the first call (`require_models_served`).
     """
 
 
 class ModelClientMismatchError(LLMConfigurationError):
     """A model id that the client it was sent to cannot serve, such as an OpenAI default model reaching an Anthropic client.
 
-    The entry points (`red_team`, `simulate`, `generate`, `insights`, a jury declaration) check the models they are about to call with `require_models_served` and raise this once, before any call. A model they cannot see ahead of time, such as the one inside an injected agent, still reaches the adapter at call time; judge, classify and signals code re-raises it there like every `LLMConfigurationError`, and a per-item handler further up records it on each row.
+    The entry points (`red_team`, `simulate`, `generate`, `insights`, a jury declaration) check the models they are about to call with `require_models_served` and raise this once, before any call. A model they cannot see ahead of time, such as the one inside an injected agent, reaches the adapter at call time and ends the run there, like every `LLMConfigurationError`.
     """
 
 
@@ -256,7 +256,7 @@ def require_models_served_by_provider(models: Mapping[str, str]) -> None:
 def require_models_served_by_client(client: object, models: Mapping[str, str]) -> None:
     """Stop a run before any work when a client that was passed in is an Anthropic client and a model it will be sent names another provider.
 
-    The counterpart of `require_models_served_by_provider` for an injected client. Without it the adapter raises the same error at the first call of every item, the per-item handlers record it on each row, and the run finishes with a row of identical errors after paying for every call that came before the failing one.
+    The counterpart of `require_models_served_by_provider` for an injected client. Without it the run starts, pays for every call that comes before the first one this client refuses, and only then stops.
 
     A client of any other kind is not checked: the Orq router and OpenAI resolve model ids themselves, and a wrong one fails there.
 

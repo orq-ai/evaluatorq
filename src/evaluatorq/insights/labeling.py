@@ -25,6 +25,7 @@ from evaluatorq.common.judge import (
     JudgeError,
     run_classify,
 )
+from evaluatorq.common.llm_client import LLMConfigurationError
 from evaluatorq.common.model_input import (
     cap_text,
     effective_trace_input_chars,
@@ -526,6 +527,8 @@ async def label_traces(
                 coding_labels=coding_labels,
                 trace_input_chars=trace_input_chars,
             )
+        except LLMConfigurationError:
+            raise
         except Exception as exc:  # noqa: BLE001 - an unexpected trace shape must not fail the whole pass
             message = str(exc) or type(exc).__name__
             logger.warning('Insights label processing failed for trace {}: {}', trace.trace_id, message)

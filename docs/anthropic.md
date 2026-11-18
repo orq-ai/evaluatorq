@@ -50,7 +50,7 @@ An Anthropic client cannot serve evaluatorq's default models. The defaults are `
 ModelClientMismatchError: The Anthropic client passed in cannot serve EVALUATORQ_SMART_MODEL (unset, built-in default) (redteam.attacker)=openai/gpt-6-sol, EVALUATORQ_SMART_MODEL (unset, built-in default) (redteam.evaluator)=openai/gpt-6-sol. Set those to Claude model ids (for example claude-sonnet-5-5), or pass a client that serves them.
 ```
 
-The check covers the models the entry point itself resolves. A model it cannot see ahead of time still fails at call time with the message below, once per attack or row: the model inside a simulator or judge agent you inject, for example.
+The check covers the models the entry point itself resolves. A model it cannot see ahead of time, such as the one inside a simulator or judge agent you inject, fails at its first call with the message below. That also ends the run: a row, an attack, a judge or an Insights stage that hits a configuration error raises it instead of recording it and carrying on. `insights()` keeps its contract of returning a saved run, so there it ends with `status == 'error'` and one stage failure.
 
 ```pytb
 ModelClientMismatchError: An Anthropic client needs a Claude model id, got 'openai/gpt-6-sol'. Set the model explicitly, for example through the EVALUATORQ_SMART_MODEL role variable, to a name such as "claude-sonnet-5-5" or "anthropic/claude-sonnet-5-5".

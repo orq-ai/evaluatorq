@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import __version__
-from evaluatorq.common.llm_client import as_llm_client, configured_llm_provider, is_anthropic_client, resolve_llm_client
+from evaluatorq.common.llm_client import (
+    LLMConfigurationError,
+    as_llm_client,
+    configured_llm_provider,
+    is_anthropic_client,
+    resolve_llm_client,
+)
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import start_manifest
@@ -885,6 +891,8 @@ async def insights(  # noqa: C901
                         for warning in result.warnings:
                             run.warnings.append(warning)
                         _stage_end(writer, stage_name)
+                    except LLMConfigurationError:
+                        raise
                     except Exception as exc:  # noqa: BLE001 - a dimension failure must preserve other dimensions
                         message = str(exc)
                         _discard_dimension(run.traces, dimension)

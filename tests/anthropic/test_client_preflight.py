@@ -1,8 +1,7 @@
 """A run handed an Anthropic client and a model that client cannot serve stops once, before any call.
 
-Without the check the adapter raises on the first call of every item, the per-item handlers record it on each row, and
-the run finishes with a row of identical errors after paying for every call before the failing one. One test per
-surface: jury, red team, simulation, Insights.
+Without the check the run starts, pays for every call that comes before the first one the client refuses, and only
+then stops. One test per surface: jury, red team, simulation, Insights.
 """
 
 from __future__ import annotations
