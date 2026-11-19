@@ -11,6 +11,7 @@ import pytest
 from evaluatorq.common.model_input import (
     CHARS_PER_ESTIMATED_TOKEN,
     DECISION_STATE_ALL_QUESTIONS_CHARS,
+    DECISION_STATE_CHARS_PER_TOKEN,
     effective_trace_input_chars,
 )
 from evaluatorq.common.model_catalogue import ContextTier, ModelInfo, Pricing, cost_of
@@ -166,7 +167,9 @@ def test_decision_classifier_estimate_observes_its_combined_request_character_ce
         trace_input_chars=500_000,
     )
 
-    assert _row(result, 'label').tokens_in == DECISION_STATE_ALL_QUESTIONS_CHARS // estimate.CHARS_PER_TOKEN
+    assert _row(result, 'label').tokens_in == DECISION_STATE_ALL_QUESTIONS_CHARS // DECISION_STATE_CHARS_PER_TOKEN == 64_000
+    assert f'at {DECISION_STATE_CHARS_PER_TOKEN} characters per token' in _row(result, 'label').basis
+    assert _row(result, 'summary').tokens_in == 500_000 // CHARS_PER_ESTIMATED_TOKEN
 
 
 @pytest.mark.parametrize(

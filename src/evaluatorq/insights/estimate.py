@@ -18,6 +18,7 @@ from evaluatorq.common.model_catalogue import cost_of
 from evaluatorq.common.model_input import (
     CHARS_PER_ESTIMATED_TOKEN,
     DECISION_STATE_ALL_QUESTIONS_CHARS,
+    chars_per_token,
     effective_trace_input_chars,
     uses_decision_state,
 )
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
 
 TraceSource = Literal['recent', 'query', 'finder', 'snapshot']
 
-# Character caps divided by four are estimates, not measurements from a model tokenizer.
+# Character caps divided by `chars_per_token` (four, or three for a decision state) are estimates, not tokenizer counts.
 CHARS_PER_TOKEN = CHARS_PER_ESTIMATED_TOKEN
 LABEL_ANSWER_TOKENS = 4
 SUMMARY_OUTPUT_TOKENS = SUMMARY_MAX_TOKENS
@@ -231,7 +232,8 @@ def estimate_run(
         if uses_decision_state(models.classifier)
         else trace_input_chars
     )
-    label_in = label_chars // CHARS_PER_TOKEN
+    label_chars_per_token = chars_per_token(models.classifier)
+    label_in = label_chars // label_chars_per_token
     label_answer = LABEL_ANSWER_TOKENS
     summary_in = trace_input_chars // CHARS_PER_TOKEN
     summary_out = SUMMARY_OUTPUT_TOKENS
@@ -240,7 +242,8 @@ def estimate_run(
     if coding:
         unknowns.append('cost: coding tool activity may require additional classifier chunks')
     label_basis = (
-        f'one classify call per trace: up to {label_in:,} estimated input tokens at four characters per token '
+        f'one classify call per trace: up to {label_in:,} estimated input tokens '
+        f'at {label_chars_per_token} characters per token '
         'for combined state and serialized questions, '
         f'and {answers} answer{"s" if answers != 1 else ""} of {label_answer} output tokens'
         + (', including the population-match answer' if query else '')
@@ -250,7 +253,7 @@ def estimate_run(
         f'{label_answer} output tokens); long activity can split into additional chunks'
     )
     summary_basis = (
-        f'up to {summary_in:,} estimated input tokens at four characters per token, '
+        f'up to {summary_in:,} estimated input tokens at {CHARS_PER_TOKEN} characters per token, '
         f'and up to {summary_out:,} output tokens (max_tokens)'
     )
     embed_basis = f'one embedding per trace, up to {embed_in:,} tokens (summary length cap)'

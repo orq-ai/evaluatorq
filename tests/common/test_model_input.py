@@ -208,9 +208,9 @@ def test_long_question_reserves_state_capacity() -> None:
         ]
     }
 
-    bounded = fit_decision_state(state, [{'instructions': 'q' * 100_000}])
+    bounded = fit_decision_state(state, [{'instructions': 'q' * 60_000}])
 
-    assert serialized_chars(bounded) <= 28_000 * 4 - 100_000
+    assert serialized_chars(bounded) <= DECISION_STATE_CHARS - 60_000
 
 
 @pytest.mark.parametrize(
@@ -299,7 +299,7 @@ def test_decision_final_omission_marker_stays_within_question_limited_state_budg
     state = fit_decision_state(decision_state(source, global_char_cap=500_000), questions)
 
     question_chars = serialized_chars(questions[0])
-    assert serialized_chars(state) <= 28_000 * 4 - question_chars
+    assert serialized_chars(state) <= DECISION_STATE_CHARS - question_chars
     represented = {entry['index'] for entry in state['messages']}
     omitted = len(source) - len(represented)
     assert state['omission'] == f'[... {omitted} messages left out ...]'
@@ -779,3 +779,11 @@ def test_a_conversation_is_fitted_without_probing_below_its_marker(length: int) 
         assert 'chars left out' in fitted['conversation']
     roomy = fit_classifier_input(state, model='openai/gpt-5.4-mini', questions=[], global_char_cap=200)
     assert isinstance(roomy, dict) and 'chars left out' in roomy['conversation']
+
+
+def test_decision_state_caps_assume_three_characters_per_token() -> None:
+    assert (DECISION_STATE_CHARS, DECISION_STATE_QUESTION_CHARS, DECISION_STATE_ALL_QUESTIONS_CHARS) == (
+        84_000,
+        96_000,
+        192_000,
+    )
