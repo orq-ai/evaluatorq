@@ -815,6 +815,11 @@ async def _leg_json_object(call: _ChatLadderCall, *, response_format: type[T]) -
     )
 
 
+# Chat rungs in ladder order, and the ones that send the JSON schema as a response format (`skip_schema_rungs`).
+_CHAT_RUNGS = (_leg_strict_parse, _leg_json_schema, _leg_forced_tool, _leg_json_object)
+_SCHEMA_FORMAT_RUNGS = frozenset({_leg_strict_parse, _leg_json_schema})
+
+
 def _content_result(
     response: Any,
     raw_usage: TokenUsage | None,
@@ -863,8 +868,10 @@ async def generate_structured(
 ) -> StructuredResult[T]:
     """Generate structured output, degrading through the rungs in the module docstring.
 
-    ``skip_schema_rungs`` starts the ladder at the forced tool call, skipping every rung that sends the JSON schema as
-    a response format, for a caller re-asking after a schema-valid placeholder answer.
+    ``skip_schema_rungs`` skips every leg that sends the JSON schema as a response format, for a caller re-asking
+    after a schema-valid placeholder answer: the Responses call when ``api='responses'``, and on both ``api`` values
+    chat rungs 1 (strict ``parse()``) and 2 (``json_schema``). Only rungs 3 (forced tool call) and 4 (``json_object``)
+    run.
 
     ``api`` selects the endpoint tried first; ``responses`` puts a Responses call
     in front of the chat ladder and falls through to it. On the ``responses``
@@ -977,8 +984,8 @@ async def generate_structured(
                 max_attempts=max_attempts,
             )
             last_raw = ''
-            legs = (_leg_strict_parse, _leg_json_schema, _leg_forced_tool, _leg_json_object)
-            for leg in legs[2:] if skip_schema_rungs else legs:
+            legs = [leg for leg in _CHAT_RUNGS if not (skip_schema_rungs and leg in _SCHEMA_FORMAT_RUNGS)]
+            for leg in legs:
                 result = await leg(call, response_format=response_format)
                 usages.append(result.usage)
                 last_raw = result.raw or last_raw

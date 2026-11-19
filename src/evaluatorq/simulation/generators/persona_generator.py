@@ -155,16 +155,15 @@ class PersonaGenerator(UsageTracking):
                 logger.warning('Failed to parse persona: %s', e)
         return personas
 
-    async def _generate(self, messages: list[dict[str, Any]], *, expected: int, label: str) -> list[Persona]:
+    async def _generate(self, *, messages: list[dict[str, Any]], expected: int, label: str) -> list[Persona]:
         return await generate_real_items(
-            functools.partial(
+            call=functools.partial(
                 generate_structured,
-                self._client,
+                client=self._client,
                 model=self._model,
                 messages=messages,
                 response_format=PersonaListResponse,
                 max_tokens=_persona_token_budget(expected),
-                label=label,
                 api='responses',
                 config=self._config,
             ),
@@ -256,7 +255,7 @@ Return ONLY a JSON array, no other text."""
                 {'role': 'user', 'content': user_prompt},
             ]
 
-            personas = await self._generate(messages, expected=num_personas, label='PersonaGenerator.generate')
+            personas = await self._generate(messages=messages, expected=num_personas, label='PersonaGenerator.generate')
 
             if len(personas) < num_personas:
                 logger.warning(
@@ -373,7 +372,7 @@ Return ONLY a JSON array, no other text."""
             },
         ):
             personas = await self._generate(
-                messages, expected=num_personas, label='PersonaGenerator.generate_with_coverage'
+                messages=messages, expected=num_personas, label='PersonaGenerator.generate_with_coverage'
             )
 
             # Validate coverage and fill gaps

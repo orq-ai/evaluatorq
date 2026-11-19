@@ -309,7 +309,9 @@ Return ONLY a JSON array, no other text."""
                     {'role': 'user', 'content': user_prompt},
                 ]
 
-                scenarios = await self._generate(messages, expected=num_scenarios, label='ScenarioGenerator.generate')
+                scenarios = await self._generate(
+                    messages=messages, expected=num_scenarios, label='ScenarioGenerator.generate'
+                )
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(
@@ -373,7 +375,7 @@ Return ONLY a JSON array, no other text."""
                 },
             ):
                 scenarios = await self._generate(
-                    messages, expected=num_scenarios, label='ScenarioGenerator.generate_with_coverage'
+                    messages=messages, expected=num_scenarios, label='ScenarioGenerator.generate_with_coverage'
                 )
 
                 # Validate coverage
@@ -436,7 +438,7 @@ Return ONLY a JSON array, no other text."""
                 },
             ):
                 scenarios = await self._generate(
-                    messages, expected=num_edge_cases, label='ScenarioGenerator.generate_edge_cases'
+                    messages=messages, expected=num_edge_cases, label='ScenarioGenerator.generate_edge_cases'
                 )
                 scenarios = [s.model_copy(update={'is_edge_case': True}) for s in scenarios]
 
@@ -489,7 +491,7 @@ Return ONLY a JSON array, no other text."""
                 },
             ):
                 scenarios = await self._generate(
-                    messages, expected=num_scenarios, label='ScenarioGenerator.generate_boundary_scenarios'
+                    messages=messages, expected=num_scenarios, label='ScenarioGenerator.generate_boundary_scenarios'
                 )
                 scenarios = [s.model_copy(update={'is_edge_case': True}) for s in scenarios]
 
@@ -555,7 +557,7 @@ Return ONLY a JSON array, no other text."""
                 },
             ):
                 scenarios = await self._generate(
-                    messages, expected=num_scenarios, label='ScenarioGenerator.generate_security_scenarios'
+                    messages=messages, expected=num_scenarios, label='ScenarioGenerator.generate_security_scenarios'
                 )
                 scenarios = [s.model_copy(update={'is_edge_case': True}) for s in scenarios]
 
@@ -574,16 +576,15 @@ Return ONLY a JSON array, no other text."""
     # Private helpers
     # ---------------------------------------------------------------------------
 
-    async def _generate(self, messages: list[dict[str, Any]], *, expected: int, label: str) -> list[Scenario]:
+    async def _generate(self, *, messages: list[dict[str, Any]], expected: int, label: str) -> list[Scenario]:
         return await generate_real_items(
-            functools.partial(
+            call=functools.partial(
                 generate_structured,
-                self._client,
+                client=self._client,
                 model=self._model,
                 messages=messages,
                 response_format=ScenarioListResponse,
                 max_tokens=_scenario_token_budget(expected),
-                label=label,
                 api='responses',
                 config=self._config,
             ),

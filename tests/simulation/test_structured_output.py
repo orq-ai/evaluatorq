@@ -1208,11 +1208,13 @@ async def test_skip_schema_rungs_falls_through_to_json_object_and_sums_both_rung
     async def json_object_rung(*_args: Any, **_kwargs: Any) -> Any:
         return StructuredResult(None, '[{"value": "a bare array"}]', _usage(50))
 
+    async def strict_rung(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError('the strict parse rung ran')
+
+    assert structured_output._SCHEMA_FORMAT_RUNGS == {structured_output._leg_strict_parse, structured_output._leg_json_schema}
     monkeypatch.setattr(structured_output, '_generate_structured_via_responses', unexpected)
-    monkeypatch.setattr(structured_output, '_leg_strict_parse', unexpected)
-    monkeypatch.setattr(structured_output, '_leg_json_schema', unexpected)
-    monkeypatch.setattr(structured_output, '_leg_forced_tool', tool_rung)
-    monkeypatch.setattr(structured_output, '_leg_json_object', json_object_rung)
+    monkeypatch.setattr(structured_output, '_CHAT_RUNGS', (strict_rung, unexpected, tool_rung, json_object_rung))
+    monkeypatch.setattr(structured_output, '_SCHEMA_FORMAT_RUNGS', frozenset({strict_rung, unexpected}))
 
     result = await generate_structured(
         _responses_client(_responses_result(None)),
