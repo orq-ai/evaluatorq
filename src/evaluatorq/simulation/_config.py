@@ -78,6 +78,9 @@ class SimulationConfig(BaseModel):
     max_turns: int | None = None
     """None means "unset": resolved in ``_simulate_core`` to a replayed run's
     cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
+    repetitions: int = Field(default=1, ge=1, strict=True)
+    """Separate conversations run per case. Strict, so ``True`` and ``2.0`` are
+    rejected instead of read as a count."""
     llm_config: LLMCallConfig = Field(default_factory=LLMCallConfig)
     """Sampling/transport settings for every simulation-side LLM call — five roles:
     the user simulator, the judge, the persona / scenario / first-message

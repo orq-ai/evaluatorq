@@ -738,7 +738,7 @@ def traces(
     if dimension and cluster:
         selected = (
             next(
-                (item for item in run.dimensions.get(dimension, ()).clusters if item.id == cluster),
+                (item for item in run.dimensions[dimension].clusters if item.id == cluster),
                 None,
             )
             if dimension in run.dimensions

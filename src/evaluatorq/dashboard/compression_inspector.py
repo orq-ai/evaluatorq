@@ -44,6 +44,8 @@ from evaluatorq.local_sessions.roots import session_roots
 from evaluatorq.trace_finder.settings import effective_settings, load_settings
 
 if TYPE_CHECKING:
+    from starlette.datastructures import FormData
+
     from evaluatorq.common.trace_document import TraceDocument
     from evaluatorq.local_sessions.models import SessionSearchResult, SessionSource
 
@@ -321,15 +323,15 @@ def _enabled() -> bool:
     return load_settings().compression_inspector_enabled
 
 
-async def _check_request(req: Request) -> tuple[Any, None] | tuple[None, Response]:
-    """Check feature-enabled and CSRF; return (form, None) or (None, error_response)."""
+async def _check_request(req: Request) -> FormData | Response:
+    """Check feature-enabled and CSRF; return the form, or the error response to send instead."""
     if not _enabled():
-        return None, _disabled()
+        return _disabled()
     form = await req.form()
     rejected = request_rejected(req, form)
     if rejected:
-        return None, _page_response(notice=rejected, status_code=403)
-    return form, None
+        return _page_response(notice=rejected, status_code=403)
+    return form
 
 
 def compression_inspector_page(_req: Request) -> Response:
@@ -347,9 +349,9 @@ def _load(req: Request, document: TraceDocument, source_path: Path | None = None
 
 
 async def compression_inspector_orq(req: Request) -> Response:
-    form, error = await _check_request(req)
-    if error:
-        return error
+    form = await _check_request(req)
+    if isinstance(form, Response):
+        return form
     trace_id = str(form.get('trace_id') or '').strip()
     if not trace_id or len(trace_id) > TRACE_ID_MAX_LENGTH:
         return _page_response(notice='Enter a valid Orq trace ID.', status_code=422)
@@ -373,9 +375,9 @@ async def compression_inspector_orq(req: Request) -> Response:
 
 
 async def compression_inspector_sessions_search(req: Request) -> Response:
-    _form, error = await _check_request(req)
-    if error:
-        return error
+    checked = await _check_request(req)
+    if isinstance(checked, Response):
+        return checked
     query = SessionQuery(sources=_LOCAL_SOURCES, limit=50)
     try:
         result = await asyncio.to_thread(search_sessions, query=query)
@@ -385,9 +387,9 @@ async def compression_inspector_sessions_search(req: Request) -> Response:
 
 
 async def compression_inspector_sessions_load(req: Request) -> Response:
-    form, error = await _check_request(req)
-    if error:
-        return error
+    form = await _check_request(req)
+    if isinstance(form, Response):
+        return form
     raw_ref = str(form.get('session') or '')
     if len(raw_ref) > SESSION_REF_MAX_LENGTH:
         return _page_response(notice=_SESSION_ERROR, status_code=422)
@@ -406,9 +408,9 @@ async def compression_inspector_sessions_load(req: Request) -> Response:
 
 async def compression_inspector_preview(req: Request) -> Response:
     """Re-render a loaded document under new knobs: the live region for htmx, the whole page otherwise."""
-    form, error = await _check_request(req)
-    if error:
-        return error
+    form = await _check_request(req)
+    if isinstance(form, Response):
+        return form
     token = str(form.get('token') or '')
     cached = req.app.state.compression_documents.get(token)
     loaded: _Loaded | None = None

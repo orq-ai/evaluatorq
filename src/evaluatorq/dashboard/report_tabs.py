@@ -906,6 +906,29 @@ def _sim_breakdown_table(
     return panel(title, f'<div class="sim-bd-table">{table}</div>', sub=denominator_note)
 
 
+def _sim_heat_cell_count(cell: dict) -> str:
+    """The conversation count under a heatmap value, with the cell's counts and both rates on hover.
+
+    Empty for a cell of one conversation: there is nothing to average, and a
+    count of 1 must not read as evidence of reliability.
+    """
+    from evaluatorq.common.reports.html_helpers import pct
+
+    n = cell.get('n') or 0
+    if n <= 1:
+        return ''
+    completed = cell.get('completed_conversations', 0)
+    errored = cell.get('errored_conversations', 0)
+    score, rate = cell.get('avg_score'), cell.get('success_rate')
+    parts = [f'{n} conversations', f'{completed} completed', f'{errored} errored']
+    if score is not None:
+        parts.append(f'mean goal-completion score {pct(score)}')
+    if rate is not None:
+        parts.append(f'goal achieved in {pct(rate)}')
+    title = esc(' · '.join(parts))
+    return f'<span class="rk-heat-n" style="margin-left:8px;font-size:11px;font-weight:400;opacity:.85" title="{title}">n={n}</span>'
+
+
 def _sim_heat_cell_trigger(rid: str, entity_context: dict[str, Any]) -> Callable[[dict, str], str]:
     """Heatmap cell renderer: the value opens the cell's conversations in the drawer.
 
@@ -920,13 +943,15 @@ def _sim_heat_cell_trigger(rid: str, entity_context: dict[str, Any]) -> Callable
             key=lambda e: (e.goal_completion_score, e.index),
         )
         if not entries:
-            return text
+            return text + _sim_heat_cell_count(cell)
         n = len(entries)
+        # Inside the visible button: the button fills the cell, so anything after it wraps underneath.
+        count = _sim_heat_cell_count(cell)
         label = f'Open {n} conversation{"s" if n != 1 else ""}: {cell.get("persona")} × {cell.get("scenario")}'  # noqa: RUF001
         buttons = [
             f'<button type="button" class="rk-heat-trigger" data-sim-entity-trigger data-entity-kind="conversation" '
             f'data-drawer-url="/r/{esc(rid)}/sim/transcript?idx={int(e.index)}"'
-            + (f' aria-label="{esc(label)}">{text}' if i == 0 else ' hidden tabindex="-1">')
+            + (f' aria-label="{esc(label)}">{text}{count}' if i == 0 else ' hidden tabindex="-1">')
             + '</button>'
             for i, e in enumerate(entries)
         ]
@@ -962,7 +987,9 @@ def _sim_breakdown(
                 d.get('scenarios', []),
                 d.get('cells', []),
                 value_key='avg_score',
-                render_value=None if standalone else _sim_heat_cell_trigger(rid, entity_context),
+                render_value=(lambda cell, text: text + _sim_heat_cell_count(cell))
+                if standalone
+                else _sim_heat_cell_trigger(rid=rid, entity_context=entity_context),
             ),
             sub='Red → yellow → green as the average goal-completion score rises. Click a cell to read its conversations.',
             info=(
@@ -970,7 +997,10 @@ def _sim_breakdown(
                 "agent across that persona × scenario's conversations — a continuous measure of "  # noqa: RUF001
                 'how fully the goal was met, not a count of goals achieved. 100% = the goal was '
                 'fully accomplished in every conversation; a single half-met conversation reads '
-                '~50%. The binary pass/fail rate is shown separately as "Goal rate" in the tables below.'
+                '~50%. The binary pass/fail rate is shown separately as "Goal rate" in the tables below. '
+                'A cell that averages several conversations shows how many as n; hover it for the completed '
+                'and errored counts. A cell without n is a single conversation, which says nothing about '
+                'how often the agent gets it right.'
             ),
         )
 

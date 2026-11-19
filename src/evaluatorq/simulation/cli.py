@@ -638,6 +638,7 @@ _SHARED_FLAGS: tuple[Flag, ...] = (
     Flag('report_path', replaces=('report',)),
     Flag('name', 'run_name', replaces=('evaluation_name',)),
     Flag('max_turns'),
+    Flag('repetitions'),
     Flag('datapoint_parallelism', replaces=('parallelism',)),
     Flag('llm_parallelism'),
     Flag('target_reasoning_effort'),
@@ -964,6 +965,14 @@ def simulate(
             help=f"Maximum conversation turns. Defaults to {DEFAULT_MAX_TURNS}, or to the replayed run's cap with --from-run.",
         ),
     ] = None,
+    repetitions: Annotated[
+        int | None,
+        typer.Option(
+            '--repetitions',
+            min=1,
+            help='Separate conversations to run for each case. Each one is a fresh conversation with the same persona, scenario and opening message. Defaults to 1. This repeats the conversation, not the judge call.',
+        ),
+    ] = None,
     datapoint_parallelism: Annotated[
         int | None,
         typer.Option('--datapoint-parallelism', '--parallelism', min=1, help=_DATAPOINT_PARALLELISM_HELP),
@@ -1199,6 +1208,14 @@ def run(
     max_turns: Annotated[
         int | None,
         typer.Option('--max-turns', min=1, help=f'Maximum conversation turns. Defaults to {DEFAULT_MAX_TURNS}.'),
+    ] = None,
+    repetitions: Annotated[
+        int | None,
+        typer.Option(
+            '--repetitions',
+            min=1,
+            help='Separate conversations to run for each case. Each one is a fresh conversation with the same persona, scenario and opening message. Defaults to 1. This repeats the conversation, not the judge call.',
+        ),
     ] = None,
     datapoint_parallelism: Annotated[
         int | None,

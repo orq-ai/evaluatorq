@@ -832,6 +832,16 @@ def test_traces_can_be_filtered_by_cluster(tmp_path, minimal_run, monkeypatch):
     assert 'trace-2' not in response.text
 
 
+def test_traces_filter_on_an_unknown_dimension_shows_the_raw_cluster_id(tmp_path, minimal_run, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _write_run(tmp_path, minimal_run)
+
+    response = TestClient(build_app()).get('/insights/run-1/traces?dimension=bogus&cluster=bad')
+
+    assert response.status_code == 200
+    assert 'bogus = bad' in response.text
+
+
 def test_traces_route_forwards_crosstab_filters(tmp_path, minimal_run, monkeypatch):
     from evaluatorq.dashboard import insights_views
 

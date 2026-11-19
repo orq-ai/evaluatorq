@@ -16,6 +16,7 @@ from urllib.parse import quote, urlencode
 
 from loguru import logger
 from pydantic import ValidationError
+from starlette.datastructures import UploadFile
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
@@ -741,7 +742,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             if rejected:
                 return Response(json.dumps({'error': rejected}), status_code=403, media_type='application/json')
             upload = form.get('file')
-            if upload is None or not hasattr(upload, 'read') or not getattr(upload, 'filename', ''):
+            if not isinstance(upload, UploadFile) or not upload.filename:
                 return Response(
                     json.dumps({'error': 'Choose a JSON file to upload.'}),
                     status_code=422,
