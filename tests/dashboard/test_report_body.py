@@ -232,7 +232,9 @@ class TestRedteamRenderReportBody:
 
         report = _make_redteam_report()
         doc = export_html(report)
-        assert 'Executive summary' in doc or 'Overview' in doc
+        # Fixture-specific facts, so a template-only document cannot pass.
+        assert 'test-agent' in doc
+        assert 'ASI01-body-test-001' in doc
 
 
 # ---------------------------------------------------------------------------
