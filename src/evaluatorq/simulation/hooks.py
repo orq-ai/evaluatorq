@@ -79,7 +79,10 @@ class SimulationRunMeta(TypedDict):
     """
 
     num_datapoints: int
-    """Conversations the run will execute: cases times ``repetitions``."""
+    """Cases the run will simulate, one per datapoint. Not multiplied by ``repetitions``."""
+    num_conversations: NotRequired[int]
+    """Conversations the run will execute: ``num_datapoints`` times ``repetitions``.
+    Absent means ``num_datapoints``, as in payloads built before repetitions existed."""
     repetitions: NotRequired[int]
     """Separate conversations per case. Absent means 1."""
     model: str
@@ -90,13 +93,21 @@ class SimulationRunMeta(TypedDict):
     target: str
 
 
+def _conversation_count(meta: SimulationRunMeta) -> int:
+    """Conversations the run will execute, for a payload with or without ``num_conversations``."""
+    return meta.get('num_conversations', meta['num_datapoints'] * meta.get('repetitions', 1))
+
+
+_REPEATED_COST_NOTE = 'evaluators and recommendations run once per conversation, so their cost scales with repetitions'
+
+
 def _conversation_plan(meta: SimulationRunMeta) -> str:
     """The planned workload in words. With repetitions it names both the cases and the conversations."""
-    total = meta['num_datapoints']
+    cases = meta['num_datapoints']
     repetitions = meta.get('repetitions', 1)
     if repetitions == 1:
-        return f'{total} datapoints'
-    return f'{total // repetitions} datapoints x {repetitions} repetitions = {total} conversations'
+        return f'{cases} datapoints'
+    return f'{cases} datapoints x {repetitions} repetitions = {_conversation_count(meta)} conversations'
 
 
 @runtime_checkable
@@ -183,6 +194,8 @@ class DefaultHooks:
             f'max_turns={meta["max_turns"]} | datapoint_parallelism={meta["datapoint_parallelism"]} | '
             f'evaluators={meta["evaluator_names"]}'
         )
+        if meta.get('repetitions', 1) > 1:
+            logger.info(f'[simulation] Report steps: {_REPEATED_COST_NOTE}.')
         return True
 
     async def on_run_start(self, meta: SimulationRunMeta) -> None:
@@ -300,13 +313,13 @@ class RichHooks:
             ('Parallelism', str(meta['datapoint_parallelism'])),
             ('Evaluators', ', '.join(meta['evaluator_names'])),
         ]
+        if meta.get('repetitions', 1) > 1:
+            rows.append(('Report steps', _REPEATED_COST_NOTE.capitalize()))
         return await confirm_run_plan(
             self._console,
             title='Run Plan',
             rows=rows,
-            prompt=f'Simulate {meta["num_datapoints"]} conversations?'
-            if meta.get('repetitions', 1) > 1
-            else f'Simulate {meta["num_datapoints"]} datapoints?',
+            prompt=f'Simulate {_conversation_plan(meta)}?',
             skip_confirm=self._skip_confirm,
         )
 
@@ -385,7 +398,7 @@ class RichHooks:
         self._reset_run_state()
         self._ensure_started()
         self._max_turns = meta['max_turns']
-        self._overall_task_id = self._progress.add_task('[bold cyan]Simulations', total=meta['num_datapoints'])
+        self._overall_task_id = self._progress.add_task('[bold cyan]Simulations', total=_conversation_count(meta))
 
     async def on_datapoint_start(self, datapoint: SimulationDatapoint) -> None:
         from rich.markup import escape
