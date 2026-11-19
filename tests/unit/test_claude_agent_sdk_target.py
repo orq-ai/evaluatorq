@@ -372,12 +372,15 @@ async def test_each_clone_gets_its_own_copy_of_the_workdir_and_close_removes_it(
 
 
 @pytest.mark.asyncio
-async def test_a_failed_copy_of_the_workdir_is_still_removed_by_close(
+async def test_a_failed_copy_of_the_workdir_is_removed_and_the_next_turn_copies_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A retried turn on the same target must not reuse a partial copy: the runner retries the same instance."""
     source = tmp_path / 'project'
     source.mkdir()
+    (source / 'app.py').write_text('print(1)', encoding='utf-8')
     roots: list[Path] = []
+    real_copytree = target_module.shutil.copytree
 
     def failing_copytree(src: Any, dst: Any, **kwargs: Any) -> None:
         roots.append(Path(dst).parent)
@@ -388,9 +391,17 @@ async def test_a_failed_copy_of_the_workdir_is_still_removed_by_close(
     target = ClaudeAgentSDKTarget(ClaudeAgentOptions(), workdir=source)
     with pytest.raises(OSError, match='disk full'):
         target.turn_options()
-    assert roots[0].exists()
-    await target.close()
     assert not roots[0].exists()
+    assert target.workdir is None
+
+    monkeypatch.setattr(target_module.shutil, 'copytree', real_copytree)
+    options = target.turn_options()
+    assert options.cwd is not None
+    cwd = Path(options.cwd)
+    assert cwd != roots[0] / 'workdir'
+    assert (cwd / 'app.py').read_text(encoding='utf-8') == 'print(1)'
+    assert Path(options.env['CLAUDE_CONFIG_DIR']).is_dir()
+    await target.close()
 
 
 def test_a_clone_keeps_the_isolation_and_keep_workdir_of_its_original() -> None:

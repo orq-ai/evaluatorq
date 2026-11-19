@@ -189,12 +189,17 @@ class ClaudeAgentSDKTarget(AgentTarget):
     def _ensure_dirs(self) -> Path:
         if self._root is None:
             root = Path(tempfile.mkdtemp(prefix='evq-agent-sdk-'))
-            self._root = root  # set first so close() removes a partial copy if copytree raises
-            if self._source_workdir is not None:
-                shutil.copytree(self._source_workdir, root / 'workdir', ignore=_symlinks)
-            else:
-                (root / 'workdir').mkdir()
-            (root / 'config').mkdir()
+            try:
+                if self._source_workdir is not None:
+                    shutil.copytree(self._source_workdir, root / 'workdir', ignore=_symlinks)
+                else:
+                    (root / 'workdir').mkdir()
+                (root / 'config').mkdir()
+            except BaseException:
+                # Leave _root unset so a retried turn builds the directories again instead of using a partial copy.
+                shutil.rmtree(root, ignore_errors=True)
+                raise
+            self._root = root
         return self._root
 
     def turn_options(self) -> ClaudeAgentOptions:
