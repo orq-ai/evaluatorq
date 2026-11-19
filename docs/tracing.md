@@ -215,6 +215,8 @@ Evaluatorq - Red Teaming
 
 There is no `orq.redteam.security_evaluation` span. The OWASP scorer annotates the framework's own `orq.evaluation` span in place rather than nesting a redundant layer between it and the judge's LLM span.
 
+When the evaluator is a panel of judges, the panel's reliability numbers are on the `orq.jury` span under that `orq.evaluation` span, as the `jury.*` attributes listed under [Judge-panel spans](#judge-panel-spans): judges configured, succeeded and failed, replacements used, raw agreement, tie and inconclusive. Query them there. The evaluation span carries a readable copy as one JSON `metadata` attribute, `{"jury": {...}}`, and nothing else about the panel: the `orq.redteam.jury.*` attributes it used to carry are no longer written. A single judge runs no panel, so it has no `orq.jury` span and no `metadata` copy.
+
 The judge's span is named for the endpoint that served it. Evaluator configs default to `api='responses'`, so it is usually `responses {provider}/{model}`; it is `chat {model}` when the call falls back to Chat Completions — a non-router client, `structured_output=False`, a model the catalogue cannot qualify as Responses-capable, or `api='chat_completions'` set explicitly.
 
 LLM spans (`chat ...` / `responses ...`) carry standard GenAI attributes:

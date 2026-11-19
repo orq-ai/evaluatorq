@@ -597,7 +597,7 @@ async def test_review_start_returns_working_snapshot_while_changed_population_lo
             self.block_next = False
             self.entered = asyncio.Event()
 
-        async def __call__(self, population: PopulationRequest) -> Snapshot:  # ty: ignore[invalid-method-override]
+        async def __call__(self, population: PopulationRequest) -> Snapshot:  # ty: ignore[lost-keyword-for-regular-parameter]
             if self.block_next:
                 self.calls.append(population)
                 self.entered.set()

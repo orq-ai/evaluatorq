@@ -167,7 +167,7 @@ async def select_llm_filters_with_response(
     fields: dict[str, tuple[Any, Any]] = {}
     for name, values in choices.items():
         literal_type = cast('Any', Literal.__getitem__(values))
-        fields[name] = (list[literal_type], ...)
+        fields[name] = (list[literal_type], ...)  # ty: ignore[invalid-type-form]
     fields.update({
         'numeric': (WireNumeric, ...),
         'calendar_day': (StrictBool, ...),
