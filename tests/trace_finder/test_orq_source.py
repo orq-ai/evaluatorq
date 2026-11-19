@@ -173,7 +173,7 @@ def test_build_oql_keeps_the_base_filter_unless_a_model_or_provider_is_picked() 
     base = 'operation not_in ("generate_content")'
 
     assert base in build_oql(FacetSelection(status=frozenset({'error'})), NumericFilters(), {})
-    # jev and other bare model calls are generate_content traces; the base filter would hide all of them.
+    # decision-model and other bare model calls are generate_content traces; the base filter would hide all of them.
     assert base not in build_oql(FacetSelection(model=frozenset({'jev-latest'})), NumericFilters(), {})
     assert base not in build_oql(FacetSelection(provider=frozenset({'typesafe'})), NumericFilters(), {})
 

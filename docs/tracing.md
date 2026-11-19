@@ -173,6 +173,8 @@ Span attributes on `orq.evaluation`:
 | `orq.score` | JSON-serialised score value |
 | `orq.explanation` | Explanation string (if the evaluator provides one) |
 | `orq.pass` | Boolean pass/fail result |
+| `orq.evaluation.input` / `gen_ai.input` | JSON scorer input: the datapoint, the job output and the row (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
+| `orq.evaluation.output` / `gen_ai.output` | JSON verdict: `passed`, `value`, `type`, `reason`, or `error` when the scorer raised (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 
 ### Red teaming spans
 
@@ -212,6 +214,8 @@ Evaluatorq - Red Teaming
 ```
 
 There is no `orq.redteam.security_evaluation` span. The OWASP scorer annotates the framework's own `orq.evaluation` span in place rather than nesting a redundant layer between it and the judge's LLM span.
+
+When the evaluator is a panel of judges, the panel's reliability numbers are on the `orq.jury` span under that `orq.evaluation` span, as the `jury.*` attributes listed under [Judge-panel spans](#judge-panel-spans): judges configured, succeeded and failed, replacements used, raw agreement, tie and inconclusive. Query them there. The evaluation span carries a readable copy as one JSON `metadata` attribute, `{"jury": {...}}`, and nothing else about the panel: the `orq.redteam.jury.*` attributes it used to carry are no longer written. A single judge runs no panel, so it has no `orq.jury` span and no `metadata` copy.
 
 The judge's span is named for the endpoint that served it. Evaluator configs default to `api='responses'`, so it is usually `responses {provider}/{model}`; it is `chat {model}` when the call falls back to Chat Completions — a non-router client, `structured_output=False`, a model the catalogue cannot qualify as Responses-capable, or `api='chat_completions'` set explicitly.
 
@@ -277,7 +281,7 @@ orq.simulation.generate          # root — one per standalone generate() call
   └── chat/responses {model}     # persona/scenario/first-message generation calls
 ```
 
-`generate_personas()` and `generate_scenarios()` don't open a synthetic root span when invoked standalone. They do create `orq.simulation.persona_generation` / `orq.simulation.scenario_generation` spans around their LLM calls. Those generation spans carry the active run metadata when called inside an outer simulation or red-team scope; standalone helpers intentionally have no synthetic run id to stamp.
+`generate_personas()` and `generate_scenarios()` don't open a synthetic root span when invoked standalone. They do create `orq.simulation.persona_generation` / `orq.simulation.scenario_generation` spans around their LLM calls. Those generation spans carry the active run metadata when called inside an outer simulation or red-team scope; standalone helpers intentionally have no synthetic run id to stamp. `generate_checked_personas()`, `generate_checked_scenarios()`, `check_personas()` and `check_scenarios()` add an `orq.simulation.fit_check` span around each round of judge calls, with the judge's LLM spans as children.
 
 Span attributes on `Evaluatorq - Agent Simulation` / `orq.simulation.generate`:
 

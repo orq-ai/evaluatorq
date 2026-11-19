@@ -402,7 +402,7 @@ async def test_an_empty_probability_distribution_is_still_recorded(monkeypatch: 
 
 @pytest.mark.asyncio
 async def test_the_span_input_carries_the_question_as_well_as_the_state(monkeypatch: pytest.MonkeyPatch):
-    """A trace reader who sees only the state cannot tell what Jev was asked."""
+    """A trace reader who sees only the state cannot tell what the decision model was asked."""
     recorded: list[list[dict[str, Any]]] = []
     monkeypatch.setattr(llm_call, 'record_llm_input', lambda span, messages: recorded.append(messages))  # noqa: ARG005
     question = ClassifyQuestion(

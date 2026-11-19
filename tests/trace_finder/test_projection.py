@@ -35,7 +35,7 @@ def _persist_cap(monkeypatch: Any, tmp_path: Path, cap: int) -> None:
     save_settings(DashboardSettings.model_validate({'trace_input_chars': cap}), settings_path)
 
 
-def test_jev_classifier_receives_role_excerpt_after_persisted_global_cap(
+def test_decision_classifier_receives_role_excerpt_after_persisted_global_cap(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     _persist_cap(monkeypatch, tmp_path, 500_000)
@@ -55,7 +55,7 @@ def test_jev_classifier_receives_role_excerpt_after_persisted_global_cap(
     assert trace.messages[0]['content'] == content
 
 
-def test_non_jev_classifier_receives_full_readable_conversation_with_persisted_cap(
+def test_plain_text_classifier_receives_full_readable_conversation_with_persisted_cap(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     _persist_cap(monkeypatch, tmp_path, 500_000)
@@ -95,7 +95,7 @@ def test_classifier_input_character_limit_is_persisted_and_keeps_both_edges(
 
 
 
-def test_non_jev_projection_fits_escaped_content_by_serialized_size() -> None:
+def test_plain_text_projection_fits_escaped_content_by_serialized_size() -> None:
     content = 'ESCAPED-HEAD' + chr(92) * 10_000 + 'ESCAPED-TAIL'
     trace = _trace(({'role': 'user', 'content': content},))
 
@@ -107,7 +107,7 @@ def test_non_jev_projection_fits_escaped_content_by_serialized_size() -> None:
     assert projection.omitted_messages == 0
     assert '[... ' in projection.payload['conversation']
 
-def test_non_jev_projection_counts_wholly_omitted_source_messages() -> None:
+def test_plain_text_projection_counts_wholly_omitted_source_messages() -> None:
     trace = _trace((
         {'role': 'user', 'content': 'BEGIN-' + 'alpha ' * 1_000},
         {'role': 'assistant', 'content': 'MIDDLE-ONLY-' + 'middle ' * 1_000},
@@ -122,7 +122,7 @@ def test_non_jev_projection_counts_wholly_omitted_source_messages() -> None:
     assert projection.omitted_messages == 1
 
 
-def test_non_jev_projection_fits_state_and_selected_questions_under_global_cap() -> None:
+def test_plain_text_projection_fits_state_and_selected_questions_under_global_cap() -> None:
     character_cap = 4_096
     base_questions = {'d0': {'kind': 'score', 'instructions': None}}
     base_question_chars = serialized_question_chars(base_questions)
@@ -158,3 +158,8 @@ def test_non_jev_projection_fits_state_and_selected_questions_under_global_cap()
 
 def test_token_estimate_uses_four_characters_per_estimated_token() -> None:
     assert estimate_tokens('a' * 4_001) == 1_001
+
+
+def test_token_estimate_uses_three_characters_per_token_for_jev() -> None:
+    assert estimate_tokens('a' * 3_001, model='typesafe/jev-latest') == 1_001
+    assert estimate_tokens('a' * 3_001, model='openai/gpt-5.6-luna') == 751

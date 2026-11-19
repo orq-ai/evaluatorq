@@ -8,7 +8,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
 
@@ -17,6 +17,7 @@ from .facets import facet_catalogue_cache_hit, load_facet_catalogue_cached
 from .filter_selector import FilterSelectionResult, select_filters_with_response, select_llm_filters_with_response
 from .models import FACET_NAMES, FacetCatalogue, FacetName, FacetSelection, NumericFilters, PopulationRequest
 from .orq_source import OrqTraceSource
+from .settings import normalize_filter_selection
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -53,7 +54,7 @@ async def plan_query(
     client: AsyncOpenAI,
     orq: Orq,
     compiler_model: str,
-    filter_selection: Literal['llm', 'llm+jev'] = 'llm+jev',
+    filter_selection: Literal['llm', 'llm+decision'] = 'llm+decision',
     classifier_model: str,
     fast_filter_model: str,
     within_results: bool = False,
@@ -62,6 +63,7 @@ async def plan_query(
     candidate_confirmer: Callable[..., Awaitable[bool]] | None = None,
 ) -> PlanningResult:
     """Compile semantic dimensions and select facet/numeric/time filters using configured models."""
+    filter_selection = cast("Literal['llm', 'llm+decision']", normalize_filter_selection(filter_selection))
     anchor = now or datetime.now(timezone.utc)
     compiled_task = asyncio.create_task(compile_query(client, compiler_model, query, now=anchor))
     try:
@@ -105,8 +107,8 @@ async def plan_query(
                 'source': 'injected' if catalogue_loader else 'production',
             })
 
-    time_filter = compiled.time if filter_selection == 'llm+jev' else None
-    if filter_selection == 'llm+jev':
+    time_filter = compiled.time if filter_selection == 'llm+decision' else None
+    if filter_selection == 'llm+decision':
         initial_time = normalize_generated_time(
             compiled.time,
             population=population,
@@ -150,7 +152,7 @@ async def plan_query(
             time_filter = selected.time
     except Exception as exc:  # noqa: BLE001 - selector failures intentionally degrade to semantic-only planning
         selected = FilterSelectionResult(FacetSelection(), error=str(exc))
-        time_filter = compiled.time if filter_selection == 'llm+jev' else None
+        time_filter = compiled.time if filter_selection == 'llm+decision' else None
 
     catalogue, selected, time_filter, effective_time, catalogue_valid = await _resolve_final_selection(
         query,
@@ -180,7 +182,7 @@ async def plan_query(
         catalogue_valid = False
 
     generated_numeric = getattr(selected, 'numeric', None)
-    if filter_selection == 'llm+jev':
+    if filter_selection == 'llm+decision':
         generated_numeric = compiled.numeric
     elif generated_numeric is None:
         generated_numeric = NumericFilters()
@@ -245,10 +247,10 @@ async def plan_query(
         'dimensions': 'compiler',
         'facets': 'explicit'
         if population.facets != FacetSelection()
-        else ('llm' if filter_selection == 'llm' else 'jev'),
+        else ('llm' if filter_selection == 'llm' else 'decision'),
         'numeric': 'explicit'
         if population.numeric != NumericFilters()
-        else ('compiler' if filter_selection == 'llm+jev' else 'llm'),
+        else ('compiler' if filter_selection == 'llm+decision' else 'llm'),
         'time': time_source,
     }
     return PlanningResult(
@@ -458,14 +460,14 @@ async def _select_from_catalogue(
     catalogue: FacetCatalogue,
     *,
     client: AsyncOpenAI,
-    filter_selection: Literal['llm', 'llm+jev'],
+    filter_selection: Literal['llm', 'llm+decision'],
     classifier_model: str,
     fast_filter_model: str,
     now: datetime,
 ) -> FilterSelectionResult:
     candidates = _literal_candidates(query, catalogue)
     selector_query = _selector_query(query, candidates, catalogue)
-    if filter_selection == 'llm+jev':
+    if filter_selection == 'llm+decision':
         return await select_filters_with_response(client, classifier_model, catalogue, selector_query)
     return await select_llm_filters_with_response(
         client,
@@ -483,7 +485,7 @@ async def _select_recorded(model_calls: list[Usage | None], *args: Any, **kwargs
     except Exception:
         model_calls.append(None)
         raise
-    # The jev path makes no call when the catalogue offers nothing to classify, and then has no response.
+    # The decision path makes no call when the catalogue offers nothing to classify, and then has no response.
     if kwargs['filter_selection'] == 'llm' or selected.response is not None:
         model_calls.append(selected.usage)
     return selected
@@ -499,7 +501,7 @@ async def _resolve_final_selection(
     initial_end: datetime,
     *,
     client: AsyncOpenAI,
-    filter_selection: Literal['llm', 'llm+jev'],
+    filter_selection: Literal['llm', 'llm+decision'],
     default_window: bool,
     within_results: bool,
     anchor: datetime,

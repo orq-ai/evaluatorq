@@ -67,7 +67,7 @@ get_preset("strong-jury").seated_efforts()
 # {'anthropic/claude-opus-5-5': 'medium', 'openai/gpt-6.1-sol': 'medium', 'google-ai/gemini-3.8-flash': 'medium'}
 ```
 
-Seats are ranked on their Artificial Analysis score at that default effort. Where a card has no score at its default, it ranks on its headline index, which carries no reasoning level: `tencent/deepseek-v4.1-flash` runs at `high` while Artificial Analysis measures it only at `max` and `none`, so it ranks on its `max` headline although it runs lower, and `wafer/GLM-5.3-Flash`'s card carries a headline with no rungs at all. `openai/gpt-6.1-terra` has no score in the catalog, so it is priced and ranked from its `MANUAL_MODEL_CARDS` entry.
+Seats are ranked on their Artificial Analysis score at that default effort. Where a card has no score at its default, it ranks on its headline index, which carries no reasoning level: `tencent/deepseek-v4.1-flash` runs at `high` while Artificial Analysis measures it only at `max` and `none`, so it ranks on its `max` headline although it runs lower, and `wafer/GLM-5.3-Flash`'s card carries a headline with no rungs at all. `openai/gpt-6.1-terra` has no score in the catalog, so it is priced and ranked from its `MANUAL_MODEL_CARDS` entry. Gemini 4 Hydrogen is listed by Google as a stable Gemini 4 model, but stays out of the panel until its live card carries an Artificial Analysis score; Gemini 4 Carbon is scored and waits on a reviewer decision about which preset takes it.
 
 `llm_jury()` takes one `reasoning_effort` for the whole panel, so passing one overrides every seat's default. Per-judge call settings are a schema change and a separate ticket.
 

@@ -592,7 +592,7 @@ async def execute_classify(
         options['headers'] = trace_headers
 
     # The rubric rides on the span as a system message, mirroring what the prompted
-    # legs record: a trace reader who sees only the state cannot tell what Jev was
+    # legs record: a trace reader who sees only the state cannot tell what the decision model was
     # asked, and the question is the half of the call the caller authored.
     single_question = question
     if single_question is None and len(questions) == 1 and 'verdict' in questions:
