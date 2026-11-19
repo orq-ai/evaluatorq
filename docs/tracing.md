@@ -293,7 +293,9 @@ Span attributes on `Evaluatorq - Agent Simulation` / `orq.simulation.generate`:
 | `orq.simulation.mode` | `"generate_and_simulate"` or `"generate"` | `Evaluatorq - Agent Simulation` (generate_and_simulate only), `orq.simulation.generate` |
 | `orq.simulation.num_personas` | Requested persona count | `Evaluatorq - Agent Simulation` (generate_and_simulate only), `orq.simulation.generate` |
 | `orq.simulation.num_scenarios` | Requested scenario count | `Evaluatorq - Agent Simulation` (generate_and_simulate only), `orq.simulation.generate` |
-| `orq.simulation.datapoints_count` | Resolved datapoint count | `Evaluatorq - Agent Simulation` only |
+| `orq.simulation.datapoints_count` | Resolved datapoint (case) count, not multiplied by repetitions | `Evaluatorq - Agent Simulation` only |
+| `orq.simulation.repetitions` | Conversations run per case | `Evaluatorq - Agent Simulation` only |
+| `orq.simulation.conversations_count` | Conversations the run executes: datapoints times repetitions | `Evaluatorq - Agent Simulation` only |
 | `orq.evaluatorq_run_id` | This run's id — see [Run correlation](#run-correlation) | `Evaluatorq - Agent Simulation`, `orq.simulation.generate` |
 
 Span attributes on `orq.simulation.run`:
