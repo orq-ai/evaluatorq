@@ -257,7 +257,7 @@ def discover_oauth_scopes(server: str, *, workspace: str = '', timeout: float = 
         except TimeoutError as exc:
             return OAuthScopes(workspaces=workspaces, error=str(exc))
         data = page.get('data') if page else None
-        if not isinstance(data, list):
+        if not page or not isinstance(data, list):
             return OAuthScopes(workspaces=workspaces, error='The orq CLI could not list projects for this workspace.')
         projects.extend(
             OrqProject(row['project_id'], row['name'], row['workspace_id'])

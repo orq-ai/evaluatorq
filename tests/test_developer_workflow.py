@@ -688,7 +688,6 @@ def test_ty_dashboard_overrides_match_the_diagnostic_baseline() -> None:
                     'invalid-type-form',
                     'missing-type-argument',
                     'missing-attribute',
-                    'missing-union-attribute',
                 ],
                 'ignore',
             ),

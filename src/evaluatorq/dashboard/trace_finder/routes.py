@@ -1048,9 +1048,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 return tuple(record for record in records.values() if record is not None)
 
             if str(form.get('scope') or 'new') == 'within':
-                explorer = store.explorer
-                explorer_view = await explorer.view() if explorer is not None else None
-                if explorer is None or explorer_view is None or not explorer_view.rows:
+                within_explorer = store.explorer
+                explorer_view = await within_explorer.view() if within_explorer is not None else None
+                if within_explorer is None or explorer_view is None or not explorer_view.rows:
                     current_snapshot = await store.snapshot()
                     return _html(
                         render_fragment(
@@ -1083,7 +1083,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                     return await hydrate_explorer_rows(ids)
 
                 async def loaded_traces_limited(limit: int) -> tuple[TraceRecord, ...]:
-                    records, missing = await explorer.records_until_usable(
+                    records, missing = await within_explorer.records_until_usable(
                         ids, generation=explorer_view.generation, limit=limit
                     )
                     if missing:

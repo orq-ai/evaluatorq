@@ -70,6 +70,16 @@ def test_upload_rejects_bad_csrf_type_and_invalid_content(tmp_path: Path, monkey
     assert not list((tmp_path / 'insights-runs' / '.uploads').glob('*'))
 
 
+def test_upload_rejects_a_file_field_sent_as_plain_text(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+
+    response = client.post('/insights/uploads', data={'csrf': _token(client), 'file': '{"traces": []}'})
+
+    assert response.status_code == 422
+    assert response.json()['error'] == 'Choose a JSON file to upload.'
+
+
 def test_upload_rejects_oversized_files_before_storing(tmp_path: Path, monkeypatch) -> None:
     from evaluatorq.dashboard.insights_uploads import MAX_INSIGHTS_UPLOAD_BYTES
 
