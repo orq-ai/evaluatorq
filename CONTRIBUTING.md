@@ -16,7 +16,7 @@ uv sync --all-extras --all-groups
 # Verify the setup
 uv run pytest -m 'not integration' --co  # list tests without running
 uv run ty check                           # check configured source, test, root, and docs files
-uv run ruff check src                     # lint
+uv run ruff check src tests               # lint (tests use the narrow set in tests/ruff.toml)
 ```
 
 ## Development Workflow
@@ -49,8 +49,9 @@ uv run pytest -m integration
 ### Linting and Formatting
 
 ```bash
-# Check for lint issues
+# Check for lint issues (tests are linted with a narrow rule set and are not formatted)
 uv run ruff check src
+uv run ruff check tests
 
 # Auto-fix lint issues
 uv run ruff check src --fix

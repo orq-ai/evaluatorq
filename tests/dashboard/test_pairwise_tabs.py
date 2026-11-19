@@ -27,7 +27,7 @@ JUDGES = ['judge-one', 'judge-two', 'judge-three']
 def _comparison(values: list[str | None], winner: str, *, usage: Usage | None = None) -> PairwiseComparison:
     votes = [
         PairwiseVote(model=m, vote=v, flipped=False, completed=True, explanation=f'{m} says {v}')
-        for m, v in zip(JUDGES, values)
+        for m, v in zip(JUDGES, values, strict=True)
     ]
     return PairwiseComparison(winner=winner, votes=votes, token_usage=usage)
 

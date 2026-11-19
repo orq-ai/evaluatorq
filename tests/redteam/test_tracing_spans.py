@@ -328,7 +328,7 @@ async def test_llm_span_name_format(span_collector: _CollectingExporter):
     """LLM span name follows OTel spec: 'chat <model>'."""
     from evaluatorq.redteam.tracing import with_llm_span
 
-    async with with_llm_span(model='gpt-5-mini') as span:
+    async with with_llm_span(model='gpt-5-mini'):
         pass  # no-op body
 
     assert len(span_collector.spans) == 1
@@ -341,7 +341,7 @@ async def test_llm_span_name_with_provider_model(span_collector: _CollectingExpo
     """Provider/model format produces correct span name."""
     from evaluatorq.redteam.tracing import with_llm_span
 
-    async with with_llm_span(model='azure/gpt-5-mini') as span:
+    async with with_llm_span(model='azure/gpt-5-mini'):
         pass
 
     s = span_collector.spans[0]
@@ -353,7 +353,7 @@ async def test_llm_span_gen_ai_system(span_collector: _CollectingExporter):
     """gen_ai.system is set to resolved provider."""
     from evaluatorq.redteam.tracing import with_llm_span
 
-    async with with_llm_span(model='azure/gpt-5-mini') as span:
+    async with with_llm_span(model='azure/gpt-5-mini'):
         pass
 
     attrs = _attrs(span_collector.spans[0])
@@ -368,7 +368,7 @@ async def test_llm_span_gen_ai_system_default_openai(span_collector: _Collecting
     """gen_ai.system defaults to 'openai' for unprefixed models."""
     from evaluatorq.redteam.tracing import with_llm_span
 
-    async with with_llm_span(model='gpt-5-mini') as span:
+    async with with_llm_span(model='gpt-5-mini'):
         pass
 
     attrs = _attrs(span_collector.spans[0])
@@ -381,7 +381,7 @@ async def test_llm_span_error_type(span_collector: _CollectingExporter):
     from evaluatorq.redteam.tracing import with_llm_span
 
     with pytest.raises(ValueError):
-        async with with_llm_span(model='gpt-5-mini') as span:
+        async with with_llm_span(model='gpt-5-mini'):
             raise ValueError('boom')
 
     s = span_collector.spans[0]
@@ -396,7 +396,7 @@ async def test_redteam_span_error_type(span_collector: _CollectingExporter):
     from evaluatorq.redteam.tracing import with_redteam_span
 
     with pytest.raises(RuntimeError):
-        async with with_redteam_span('orq.redteam.test') as span:
+        async with with_redteam_span('orq.redteam.test'):
             raise RuntimeError('fail')
 
     s = span_collector.spans[0]
@@ -410,7 +410,7 @@ async def test_llm_span_ok_status(span_collector: _CollectingExporter):
     """Successful LLM span has OK status and no error.type."""
     from evaluatorq.redteam.tracing import with_llm_span
 
-    async with with_llm_span(model='gpt-5-mini') as span:
+    async with with_llm_span(model='gpt-5-mini'):
         pass
 
     s = span_collector.spans[0]
@@ -430,7 +430,7 @@ async def test_llm_span_with_all_genai_attrs(span_collector: _CollectingExporter
         max_tokens=500,
         input_messages=msgs,
         attributes={'orq.redteam.llm_purpose': 'adversarial'},
-    ) as span:
+    ):
         pass
 
     attrs = _attrs(span_collector.spans[0])
@@ -461,7 +461,7 @@ async def test_llm_span_input_messages_suppressed_by_capture_gate(
     async with with_llm_span(
         model='gpt-5-mini',
         input_messages=[{'role': 'user', 'content': 'secret prompt'}],
-    ) as span:
+    ):
         pass
 
     attrs = _attrs(span_collector.spans[0])
@@ -474,7 +474,7 @@ async def test_llm_span_kind_is_client(span_collector: _CollectingExporter):
     """LLM spans use SpanKind.CLIENT per OTel GenAI spec."""
     from evaluatorq.redteam.tracing import with_llm_span
 
-    async with with_llm_span(model='gpt-5-mini') as span:
+    async with with_llm_span(model='gpt-5-mini'):
         pass
 
     s = span_collector.spans[0]
@@ -486,7 +486,7 @@ async def test_redteam_span_kind_is_internal(span_collector: _CollectingExporter
     """Redteam spans use SpanKind.INTERNAL."""
     from evaluatorq.redteam.tracing import with_redteam_span
 
-    async with with_redteam_span('orq.redteam.test') as span:
+    async with with_redteam_span('orq.redteam.test'):
         pass
 
     s = span_collector.spans[0]
@@ -533,11 +533,11 @@ async def test_nested_redteam_and_llm_spans(span_collector: _CollectingExporter)
     from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 
     async with (
-        with_redteam_span('orq.redteam.attack') as outer,
+        with_redteam_span('orq.redteam.attack'),
         with_llm_span(
             model='gpt-5-mini',
             attributes={'orq.redteam.llm_purpose': 'adversarial'},
-        ) as inner,
+        ),
     ):
         pass
 

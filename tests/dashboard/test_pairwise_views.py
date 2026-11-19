@@ -27,7 +27,7 @@ def _vote(model: str, value: str | None, *, flipped: bool = False) -> PairwiseVo
 
 
 def _comparison(values: list[str | None], winner: str, **kw: bool) -> PairwiseComparison:
-    return PairwiseComparison(winner=winner, votes=[_vote(m, v, **kw) for m, v in zip(JUDGES, values)])
+    return PairwiseComparison(winner=winner, votes=[_vote(m, v, **kw) for m, v in zip(JUDGES, values, strict=True)])
 
 
 def _fixture_run() -> PairwiseRun:

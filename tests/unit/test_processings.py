@@ -150,7 +150,7 @@ def test_summary_table_counts_a_job_reported_error() -> None:
         data_point=DataPoint(inputs={'text': 'hi'}),
         job_results=[JobResult(job_name='sim', output='dead', error='401 unauthorized', evaluator_scores=[])],
     )
-    rows = {cells[0]: cells[1].plain for cells in zip(*(col._cells for col in create_summary_display([dead]).columns))}
+    rows = {cells[0]: cells[1].plain for cells in zip(*(col._cells for col in create_summary_display([dead]).columns), strict=True)}
 
     assert rows['Failed Jobs'] == '1'
     assert rows['Success Rate'] == '0%'

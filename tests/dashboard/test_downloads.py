@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 from starlette.testclient import TestClient
@@ -34,7 +34,6 @@ if TYPE_CHECKING:
 
 def _make_rt_report():
     """Build a minimal RedTeamReport with results in two categories."""
-    from evaluatorq.contracts import TokenUsage
     from evaluatorq.redteam.contracts import (
         AgentInfo,
         AttackInfo,
@@ -113,7 +112,7 @@ def _make_sim_run(
     turn_metrics_by_result = turn_metrics_by_result or []
 
     results = []
-    for i, (persona, goal) in enumerate(zip(personas, goal_achieved_flags)):
+    for i, (persona, goal) in enumerate(zip(personas, goal_achieved_flags, strict=True)):
         tms = turn_metrics_by_result[i] if i < len(turn_metrics_by_result) else []
         results.append(
             SimulationResult(

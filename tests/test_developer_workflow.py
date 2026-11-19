@@ -172,7 +172,7 @@ def _run_invocations(workflow: str, prefix: list[str]) -> list[list[str]]:
 
 def _assert_failure_enforcing(block: str, *, indent: int) -> None:
     assert not re.search(
-        rf'(?m)^{{indent}}continue-on-error\s*:'.format(indent=' ' * indent),
+        r'(?m)^{indent}continue-on-error\s*:'.format(indent=' ' * indent),
         block,
     )
 

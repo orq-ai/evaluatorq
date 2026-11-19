@@ -610,7 +610,7 @@ class TestDynamicMultiTurnPath:
                     backend=factory,
                 )
 
-                output = await _call_dynamic_job(job_fn, datapoint)
+                await _call_dynamic_job(job_fn, datapoint)
 
         # Orchestrator was used even though turn_type is SINGLE
         mock_orch_instance.run_attack.assert_called_once()

@@ -121,7 +121,7 @@ async def fetch_dataset_batches(
             starting_after = last_id
 
     except Exception as e:
-        raise Exception(f'Failed to fetch dataset {dataset_id}: {e}')
+        raise Exception(f'Failed to fetch dataset {dataset_id}: {e}') from e
 
 
 async def fetch_dataset_as_datapoints(

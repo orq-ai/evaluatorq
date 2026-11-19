@@ -24,7 +24,6 @@ from evaluatorq.redteam.contracts import (
     AttackStrategy,
     AttackTechnique,
     DeliveryMethod,
-    SendResult,
     TokenUsage,
     TurnType,
 )

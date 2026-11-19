@@ -20,7 +20,7 @@ from evaluatorq.insights.models import InsightsRun
 from evaluatorq.trace_finder.models import TraceRecord
 from evaluatorq.trace_finder.orq_source import OrqTraceSource
 from tests.dashboard.insights_trace_helpers import snapshot_run, write_snapshot
-from tests.dashboard.test_insights_page import _write_run, minimal_run  # noqa: F401 — fixture reused
+from tests.dashboard.test_insights_page import _write_run
 from tests.insights.test_population import make_trace
 from tests.trace_finder.test_orq_source import FakeOrq, FakeTraces, detail, span, summary
 

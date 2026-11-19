@@ -17,7 +17,6 @@ checks run offline on hand-built cards, in the normal suite.
 """
 
 import asyncio
-from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 

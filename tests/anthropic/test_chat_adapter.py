@@ -422,7 +422,7 @@ def test_client_attributes_retry_and_close():
 def test_embeddings_not_supported():
     client = AnthropicLLMClient(FakeAnthropic())
     with pytest.raises(NotImplementedError, match='embedding_client'):
-        client.embeddings.create
+        client.embeddings.create  # noqa: B018  the attribute access is what raises
 
 
 def test_rejects_object_without_messages_create():

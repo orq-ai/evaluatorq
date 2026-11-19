@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast

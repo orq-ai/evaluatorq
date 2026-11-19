@@ -9,7 +9,6 @@ for both Chat Completions and Responses API shapes.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Sequence
 from typing import Any
 from unittest.mock import patch

@@ -350,7 +350,7 @@ def test_simulation_recommendation_excerpt_is_bounded_and_links_full_section() -
 
     assert 'Recorded recommendation excerpt:' in html
     assert 'Full recommendation</a>' in html
-    assert f'href="#simtab-recommendations"' in html
+    assert 'href="#simtab-recommendations"' in html
     assert recommendation not in html
     assert 'data-label="Finding"' in html
     assert 'data-label="Recommended next step"' in html

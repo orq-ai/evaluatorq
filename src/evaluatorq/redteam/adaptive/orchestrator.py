@@ -994,7 +994,7 @@ class MultiTurnOrchestrator:
         # OpenAI param union, and `list` is invariant. It is deliberately taken
         # on a per-turn local — `adversarial_messages` keeps its annotation, so
         # reassigning the marked copy onto it stays a type error.
-        raw_messages = cast('list[dict[str, Any]]', adversarial_messages)
+        raw_messages = cast('list[dict[str, Any]]', adversarial_messages)  # ty: ignore[disjoint-cast]
         sent_messages = (
             apply_cache_breakpoints(raw_messages, volatile_tail=0)
             if caching_applies(self.llm_client, self.model)

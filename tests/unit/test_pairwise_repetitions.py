@@ -462,7 +462,7 @@ def test_cost_model_calls_scale_linearly_with_repetitions() -> None:
         calls = {'n': 0}
 
         async def judge(a: object, b: object, model: str) -> Prediction:
-            calls['n'] += 1
+            calls['n'] += 1  # noqa: B023  run to completion inside this iteration
             return Prediction(value='A', explanation='ok')
 
         asyncio.run(run_pairwise(judge_fn=judge, panel=['j'], response_a='x', response_b='y', repetitions=reps))

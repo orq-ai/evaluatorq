@@ -32,7 +32,7 @@ async def test_codex_orq_read_only_sandbox_holds() -> None:
     _needs('orq')
     _needs('codex')
     target = CodingAgentTarget('codex', launcher='orq', permission_mode='read-only', timeout_ms=180_000)
-    response = await target.respond([
+    await target.respond([
         Message(role='user', content='Create a file named probe.txt containing "x". Then say done or blocked.')
     ])
     assert target.workdir is not None

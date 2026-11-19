@@ -17,7 +17,6 @@ only, not runtime JS execution.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest

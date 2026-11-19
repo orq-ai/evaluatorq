@@ -26,6 +26,9 @@ jobs:
       - name: Ruff lint
         run: uv run ruff check src
 
+      - name: Ruff lint (tests, narrow set in tests/ruff.toml)
+        run: uv run ruff check tests
+
       - name: Ruff format check
         run: uv run ruff format --check src
 

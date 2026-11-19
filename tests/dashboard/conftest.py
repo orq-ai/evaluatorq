@@ -38,9 +38,11 @@ from evaluatorq.redteam.contracts import (
     UnifiedEvaluationResult,
 )
 from evaluatorq.redteam.reports.converters import compute_report_summary
+from tests.dashboard.insights_run_factory import build_minimal_run
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import Message
+    from evaluatorq.insights.models import InsightsRun
 
 
 @pytest.fixture(autouse=True)
@@ -535,3 +537,9 @@ def test_rt_fixtures_build(
     client, rid = client_with_rt_fixture
     resp = client.get(f'/r/{rid}')
     assert resp.status_code == 200
+
+
+@pytest.fixture
+def minimal_run() -> InsightsRun:
+    """A completed two-trace Insights run; see `tests/dashboard/insights_run_factory.py`."""
+    return build_minimal_run()

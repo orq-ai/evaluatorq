@@ -21,7 +21,6 @@ from evaluatorq.redteam.contracts import (
     Pipeline,
     RedTeamReport,
     RedTeamResult,
-    ReportSummary,
     Severity,
     TurnType,
     UnifiedEvaluationResult,
