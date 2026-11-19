@@ -1069,7 +1069,7 @@ async def run_classify_judges(
 ) -> dict[str, JudgeOutcome]:
     """Judge several questions about one ``state``, returning one outcome per question key.
 
-    A classify model (Jev) answers every question in one ``/decisions`` round trip, so
+    A classify model (a decision model such as ``typesafe/jev-latest``) answers every question in one ``/decisions`` round trip, so
     three questions cost one call, not three. Its token usage rides on each outcome,
     because the reply is not split per question. Any other model falls back to one
     `run_judge` call per question, which is what a single-question caller gets.

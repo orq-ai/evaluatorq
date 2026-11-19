@@ -44,26 +44,18 @@ if TYPE_CHECKING:
 
 
 def set_jury_span_attrs(span: Span | None, jury: JuryResult | None) -> None:
-    """Record panel-of-judges reliability on the evaluator span.
+    """Show the panel-of-judges breakdown as a visible ``metadata`` field on the evaluator span.
 
-    Emits the flat ``orq.redteam.jury.*`` attributes (dotted keys the Orq trace
-    UI nests back into an object) *and* a JSON ``metadata`` attribute so the
-    breakdown surfaces as a visible field on the span rather than only living in
-    the raw attribute list. No-op when no jury ran.
+    The numbers themselves live on the ``orq.jury`` span, under ``jury.*``: that span is the one source to query.
+    This writes only a JSON ``metadata`` attribute, so the breakdown is readable on the evaluator span without
+    opening its child. No-op when no jury ran.
     """
     if span is None or jury is None:
         return
     set_span_attrs(
         span,
         {
-            'orq.redteam.jury.judges_configured': jury.judges_configured,
-            'orq.redteam.jury.judges_succeeded': jury.judges_succeeded,
-            'orq.redteam.jury.judges_failed': jury.judges_failed,
-            'orq.redteam.jury.replacements_used': jury.replacements_used,
-            'orq.redteam.jury.raw_agreement': jury.raw_agreement,
-            'orq.redteam.jury.tie': jury.tie,
-            'orq.redteam.jury.inconclusive': jury.inconclusive,
-            # Visible metadata field (JSON — OTel attrs can't hold nested objects).
+            # JSON, because an OTel attribute cannot hold a nested object.
             'metadata': json.dumps({
                 'jury': {
                     'judges_configured': jury.judges_configured,

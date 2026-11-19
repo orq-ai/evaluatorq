@@ -652,7 +652,7 @@ async def insights(  # noqa: C901
                     from evaluatorq.trace_finder.settings import effective_settings
 
                     filter_selection = population.filter_selection or effective_settings().filter_selection
-                if filter_selection == 'llm+jev':
+                if filter_selection == 'llm+decision':
                     run.population['finder_classifier_model'] = finder_classifier_model
                 elif filter_selection == 'llm':
                     run.population['finder_filter_model'] = resolved.echo.get(
@@ -678,7 +678,7 @@ async def insights(  # noqa: C901
                 if omitted:
                     warning += (
                         f' {omitted} of {resolved.echo.get("n_source_messages", 0)} whole messages were omitted '
-                        'from the Jev classifier state.'
+                        'from the decision state.'
                     )
                 run.warnings.append(warning)
             run.traces = [

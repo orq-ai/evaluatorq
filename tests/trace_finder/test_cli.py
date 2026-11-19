@@ -178,7 +178,9 @@ def test_find_shows_plan_and_classifies_without_prompt_when_not_a_tty(monkeypatc
 
 
 @pytest.mark.parametrize(('args', 'expected_origin', 'expected_mode'), [
-    ([], 'default', 'llm+jev'),
+    ([], 'default', 'llm+decision'),
+    (['--filter-selection', 'llm+decision'], 'default', 'llm+decision'),
+    (['--filter-selection', 'llm+jev'], 'default', 'llm+decision'),
     (['--window-days', '3', '--filter-selection', 'llm'], 'explicit', 'llm'),
 ])
 def test_find_preserves_window_and_filter_selection_overrides(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from evaluatorq.common import model_catalogue as catalogue
-from evaluatorq.common.model_catalogue import ModelInfo, cost_of
+from evaluatorq.common.model_catalogue import ModelInfo, Pricing, cost_of
 from evaluatorq.contracts import Usage, _cache_counts
 
 ANTHROPIC = {
@@ -154,8 +154,7 @@ def test_cost_of_prices_an_anthropic_cache_heavy_call_on_all_tokens():
         0.015,
         'anthropic',
         True,  # noqa: FBT003
-        cache_read_cost_per_1k=0.0003,
-        cache_write_cost_per_1k=0.00375,
+        pricing=Pricing(cache_read=0.0003, cache_write=0.00375),
     )
     usage = _extract({
         'input_tokens': 10,
@@ -182,8 +181,7 @@ async def test_price_usage_prices_anthropic_cache_tokens(fake_catalogue):
             0.015,
             'anthropic',
             True,  # noqa: FBT003
-            cache_read_cost_per_1k=0.0003,
-            cache_write_cost_per_1k=0.00375,
+            pricing=Pricing(cache_read=0.0003, cache_write=0.00375),
         )
     })
     usage = _extract({

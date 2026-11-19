@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
+from typing import Any
 
 import pytest
 
 from evaluatorq.common.model_input import (
-    DEFAULT_JEV_OPTIONS,
-    JEV_STATE_ALL_QUESTIONS_CHARS,
-    JEV_STATE_CHARS,
-    JEV_STATE_QUESTION_CHARS,
+    DEFAULT_DECISION_OPTIONS,
+    DECISION_STATE_ALL_QUESTIONS_CHARS,
+    DECISION_STATE_CHARS,
+    DECISION_STATE_QUESTION_CHARS,
     EdgeLimit,
-    JevOptions,
+    DecisionOptions,
     cap_text,
     classifier_question_wire_payloads,
-    fit_jev_state,
-    is_jev_model,
-    jev_state,
+    fit_classifier_input,
+    fit_decision_state,
+    uses_decision_state,
+    decision_state,
     message_lines,
     serialized_chars,
     serialized_question_chars,
@@ -107,16 +110,16 @@ def test_question_wire_payloads_count_exact_fields_and_are_idempotent() -> None:
     assert classifier_question_wire_payloads(expected) == expected
     assert serialized_question_chars(questions) == serialized_chars(expected)
 
-def test_jev_state_keeps_user_edges_and_does_not_mutate_source() -> None:
+def test_decision_state_keeps_user_edges_and_does_not_mutate_source() -> None:
     source = [{'role': 'user', 'content': 'x' * 3_000}]
 
-    state = jev_state(source, global_char_cap=500_000)
+    state = decision_state(source, global_char_cap=500_000)
 
     assert state['messages'][0]['text'] == f'{"x" * 1000}[... 1000 chars left out ...]{"x" * 1000}'
     assert source[0]['content'] == 'x' * 3_000
 
 
-def test_jev_tool_call_pairs_every_matching_result_and_retains_status() -> None:
+def test_decision_tool_call_pairs_every_matching_result_and_retains_status() -> None:
     source = [
         {'role': 'assistant', 'tool_calls': [{'id': 'call-1', 'function': {'name': 'shell.exec', 'arguments': 'x' * 300}}]},
         {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'b' * 300, 'status': 'failed', 'exit_code': 7},
@@ -124,7 +127,7 @@ def test_jev_tool_call_pairs_every_matching_result_and_retains_status() -> None:
         {'role': 'tool', 'content': 'orphan'},
     ]
 
-    state = jev_state(source, global_char_cap=500_000)
+    state = decision_state(source, global_char_cap=500_000)
     calls = [item for item in state['messages'] if item['type'] == 'tool_call']
 
     assert calls[0]['name'] == 'shell.exec'
@@ -135,7 +138,7 @@ def test_jev_tool_call_pairs_every_matching_result_and_retains_status() -> None:
     assert any(item['type'] == 'orphan_result' for item in state['messages'])
 
 
-def test_jev_duplicate_tool_call_ids_pair_results_in_source_order() -> None:
+def test_decision_duplicate_tool_call_ids_pair_results_in_source_order() -> None:
     source = [
         {
             'role': 'assistant',
@@ -148,7 +151,7 @@ def test_jev_duplicate_tool_call_ids_pair_results_in_source_order() -> None:
         {'role': 'tool', 'tool_call_id': 'call-duplicate', 'content': 'second result'},
     ]
 
-    state = jev_state(source, global_char_cap=500_000)
+    state = decision_state(source, global_char_cap=500_000)
     calls = [item for item in state['messages'] if item['type'] == 'tool_call']
 
     assert [call['name'] for call in calls] == ['first', 'second']
@@ -158,7 +161,7 @@ def test_jev_duplicate_tool_call_ids_pair_results_in_source_order() -> None:
     ]
 
 
-def test_jev_reused_tool_call_id_uses_latest_assistant_group() -> None:
+def test_decision_reused_tool_call_id_uses_latest_assistant_group() -> None:
     source = [
         {
             'role': 'assistant',
@@ -171,7 +174,7 @@ def test_jev_reused_tool_call_id_uses_latest_assistant_group() -> None:
         {'role': 'tool', 'tool_call_id': 'call-reused', 'content': 'latest result'},
     ]
 
-    state = jev_state(source, global_char_cap=500_000)
+    state = decision_state(source, global_char_cap=500_000)
     calls = [item for item in state['messages'] if item['type'] == 'tool_call']
 
     assert [call['name'] for call in calls] == ['earlier', 'later']
@@ -180,18 +183,18 @@ def test_jev_reused_tool_call_id_uses_latest_assistant_group() -> None:
 
 
 
-def test_jev_model_gate_and_question_capacity_validation() -> None:
-    assert is_jev_model('typesafe/jev-latest')
-    assert not is_jev_model('openai/gpt-6-luna')
+def test_decision_state_gate_and_question_capacity_validation() -> None:
+    assert uses_decision_state('typesafe/jev-latest')
+    assert not uses_decision_state('openai/gpt-6-luna')
 
     with pytest.raises(ValueError, match='questions alone'):
-        fit_jev_state({'messages': []}, [{'instructions': 'q' * JEV_STATE_ALL_QUESTIONS_CHARS}])
+        fit_decision_state({'messages': []}, [{'instructions': 'q' * DECISION_STATE_ALL_QUESTIONS_CHARS}])
 
 
-def test_jev_global_cap_keeps_complete_head_and_tail_messages() -> None:
+def test_decision_global_cap_keeps_complete_head_and_tail_messages() -> None:
     source = [{'role': 'user', 'content': f'message-{index}-' + 'x' * 100} for index in range(20)]
 
-    state = jev_state(source, global_char_cap=1_000)
+    state = decision_state(source, global_char_cap=1_000)
 
     assert state['messages'][0]['index'] == 0
     assert state['messages'][-1]['index'] == 19
@@ -205,22 +208,22 @@ def test_long_question_reserves_state_capacity() -> None:
         ]
     }
 
-    bounded = fit_jev_state(state, [{'instructions': 'q' * 100_000}])
+    bounded = fit_decision_state(state, [{'instructions': 'q' * 60_000}])
 
-    assert serialized_chars(bounded) <= 28_000 * 4 - 100_000
+    assert serialized_chars(bounded) <= DECISION_STATE_CHARS - 60_000
 
 
 @pytest.mark.parametrize(
     ('role', 'excerpt_chars', 'edge_chars'),
     [('system', 8_000, 4_000), ('developer', 8_000, 4_000), ('user', 2_000, 1_000), ('assistant', 1_000, 500)],
 )
-def test_jev_role_excerpts_keep_exact_edges_without_mutating_source(
+def test_decision_role_excerpts_keep_exact_edges_without_mutating_source(
     role: str, excerpt_chars: int, edge_chars: int
 ) -> None:
     original = 'begin-' + 'x' * (excerpt_chars + 100) + '-end'
     source = [{'role': role, 'content': original}]
 
-    state = jev_state(source, global_char_cap=500_000)
+    state = decision_state(source, global_char_cap=500_000)
 
     rendered = state['messages'][0]['text']
     omitted = len(original) - edge_chars * 2
@@ -228,12 +231,12 @@ def test_jev_role_excerpts_keep_exact_edges_without_mutating_source(
     assert source[0]['content'] == original
 
 
-def test_jev_global_cap_keeps_edges_of_one_oversized_user_message_before_role_excerpt() -> None:
+def test_decision_global_cap_keeps_edges_of_one_oversized_user_message_before_role_excerpt() -> None:
     original = 'user-head:' + 'x' * 600_000 + ':user-tail'
     source = [{'role': 'user', 'content': original}]
 
-    state = jev_state(source, global_char_cap=500_000)
-    state = fit_jev_state(state, [])
+    state = decision_state(source, global_char_cap=500_000)
+    state = fit_decision_state(state, [])
 
     rendered = state['messages'][0]['text']
     assert rendered.startswith('user-head:')
@@ -244,7 +247,7 @@ def test_jev_global_cap_keeps_edges_of_one_oversized_user_message_before_role_ex
     assert source[0]['content'] == original
 
 
-def test_jev_global_cap_keeps_oversized_tool_output_edges_and_result_metadata() -> None:
+def test_decision_global_cap_keeps_oversized_tool_output_edges_and_result_metadata() -> None:
     output = 'tool-head:' + 'y' * 600_000 + ':tool-tail'
     arguments = 'arg-head-' + 'x' * 600_000 + '-arg-tail'
     source = [
@@ -262,7 +265,7 @@ def test_jev_global_cap_keeps_oversized_tool_output_edges_and_result_metadata() 
         },
     ]
 
-    state = fit_jev_state(jev_state(source, global_char_cap=500_000), [])
+    state = fit_decision_state(decision_state(source, global_char_cap=500_000), [])
 
     call = next(entry for entry in state['messages'] if entry['type'] == 'tool_call')
     assert call['name'] == 'shell.exec'
@@ -278,10 +281,10 @@ def test_jev_global_cap_keeps_oversized_tool_output_edges_and_result_metadata() 
     assert source[1]['content'] == output
 
 
-def test_jev_omission_marker_counts_unrepresented_source_messages_and_fits_global_cap() -> None:
+def test_decision_omission_marker_counts_unrepresented_source_messages_and_fits_global_cap() -> None:
     source = [{'role': 'user', 'content': f'message-{index}-' + 'x' * 100} for index in range(20)]
 
-    state = jev_state(source, global_char_cap=1_000)
+    state = decision_state(source, global_char_cap=1_000)
 
     represented = {entry['index'] for entry in state['messages']}
     assert state['omission'] == f'[... {len(source) - len(represented)} messages left out ...]'
@@ -289,20 +292,20 @@ def test_jev_omission_marker_counts_unrepresented_source_messages_and_fits_globa
     assert serialized_chars(state) <= 1_000
 
 
-def test_jev_final_omission_marker_stays_within_question_limited_state_budget() -> None:
+def test_decision_final_omission_marker_stays_within_question_limited_state_budget() -> None:
     source = [{'role': 'user', 'content': f'message-{index}-' + 'x' * 2_000} for index in range(80)]
     questions = [{'instructions': 'q' * 30_000}]
 
-    state = fit_jev_state(jev_state(source, global_char_cap=500_000), questions)
+    state = fit_decision_state(decision_state(source, global_char_cap=500_000), questions)
 
     question_chars = serialized_chars(questions[0])
-    assert serialized_chars(state) <= 28_000 * 4 - question_chars
+    assert serialized_chars(state) <= DECISION_STATE_CHARS - question_chars
     represented = {entry['index'] for entry in state['messages']}
     omitted = len(source) - len(represented)
     assert state['omission'] == f'[... {omitted} messages left out ...]'
 
 
-def test_jev_removes_harness_reminders_and_typed_reasoning_but_keeps_business_json() -> None:
+def test_decision_removes_harness_reminders_and_typed_reasoning_but_keeps_business_json() -> None:
     source = [
         {
             'role': 'assistant',
@@ -314,7 +317,7 @@ def test_jev_removes_harness_reminders_and_typed_reasoning_but_keeps_business_js
         {'role': 'user', 'content': {'reasoning': 'application data', 'question': 'help'}},
     ]
 
-    state = jev_state(source, global_char_cap=500_000)
+    state = decision_state(source, global_char_cap=500_000)
     rendered = str(state)
 
     assert 'private chain of thought' not in rendered
@@ -326,7 +329,7 @@ def test_jev_removes_harness_reminders_and_typed_reasoning_but_keeps_business_js
 def test_structured_text_data_and_url_fields_are_not_mislabeled_as_media() -> None:
     content = {'text': 'label', 'data': {'records': [{'id': 7}]}, 'url': '/records/7'}
 
-    state = jev_state([{'role': 'user', 'content': content}], global_char_cap=500_000)
+    state = decision_state([{'role': 'user', 'content': content}], global_char_cap=500_000)
 
     message = state['messages'][0]
     assert 'media' not in message
@@ -335,11 +338,11 @@ def test_structured_text_data_and_url_fields_are_not_mislabeled_as_media() -> No
     assert '"/records/7"' in message['text']
 
 
-def test_literal_omission_marker_does_not_inflate_jev_excerpt_count() -> None:
+def test_literal_omission_marker_does_not_inflate_decision_excerpt_count() -> None:
     literal = '[... 100000 chars left out ...]'
     source = literal + 'x' * 600_000
 
-    state = fit_jev_state(jev_state([{'role': 'user', 'content': source}], global_char_cap=500_000), [])
+    state = fit_decision_state(decision_state([{'role': 'user', 'content': source}], global_char_cap=500_000), [])
 
     text = state['messages'][0]['text']
     markers = re.findall(r'\[\.\.\. (\d+) chars left out \.\.\.\]', text)
@@ -349,20 +352,20 @@ def test_literal_omission_marker_does_not_inflate_jev_excerpt_count() -> None:
 
 
 
-def test_jev_inline_base64_media_reports_decoded_size_without_copying_payload() -> None:
+def test_decision_inline_base64_media_reports_decoded_size_without_copying_payload() -> None:
     import base64
 
     payload = b'\x89PNG' + b'x' * 130_000
     encoded = base64.b64encode(payload).decode('ascii')
     source = [{'role': 'user', 'content': [{'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{encoded}'}}]}]
 
-    state = jev_state(source, global_char_cap=500_000)
+    state = decision_state(source, global_char_cap=500_000)
 
     assert state['messages'][0]['media'] == [f'[image, {len(payload) // 1024} KB]']
     assert encoded not in str(state)
 
 
-def test_jev_message_and_tool_results_preserve_multimodal_order() -> None:
+def test_decision_message_and_tool_results_preserve_multimodal_order() -> None:
     content = [
         {'type': 'text', 'text': 'refer to'},
         {'type': 'image_url', 'image_url': {'url': 'https://example.test/image.png'}},
@@ -377,7 +380,7 @@ def test_jev_message_and_tool_results_preserve_multimodal_order() -> None:
         {'role': 'tool', 'tool_call_id': 'call-ordered', 'content': content},
     ]
 
-    state = jev_state(source, global_char_cap=500_000)
+    state = decision_state(source, global_char_cap=500_000)
     message = next(entry for entry in state['messages'] if entry['role'] == 'user')
     call = next(entry for entry in state['messages'] if entry['type'] == 'tool_call')
     expected = 'refer to\n[image, size unknown]\nabove'
@@ -388,42 +391,42 @@ def test_jev_message_and_tool_results_preserve_multimodal_order() -> None:
 
 
 
-def test_question_limited_jev_state_preserves_and_counts_top_level_metadata() -> None:
+def test_question_limited_decision_state_preserves_and_counts_top_level_metadata() -> None:
     state = {
         'trace_status': 'completed',
         'messages': [{'index': index, 'role': 'user', 'type': 'message', 'text': 'x' * 2_000} for index in range(80)],
     }
     questions = [{'instructions': 'q' * 30_000}]
 
-    bounded = fit_jev_state(state, questions)
+    bounded = fit_decision_state(state, questions)
 
     assert bounded['trace_status'] == 'completed'
     question_chars = serialized_chars(questions)
     longest_question = max(serialized_chars(question) for question in questions)
-    assert serialized_chars(bounded) <= JEV_STATE_CHARS
-    assert serialized_chars(bounded) + longest_question <= JEV_STATE_QUESTION_CHARS
-    assert serialized_chars(bounded) + question_chars <= JEV_STATE_ALL_QUESTIONS_CHARS
+    assert serialized_chars(bounded) <= DECISION_STATE_CHARS
+    assert serialized_chars(bounded) + longest_question <= DECISION_STATE_QUESTION_CHARS
+    assert serialized_chars(bounded) + question_chars <= DECISION_STATE_ALL_QUESTIONS_CHARS
     assert len(bounded['messages']) < len(state['messages'])
 
 
 
 def test_question_fit_keeps_the_full_state_ceiling_and_respects_question_limits() -> None:
     source = [{'role': 'user', 'content': f'event-{index}-' + 'x' * 2_000} for index in range(50)]
-    state = jev_state(source, global_char_cap=500_000)
+    state = decision_state(source, global_char_cap=500_000)
     questions = [{'instructions': 'q' * 16_000}]
 
-    bounded = fit_jev_state(state, questions)
+    bounded = fit_decision_state(state, questions)
 
     question_chars = serialized_chars(questions)
     longest_question = max(serialized_chars(question) for question in questions)
-    assert serialized_chars(state) > JEV_STATE_CHARS - longest_question
+    assert serialized_chars(state) > DECISION_STATE_CHARS - longest_question
     assert bounded != state
-    assert serialized_chars(bounded) <= JEV_STATE_CHARS - question_chars
-    assert serialized_chars(bounded) + longest_question <= JEV_STATE_QUESTION_CHARS
-    assert serialized_chars(bounded) + question_chars <= JEV_STATE_ALL_QUESTIONS_CHARS
-def test_jev_role_excerpt_accumulates_global_and_role_omissions() -> None:
+    assert serialized_chars(bounded) <= DECISION_STATE_CHARS - question_chars
+    assert serialized_chars(bounded) + longest_question <= DECISION_STATE_QUESTION_CHARS
+    assert serialized_chars(bounded) + question_chars <= DECISION_STATE_ALL_QUESTIONS_CHARS
+def test_decision_role_excerpt_accumulates_global_and_role_omissions() -> None:
     original = 'x' * 600_000
-    state = fit_jev_state(jev_state([{'role': 'user', 'content': original}], global_char_cap=500_000), [])
+    state = fit_decision_state(decision_state([{'role': 'user', 'content': original}], global_char_cap=500_000), [])
 
     assert state['messages'][0]['text'] == f'{original[:1000]}[... {len(original) - 2_000} chars left out ...]{original[-1000:]}'
 
@@ -442,16 +445,16 @@ _OPTION_SOURCE = [
 ]
 
 
-def test_default_jev_options_leave_the_state_unchanged() -> None:
-    assert jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=DEFAULT_JEV_OPTIONS) == jev_state(
+def test_default_decision_options_leave_the_state_unchanged() -> None:
+    assert decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=DEFAULT_DECISION_OPTIONS) == decision_state(
         _OPTION_SOURCE, global_char_cap=500_000
     )
 
 
-def test_jev_edge_limits_change_how_each_part_is_trimmed() -> None:
-    options = JevOptions(user=EdgeLimit(400, 100), tool_input=EdgeLimit(40, 10), tool_result=EdgeLimit(60, 20))
+def test_decision_edge_limits_change_how_each_part_is_trimmed() -> None:
+    options = DecisionOptions(user=EdgeLimit(400, 100), tool_input=EdgeLimit(40, 10), tool_result=EdgeLimit(60, 20))
 
-    messages = jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=options)['messages']
+    messages = decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=options)['messages']
 
     user = next(entry for entry in messages if entry['role'] == 'user')
     call = next(entry for entry in messages if entry['type'] == 'tool_call')
@@ -461,9 +464,9 @@ def test_jev_edge_limits_change_how_each_part_is_trimmed() -> None:
 
 
 def test_excluding_a_role_drops_its_entries_and_counts_them_as_omitted() -> None:
-    options = JevOptions(include_user=False, include_developer=False)
+    options = DecisionOptions(include_user=False, include_developer=False)
 
-    state = jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=options)
+    state = decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=options)
 
     roles = {entry['role'] for entry in state['messages'] if entry['type'] == 'message'}
     assert roles == {'system', 'assistant'}
@@ -471,14 +474,14 @@ def test_excluding_a_role_drops_its_entries_and_counts_them_as_omitted() -> None
 
 
 def test_excluding_tool_calls_drops_their_paired_results_but_keeps_orphans() -> None:
-    state = jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=JevOptions(include_tool_calls=False))
+    state = decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=DecisionOptions(include_tool_calls=False))
 
     assert {entry['type'] for entry in state['messages']} == {'message', 'orphan_result'}
     assert state['omission'] == '[... 1 messages left out ...]'
 
 
 def test_excluding_tool_results_keeps_calls_without_results_and_drops_orphans() -> None:
-    state = jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=JevOptions(include_tool_results=False))
+    state = decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=DecisionOptions(include_tool_results=False))
 
     calls = [entry for entry in state['messages'] if entry['type'] == 'tool_call']
     assert [call['results'] for call in calls] == [[]]
@@ -486,24 +489,24 @@ def test_excluding_tool_results_keeps_calls_without_results_and_drops_orphans() 
     assert state['omission'] == '[... 2 messages left out ...]'
 
 
-def test_jev_state_limit_option_lowers_the_ceiling_under_the_global_cap() -> None:
+def test_decision_state_limit_option_lowers_the_ceiling_under_the_global_cap() -> None:
     source = [{'role': 'user', 'content': f'message-{index}-' + 'x' * 100} for index in range(40)]
 
-    state = jev_state(source, global_char_cap=500_000, options=JevOptions(state_chars=3_000))
+    state = decision_state(source, global_char_cap=500_000, options=DecisionOptions(state_chars=3_000))
 
     assert serialized_chars(state) <= 3_000
     assert 'omission' in state
 
 
-def test_jev_coverage_is_off_by_default_and_leaves_the_state_identical() -> None:
-    assert jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=JevOptions(coverage=False)) == jev_state(
+def test_decision_coverage_is_off_by_default_and_leaves_the_state_identical() -> None:
+    assert decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=DecisionOptions(coverage=False)) == decision_state(
         _OPTION_SOURCE, global_char_cap=500_000
     )
-    assert 'context' not in jev_state(_OPTION_SOURCE, global_char_cap=500_000)
+    assert 'context' not in decision_state(_OPTION_SOURCE, global_char_cap=500_000)
 
 
-def test_jev_coverage_puts_the_context_first_and_says_reasoning_is_not_included() -> None:
-    state = jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=JevOptions(coverage=True))
+def test_decision_coverage_puts_the_context_first_and_says_reasoning_is_not_included() -> None:
+    state = decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=DecisionOptions(coverage=True))
 
     assert next(iter(state)) == 'context'
     assert state['context']['reasoning'] == 'not included'
@@ -516,10 +519,10 @@ def test_jev_coverage_puts_the_context_first_and_says_reasoning_is_not_included(
         'tool_results',
     ]
     assert state['context']['left_out'] == []
-    assert state['messages'] == jev_state(_OPTION_SOURCE, global_char_cap=500_000)['messages']
+    assert state['messages'] == decision_state(_OPTION_SOURCE, global_char_cap=500_000)['messages']
 
 
-def test_jev_state_never_reads_reasoning_even_when_the_source_carries_it() -> None:
+def test_decision_state_never_reads_reasoning_even_when_the_source_carries_it() -> None:
     source = [
         {'role': 'user', 'content': 'question'},
         {
@@ -529,40 +532,40 @@ def test_jev_state_never_reads_reasoning_even_when_the_source_carries_it() -> No
         },
     ]
 
-    state = jev_state(source, global_char_cap=500_000, options=JevOptions(coverage=True))
+    state = decision_state(source, global_char_cap=500_000, options=DecisionOptions(coverage=True))
 
     assert 'SECRET-THOUGHT' not in str(state['messages'])
     assert state['context']['reasoning'] == 'not included'
 
 
-def test_jev_coverage_follows_the_include_flags_and_the_trim_limits() -> None:
-    off = JevOptions(
+def test_decision_coverage_follows_the_include_flags_and_the_trim_limits() -> None:
+    off = DecisionOptions(
         coverage=True, include_user=False, include_tool_results=False, user=EdgeLimit(10, 5), assistant=EdgeLimit(90, 30)
     )
 
-    context = jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=off)['context']
+    context = decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=off)['context']
 
     assert context['left_out'] == ['user', 'tool_results']
     assert 'user' not in context['includes'] and 'tool_results' not in context['includes']
     assert 'user' not in context['trimmed']
     assert '90' in context['trimmed']['assistant'] and '30' in context['trimmed']['assistant']
-    assert context != jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=JevOptions(coverage=True))['context']
+    assert context != decision_state(_OPTION_SOURCE, global_char_cap=500_000, options=DecisionOptions(coverage=True))['context']
 
 
-def test_jev_coverage_says_only_call_less_results_remain_when_tool_calls_are_off() -> None:
-    context = jev_state(
-        _OPTION_SOURCE, global_char_cap=500_000, options=JevOptions(coverage=True, include_tool_calls=False)
+def test_decision_coverage_says_only_call_less_results_remain_when_tool_calls_are_off() -> None:
+    context = decision_state(
+        _OPTION_SOURCE, global_char_cap=500_000, options=DecisionOptions(coverage=True, include_tool_calls=False)
     )['context']
 
     assert 'tool_calls' in context['left_out']
     assert any(item.startswith('tool_results (only') for item in context['includes'])
 
 
-def test_jev_coverage_counts_inside_the_state_cap() -> None:
+def test_decision_coverage_counts_inside_the_state_cap() -> None:
     source = [{'role': 'user', 'content': f'message {n} ' + 'w' * 300} for n in range(40)]
     cap = 3_000
 
-    state = jev_state(source, global_char_cap=cap, options=JevOptions(coverage=True, state_chars=cap))
+    state = decision_state(source, global_char_cap=cap, options=DecisionOptions(coverage=True, state_chars=cap))
 
     assert serialized_chars(state) <= cap
     assert next(iter(state)) == 'context'
@@ -581,9 +584,9 @@ def test_located_gaps_use_source_neighbours_including_grouped_results() -> None:
         {'role': 'user', 'content': 'retained'},
         {'role': 'system', 'content': 'excluded end'},
     ]
-    state = jev_state(
+    state = decision_state(
         messages, global_char_cap=10_000,
-        options=JevOptions(include_system=False, located_omission=True),
+        options=DecisionOptions(include_system=False, located_omission=True),
     )
     gaps = [entry for entry in state['messages'] if entry['type'] == 'omission']
     assert [(gap['after_index'], gap['before_index'], gap['messages_left_out']) for gap in gaps] == [
@@ -591,7 +594,7 @@ def test_located_gaps_use_source_neighbours_including_grouped_results() -> None:
     ]
     assert state_omitted_messages(state) == 4
     assert 'omission' not in state
-    legacy = jev_state(messages, global_char_cap=10_000, options=JevOptions(include_system=False))
+    legacy = decision_state(messages, global_char_cap=10_000, options=DecisionOptions(include_system=False))
     assert state_omitted_messages(legacy) == 4
 
 
@@ -606,7 +609,7 @@ def test_located_caps_count_unique_source_indexes_and_marker_metadata(cap: int) 
         {'role': 'tool', 'tool_call_id': 'b', 'content': 'b' * 100},
         *({'role': 'user', 'content': 'z' * 300} for _ in range(8)),
     ]
-    state = jev_state(messages, global_char_cap=10_000, options=JevOptions(state_chars=cap, located_omission=True))
+    state = decision_state(messages, global_char_cap=10_000, options=DecisionOptions(state_chars=cap, located_omission=True))
     represented = {
         index
         for entry in state['messages'] if entry['type'] != 'omission'
@@ -619,18 +622,18 @@ def test_located_caps_count_unique_source_indexes_and_marker_metadata(cap: int) 
             first = 0 if gap['after_index'] is None else gap['after_index'] + 1
             end = len(messages) if gap['before_index'] is None else gap['before_index']
             assert not represented.intersection(range(first, end))
-    fitted = fit_jev_state(state, [], global_char_cap=cap)
+    fitted = fit_decision_state(state, [], global_char_cap=cap)
     assert serialized_chars(fitted) <= cap
 
 
-def test_jev_layout_options_preserve_type_and_status_without_empty_call_fields() -> None:
+def test_decision_layout_options_preserve_type_and_status_without_empty_call_fields() -> None:
     messages = [
         {'role': 'assistant', 'content': '', 'tool_calls': [
             {'id': 'a', 'function': {'name': 'shell', 'arguments': ''}},
         ]},
         {'role': 'tool', 'tool_call_id': 'a', 'content': '', 'status': 'error', 'exit_code': 7},
     ]
-    state = jev_state(messages, global_char_cap=10_000, options=JevOptions(field_order=True, drop_empty=True))
+    state = decision_state(messages, global_char_cap=10_000, options=DecisionOptions(field_order=True, drop_empty=True))
     call = state['messages'][0]
     assert call['type'] == 'tool_call'
     assert 'call_index' not in call and 'input' not in call
@@ -638,7 +641,7 @@ def test_jev_layout_options_preserve_type_and_status_without_empty_call_fields()
     result = call['results'][0]
     assert result['status'] == 'error' and result['exit_code'] == 7
     assert 'text' not in result
-    legacy = jev_state(messages, global_char_cap=10_000)
+    legacy = decision_state(messages, global_char_cap=10_000)
     assert legacy['messages'][0]['call_index'] == 0
     assert legacy['messages'][0]['input'] == ''
 
@@ -648,7 +651,7 @@ def test_drop_empty_keeps_multi_call_indexes_and_null_identifiers() -> None:
         {'id': None, 'function': {'name': None, 'arguments': ''}},
         {'id': 'b', 'function': {'name': 'shell', 'arguments': ''}},
     ]}]
-    state = jev_state(messages, global_char_cap=10_000, options=JevOptions(drop_empty=True))
+    state = decision_state(messages, global_char_cap=10_000, options=DecisionOptions(drop_empty=True))
     assert [entry['call_index'] for entry in state['messages']] == [0, 1]
     assert state['messages'][0]['id'] is None and state['messages'][0]['name'] is None
     assert all('results' not in entry and 'input' not in entry for entry in state['messages'])
@@ -656,12 +659,12 @@ def test_drop_empty_keeps_multi_call_indexes_and_null_identifiers() -> None:
 
 def test_located_coverage_metadata_fits_or_reports_an_impossible_cap() -> None:
     messages = [{'role': 'user', 'content': 'body ' * 200} for _ in range(20)]
-    options = JevOptions(coverage=True, located_omission=True, state_chars=1_500)
-    state = jev_state(messages, global_char_cap=10_000, options=options)
+    options = DecisionOptions(coverage=True, located_omission=True, state_chars=1_500)
+    state = decision_state(messages, global_char_cap=10_000, options=options)
     assert 'context' in state
     assert serialized_chars(state) <= 1_500
     with pytest.raises(ValueError, match='metadata'):
-        jev_state(messages, global_char_cap=10_000, options=JevOptions(
+        decision_state(messages, global_char_cap=10_000, options=DecisionOptions(
             coverage=True, located_omission=True, state_chars=50,
         ))
 
@@ -671,11 +674,116 @@ def test_located_marker_overhead_preserves_useful_messages_within_budget() -> No
         {'role': 'system' if index % 2 else 'user', 'content': f'visible turn {index}'}
         for index in range(161)
     ]
-    state = jev_state(
+    state = decision_state(
         messages, global_char_cap=10_000,
-        options=JevOptions(include_system=False, coverage=True, located_omission=True, state_chars=5_000),
+        options=DecisionOptions(include_system=False, coverage=True, located_omission=True, state_chars=5_000),
     )
     retained = [entry['index'] for entry in state['messages'] if entry['type'] != 'omission']
     assert 0 in retained and 160 in retained
     assert state_omitted_messages(state) == len(messages) - len(retained)
     assert serialized_chars(state) <= 5_000
+
+
+def _long_tool_chat(pairs: int) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = [
+        {'role': 'system', 'content': 'S' * 20_000},
+        {'role': 'user', 'content': 'U' * 5_000},
+    ]
+    for index in range(pairs):
+        call = {
+            'id': f'c{index}',
+            'type': 'function',
+            'function': {'name': 'Bash', 'arguments': json.dumps({'command': 'x' * 50})},
+        }
+        messages.append({'role': 'assistant', 'content': 'A' * 100, 'tool_calls': [call]})
+        messages.append({'role': 'tool', 'tool_call_id': f'c{index}', 'content': 'R' * 100})
+    return messages
+
+
+def _kept_indexes(state: dict[str, Any]) -> set[int]:
+    kept: set[int] = set()
+    for entry in state['messages']:
+        if entry['type'] == 'omission':
+            continue
+        kept.add(entry['index'])
+        kept.update(result['index'] for result in entry.get('results', []) if 'index' in result)
+    return kept
+
+
+@pytest.mark.parametrize('pairs', [384, *range(370, 400, 3)])
+def test_long_chat_drops_the_boundary_entry_that_cannot_hold_a_marker(pairs: int) -> None:
+    messages = _long_tool_chat(pairs)
+    state = decision_state(messages, global_char_cap=500_000)
+    assert serialized_chars(state) <= DEFAULT_DECISION_OPTIONS.state_chars
+    kept = _kept_indexes(state)
+    assert state_omitted_messages(state) > 0
+    assert len(kept) + state_omitted_messages(state) == len(messages), 'every dropped message is counted'
+    assert {0, len(messages) - 1} <= kept, 'both ends of the chat stay'
+
+
+@pytest.mark.parametrize('cap', [600, 1_000, 2_000])
+@pytest.mark.parametrize('count', [20, 40, 80])
+@pytest.mark.parametrize('step', [7, 13, 29, 37])
+def test_a_text_too_small_for_its_marker_is_dropped_not_emptied(step: int, count: int, cap: int) -> None:
+    messages = [
+        {'role': 'user' if index % 2 == 0 else 'assistant', 'content': 'w' * (1 + (index * step) % 211)}
+        for index in range(count)
+    ]
+    state = decision_state(messages, global_char_cap=cap)
+    assert serialized_chars(state) <= cap
+    texts = [entry['text'] for entry in state['messages'] if entry['type'] == 'message']
+    assert texts and all(texts), 'no message is kept with its text cut to nothing'
+    assert len(_kept_indexes(state)) + state_omitted_messages(state) == len(messages)
+
+
+@pytest.mark.parametrize('pairs', [384, *range(370, 400, 3)])
+def test_a_turn_is_kept_whole_or_left_out_whole(pairs: int) -> None:
+    messages = _long_tool_chat(pairs)
+    state = decision_state(messages, global_char_cap=500_000)
+    kinds: dict[int, list[str]] = {}
+    for entry in state['messages']:
+        if entry['type'] != 'omission':
+            kinds.setdefault(entry['index'], []).append(entry['type'])
+    with_calls = {index for index, message in enumerate(messages) if message.get('tool_calls')}
+    assert with_calls & set(kinds), 'some assistant turns with a tool call are kept'
+    for index in with_calls & set(kinds):
+        assert sorted(kinds[index]) == ['message', 'tool_call'], f'turn {index} kept its text and its call together'
+    assert len(_kept_indexes(state)) + state_omitted_messages(state) == len(messages)
+
+
+@pytest.mark.parametrize('cap', range(900, 2_400, 60))
+def test_a_tool_result_too_small_for_its_marker_is_dropped_not_emptied(cap: int) -> None:
+    messages: list[dict[str, Any]] = [{'role': 'user', 'content': 'go'}]
+    for index in range(12):
+        call = {'id': f'c{index}', 'type': 'function', 'function': {'name': 'Bash', 'arguments': '{}'}}
+        messages.append({'role': 'assistant', 'content': '', 'tool_calls': [call]})
+        messages.append({'role': 'tool', 'tool_call_id': f'c{index}', 'content': 'R' * (300 + 37 * index)})
+    state = decision_state(messages, global_char_cap=cap)
+    assert serialized_chars(state) <= cap
+    results = [result for entry in state['messages'] if entry['type'] == 'tool_call' for result in entry['results']]
+    assert all(result['text'] for result in results), 'no tool result is kept with its text cut to nothing'
+    assert len(_kept_indexes(state)) + state_omitted_messages(state) == len(messages)
+
+
+@pytest.mark.parametrize('length', [5_000, 120_000])
+def test_a_conversation_is_fitted_without_probing_below_its_marker(length: int) -> None:
+    state = {'conversation': 'x' * length}
+    for cap in range(30, 70):
+        try:
+            fitted = fit_classifier_input(state, model='openai/gpt-5.4-mini', questions=[], global_char_cap=cap)
+        except ValueError as error:
+            assert 'cannot fit' in str(error), 'a cap with no room says so; it is not a marker-size crash'
+            continue
+        assert isinstance(fitted, dict)
+        assert serialized_chars(fitted) <= cap
+        assert 'chars left out' in fitted['conversation']
+    roomy = fit_classifier_input(state, model='openai/gpt-5.4-mini', questions=[], global_char_cap=200)
+    assert isinstance(roomy, dict) and 'chars left out' in roomy['conversation']
+
+
+def test_decision_state_caps_assume_three_characters_per_token() -> None:
+    assert (DECISION_STATE_CHARS, DECISION_STATE_QUESTION_CHARS, DECISION_STATE_ALL_QUESTIONS_CHARS) == (
+        84_000,
+        96_000,
+        192_000,
+    )

@@ -27,11 +27,11 @@ from evaluatorq.common.judge import (
 )
 from evaluatorq.common.model_input import (
     cap_text,
+    decision_state,
+    decision_text_state,
     effective_trace_input_chars,
     fit_classifier_input,
-    is_jev_model,
-    jev_state,
-    jev_text_state,
+    uses_decision_state,
 )
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.trace_document import to_chat_messages
@@ -227,8 +227,8 @@ def _prepare_state(
     char_cap: int,
 ) -> str | dict[str, object]:
     """Apply the global cap while preserving the caller's question-specific state."""
-    if is_jev_model(model):
-        return state if isinstance(state, dict) else jev_text_state(state, global_char_cap=char_cap)
+    if uses_decision_state(model):
+        return state if isinstance(state, dict) else decision_text_state(state, global_char_cap=char_cap)
     rendered = (
         state
         if isinstance(state, str)
@@ -238,9 +238,9 @@ def _prepare_state(
 
 
 def prepare_classifier_state(trace: TraceRecord | TraceDocument, *, model: str, char_cap: int) -> str | dict[str, Any]:
-    """Build the main Insights classifier state before any Jev question-capacity fit."""
-    if is_jev_model(model):
-        return jev_state(to_chat_messages(trace), global_char_cap=char_cap)
+    """Build the main Insights classifier state before any decision-state question-capacity fit."""
+    if uses_decision_state(model):
+        return decision_state(to_chat_messages(trace), global_char_cap=char_cap)
     return _prepare_state(full_conversation_view(trace, char_cap, DETAILED), model, char_cap)
 
 
@@ -491,7 +491,7 @@ async def label_traces(
 ) -> list[LabelOutcome]:
     """Label every trace, bounded by `parallelism` concurrent `/decisions` calls.
 
-    Per trace: prepare the classifier state from the full transcript or indexed Jev messages, ask
+    Per trace: prepare the classifier state from the full transcript or indexed decision-state messages, ask
     every label's question plus (when `compiled` is given) the population-match
     question in a single request, and skip that call when neither is present.
     With `coding` on, each trace also gets the coding-agent check and, when it

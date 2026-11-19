@@ -10,10 +10,11 @@ import pytest
 
 from evaluatorq.common.model_input import (
     CHARS_PER_ESTIMATED_TOKEN,
-    JEV_STATE_ALL_QUESTIONS_CHARS,
+    DECISION_STATE_ALL_QUESTIONS_CHARS,
+    DECISION_STATE_CHARS_PER_TOKEN,
     effective_trace_input_chars,
 )
-from evaluatorq.common.model_catalogue import ModelInfo, cost_of
+from evaluatorq.common.model_catalogue import ContextTier, ModelInfo, Pricing, cost_of
 from evaluatorq.common.run_manifest import list_manifests, start_manifest
 from evaluatorq.contracts import ManifestStatus, StageRecord
 from evaluatorq.insights import estimate, summarize
@@ -160,13 +161,15 @@ def test_token_estimates_follow_character_caps_and_stage_output_caps() -> None:
     assert _row(result, 'dimension:intent').tokens_in == summarize.SUMMARY_MAX_TOKENS
 
 
-def test_jev_classifier_estimate_observes_its_combined_request_character_ceiling() -> None:
+def test_decision_classifier_estimate_observes_its_combined_request_character_ceiling() -> None:
     result = _estimate(
         models=StageModels(summary='summary-m', classifier='typesafe/jev-latest', embedding='embedding-m'),
         trace_input_chars=500_000,
     )
 
-    assert _row(result, 'label').tokens_in == JEV_STATE_ALL_QUESTIONS_CHARS // estimate.CHARS_PER_TOKEN
+    assert _row(result, 'label').tokens_in == DECISION_STATE_ALL_QUESTIONS_CHARS // DECISION_STATE_CHARS_PER_TOKEN == 64_000
+    assert f'at {DECISION_STATE_CHARS_PER_TOKEN} characters per token' in _row(result, 'label').basis
+    assert _row(result, 'summary').tokens_in == 500_000 // CHARS_PER_ESTIMATED_TOKEN
 
 
 @pytest.mark.parametrize(
@@ -312,10 +315,7 @@ def test_an_above_threshold_estimate_uses_the_extended_context_tier() -> None:
         0.03,
         'p',
         supports_responses=True,
-        extended_context_threshold=1,
-        extended_context_mode='all_tokens',
-        above_threshold_input_cost_per_1k=0.02,
-        above_threshold_output_cost_per_1k=0.06,
+        pricing=Pricing(tier=ContextTier(threshold=1, input=0.02, output=0.06, cache_read=None)),
     )
     result = _estimate(prices=_prices() | {'summary-m': tiered})
     summary = _row(result, 'summary')
@@ -324,15 +324,6 @@ def test_an_above_threshold_estimate_uses_the_extended_context_tier() -> None:
     assert expected is not None
     assert summary.cost_high == pytest.approx(100 * (expected.input + expected.output))
     assert summary.cost_high != pytest.approx(100 * (summary.tokens_in * 0.01 + summary.tokens_out * 0.03) / 1000)
-
-
-def test_an_above_threshold_estimate_on_an_incomplete_tier_is_unpriced() -> None:
-    incomplete = ModelInfo(
-        0.01, 0.03, 'p', supports_responses=True, extended_context_threshold=1, extended_context_mode='all_tokens'
-    )
-    result = _estimate(prices=_prices() | {'summary-m': incomplete})
-    assert _row(result, 'summary').cost_high is None
-    assert result.cost_partial is True
 
 
 def test_embedding_cost_scales_with_dimension_count() -> None:

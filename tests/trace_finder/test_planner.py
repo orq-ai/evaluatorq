@@ -336,6 +336,44 @@ async def test_cancelled_planner_awaits_compiler_task(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('given', ['llm+decision', 'llm+jev'])
+async def test_the_old_filter_mode_name_plans_as_the_decision_mode(monkeypatch, given):
+    from evaluatorq.trace_finder import planner
+
+    anchor = datetime(2026, 5, 31, tzinfo=timezone.utc)
+    selectors: list[str] = []
+
+    async def compile_stub(*_args, **_kwargs):
+        return SimpleNamespace(dimensions=(), numeric=NumericFilters(), time=None, unsupported_reason=None, usages=())
+
+    async def loader(_orq, **_kwargs):
+        return FacetCatalogue(model=('some/model',))
+
+    async def decision_selector(*_args, **_kwargs):
+        selectors.append('decision')
+        return FilterSelectionResult(FacetSelection())
+
+    async def llm_selector(*_args, **_kwargs):
+        selectors.append('llm')
+        return FilterSelectionResult(FacetSelection())
+
+    monkeypatch.setattr(planner, 'compile_query', compile_stub)
+    monkeypatch.setattr(planner, 'select_filters_with_response', decision_selector)
+    monkeypatch.setattr(planner, 'select_llm_filters_with_response', llm_selector)
+    await invalidate_facet_catalogue_cache()
+    result = await planner.plan_query(
+        'model some/model', PopulationRequest(time_origin='default'), client=cast(Any, object()),
+        orq=cast(Any, _client()), compiler_model='compiler', filter_selection=given,
+        classifier_model='classifier', fast_filter_model='fast', now=anchor, catalogue_loader=loader,
+    )
+    await invalidate_facet_catalogue_cache()
+
+    assert selectors == ['decision']
+    assert result.provenance['filter_mode'] == 'llm+decision'
+    assert result.provenance['facets'] == 'decision'
+
+
+@pytest.mark.asyncio
 async def test_llm_selector_time_drives_catalogue_reselection_and_candidate_confirmation(monkeypatch):
     from evaluatorq.trace_finder import planner
 
