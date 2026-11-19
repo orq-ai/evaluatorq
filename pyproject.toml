@@ -260,7 +260,6 @@ include = [ "src/evaluatorq/dashboard" ]
   invalid-type-form = "ignore"
   missing-type-argument = "ignore"
   missing-attribute = "ignore"
-  missing-union-attribute = "ignore"
 
 [[tool.ty.overrides]]
 include = [ "tests/dashboard" ]
