@@ -361,12 +361,13 @@ async def test_the_usage_of_both_runs_is_counted_and_a_failed_second_run_keeps_t
 
 
 @pytest.mark.asyncio
-async def test_a_first_run_that_raises_is_not_asked_again() -> None:
+async def test_a_first_run_that_raises_is_not_asked_again_and_its_usage_is_counted() -> None:
     calls: list[bool] = []
+    recorded: list[TokenUsage | None] = []
 
     async def call(*, skip_schema_rungs: bool) -> StructuredResult[Any]:
         calls.append(skip_schema_rungs)
-        raise StructuredGenerationError('model refused to generate')
+        raise StructuredGenerationError('model refused to generate', usage=_usage(150))
 
     with pytest.raises(StructuredGenerationError):
         await generate_real_items(
@@ -376,7 +377,8 @@ async def test_a_first_run_that_raises_is_not_asked_again() -> None:
             salvage=lambda _raw: [],
             expected=5,
             label='Sample.generate',
-            record_usage=lambda _usage: None,
+            record_usage=recorded.append,
         )
 
     assert calls == [False]
+    assert [usage.input_tokens for usage in recorded if usage is not None] == [150]

@@ -60,7 +60,11 @@ async def generate_real_items(
             logger.warning('%s: dropped %d placeholder item(s)', label, len(items) - len(kept))
         return kept
 
-    first = await call(skip_schema_rungs=False)
+    try:
+        first = await call(skip_schema_rungs=False)
+    except Exception as exc:
+        record_usage(usage_from_exception(exc))
+        raise
     record_usage(first.usage)
     if first.parsed is None:
         return real(salvage(first.raw or '[]'))
