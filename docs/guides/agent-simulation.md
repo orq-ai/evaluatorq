@@ -197,6 +197,57 @@ The earlier names `evaluation_description`, `orq_results_path`, `report`, and `e
 
     `raise_on_execution_failure` gates on datapoints that never produced a conversation, not on scores, so it will not fail a build for an agent that simply answered badly. For a gate on the scores themselves — turning evaluator results into an exit code, with the env vars and workflow step to go with it — see [In an evaluatorq Run › In CI](simulation-in-evaluatorq.md#in-ci).
 
+## Repeat each case to see how stable the result is
+
+One conversation per case tells you what happened once. An agent, a simulated user and a judge are all models, so the same case can end differently the next time. `repetitions` runs every case several times, each as a separate fresh conversation, so you can see how often the goal is reached and not only whether it was reached once.
+
+=== "CLI"
+
+    ```bash
+    eq sim run --target agent:my-agent \
+      --agent-description "Handle IT incidents and ticket updates." \
+      --num-personas 3 --num-scenarios 2 --repetitions 10
+    ```
+
+=== "Python"
+
+    ```python
+    from evaluatorq.simulation import generate_and_simulate
+
+    results = await generate_and_simulate(
+        target="agent:my-agent",
+        agent_description="Handle IT incidents and ticket updates.",
+        num_personas=3,
+        num_scenarios=2,
+        repetitions=10,
+    )
+    # 6 cases x 10 repetitions = 60 conversations
+    ```
+
+It works the same on `simulate()` and `eq sim simulate`, for cases you pass in yourself. The default is 1. A value that is not a whole number of at least 1 raises `ValueError` before anything runs.
+
+Three settings sound alike and do different things:
+
+| Setting | What it multiplies |
+|---|---|
+| `num_personas`, `num_scenarios` | The cases. More of them means more different situations. |
+| `repetitions` | The conversations per case. The persona, scenario, opening message and criteria stay the same; the conversation is run again from the start. |
+| Judge or jury repetitions (`llm_jury`, the red-team judge) | The scoring calls on one finished transcript. `repetitions` here never repeats the judge. |
+
+What to expect from a repeated run:
+
+- **Generation runs once.** Personas, scenarios and opening messages are created once per case, then every repetition reuses them.
+- **Each repetition is its own conversation.** It gets its own history, its own thread id and a fresh copy of the target, so default memory is not shared between repetitions. Two things are shared because you asked for them: an explicit `memory_entity_id`, which is one memory scope for the whole run, and any state your own target callable keeps outside the messages it is given.
+- **Every conversation is kept.** The run holds `cases x repetitions` results, and each one is uploaded and saved on its own. Each result's `metadata` has `base_datapoint_id` (the case), `trial_index` (0, 1, 2, ...) and a `datapoint_id` unique to that conversation (`<case id>#t<trial_index>`). Hooks receive that unique id.
+- **A retry is not a repetition.** A target call that fails and is retried stays inside the same conversation and does not add a result.
+- **`datapoint_parallelism` bounds all conversations together**, not each case separately.
+- **The run plan shows the total before it starts**, for example `6 datapoints x 10 repetitions = 60 conversations`.
+- **Replay does not multiply.** A saved run stores each case once, next to the `repetitions` it ran with. `previous_run` / `--from-run` reloads those cases and runs them once each unless you pass `repetitions` again.
+
+In the dashboard, all repetitions of a case land in the same heatmap cell. The cell shows the mean goal-completion score and, when it holds more than one conversation, `n`; hovering `n` gives the completed and errored counts and the goal-achieved rate. The mean score and the goal-achieved rate are different numbers: three conversations scored 60% each have a mean of 60% and a goal-achieved rate of 0%.
+
+Repeating a case measures how much one case varies. It does not remove judge bias, it does not make your cases representative of real traffic, and a difference between two runs is not shown to be significant just because each cell has several conversations.
+
 ## Seed by archetype
 
 The middle ground between "just give me five" and specifying every trait: name the archetype, and `generate_persona()` / `generate_scenario()` fill the rest. You get back real `Persona` / `Scenario` objects to inspect, tweak, and pass to `simulate()`.
@@ -799,7 +850,7 @@ Replay the most recent run, or pick a specific one:
 
 A timestamp on its own does not match; use the whole file name. If a name matches several runs, the newest wins. An id prefix that matches several runs raises `ReplayError`, so use a longer prefix. `latest` on an empty store raises `ReplayError: No saved simulation runs found in <runs directory> — nothing to replay.` A run saved before replay support has no stored cases and raises `ReplayError` too; re-run it once to get a replayable file.
 
-Replay reuses the stored cases and the stored turn limit. It does not restore the evaluators: pass `--evaluator` or `evaluator_names`, or the defaults run. Pass `--max-turns` or `max_turns` to override the stored limit.
+Replay reuses the stored cases and the stored turn limit. It does not restore the evaluators: pass `--evaluator` or `evaluator_names`, or the defaults run. Pass `--max-turns` or `max_turns` to override the stored limit. The stored cases are the base cases, one per persona and scenario pair, even when the saved run used `repetitions`; replay runs each once unless you pass `repetitions` again.
 
 ### Ground new cases in real traces
 
