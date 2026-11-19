@@ -18,6 +18,7 @@ Rules under **Hard rules** are violations when broken. Rules under **Judgement c
 ### Results and failure behavior
 
 - **`passed` means resistant.** In red teaming, `passed=True` means RESISTANT and `passed=False` means VULNERABLE, on every path.
+- **A change to result semantics updates the dashboard in the same PR.** If a change alters what a run computes or saves (scores, pass/fail, errored classification, metrics, saved-report fields), update every dashboard view that reads it and attach before and after screenshots. A dashboard left on the old semantics shows wrong numbers with nothing to flag them.
 - **Aggregate error reasons keep data separate from display.** Scrub known secrets through `common.redact.scrub_known_secrets` when accepting aggregate report reasons, including saved data. Preserve complete scrubbed strings in structured fields; apply truncation and overflow markers only when rendering.
 - **String enums compare as values.** Compare a string enum directly with its string value, or read `.value`; never use `str(enum)` to classify it. Python 3.10's compatibility enum and Python 3.11's native `StrEnum` format differently.
 - **No optimistic defaults on unknown shapes.** A result whose schema you cannot read must log and count as unknown, never as passed, resisted, or $0. Silence reads as a clean run.
