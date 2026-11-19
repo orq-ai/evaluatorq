@@ -164,6 +164,15 @@ Span attributes on `orq.job`:
 | `orq.row_index` | Zero-based row number |
 | `orq.job_name` | Job name (if set via `@job("name")`) |
 
+Events on `orq.job`: one `gen_ai.evaluation.result` event per evaluator, the [OpenTelemetry GenAI evaluation event](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/model/gen-ai/events.yaml). Evaluators run while the job span is still open, so the event sits on the span whose output was scored, as the conventions ask. It is emitted for every evaluator that sets `evaluator_type`, which `evaluatorq()` defaults to `python_eval`.
+
+| Event attribute | Value |
+|---|---|
+| `gen_ai.evaluation.name` | Name of the evaluator |
+| `gen_ai.evaluation.score.value` | Numeric or boolean score as a float; absent for a string score |
+| `gen_ai.evaluation.score.label` | `pass` or `fail` when the evaluator returns `pass_`, otherwise a string score itself, cut to 64 characters with a logged warning |
+| `gen_ai.evaluation.explanation` | Explanation string, capped at 512 characters (if the evaluator provides one) |
+
 Span attributes on `orq.evaluation`:
 
 | Attribute | Value |
@@ -173,6 +182,10 @@ Span attributes on `orq.evaluation`:
 | `orq.score` | JSON-serialised score value |
 | `orq.explanation` | Explanation string (if the evaluator provides one) |
 | `orq.pass` | Boolean pass/fail result |
+| `orq.span_type` | `"span.evaluator"`, so Orq attaches the result as an evaluation |
+| `gen_ai.evaluation.name`, `.score.value`, `.score.label`, `.explanation` | The same values as the `gen_ai.evaluation.result` event on `orq.job`; Orq reads them from this span |
+| `gen_ai.evaluation.passed` / `orq.evaluator.passed` | Boolean pass/fail result. Not part of the OpenTelemetry conventions, but Orq stores, alerts on and scores yes/no evaluators from `gen_ai.evaluation.passed` |
+| `orq.evaluator.key` / `orq.evaluator.type` / `orq.evaluator.output_type` / `orq.evaluator.score.label` | Evaluator identity and how Orq formats the score (`boolean`, `number` or `string`) |
 | `orq.evaluation.input` / `gen_ai.input` | JSON scorer input: the datapoint, the job output and the row (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `orq.evaluation.output` / `gen_ai.output` | JSON verdict: `passed`, `value`, `type`, `reason`, or `error` when the scorer raised (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 

@@ -540,6 +540,109 @@ def test_set_evaluation_attributes_emits_evaluator_span_when_typed() -> None:
     }
 
 
+def test_set_evaluation_attributes_emits_orq_passed_next_to_gen_ai_passed() -> None:
+    """Orq reads gen_ai.evaluation.passed with no fallback, so it stays; the
+    orq.evaluator.passed copy survives a later move out of the gen_ai namespace."""
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span = MagicMock()
+    set_evaluation_attributes(span, 0.0, pass_=False, evaluator_name='e', evaluator_type='python_eval')
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['gen_ai.evaluation.passed'] is False
+    assert attrs['orq.evaluator.passed'] is False
+    assert attrs['gen_ai.evaluation.score.label'] == 'fail'
+
+
+def test_set_evaluation_attributes_adds_result_event_to_evaluated_span() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span, job_span = MagicMock(), MagicMock()
+    set_evaluation_attributes(
+        span,
+        1.0,
+        explanation='why',
+        pass_=True,
+        evaluator_name='goal_achieved',
+        evaluator_type='python_eval',
+        evaluated_span=job_span,
+    )
+    job_span.add_event.assert_called_once_with(
+        'gen_ai.evaluation.result',
+        attributes={
+            'gen_ai.evaluation.name': 'goal_achieved',
+            'gen_ai.evaluation.score.value': 1.0,
+            'gen_ai.evaluation.score.label': 'pass',
+            'gen_ai.evaluation.explanation': 'why',
+        },
+    )
+    span.add_event.assert_not_called()
+
+
+def test_set_evaluation_attributes_no_result_event_without_evaluator_type() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    job_span = MagicMock()
+    set_evaluation_attributes(MagicMock(), 1.0, pass_=True, evaluator_name='e', evaluated_span=job_span)
+    job_span.add_event.assert_not_called()
+
+
+def test_set_evaluation_attributes_string_score_is_its_own_label() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span, job_span = MagicMock(), MagicMock()
+    set_evaluation_attributes(span, 'relevant', evaluator_name='e', evaluator_type='llm_eval', evaluated_span=job_span)
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['gen_ai.evaluation.score.label'] == 'relevant'
+    assert attrs['orq.evaluator.score.label'] == 'relevant'
+    assert 'gen_ai.evaluation.score.value' not in attrs
+    assert 'gen_ai.evaluation.passed' not in attrs
+    assert job_span.add_event.call_args.kwargs['attributes'] == {
+        'gen_ai.evaluation.name': 'e',
+        'gen_ai.evaluation.score.label': 'relevant',
+    }
+
+
+def test_set_evaluation_attributes_cuts_long_string_label_with_warning() -> None:
+    """The conventions want a low-cardinality label; a long string verdict is cut
+    on the span, with a warning, while orq.evaluation.output keeps the full value."""
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    records: list[str] = []
+    handler_id = logger.add(lambda message: records.append(message.record['message']), level='WARNING')
+    try:
+        span = MagicMock()
+        long = 'x' * 100
+        set_evaluation_attributes(span, long, evaluator_name='verbose', evaluator_type='llm_eval')
+    finally:
+        logger.remove(handler_id)
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    label = attrs['gen_ai.evaluation.score.label']
+    assert len(label) == 64
+    assert label.endswith('…')
+    assert json.loads(attrs['orq.evaluation.output'])['value'] == long
+    assert len(records) == 1
+    assert "'verbose'" in records[0]
+    assert '100-character' in records[0]
+
+
+def test_set_evaluation_attributes_short_string_label_does_not_warn() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    records: list[str] = []
+    handler_id = logger.add(lambda message: records.append(message.record['message']), level='WARNING')
+    try:
+        set_evaluation_attributes(MagicMock(), 'x' * 64, evaluator_name='e', evaluator_type='llm_eval')
+    finally:
+        logger.remove(handler_id)
+    assert records == []
+
+
 def test_set_evaluation_attributes_output_type_boolean() -> None:
     """A bool score must report output_type 'boolean', not 'number' — bool is an
     int subclass, so the numeric branch would otherwise swallow it."""

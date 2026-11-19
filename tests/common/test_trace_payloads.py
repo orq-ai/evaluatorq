@@ -276,3 +276,47 @@ async def test_invalid_optional_diagnostics_preserve_verdict(
     assert 'raw_output' in caplog.text
     assert 'optional' in caplog.text
     assert span.status.status_code == StatusCode.OK
+
+
+@pytest.mark.asyncio
+async def test_job_span_carries_one_result_event_per_evaluator(spans: InMemorySpanExporter) -> None:
+    """The OTel GenAI conventions put gen_ai.evaluation.result on the evaluated
+    span. Evaluators run while orq.job is still open, so the event lands there."""
+
+    async def job(_data: DataPoint, _row: int) -> dict[str, Any]:
+        return {'name': 'echo', 'output': 'reply'}
+
+    async def passes(_params: ScorerParameter) -> EvaluationResult:
+        return EvaluationResult(value=1.0, pass_=True, explanation='matched')
+
+    async def labels(_params: ScorerParameter) -> EvaluationResult:
+        return EvaluationResult(value='relevant')
+
+    result = await process_job(
+        job,
+        DataPoint(inputs={}),
+        row_index=0,
+        evaluators=[{'name': 'match', 'scorer': passes}, {'name': 'relevance', 'scorer': labels}],
+    )
+
+    assert result.error is None
+    job_span = _span(spans, 'orq.job')
+    events = {
+        str((e.attributes or {})['gen_ai.evaluation.name']): dict(e.attributes or {})
+        for e in job_span.events
+        if e.name == 'gen_ai.evaluation.result'
+    }
+    assert events == {
+        'match': {
+            'gen_ai.evaluation.name': 'match',
+            'gen_ai.evaluation.score.value': 1.0,
+            'gen_ai.evaluation.score.label': 'pass',
+            'gen_ai.evaluation.explanation': 'matched',
+        },
+        'relevance': {
+            'gen_ai.evaluation.name': 'relevance',
+            'gen_ai.evaluation.score.label': 'relevant',
+        },
+    }
+    for name in ('orq.evaluation match', 'orq.evaluation relevance'):
+        assert not [e for e in _span(spans, name).events if e.name == 'gen_ai.evaluation.result']
