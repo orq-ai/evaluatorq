@@ -224,7 +224,7 @@ One conversation per case tells you what happened once. An agent, a simulated us
     # 6 cases x 10 repetitions = 60 conversations
     ```
 
-It works the same on `simulate()` and `eq sim simulate`, for cases you pass in yourself. The default is 1. A value that is not a whole number of at least 1 raises `ValueError` before anything runs.
+It works the same on `simulate()` and `eq sim simulate`, for cases you pass in yourself. The default is 1, or the replayed run's count when you replay. A value that is not a whole number of at least 1 raises `ValueError` before anything runs.
 
 Three settings sound alike and do different things:
 
@@ -237,14 +237,16 @@ Three settings sound alike and do different things:
 What to expect from a repeated run:
 
 - **Generation runs once.** Personas, scenarios and opening messages are created once per case, then every repetition reuses them.
-- **Each repetition is its own conversation.** It gets its own history, its own thread id and a fresh copy of the target, so default memory is not shared between repetitions. Two things are shared because you asked for them: an explicit `memory_entity_id`, which is one memory scope for the whole run, and any state your own target callable keeps outside the messages it is given.
-- **Every conversation is kept.** The run holds `cases x repetitions` results, and each one is uploaded and saved on its own. Each result's `metadata` has `base_datapoint_id` (the case), `trial_index` (0, 1, 2, ...) and a `datapoint_id` unique to that conversation (`<case id>#t<trial_index>`). Hooks receive that unique id.
+- **Each repetition is its own conversation.** It gets its own history, its own thread id and its own copy of the target, made with the target's `new()`, so an `agent:` target's default memory is not shared between repetitions. Three things are shared because you asked for them: an explicit `memory_entity_id`, which is one memory scope for the whole run, any state your own target callable keeps outside the messages it is given, since the callable itself is not copied, and anything your own `AgentTarget.new()` carries over to the copy.
+- **Every conversation is kept.** The run holds `cases x repetitions` results, and each one is uploaded and saved on its own. Each result's `metadata` has `base_datapoint_id` (the case), `trial_index` (0, 1, 2, ...) and a `datapoint_id` unique to that conversation (`<case id>#t<trial_index>`). Hooks receive that unique id. Group by `base_datapoint_id` to join conversations to their case: it is set on every run, `trial_index` 0 and equal to `datapoint_id` when the run has one repetition. Because of that id scheme, a run with `repetitions` above 1 rejects a case whose id already ends in `#t<digits>`.
+- **Uploaded experiment rows tell trials apart.** With `repetitions` above 1, each row's inputs carry `base_datapoint_id` and `trial_index` next to the case, so the repetitions of a case are not identical rows in the Orq experiment.
 - **A retry is not a repetition.** A target call that fails and is retried stays inside the same conversation and does not add a result.
 - **`datapoint_parallelism` bounds all conversations together**, not each case separately.
-- **The run plan shows the total before it starts**, for example `6 datapoints x 10 repetitions = 60 conversations`.
-- **Replay does not multiply.** A saved run stores each case once, next to the `repetitions` it ran with. `previous_run` / `--from-run` reloads those cases and runs them once each unless you pass `repetitions` again.
+- **The run plan shows the total before it starts**, for example `6 datapoints x 10 repetitions = 60 conversations`. The `on_confirm` and `on_run_start` payload keeps `num_datapoints` as the number of cases and adds `num_conversations` and `repetitions`; the run span records `orq.simulation.datapoints_count`, `orq.simulation.conversations_count` and `orq.simulation.repetitions`.
+- **Report steps scale with the conversations.** The judge, every evaluator and the recommendations pass run once per conversation, and the executive summary reads all of them, so 10 repetitions cost roughly 10 times as much as one in those steps too, not only in the conversations. The run plan says so when `repetitions` is above 1.
+- **Replay restores the count.** A saved run stores each case once, next to the `repetitions` it ran with. `previous_run` / `--from-run` reloads those cases and runs each of them that many times again. Pass `repetitions` to override it, for example `repetitions=1` to run each case once.
 
-In the dashboard, all repetitions of a case land in the same heatmap cell. The cell shows the mean goal-completion score and, when it holds more than one conversation, `n`; hovering `n` gives the completed and errored counts and the goal-achieved rate. The mean score and the goal-achieved rate are different numbers: three conversations scored 60% each have a mean of 60% and a goal-achieved rate of 0%.
+In the dashboard, all repetitions of a case land in the same heatmap cell. The cell shows the mean goal-completion score and, when it holds more than one conversation, `n`; hovering `n` gives the completed and errored counts and how many conversations reached the goal, for example `goal achieved in 7 of 10 (70%)`. The Markdown and HTML reports print that count next to the cell's rate, as `70% (7 of 10)`. The mean score and the goal-achieved rate are different numbers: three conversations scored 60% each have a mean of 60% and a goal-achieved rate of 0%.
 
 Repeating a case measures how much one case varies. It does not remove judge bias, it does not make your cases representative of real traffic, and a difference between two runs is not shown to be significant just because each cell has several conversations.
 
@@ -850,7 +852,7 @@ Replay the most recent run, or pick a specific one:
 
 A timestamp on its own does not match; use the whole file name. If a name matches several runs, the newest wins. An id prefix that matches several runs raises `ReplayError`, so use a longer prefix. `latest` on an empty store raises `ReplayError: No saved simulation runs found in <runs directory> — nothing to replay.` A run saved before replay support has no stored cases and raises `ReplayError` too; re-run it once to get a replayable file.
 
-Replay reuses the stored cases and the stored turn limit. It does not restore the evaluators: pass `--evaluator` or `evaluator_names`, or the defaults run. Pass `--max-turns` or `max_turns` to override the stored limit. The stored cases are the base cases, one per persona and scenario pair, even when the saved run used `repetitions`; replay runs each once unless you pass `repetitions` again.
+Replay reuses the stored cases and the stored turn limit. It does not restore the evaluators: pass `--evaluator` or `evaluator_names`, or the defaults run. Pass `--max-turns` or `max_turns` to override the stored limit. The stored cases are the base cases, one per persona and scenario pair, even when the saved run used `repetitions`. Replay restores the stored `repetitions` the same way as the turn limit; pass `--repetitions` or `repetitions` to override it.
 
 ### Ground new cases in real traces
 
