@@ -666,13 +666,34 @@ def test_ty_config_names_only_current_rules() -> None:
     assert configured - current == set()
 
 
-@pytest.mark.parametrize('workflow', ['ci.yml', 'docs.yml', 'examples-weekly.yml', 'preset-drift-weekly.yml'])
+def _uv_sync_invocations(text: str) -> list[str]:
+    # Join backslash continuations so a flag on the next line of a `run: |` block still counts.
+    joined = re.sub(r'\\\n\s*', ' ', text)
+    return [' '.join(match.group(0).split()) for match in re.finditer(r'\buv\s+sync\b[^\n;&|]*', joined)]
+
+
+def test_uv_sync_invocations_parse_multi_line_run_blocks() -> None:
+    text = 'run: |\n  uv sync \\\n    --locked --all-extras\n  uv sync --all-groups && uv run pytest\n'
+
+    assert _uv_sync_invocations(text) == ['uv sync --locked --all-extras', 'uv sync --all-groups']
+
+
+@pytest.mark.parametrize('workflow', sorted(path.name for path in (REPO_ROOT / '.github/workflows').glob('*.yml')))
 def test_ci_installs_fail_when_the_lock_disagrees_with_pyproject(workflow: str) -> None:
     # --frozen skips the check, so a dependency bump that missed uv.lock tested the old version (#423).
     text = (REPO_ROOT / '.github/workflows' / workflow).read_text()
 
-    assert 'uv sync --frozen' not in text
-    assert 'uv sync --locked' in text
+    unlocked = [command for command in _uv_sync_invocations(text) if '--locked' not in command.split()]
+    assert unlocked == []
+
+
+def test_ci_install_guard_sees_the_workflows_that_install() -> None:
+    # A guard that matches nothing passes vacuously, so pin the workflows known to install.
+    installing = {
+        path.name for path in (REPO_ROOT / '.github/workflows').glob('*.yml') if _uv_sync_invocations(path.read_text())
+    }
+
+    assert {'ci.yml', 'docs.yml', 'examples-weekly.yml', 'preset-drift-weekly.yml'} <= installing
 
 
 def test_ty_dashboard_overrides_match_the_diagnostic_baseline() -> None:

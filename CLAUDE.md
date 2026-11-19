@@ -229,10 +229,8 @@ Every variable evaluatorq owns is an `EnvVar` row in `ENV_VARS` (`src/evaluatorq
 - `StrEnum` polyfill for Python 3.10 (native in 3.11+)
 - Linting: ruff
 - Type checking: ty. When bumping its pin:
-  - Run `uv lock` in the same change. CI installs with `uv sync --locked`, so a pin without a relock fails.
   - Rename every rule ty reports as renamed, in `pyproject.toml` and in `ty: ignore` comments. `renamed-rule-in-ignore-comment` is an error and `test_ty_config_names_only_current_rules` fails on any old name in config.
   - When a rule splits, carry an ignore or override over to every rule it split into, so the policy does not change. The dashboard overrides ignore both `missing-attribute` and `missing-union-attribute` for this reason.
-  - Delete `ty: ignore` comments ty now reports as unused instead of keeping them.
 - Logging: `loguru` everywhere (core runtime dependency since 1.3)
 
 ### Releases
