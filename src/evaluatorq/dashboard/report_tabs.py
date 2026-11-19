@@ -989,7 +989,7 @@ def _sim_breakdown(
                 value_key='avg_score',
                 render_value=(lambda cell, text: text + _sim_heat_cell_count(cell))
                 if standalone
-                else _sim_heat_cell_trigger(rid, entity_context),
+                else _sim_heat_cell_trigger(rid=rid, entity_context=entity_context),
             ),
             sub='Red → yellow → green as the average goal-completion score rises. Click a cell to read its conversations.',
             info=(

@@ -264,7 +264,7 @@ async def test_a_saved_repeated_run_stores_the_cases_once_and_replays_without_mu
     assert saved['repetitions'] == 3
     assert saved['total_results'] == 6
     assert [dp['id'] for dp in saved['datapoints']] == ['a', 'b'], 'the base cases, not the six trials'
-    assert [dp.id for dp in load_simulation_replay('latest', runs_dir).datapoints] == ['a', 'b']
+    assert [dp.id for dp in load_simulation_replay('latest', runs_dir=runs_dir).datapoints] == ['a', 'b']
 
     replayed = await _run(previous_run='latest')
     assert _lineage(replayed) == [('a', 'a', 0), ('b', 'b', 0)], 'a replay runs each case once by default'
@@ -292,7 +292,7 @@ def test_the_dashboard_heatmap_shows_n_only_where_a_cell_averages_several_conver
     # alice has two conversations in one cell (a pass and a fail); bob has one.
     sim_run = _make_sim_run(personas=['alice', 'alice', 'bob'], goal_achieved_flags=[True, False, True])
 
-    for html in (sim_report_tabs('rid', sim_run), sim_report_tabs('rid', sim_run, standalone=True)):
+    for html in (sim_report_tabs(rid='rid', run=sim_run), sim_report_tabs(rid='rid', run=sim_run, standalone=True)):
         heatmap = html.split('class="rk-heatmap"', 1)[1].split('</table>', 1)[0]
         assert heatmap.count('>n=2<') == 1
         assert 'n=1' not in heatmap, 'a single conversation is not presented as a sample'
@@ -313,5 +313,5 @@ def test_the_cli_offers_the_option_on_both_commands() -> None:
     for command in ('run', 'simulate'):
         options = {opt for param in group.commands[command].params for opt in param.opts}
         assert '--repetitions' in options
-        rejected = CliRunner().invoke(sim_app, [command, '--repetitions', '0'])
+        rejected = CliRunner().invoke(sim_app, args=[command, '--repetitions', '0'])
         assert rejected.exit_code == 2, 'zero is a usage error'

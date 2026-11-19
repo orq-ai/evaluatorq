@@ -2051,8 +2051,8 @@ async def _simulate_core(
         config = config.model_copy(update={'max_turns': max_turns})
 
     set_span_attrs(
-        pipeline_span,
-        {
+        span=pipeline_span,
+        attrs={
             'orq.simulation.datapoints_count': len(sim_datapoints) * config.repetitions,
             'orq.simulation.repetitions': config.repetitions,
             'orq.simulation.max_turns': max_turns,
@@ -2494,7 +2494,7 @@ def _check_repetitions(repetitions: object) -> None:
         raise ValueError(f'repetitions must be an integer of at least 1, got {repetitions!r}')
 
 
-def _trial_datapoint(datapoint: SimulationDatapoint, trial_index: int, repetitions: int) -> SimulationDatapoint:
+def _trial_datapoint(datapoint: SimulationDatapoint, *, trial_index: int, repetitions: int) -> SimulationDatapoint:
     """The datapoint one trial runs with: the case itself for a single trial, else a copy with a trial id."""
     if repetitions == 1:
         return datapoint
@@ -2502,7 +2502,7 @@ def _trial_datapoint(datapoint: SimulationDatapoint, trial_index: int, repetitio
 
 
 def _stamp_trial_lineage(
-    result: SimulationResult, trial_datapoint: SimulationDatapoint, lineage: tuple[str, int] | None
+    result: SimulationResult, *, trial_datapoint: SimulationDatapoint, lineage: tuple[str, int] | None
 ) -> None:
     """Record which conversation this is: its own id, the case it repeats, and its position among that case's trials."""
     base_id, trial_index = lineage if lineage is not None else (trial_datapoint.id, 0)
@@ -2595,7 +2595,7 @@ def _build_simulation_job_and_cache(
             await await_maybe(resolved_hooks.on_datapoint_start(sim_dp))
         except Exception as start_err:
             err = _error_result(str(start_err), sim_dp.persona, sim_dp.scenario)
-            _stamp_trial_lineage(err, sim_dp, (lineage_by_id or {}).get(id(data)))
+            _stamp_trial_lineage(err, trial_datapoint=sim_dp, lineage=(lineage_by_id or {}).get(id(data)))
             result_cache[id(data)] = err
             await await_maybe(resolved_hooks.on_datapoint_error(sim_dp, start_err))
             await await_maybe(resolved_hooks.on_datapoint_complete(err))
@@ -2611,7 +2611,7 @@ def _build_simulation_job_and_cache(
         result = await runner._run_with_timeout(  # noqa: SLF001
             sim_dp, max_turns, per_simulation_timeout_s or 0, thread_id=thread_id
         )
-        _stamp_trial_lineage(result, sim_dp, (lineage_by_id or {}).get(id(data)))
+        _stamp_trial_lineage(result, trial_datapoint=sim_dp, lineage=(lineage_by_id or {}).get(id(data)))
         result_cache[id(data)] = result
         reason = failure_reason(result)
         if reason is not None:
@@ -2877,7 +2877,7 @@ async def _simulate_via_evaluatorq(
     # conversation runs with is a copy with its own id when there is more than one
     # trial, because hooks and reports key their per-conversation state on that id.
     trials = [(dp, index) for dp in sim_datapoints for index in range(config.repetitions)]
-    trial_datapoints = [_trial_datapoint(dp, index, config.repetitions) for dp, index in trials]
+    trial_datapoints = [_trial_datapoint(dp, trial_index=index, repetitions=config.repetitions) for dp, index in trials]
     eq_datapoints = [DataPoint(inputs={'datapoint': dp.model_dump(mode='json')}) for dp, _ in trials]
     # Map the evaluatorq DataPoint instance back to its source simulation
     # SimulationDatapoint by identity, so the job can run the source directly without
