@@ -246,6 +246,7 @@ blanket-ignore-comment = "error"
 ignore-comment-unknown-rule = "error"
 missing-type-argument = "error"
 possibly-unresolved-reference = "error"
+renamed-rule-in-ignore-comment = "error"
 unused-ignore-comment = "error"
 unused-type-ignore-comment = "error"
 unused-awaitable = "error"
@@ -258,7 +259,8 @@ include = [ "src/evaluatorq/dashboard" ]
   invalid-return-type = "ignore"
   invalid-type-form = "ignore"
   missing-type-argument = "ignore"
-  unresolved-attribute = "ignore"
+  missing-attribute = "ignore"
+  missing-union-attribute = "ignore"
 
 [[tool.ty.overrides]]
 include = [ "tests/dashboard" ]
@@ -268,7 +270,8 @@ include = [ "tests/dashboard" ]
   invalid-return-type = "ignore"
   missing-type-argument = "ignore"
   not-iterable = "ignore"
-  unresolved-attribute = "ignore"
+  missing-attribute = "ignore"
+  missing-union-attribute = "ignore"
 
 [project]
 name = "evaluatorq"
@@ -396,7 +399,7 @@ dev = [
   "pytest-timeout>=2.3.0",
   "pytest-xdist>=3.6.0",
   "tomli>=2.0.0; python_version < '3.11'",
-  "ty==0.0.90",
+  "ty==0.0.100",
   "ruff>=0.14.3",
   "orq-ai-sdk>=4.14",
   "anthropic>=0.75.0",

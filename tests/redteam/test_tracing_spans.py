@@ -612,13 +612,13 @@ async def test_static_deployment_job_traces_attack_and_target_call(
 
     _assert_static_target_spans(span_collector)
     _assert_target_child_span(span_collector, child_name='invoke deployment:test-deployment')
-    assert deployments.invoke_async.await_args.kwargs['metadata'] == {  # ty: ignore[unresolved-attribute]
+    assert deployments.invoke_async.await_args.kwargs['metadata'] == {  # ty: ignore[missing-union-attribute]
         'evaluatorq_pipeline': 'red_teaming',
         'evaluatorq_run_id': 'static-run',
     }
-    assert deployments.invoke_async.await_args.kwargs['thread'] == {'id': 'static-run:test-deployment:0'}  # ty: ignore[unresolved-attribute]
+    assert deployments.invoke_async.await_args.kwargs['thread'] == {'id': 'static-run:test-deployment:0'}  # ty: ignore[missing-union-attribute]
     # Without this the deployment's server-side execution starts its own root trace.
-    assert 'traceparent' in deployments.invoke_async.await_args.kwargs['http_headers']  # ty: ignore[unresolved-attribute]
+    assert 'traceparent' in deployments.invoke_async.await_args.kwargs['http_headers']  # ty: ignore[missing-union-attribute]
 
 
 @pytest.mark.asyncio
@@ -653,7 +653,7 @@ async def test_static_deployment_job_omits_trace_headers_when_propagation_disabl
         0,
     )
 
-    assert 'http_headers' not in deployments.invoke_async.await_args.kwargs  # ty: ignore[unresolved-attribute]
+    assert 'http_headers' not in deployments.invoke_async.await_args.kwargs  # ty: ignore[missing-union-attribute]
 
 
 @pytest.mark.asyncio
