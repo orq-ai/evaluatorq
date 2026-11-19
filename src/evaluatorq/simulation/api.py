@@ -405,8 +405,8 @@ async def simulate(
             much the outcome varies from run to run. It does not create more
             cases and it does not repeat the judge call. The run holds
             ``cases x repetitions`` results; each result's ``metadata``
-            carries ``base_datapoint_id`` and ``trial_index``. With more than
-            one repetition, a case id must not already end in ``#t<digits>``.
+            carries ``base_datapoint_id`` and ``repetition_index``. With more than
+            one repetition, a case id must not already end in ``#r<digits>``.
         previous_run: Replay a saved run instead of building new cases. Accepts
             a run's file name, its run id (full or an unambiguous 8+ character
             prefix), a path to a saved run JSON, or ``"latest"``, resolved
@@ -1184,7 +1184,7 @@ async def _generate_and_simulate_run(
                             # stage-end meta so a failed generate records the stage as
                             # 'error', mirroring SIMULATE (§4.4). None on the success
                             # path → 'completed'.
-                            meta: dict[str, Any] = {'num_datapoints': len(datapoints)} if datapoints else {}
+                            meta: dict[str, Any] = {'num_cases': len(datapoints)} if datapoints else {}
                             meta['error'] = sys.exc_info()[1]
                             await await_maybe(composed_hooks.on_stage_end(SimStage.GENERATE, meta))
 
@@ -1782,7 +1782,7 @@ def _resolve_run_settings(
     raw_target_model = getattr(target_agent, 'model', None) or getattr(target_callable, 'model', None)
     target_model = raw_target_model if isinstance(raw_target_model, str) else None
     run_meta: SimulationRunMeta = {
-        'num_datapoints': len(sim_datapoints),
+        'num_cases': len(sim_datapoints),
         'num_conversations': len(sim_datapoints) * repetitions,
         'repetitions': repetitions,
         'model': config.model,
@@ -2070,12 +2070,12 @@ async def _simulate_core(
     repetitions = _resolve_repetitions(config=config, replayed=replayed)
     if config.max_turns != max_turns or config.repetitions != repetitions:
         config = config.model_copy(update={'max_turns': max_turns, 'repetitions': repetitions})
-    _check_trial_ids(sim_datapoints, repetitions=repetitions)
+    _check_repetition_ids(sim_datapoints, repetitions=repetitions)
 
     set_span_attrs(
         span=pipeline_span,
         attrs={
-            'orq.simulation.datapoints_count': len(sim_datapoints),
+            'orq.simulation.cases_count': len(sim_datapoints),
             'orq.simulation.conversations_count': len(sim_datapoints) * repetitions,
             'orq.simulation.repetitions': repetitions,
             'orq.simulation.max_turns': max_turns,
@@ -2148,7 +2148,7 @@ async def _simulate_core(
             run_id=run_id,
             experiment_url=execution.experiment_url,
             # Persist the cases themselves so this run can be replayed later. These are
-            # the base cases, one per persona and scenario pair, never the expanded trials;
+            # the base cases, one per persona and scenario pair, never the expanded repetitions;
             # the count is stored next to them, and a replay restores both.
             datapoints=sim_datapoints,
             repetitions=repetitions,
@@ -2512,39 +2512,41 @@ async def _generate_single_datapoint(
     return generate_datapoint(persona, scenario, first_message)
 
 
-_TRIAL_SUFFIX = re.compile(r'#t\d+$')
+_REPETITION_SUFFIX = re.compile(r'#r\d+$')
 
 
-def _check_trial_ids(datapoints: Sequence[SimulationDatapoint], *, repetitions: int) -> None:
-    """Reject a case id that already looks like a trial id when the run repeats cases.
+def _check_repetition_ids(datapoints: Sequence[SimulationDatapoint], *, repetitions: int) -> None:
+    """Reject a case id that already looks like a repetition id when the run repeats cases.
 
-    A repeated case runs under ``<case id>#t<index>``. A case named ``a#t1`` next to a
-    case ``a`` would then share a conversation id with the second trial of ``a``.
+    A repeated case runs under ``<case id>#r<index>``. A case named ``a#r1`` next to a
+    case ``a`` would then share a conversation id with the second repetition of ``a``.
     """
     if repetitions == 1:
         return
-    clashing = [dp.id for dp in datapoints if _TRIAL_SUFFIX.search(dp.id)]
+    clashing = [dp.id for dp in datapoints if _REPETITION_SUFFIX.search(dp.id)]
     if clashing:
         raise ValueError(
-            f'repetitions={repetitions} gives each conversation the id <case id>#t<trial index>, so a case id '
-            f'cannot already end in #t<digits>. Rename these cases: {clashing}'
+            f'repetitions={repetitions} gives each conversation the id <case id>#r<repetition index>, so a case id '
+            f'cannot already end in #r<digits>. Rename these cases: {clashing}'
         )
 
 
-def _trial_inputs(*, datapoint: SimulationDatapoint, trial_index: int, repetitions: int) -> dict[str, Any]:
-    """The experiment row inputs for one trial. A single trial keeps the row shape it always had."""
+def _repetition_inputs(*, datapoint: SimulationDatapoint, repetition_index: int, repetitions: int) -> dict[str, Any]:
+    """The experiment row inputs for one repetition. A single repetition keeps the row shape it always had."""
     inputs: dict[str, Any] = {'datapoint': datapoint.model_dump(mode='json')}
     if repetitions > 1:
         inputs['base_datapoint_id'] = datapoint.id
-        inputs['trial_index'] = trial_index
+        inputs['repetition_index'] = repetition_index
     return inputs
 
 
-def _trial_datapoint(datapoint: SimulationDatapoint, *, trial_index: int, repetitions: int) -> SimulationDatapoint:
-    """The datapoint one trial runs with: the case itself for a single trial, else a copy with a trial id."""
+def _repetition_datapoint(
+    datapoint: SimulationDatapoint, *, repetition_index: int, repetitions: int
+) -> SimulationDatapoint:
+    """The datapoint one repetition runs with: the case itself for a single run, else a copy with a repetition id."""
     if repetitions == 1:
         return datapoint
-    return datapoint.model_copy(update={'id': f'{datapoint.id}#t{trial_index}'})
+    return datapoint.model_copy(update={'id': f'{datapoint.id}#r{repetition_index}'})
 
 
 def _build_simulation_job_and_cache(
@@ -2584,7 +2586,7 @@ def _build_simulation_job_and_cache(
     from evaluatorq.simulation.convert import to_open_responses
     from evaluatorq.simulation.evaluators.scorers import failure_reason
     from evaluatorq.simulation.hooks import DefaultHooks
-    from evaluatorq.simulation.runner.simulation import SimulationRunner, _error_result, stamp_trial_lineage
+    from evaluatorq.simulation.runner.simulation import SimulationRunner, _error_result, stamp_repetition_lineage
 
     runner = SimulationRunner(
         target=target,
@@ -2631,7 +2633,7 @@ def _build_simulation_job_and_cache(
             await await_maybe(resolved_hooks.on_datapoint_start(sim_dp))
         except Exception as start_err:
             err = _error_result(str(start_err), sim_dp.persona, sim_dp.scenario)
-            stamp_trial_lineage(err, trial_datapoint=sim_dp, lineage=(lineage_by_id or {}).get(id(data)))
+            stamp_repetition_lineage(err, repetition_datapoint=sim_dp, lineage=(lineage_by_id or {}).get(id(data)))
             result_cache[id(data)] = err
             await await_maybe(resolved_hooks.on_datapoint_error(sim_dp, start_err))
             await await_maybe(resolved_hooks.on_datapoint_complete(err))
@@ -2647,7 +2649,7 @@ def _build_simulation_job_and_cache(
         result = await runner._run_with_timeout(  # noqa: SLF001
             sim_dp, max_turns, per_simulation_timeout_s or 0, thread_id=thread_id
         )
-        stamp_trial_lineage(result, trial_datapoint=sim_dp, lineage=(lineage_by_id or {}).get(id(data)))
+        stamp_repetition_lineage(result, repetition_datapoint=sim_dp, lineage=(lineage_by_id or {}).get(id(data)))
         result_cache[id(data)] = result
         reason = failure_reason(result)
         if reason is not None:
@@ -2907,25 +2909,27 @@ async def _simulate_via_evaluatorq(
     resolved_evaluator_names = config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     scorers = [(name, get_evaluator(name, config.scoring)) for name in resolved_evaluator_names]
 
-    # One row per trial: every case runs `repetitions` separate conversations. The
+    # One row per repetition: every case runs `repetitions` separate conversations. The
     # datapoint the conversation runs with is a copy with its own id when there is
-    # more than one trial, because hooks and reports key their per-conversation
+    # more than one repetition, because hooks and reports key their per-conversation
     # state on that id. The row's inputs carry the base case plus, when repeated,
-    # the case id and trial index, so trials stay apart in the uploaded experiment.
+    # the case id and repetition index, so repetitions stay apart in the uploaded experiment.
     # _simulate_core resolves repetitions before calling here; the fallback only
     # covers a direct call that skipped it.
     repetitions = config.repetitions if config.repetitions is not None else 1
-    trials = [(dp, index) for dp in sim_datapoints for index in range(repetitions)]
-    trial_datapoints = [_trial_datapoint(dp, trial_index=index, repetitions=repetitions) for dp, index in trials]
+    conversations = [(dp, index) for dp in sim_datapoints for index in range(repetitions)]
+    repetition_datapoints = [
+        _repetition_datapoint(dp, repetition_index=index, repetitions=repetitions) for dp, index in conversations
+    ]
     eq_datapoints = [
-        DataPoint(inputs=_trial_inputs(datapoint=dp, trial_index=index, repetitions=repetitions))
-        for dp, index in trials
+        DataPoint(inputs=_repetition_inputs(datapoint=dp, repetition_index=index, repetitions=repetitions))
+        for dp, index in conversations
     ]
     # Map the evaluatorq DataPoint instance back to its source simulation
     # SimulationDatapoint by identity, so the job can run the source directly without
     # re-parsing inputs["datapoint"] on every run.
-    sim_dp_by_id = {id(eq): sim for eq, sim in zip(eq_datapoints, trial_datapoints, strict=True)}
-    lineage_by_id = {id(eq): (dp.id, index) for eq, (dp, index) in zip(eq_datapoints, trials, strict=True)}
+    sim_dp_by_id = {id(eq): sim for eq, sim in zip(eq_datapoints, repetition_datapoints, strict=True)}
+    lineage_by_id = {id(eq): (dp.id, index) for eq, (dp, index) in zip(eq_datapoints, conversations, strict=True)}
 
     job_fn, result_cache, runner = _build_simulation_job_and_cache(
         job_name='simulation',

@@ -78,11 +78,11 @@ class SimulationRunMeta(TypedDict):
     ORQ deployment keys, or ``"callback"`` for plain callables.
     """
 
-    num_datapoints: int
+    num_cases: int
     """Cases the run will simulate, one per datapoint. Not multiplied by ``repetitions``."""
     num_conversations: NotRequired[int]
-    """Conversations the run will execute: ``num_datapoints`` times ``repetitions``.
-    Absent means ``num_datapoints``, as in payloads built before repetitions existed."""
+    """Conversations the run will execute: ``num_cases`` times ``repetitions``.
+    Absent means ``num_cases``, as in payloads built before repetitions existed."""
     repetitions: NotRequired[int]
     """Separate conversations per case. Absent means 1."""
     model: str
@@ -95,7 +95,7 @@ class SimulationRunMeta(TypedDict):
 
 def _conversation_count(meta: SimulationRunMeta) -> int:
     """Conversations the run will execute, for a payload with or without ``num_conversations``."""
-    return meta.get('num_conversations', meta['num_datapoints'] * meta.get('repetitions', 1))
+    return meta.get('num_conversations', meta['num_cases'] * meta.get('repetitions', 1))
 
 
 _REPEATED_COST_NOTE = 'evaluators and recommendations run once per conversation, so their cost scales with repetitions'
@@ -103,11 +103,11 @@ _REPEATED_COST_NOTE = 'evaluators and recommendations run once per conversation,
 
 def _conversation_plan(meta: SimulationRunMeta) -> str:
     """The planned workload in words. With repetitions it names both the cases and the conversations."""
-    cases = meta['num_datapoints']
+    cases = meta['num_cases']
     repetitions = meta.get('repetitions', 1)
     if repetitions == 1:
-        return f'{cases} datapoints'
-    return f'{cases} datapoints x {repetitions} repetitions = {_conversation_count(meta)} conversations'
+        return f'{cases} cases'
+    return f'{cases} cases x {repetitions} repetitions = {_conversation_count(meta)} conversations'
 
 
 @runtime_checkable
@@ -308,7 +308,7 @@ class RichHooks:
         rows = [
             ('Target', str(meta.get('target', '?'))),
             ('Model', str(meta['model'])),
-            ('Datapoints', _conversation_plan(meta)),
+            ('Cases', _conversation_plan(meta)),
             ('Max Turns', str(meta['max_turns'])),
             ('Parallelism', str(meta['datapoint_parallelism'])),
             ('Evaluators', ', '.join(meta['evaluator_names'])),
@@ -362,8 +362,8 @@ class RichHooks:
                 f'{escape(type(error).__name__)}: {escape(str(error))}[/red]'
             )
             return
-        if stage == SimStage.GENERATE and 'num_datapoints' in meta:
-            self._console.print(f'[dim] {meta["num_datapoints"]} datapoints generated[/dim]')
+        if stage == SimStage.GENERATE and 'num_cases' in meta:
+            self._console.print(f'[dim] {meta["num_cases"]} cases generated[/dim]')
 
     def _ensure_started(self) -> None:
         if self._progress is not None:

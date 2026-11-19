@@ -98,7 +98,7 @@ async def _ok_target(messages) -> str:
 
 def _meta() -> SimulationRunMeta:
     return SimulationRunMeta(
-        num_datapoints=1,
+        num_cases=1,
         model='m',
         max_turns=3,
         datapoint_parallelism=1,
