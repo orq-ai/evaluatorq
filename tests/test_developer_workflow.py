@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import copy
 import json
 import os
 import re
@@ -9,13 +8,20 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Any, TypedDict, cast
 
 import pytest
 
-from scripts import audit_ty_migration
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _ty_config() -> dict[str, Any]:
+    return tomllib.loads((REPO_ROOT / 'pyproject.toml').read_text())['tool']['ty']
 
 
 class _CollectedItem(TypedDict):
@@ -308,52 +314,6 @@ def test_local_pytest_stays_serial() -> None:
     addopts = _array(_table((REPO_ROOT / 'pyproject.toml').read_text(), 'tool.pytest.ini_options'), 'addopts')
 
     assert not any(option == '-n' or option.startswith(('-n', '--numprocesses', '--dist')) for option in addopts), addopts
-
-
-def test_ty_migration_audit_matches_effective_offline_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
-    def network_forbidden(url: str) -> str:
-        raise AssertionError(f'offline audit attempted network access: {url}')
-
-    monkeypatch.setattr(audit_ty_migration, '_download', network_forbidden)
-
-    classified = audit_ty_migration.audit()
-
-    assert {name: len(diagnostics) for name, diagnostics in classified.items()} == {
-        'ty-backed': 23,
-        'ruff-only': 8,
-        'partial': 14,
-        'absent': 20,
-    }
-
-
-@pytest.mark.parametrize(
-    ('diagnostic', 'mutation'),
-    [
-        ('reportAssertAlwaysTrue', 'global-ignore'),
-        ('reportAssertAlwaysTrue', 'per-file-ignore'),
-        ('reportTypeCommentUsage', 'preview-off'),
-    ],
-)
-def test_ty_migration_audit_applies_effective_ruff_configuration(diagnostic: str, mutation: str) -> None:
-    baseline = audit_ty_migration._load(audit_ty_migration.BASELINE)
-    config = audit_ty_migration._project_config()
-    config = copy.deepcopy(config)
-    if mutation == 'global-ignore':
-        config['tool']['ruff']['lint']['ignore'].append('F631')
-    elif mutation == 'per-file-ignore':
-        config['tool']['ruff']['lint']['per-file-ignores']['src/**/*.py'] = ['F631']
-    else:
-        config['tool']['ruff']['preview'] = False
-
-    classification, surface = audit_ty_migration._classification_and_surface(
-        diagnostic,
-        baseline['mapping_cells'][diagnostic],
-        baseline,
-        config,
-    )
-
-    assert classification == 'absent'
-    assert surface.startswith('uncovered:')
 
 
 def test_ci_runs_ty_once_on_the_python_310_ubuntu_leg() -> None:
@@ -688,29 +648,63 @@ def test_ty_promotes_contract_diagnostics_to_errors() -> None:
     assert _string(rules, 'blanket-ignore-comment') == 'error'
     assert _string(rules, 'missing-type-argument') == 'error'
     assert _string(rules, 'possibly-unresolved-reference') == 'error'
+    assert _string(rules, 'renamed-rule-in-ignore-comment') == 'error'
+
+
+def test_ty_config_names_only_current_rules() -> None:
+    # ty only warns about a renamed rule in its config, and an old name can stop covering a split-off rule.
+    ty = _ty_config()
+    configured = set(ty.get('rules', {})).union(*(override.get('rules', {}) for override in ty.get('overrides', [])))
+    explained = subprocess.run(
+        [sys.executable, '-m', 'ty', 'explain', 'rule', '--output-format', 'json'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    current = {rule['name'] for rule in json.loads(explained.stdout)}
+
+    assert configured - current == set()
+
+
+@pytest.mark.parametrize('workflow', ['ci.yml', 'docs.yml', 'examples-weekly.yml', 'preset-drift-weekly.yml'])
+def test_ci_installs_fail_when_the_lock_disagrees_with_pyproject(workflow: str) -> None:
+    # --frozen skips the check, so a dependency bump that missed uv.lock tested the old version (#423).
+    text = (REPO_ROOT / '.github/workflows' / workflow).read_text()
+
+    assert 'uv sync --frozen' not in text
+    assert 'uv sync --locked' in text
 
 
 def test_ty_dashboard_overrides_match_the_diagnostic_baseline() -> None:
-    pyproject = (REPO_ROOT / 'pyproject.toml').read_text()
-    expected = '''[[tool.ty.overrides]]
-include = [ "src/evaluatorq/dashboard" ]
+    overrides = _ty_config()['overrides']
 
-  [tool.ty.overrides.rules]
-  invalid-argument-type = "ignore"
-  invalid-return-type = "ignore"
-  invalid-type-form = "ignore"
-  missing-type-argument = "ignore"
-  unresolved-attribute = "ignore"
-
-[[tool.ty.overrides]]
-include = [ "tests/dashboard" ]
-
-  [tool.ty.overrides.rules]
-  invalid-argument-type = "ignore"
-  invalid-return-type = "ignore"
-  missing-type-argument = "ignore"
-  not-iterable = "ignore"
-  unresolved-attribute = "ignore"'''
-
-    assert pyproject.count('[[tool.ty.overrides]]') == 2
-    assert expected in pyproject
+    assert overrides == [
+        {
+            'include': ['src/evaluatorq/dashboard'],
+            'rules': dict.fromkeys(
+                [
+                    'invalid-argument-type',
+                    'invalid-return-type',
+                    'invalid-type-form',
+                    'missing-type-argument',
+                    'missing-attribute',
+                    'missing-union-attribute',
+                ],
+                'ignore',
+            ),
+        },
+        {
+            'include': ['tests/dashboard'],
+            'rules': dict.fromkeys(
+                [
+                    'invalid-argument-type',
+                    'invalid-return-type',
+                    'missing-type-argument',
+                    'not-iterable',
+                    'missing-attribute',
+                    'missing-union-attribute',
+                ],
+                'ignore',
+            ),
+        },
+    ]

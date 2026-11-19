@@ -612,13 +612,13 @@ async def test_static_deployment_job_traces_attack_and_target_call(
 
     _assert_static_target_spans(span_collector)
     _assert_target_child_span(span_collector, child_name='invoke deployment:test-deployment')
-    assert deployments.invoke_async.await_args.kwargs['metadata'] == {  # ty: ignore[unresolved-attribute]
+    assert deployments.invoke_async.await_args.kwargs['metadata'] == {  # ty: ignore[missing-union-attribute]
         'evaluatorq_pipeline': 'red_teaming',
         'evaluatorq_run_id': 'static-run',
     }
-    assert deployments.invoke_async.await_args.kwargs['thread'] == {'id': 'static-run:test-deployment:0'}  # ty: ignore[unresolved-attribute]
+    assert deployments.invoke_async.await_args.kwargs['thread'] == {'id': 'static-run:test-deployment:0'}  # ty: ignore[missing-union-attribute]
     # Without this the deployment's server-side execution starts its own root trace.
-    assert 'traceparent' in deployments.invoke_async.await_args.kwargs['http_headers']  # ty: ignore[unresolved-attribute]
+    assert 'traceparent' in deployments.invoke_async.await_args.kwargs['http_headers']  # ty: ignore[missing-union-attribute]
 
 
 @pytest.mark.asyncio
@@ -653,7 +653,7 @@ async def test_static_deployment_job_omits_trace_headers_when_propagation_disabl
         0,
     )
 
-    assert 'http_headers' not in deployments.invoke_async.await_args.kwargs  # ty: ignore[unresolved-attribute]
+    assert 'http_headers' not in deployments.invoke_async.await_args.kwargs  # ty: ignore[missing-union-attribute]
 
 
 @pytest.mark.asyncio
@@ -942,8 +942,58 @@ async def test_static_owasp_scoring_annotates_framework_evaluation_span(
     assert fe_attrs['gen_ai.evaluation.name'] == 'owasp-agentic-security'
 
 
-def test_set_jury_span_attrs_emits_flat_and_metadata() -> None:
-    """Jury reliability lands as flat orq.redteam.jury.* attrs + a JSON metadata field."""
+@pytest.mark.asyncio
+async def test_a_panel_verdict_puts_its_numbers_on_the_jury_span_and_not_on_the_evaluation_span(
+    span_collector: _CollectingExporter,
+) -> None:
+    """A red-team panel's reliability numbers live on orq.jury; orq.redteam.jury.* is not written beside them."""
+    from evaluatorq import DataPoint
+    from evaluatorq.processings import process_evaluator
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = json.dumps({'value': True, 'explanation': 'Resistant'})
+    response.usage = None
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    evaluator = create_owasp_evaluator(
+        evaluator_model='judge-a', llm_client=client, judges=['judge-b'], log_panel_warnings=False
+    )
+    await process_evaluator(
+        evaluator,
+        DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+        {'response': 'mock target response'},
+    )
+
+    evaluation = _find_span(span_collector, 'orq.evaluation')
+    assert evaluation is not None
+    evaluation_attrs = _attrs(evaluation)
+    assert [key for key in evaluation_attrs if key.startswith('orq.redteam.jury')] == []
+
+    jury_span = _find_span(span_collector, 'orq.jury')
+    assert jury_span is not None
+    assert jury_span.parent is not None
+    assert jury_span.parent.span_id == _span_id(evaluation)
+    jury_attrs = _attrs(jury_span)
+    numbers = ('judges_configured', 'judges_succeeded', 'judges_failed', 'replacements_used', 'raw_agreement', 'tie', 'inconclusive')
+    on_jury_span = {name: jury_attrs[f'jury.{name}'] for name in numbers}
+    assert on_jury_span == {
+        'judges_configured': 2,
+        'judges_succeeded': 2,
+        'judges_failed': 0,
+        'replacements_used': 0,
+        'raw_agreement': 1.0,
+        'tie': False,
+        'inconclusive': False,
+    }
+    # The readable copy on the evaluation span carries the same seven numbers.
+    assert json.loads(evaluation_attrs['metadata']) == {'jury': on_jury_span}
+
+
+def test_set_jury_span_attrs_writes_only_the_metadata_field() -> None:
+    """The breakdown is one JSON metadata field; the numbers are not repeated as orq.redteam.jury.* attributes."""
     from evaluatorq.contracts import JuryResult, JuryVote
     from evaluatorq.redteam.tracing import set_jury_span_attrs
 
@@ -963,10 +1013,18 @@ def test_set_jury_span_attrs_emits_flat_and_metadata() -> None:
 
     set_jury_span_attrs(span, jury)
 
-    assert recorded['orq.redteam.jury.raw_agreement'] == 1.0
-    assert recorded['orq.redteam.jury.judges_succeeded'] == 2
-    assert recorded['orq.redteam.jury.tie'] is False
-    assert json.loads(recorded['metadata'])['jury']['judges_configured'] == 2
+    assert list(recorded) == ['metadata']
+    assert json.loads(recorded['metadata']) == {
+        'jury': {
+            'judges_configured': 2,
+            'judges_succeeded': 2,
+            'judges_failed': 0,
+            'replacements_used': 0,
+            'raw_agreement': 1.0,
+            'tie': False,
+            'inconclusive': False,
+        }
+    }
 
 
 def test_set_jury_span_attrs_noop_without_jury() -> None:
