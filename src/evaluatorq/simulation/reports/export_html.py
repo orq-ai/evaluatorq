@@ -48,7 +48,7 @@ from evaluatorq.common.reports import (
 )
 from evaluatorq.common.reports.palette import COLORS
 from evaluatorq.dashboard.trace_links import trace_link_button
-from evaluatorq.simulation.reports.sections import build_report_sections
+from evaluatorq.simulation.reports.sections import achieved_of_n, build_report_sections
 from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
 
 if TYPE_CHECKING:
@@ -324,6 +324,7 @@ def _render_persona_scenario_heatmap_html(section: ReportSection) -> str:
     lookup = {(c['persona'], c['scenario']): c for c in d['cells']}
     # cells[row=scenario][col=persona] = success-rate (good=high -> green-high scale)
     cells = [[lookup.get((p, s), {}).get('success_rate', -1.0) for p in personas] for s in scenarios]
+    notes = [[achieved_of_n(lookup.get((p, s), {})) for p in personas] for s in scenarios]
     heat = _render_heatmap(
         x_labels=personas,
         y_labels=scenarios,
@@ -331,6 +332,7 @@ def _render_persona_scenario_heatmap_html(section: ReportSection) -> str:
         scale=_SCALE_GREEN_HIGH,
         title=section.title,
         value_fmt=lambda v: '-' if v < 0 else f'{v:.0%}',
+        cell_notes=notes,
     )
     return f'<section class="report-card">{heat}</section>'
 

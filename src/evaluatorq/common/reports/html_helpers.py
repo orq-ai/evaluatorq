@@ -346,8 +346,12 @@ def render_heatmap(
     title: str,
     value_fmt: Callable[[float], str] = lambda v: f'{v:.0%}',
     safety_mask: Sequence[Sequence[bool]] | None = None,
+    cell_notes: Sequence[Sequence[str]] | None = None,
 ) -> str:
     """Heatmap. Builds a Vega-Lite spec rendered to SVG via vl-convert.
+
+    ``cell_notes[y][x]``, when given and non-empty, is appended to that present
+    cell's formatted value, separated by a space (e.g. a ``(3 of 5)`` count).
 
     ``cells[y][x]`` holds the value in [0, 1] for row ``y_labels[y]`` and
     column ``x_labels[x]``. Values < 0 mark absent cells and are rendered with
@@ -373,7 +377,8 @@ def render_heatmap(
                 text_row.append('—')
             else:
                 color_row.append(scale_color(value, scale))
-                text_row.append(value_fmt(value))
+                note = cell_notes[yi][xi] if cell_notes is not None else ''
+                text_row.append(f'{value_fmt(value)} {note}' if note else value_fmt(value))
         cell_colors.append(color_row)
         cell_texts.append(text_row)
     safety: list[list[bool]] | None = None
