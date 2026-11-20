@@ -386,7 +386,8 @@ def _load_experiment(card: library.ReportCard) -> ExperimentRun | None:
         return None
     try:
         return library.load_model_cached(card.path, ExperimentRun.model_validate)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        logger.warning('experiment run {} could not be read and is left out of the totals: {}', card.path, exc)
         return None
 
 
@@ -629,8 +630,8 @@ def landing(roots: list[Path] | None = None) -> Landing:
     resistant = redteam_tiles.resistant
     vulnerable = redteam_tiles.vulnerable
     # Pairwise judge calls and experiment evaluator calls roll up the same way:
-    # one Usage-shaped dict per LLM-backed score. An experiment's target cost is
-    # not saved, so its spend is the evaluators' spend only.
+    # one Usage-shaped dict per LLM-backed score. An experiment's spend is the
+    # evaluators' spend only: target usage a job returned is not rolled up.
     usage_sources: list[tuple[str, list[object]]] = [
         ('pairwise', [_comparison_usage(entry) for entry in _entries(data)])
         for _card, data in _iter_report_data([card for card in manifests if card.surface == 'pairwise'])

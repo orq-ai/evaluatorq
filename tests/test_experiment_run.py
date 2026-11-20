@@ -13,7 +13,7 @@ import pytest
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, SaveMode, evaluatorq, load_experiment_run
-from evaluatorq.contracts import TokenUsage
+from evaluatorq.contracts import AgentResponse, TokenUsage
 from evaluatorq.job_helper import job
 from evaluatorq.send_results import OrqResponse
 
@@ -45,7 +45,7 @@ async def judge(params: ScorerParameter) -> EvaluationResult:
 
 async def run(
     *,
-    save: SaveMode | str = SaveMode.NONE,
+    save: SaveMode | str | bool = SaveMode.NONE,
     output_dir: Path | str | None = None,
     upload: bool = False,
     url_out: list[str] | None = None,
@@ -121,6 +121,34 @@ async def test_final_writes_run_and_completed_manifest(store: Path) -> None:
 async def test_save_accepts_the_string_value(store: Path) -> None:
     await run(save='final')
     assert len(list((store / 'experiment-runs').glob('*.json'))) == 1
+
+
+@pytest.mark.asyncio
+async def test_save_true_saves_and_save_false_writes_nothing(store: Path) -> None:
+    await run(save=False)
+    assert not store.exists()
+    await run(save=True)
+    assert len(list((store / 'experiment-runs').glob('capitals_*.json'))) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_job_agent_response_usage_is_kept_in_the_saved_output(tmp_path: Path) -> None:
+    usage = TokenUsage(input_tokens=7, output_tokens=3, total_tokens=10, total_cost=0.0005)
+
+    async def agent(_dp: DataPoint, _row: int) -> AgentResponse:
+        return AgentResponse(usage=usage)
+
+    await evaluatorq(
+        'capitals',
+        data=DATA[:1],
+        jobs=[job('agent', agent)],
+        print_results=False,
+        save=SaveMode.FINAL,
+        output_dir=tmp_path,
+        _send_results=False,
+    )
+    saved = json.loads(next(tmp_path.glob('capitals_*.json')).read_text())
+    assert saved['results'][0]['job_results'][0]['output']['usage']['total_tokens'] == 10
 
 
 @pytest.mark.asyncio
@@ -215,6 +243,15 @@ async def test_an_unwritable_save_folder_fails_before_any_job_runs(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_an_unwritable_manifest_folder_fails_before_any_work(tmp_path: Path) -> None:
+    (tmp_path / '.manifests').write_text('x')
+    with pytest.raises(ValueError, match='not writable') as raised:
+        await run(save=SaveMode.FINAL, output_dir=tmp_path)
+    assert '.manifests' in str(raised.value)
+    assert not list(tmp_path.glob('capitals_*.json'))
+
+
+@pytest.mark.asyncio
 async def test_a_save_folder_that_is_a_file_fails_before_any_work(tmp_path: Path) -> None:
     blocker = tmp_path / 'not-a-folder'
     blocker.write_text('x')
@@ -284,6 +321,19 @@ async def test_the_uploaded_experiment_url_is_saved_and_handed_back(
     assert loaded.experiment_url == url
     assert len(loaded.results) == 2
     assert _manifests(tmp_path)[0]['status'] == 'completed'
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == 'nt', reason='needs POSIX permission bits')
+async def test_adding_the_experiment_url_keeps_the_file_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _fake_upload(monkeypatch, url=None)
+    await run(save=SaveMode.FINAL, output_dir=tmp_path / 'plain', upload=True)
+    plain_mode = next((tmp_path / 'plain').glob('capitals_*.json')).stat().st_mode & 0o777
+    _fake_upload(monkeypatch, url='https://my.orq.ai/workspace/experiments/abc')
+    await run(save=SaveMode.FINAL, output_dir=tmp_path / 'linked', upload=True)
+    linked = next((tmp_path / 'linked').glob('capitals_*.json'))
+    assert load_experiment_run(linked).experiment_url is not None
+    assert linked.stat().st_mode & 0o777 == plain_mode
 
 
 @pytest.mark.asyncio

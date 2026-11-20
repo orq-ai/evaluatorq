@@ -213,13 +213,13 @@ def _card(path: Path) -> ReportCard | None:
                 headline += f' · {label} leads {max(a_wins, b_wins) / decided:.0%}{too_close}'
     elif surface == 'experiment':
         results = data.get('results')
-        headline = _count_noun(len(results) if isinstance(results, list) else 0, surface)
+        headline = _count_noun(len(results) if isinstance(results, list) else 0, surface=surface)
     else:
         headline = f'{data.get("total_results", 0)} {"attacks" if surface == "redteam" else "conversations"}'
     return ReportCard(report_id(path), surface, str(name), created_at, headline, path, error)
 
 
-def _count_noun(count: int, surface: str) -> str:
+def _count_noun(count: int, *, surface: str) -> str:
     """``'<count> <noun>'`` for a run-list headline: attacks, datapoints or conversations by surface."""
     if surface == 'redteam':
         return f'{count} attacks'
@@ -255,7 +255,7 @@ def _card_from_manifest(m: RunManifest) -> ReportCard:
     summary = m.summary or {}
     status = m.status.value
     if status == 'completed' and summary:
-        headline = _count_noun(summary.get('total_results', 0), surface)
+        headline = _count_noun(summary.get('total_results', 0), surface=surface)
     elif status == 'running':
         headline = f'running · {m.stage}' if m.stage else 'running'
     else:  # error / cancelled with no report

@@ -105,8 +105,9 @@ class ExperimentRun(BaseModel):
     """A saved ``evaluatorq()`` run: its metadata and every datapoint result.
 
     ``results`` is the list ``evaluatorq()`` returned, unchanged, so evaluator
-    ``token_usage`` and ``raw_output`` are kept. The target's own cost is not
-    recorded, because a job returns only its output.
+    ``token_usage`` and ``raw_output`` are kept, and so is the ``usage`` of a job
+    that returns an `AgentResponse`. Nothing here totals that target usage: the
+    run statistics cover the evaluators' calls only.
     """
 
     experiment_run_version: int = EXPERIMENT_RUN_VERSION
@@ -233,7 +234,7 @@ def save_experiment_run(run: ExperimentRun, *, output_dir: Path | str | None = N
     """
     runs_dir = Path(output_dir) if output_dir is not None else get_experiment_runs_dir()
     base = f'{sanitise_run_name(run.run_name, default="experiment")}_{run.started_at.strftime("%Y%m%d-%H%M%S")}'
-    return write_unique_json(runs_dir, base, run.to_json())
+    return write_unique_json(runs_dir, base=base, payload=run.to_json())
 
 
 def load_experiment_run(path: Path | str) -> ExperimentRun:

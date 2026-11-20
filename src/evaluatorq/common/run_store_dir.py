@@ -37,7 +37,7 @@ def sanitise_run_name(name: str, *, default: str) -> str:
     return sanitised[:64] or default
 
 
-def write_unique_json(runs_dir: Path, base: str, payload: str) -> Path:
+def write_unique_json(runs_dir: Path, *, base: str, payload: str) -> Path:
     """Write *payload* to ``<runs_dir>/<base>.json``, or the first free ``<base>_NNN.json``.
 
     Exclusive-create: report stamps resolve to the second, so two runs of one

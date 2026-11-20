@@ -232,7 +232,7 @@ def auto_save_run(*, run: SimulationRun, run_name: str) -> Path:
     auto-generated, collision-free `<name>_<timestamp>.json` filename."""
     ts = datetime.now(tz=timezone.utc).strftime('%Y%m%d-%H%M%S')
     base = f'{sanitise_run_name(run_name)}_{ts}'
-    return write_unique_json(get_sim_runs_dir(), base, run.model_dump_json(indent=2))
+    return write_unique_json(get_sim_runs_dir(), base=base, payload=run.model_dump_json(indent=2))
 
 
 def write_report(run: SimulationRun, output: Path) -> None:

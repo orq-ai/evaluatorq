@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import pytest
+from loguru import logger
 from starlette.testclient import TestClient
 
 from evaluatorq import DataPoint, EvaluationResult, ExperimentRun
@@ -126,6 +127,19 @@ def test_landing_counts_evaluator_tokens_and_cost(runs_dir: Path) -> None:
     assert ('Experiments', 1) in landing.by_kind
     assert ('Experiments', 150) in landing.tokens_by_kind
     assert landing.total_cost == pytest.approx(0.004)
+
+
+def test_an_unreadable_run_left_out_of_the_landing_totals_is_logged(runs_dir: Path) -> None:
+    [saved] = runs_dir.glob('*.json')
+    saved.write_text('{"experiment_run_version": 1, "results": "not a list"}')
+    messages: list[str] = []
+    sink = logger.add(lambda m: messages.append(m.record['message']), level='WARNING')
+    try:
+        landing = metrics.landing([runs_dir])
+    finally:
+        logger.remove(sink)
+    assert ('Experiments', 150) not in landing.tokens_by_kind
+    assert any(str(saved) in m and 'left out of the totals' in m for m in messages)
 
 
 def test_report_shows_scores_errors_and_a_clipped_output(client: TestClient) -> None:

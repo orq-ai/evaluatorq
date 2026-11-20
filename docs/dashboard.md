@@ -468,7 +468,7 @@ The report page has three panels below the headline counts.
 - **Rows.** One row per job result. Inputs and outputs longer than 160 characters are shortened in the cell; click the cell to read the full text. A job that raised, or a data point that failed before any job ran, is tinted red with its error in the Output column and an `error` status. Hover a score to read the evaluator's explanation.
 - **Run details.** Run id, dataset id, start and end time, duration and the evaluatorq version that wrote the file.
 
-The **Judge tokens** count is the tokens your evaluators reported through `EvaluationResult.token_usage`; an evaluator that reports none adds nothing. The landing page's spend and token totals include this figure, and it is never the cost of your target calls, which the saved run does not hold.
+The **Judge tokens** count is the tokens your evaluators reported through `EvaluationResult.token_usage`; an evaluator that reports none adds nothing, and neither does one that raised, because a raising scorer returns no result to read usage from. The landing page's spend and token totals include this figure. It never includes your target calls: a job that returns an `AgentResponse` keeps its `usage` in the saved output, but the dashboard does not total it.
 
 ![An experiment run: five data points, one errored row, a 75% pass rate and judge token usage, with per-evaluator averages and pass rates and a row table.](assets/dashboard/experiment-report.png){ .dashboard-shot }
 

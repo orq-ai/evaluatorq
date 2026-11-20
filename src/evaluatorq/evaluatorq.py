@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import inspect
 import os
+import stat
 import tempfile
 import uuid
 from collections.abc import Awaitable, Generator, Sequence
@@ -762,39 +763,48 @@ async def _run_in_memory_evaluation(
 
 
 def _require_writable_dir(runs_dir: Path) -> None:
-    """Create *runs_dir* if missing and prove it is writable by creating and removing a file in it.
+    """Create *runs_dir* and its manifest folder if missing and prove both are writable.
 
     A real write, not ``os.access``: permission bits miss read-only mounts, ACLs and full disks.
+    The manifest folder is probed too, because ``start_manifest`` only logs a failed write.
 
     Raises:
-        ValueError: The folder could not be created or written to.
+        ValueError: A folder could not be created or written to.
     """
+    from .common.run_manifest import MANIFESTS_DIR_NAME
+
+    folder = runs_dir
     try:
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        descriptor, probe = tempfile.mkstemp(prefix='.evaluatorq-write-check-', suffix='.tmp', dir=runs_dir)
-        os.close(descriptor)
-        Path(probe).unlink()
+        for folder in (runs_dir, runs_dir / MANIFESTS_DIR_NAME):
+            folder.mkdir(parents=True, exist_ok=True)
+            descriptor, probe = tempfile.mkstemp(prefix='.evaluatorq-write-check-', suffix='.tmp', dir=folder)
+            os.close(descriptor)
+            Path(probe).unlink()
     except OSError as exc:
         raise ValueError(
-            f'Cannot save the experiment run: the folder {runs_dir} is not writable ({exc}). '
+            f'Cannot save the experiment run: the folder {folder} is not writable ({exc}). '
             'Pass a writable output_dir, or save=SaveMode.NONE to skip saving.'
         ) from exc
 
 
-def _resolve_experiment_save(*, save: SaveMode | str, output_dir: Path | str | None) -> Path | None:
+def _resolve_experiment_save(*, save: SaveMode | str | bool, output_dir: Path | str | None) -> Path | None:
     """Validate ``save`` before any work is spent; the folder to save the run in, or None to save nothing.
 
     With ``SaveMode.FINAL`` the folder is created and probed with a real write here, so a
     folder that cannot be written fails the call before any datapoint runs or any API spend.
 
+    ``True`` and ``False`` mean ``SaveMode.FINAL`` and ``SaveMode.NONE``, as ``simulate(save=...)`` takes.
+
     Raises:
-        ValueError: ``save`` is not a `SaveMode` value, is ``SaveMode.DETAIL``, or the save
-            folder is not writable.
+        ValueError: ``save`` is not a bool or a `SaveMode` value, is ``SaveMode.DETAIL``, or the
+            save folder is not writable.
     """
+    if isinstance(save, bool):
+        save = SaveMode.FINAL if save else SaveMode.NONE
     try:
         mode = SaveMode(save)
     except ValueError:
-        raise ValueError(f'Invalid save value {save!r}. Use SaveMode.NONE or SaveMode.FINAL.') from None
+        raise ValueError(f'Invalid save value {save!r}. Use SaveMode.NONE, SaveMode.FINAL, True or False.') from None
     if mode == SaveMode.DETAIL:
         raise ValueError(
             'save=SaveMode.DETAIL only applies to red_team(): an experiment has no stage artifacts. Use SaveMode.FINAL.'
@@ -833,7 +843,7 @@ class _ExperimentSave:
     `record_experiment_url` then adds the upload's URL to the saved file.
     """
 
-    def __init__(self, writer: 'ManifestWriter', runs_dir: Path) -> None:
+    def __init__(self, writer: 'ManifestWriter', *, runs_dir: Path) -> None:
         self._writer = writer
         self._runs_dir = runs_dir
         self._saved: tuple[ExperimentRun, Path] | None = None
@@ -854,7 +864,7 @@ class _ExperimentSave:
             runs_dir=runs_dir,
         )
         _ = stack.enter_context(_finish_manifest_on_error(writer))
-        return cls(writer, runs_dir)
+        return cls(writer, runs_dir=runs_dir)
 
     def write(
         self,
@@ -905,14 +915,18 @@ class _ExperimentSave:
     def record_experiment_url(self, url: str | None) -> None:
         """Rewrite the saved run with the uploaded experiment's *url*; a no-op when either is missing.
 
-        A failed rewrite is logged and leaves the saved run without the link.
+        The rewrite is atomic and keeps the file's mode, so a run with a URL has the same
+        permissions as one without. A failed rewrite is logged and leaves the saved run
+        without the link.
         """
         if url is None or self._saved is None:
             return
         run, path = self._saved
         run = run.model_copy(update={'experiment_url': url})
         try:
+            mode = stat.S_IMODE(path.stat().st_mode)
             write_private_atomic(path, run.to_json(), private_directory=False)
+            path.chmod(mode)
         except OSError as exc:
             logger.warning('Could not add the Orq experiment URL to the saved run {}: {}', path, exc)
             return
@@ -935,7 +949,7 @@ async def evaluatorq(
     inference: bool | None = None,
     single_trace: bool = False,
     on_datapoint_complete: DataPointComplete | None = None,
-    save: SaveMode | str = SaveMode.NONE,
+    save: SaveMode | str | bool = SaveMode.NONE,
     output_dir: Path | str | None = None,
     _send_results: bool = True,
     _base_url: str | None = None,
@@ -1001,7 +1015,8 @@ async def evaluatorq(
         save: ``SaveMode.FINAL`` writes the run, with every result and evaluator token usage, to
               ``.evaluatorq/experiment-runs/<name>_<timestamp>.json`` and records it in a run
               manifest, so ``eq dashboard`` lists it. Defaults to ``SaveMode.NONE``, which writes
-              nothing. Applies whether the run is configured by ``params`` or by keyword arguments.
+              nothing. ``True`` and ``False`` are accepted as ``SaveMode.FINAL`` and ``SaveMode.NONE``.
+              Applies whether the run is configured by ``params`` or by keyword arguments.
               ``SaveMode.DETAIL`` raises ``ValueError``. The save folder is created and checked
               with a test write before the run starts, so a folder that cannot be written raises
               ``ValueError`` before any datapoint runs. If the write still fails when the run ends,
