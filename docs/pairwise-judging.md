@@ -239,7 +239,7 @@ From the project where you saved the run, launch the [dashboard](dashboard.md#in
 eq dashboard
 ```
 
-With no path, this scans all three default stores: `.evaluatorq/runs` (red team), `.evaluatorq/sim-runs` (simulation), and `.evaluatorq/pairwise-runs` (pairwise). Open the local URL printed by the command.
+With no path, this scans all four default stores: `.evaluatorq/runs` (red team), `.evaluatorq/sim-runs` (simulation), `.evaluatorq/pairwise-runs` (pairwise), and `.evaluatorq/experiment-runs` (experiments). Open the local URL printed by the command.
 
 The dashboard opens a pairwise run on a verdict (clear winner, too close to call, or no decided comparisons) with a 95% range and a table of signals for how far to trust it. It adds a per-judge table, a filterable list of every comparison where each row expands to the two responses side by side with every judge's vote and rationale, and a page that compares two runs. When tracing is on, each comparison records the `trace_id` of its judging span, and its row links to that trace in Orq. See [Pairwise comparison view](dashboard.md#pairwise-comparison-view).
 

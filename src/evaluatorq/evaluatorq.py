@@ -1,9 +1,12 @@
 import asyncio
+import contextlib
 import inspect
-from collections.abc import Awaitable, Sequence
+import uuid
+from collections.abc import Awaitable, Generator, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from loguru import logger
@@ -14,6 +17,8 @@ from .common.messages import coerce_content_text
 from .common.output_adapters import has_meaningful_output
 from .common.parallelism import resolve_datapoint_parallelism
 from .common.trace_input import load_traces
+from .contracts import ManifestSurface, SaveMode
+from .experiment_run import ExperimentRun, get_experiment_runs_dir, save_experiment_run
 from .fetch_data import (
     fetch_dataset_batches,
     fetch_experiment_datapoints,
@@ -41,6 +46,7 @@ from .types import (
 if TYPE_CHECKING:
     from orq_ai_sdk import Orq
 
+    from .common.run_manifest import ManifestWriter
     from .tracing.context import TracingContext
 
 
@@ -755,6 +761,59 @@ async def _run_in_memory_evaluation(
     return results
 
 
+def _resolve_experiment_save(*, save: SaveMode | str, output_dir: Path | str | None) -> bool:
+    """Validate ``save`` before any work is spent; True when the run should be written to disk.
+
+    Raises:
+        ValueError: ``save`` is not a `SaveMode` value, or is ``SaveMode.DETAIL``.
+    """
+    try:
+        mode = SaveMode(save)
+    except ValueError:
+        raise ValueError(f'Invalid save value {save!r}. Use SaveMode.NONE or SaveMode.FINAL.') from None
+    if mode == SaveMode.DETAIL:
+        raise ValueError(
+            'save=SaveMode.DETAIL only applies to red_team(): an experiment has no stage artifacts. Use SaveMode.FINAL.'
+        )
+    if mode == SaveMode.NONE and output_dir is not None:
+        logger.warning(
+            'output_dir={} is ignored because save is SaveMode.NONE; pass save=SaveMode.FINAL to write the run there.',
+            output_dir,
+        )
+    return mode == SaveMode.FINAL
+
+
+@contextlib.contextmanager
+def _finish_manifest_on_error(writer: 'ManifestWriter') -> Generator[None]:
+    """Mark the run's manifest cancelled or errored when the run raises, then re-raise."""
+    try:
+        yield
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        writer.cancel()
+        raise
+    except BaseException as exc:
+        writer.fail(f'{type(exc).__name__}: {exc}')
+        raise
+
+
+def _save_experiment(writer: 'ManifestWriter', run: ExperimentRun, output_dir: Path | str | None) -> None:
+    """Write the finished run and complete its manifest.
+
+    A write failure is logged and marks the manifest errored. It does not raise,
+    because the run has already been paid for and its results are still returned.
+    """
+    try:
+        path = save_experiment_run(run, output_dir=output_dir)
+    except (OSError, RuntimeError) as exc:
+        logger.error(
+            'Could not save experiment run {!r}: {}; the results are returned but not on disk', run.run_name, exc
+        )
+        writer.fail(f'save failed: {type(exc).__name__}: {exc}')
+        return
+    logger.info('Saved experiment run to {}', path)
+    writer.complete(report_path=path.resolve(), summary=run.manifest_summary())
+
+
 async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
@@ -771,6 +830,8 @@ async def evaluatorq(
     inference: bool | None = None,
     single_trace: bool = False,
     on_datapoint_complete: DataPointComplete | None = None,
+    save: SaveMode | str = SaveMode.NONE,
+    output_dir: Path | str | None = None,
     _send_results: bool = True,
     _base_url: str | None = None,
     _orq_api_key: str | None = None,
@@ -832,13 +893,20 @@ async def evaluatorq(
         on_datapoint_complete: Optional sync or async callback invoked exactly once after each
               DataPointResult reaches a terminal state. An exception it raises is logged at ERROR
               and the run continues.
+        save: ``SaveMode.FINAL`` writes the run, with every result and evaluator token usage, to
+              ``.evaluatorq/experiment-runs/<name>_<timestamp>.json`` and records it in a run
+              manifest, so ``eq dashboard`` lists it. Defaults to ``SaveMode.NONE``, which writes
+              nothing. Applies whether the run is configured by ``params`` or by keyword arguments.
+              ``SaveMode.DETAIL`` raises ``ValueError``.
+        output_dir: Folder to save the run in instead of ``.evaluatorq/experiment-runs``. Ignored,
+              with a warning, unless ``save`` is ``SaveMode.FINAL``.
 
     Returns:
         List of DataPointResult objects
 
     Raises:
         ValidationError: If parameters fail validation.
-        ValueError: If neither params nor required kwargs are provided.
+        ValueError: If neither params nor required kwargs are provided, or ``save`` is invalid.
 
     Example:
         ```python
@@ -860,6 +928,7 @@ async def evaluatorq(
         ```
     """
     datapoint_parallelism = resolve_datapoint_parallelism(datapoint_parallelism, parallelism, caller='evaluatorq')
+    save_run = _resolve_experiment_save(save=save, output_dir=output_dir)
     resolved = _normalise_params(
         _EvaluationInputs(
             params=params,
@@ -902,6 +971,18 @@ async def evaluatorq(
         orq_api_key = _orq_api_key or env_raw('ORQ_API_KEY')
 
         start_time = datetime.now(timezone.utc)
+
+        manifest: ManifestWriter | None = None
+        if save_run:
+            from .common.run_manifest import start_manifest
+
+            manifest = start_manifest(
+                run_id=uuid.uuid4().hex,
+                surface=ManifestSurface.EXPERIMENT,
+                run_name=name,
+                runs_dir=Path(output_dir) if output_dir is not None else get_experiment_runs_dir(),
+            )
+            _ = span_stack.enter_context(_finish_manifest_on_error(manifest))
 
         dataset_id: str | None = None
 
@@ -951,6 +1032,10 @@ async def evaluatorq(
                 show_progress=print_results,
             )
 
+        end_time = datetime.now(timezone.utc)
+        # A saved run records the uploaded experiment's URL, so collect it even when the caller did not ask.
+        url_sink = _experiment_url_out if _experiment_url_out is not None else ([] if manifest is not None else None)
+        urls_before = len(url_sink) if url_sink is not None else 0
         await _finish_evaluation(
             _EvaluationFinishInputs(
                 print_results=print_results,
@@ -963,8 +1048,30 @@ async def evaluatorq(
                 start_time=start_time,
                 path=path,
                 base_url=_base_url,
-                experiment_url_out=_experiment_url_out,
+                experiment_url_out=url_sink,
             )
         )
+
+        if manifest is not None:
+            from . import __version__
+
+            new_urls = url_sink[urls_before:] if url_sink is not None else []
+            _save_experiment(
+                manifest,
+                ExperimentRun(
+                    run_id=manifest.manifest.run_id,
+                    run_name=name,
+                    description=description,
+                    dataset_id=dataset_id,
+                    started_at=start_time,
+                    ended_at=end_time,
+                    duration_seconds=(end_time - start_time).total_seconds(),
+                    evaluatorq_version=__version__,
+                    evaluator_names=[evaluator['name'] for evaluator in evaluators_list],
+                    experiment_url=new_urls[-1] if new_urls else None,
+                    results=results,
+                ),
+                output_dir,
+            )
 
         return results

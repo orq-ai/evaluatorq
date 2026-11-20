@@ -1784,12 +1784,26 @@ class ReportSection:
 # "all shared cross-surface data models in contracts.py" convention.
 
 
+class SaveMode(StrEnum):
+    """What a run writes to disk when it finishes.
+
+    ``red_team()`` defaults to ``FINAL`` and also accepts ``DETAIL``, which adds
+    its per-stage artifacts. ``evaluatorq()`` defaults to ``NONE`` and accepts
+    ``NONE`` or ``FINAL``: an experiment has no stage artifacts to write.
+    """
+
+    NONE = 'none'
+    FINAL = 'final'
+    DETAIL = 'detail'
+
+
 class ManifestSurface(StrEnum):
     """Which runner produced a manifest."""
 
     SIM = 'sim'
     REDTEAM = 'redteam'
     INSIGHTS = 'insights'
+    EXPERIMENT = 'experiment'
 
 
 class ManifestStatus(StrEnum):

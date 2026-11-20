@@ -51,7 +51,12 @@ if TYPE_CHECKING:
     from evaluatorq.dashboard.orq_scope import OAuthScopes
 
 # Surface key → display label, used for run-list titles + kind badges.
-SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pairwise': 'Pairwise'}
+SURFACE_LABELS: dict[str, str] = {
+    'redteam': 'Red Team',
+    'sim': 'Agent Sim',
+    'pairwise': 'Pairwise',
+    'experiment': 'Experiments',
+}
 
 # Allow-listed run-overview page sizes (first entry is the default). Shared with
 # app.py so the query parser and the size picker agree.
@@ -139,6 +144,7 @@ _SCORE_TITLES: dict[str, str] = {
     'redteam': 'Resistance rate: attacks the target withstood',
     'sim': 'Mean scorer average across this run',
     'pairwise': 'Called rate: comparisons ending in a win or tie (not inconclusive)',
+    'experiment': 'Pass rate: evaluator scores that set pass and passed',
 }
 
 
@@ -197,6 +203,11 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
 
 # Surface → inline glyph (lucide: shield-alert / messages-square / columns-2) for the Type column.
 PAIRWISE_ICON_PATH = '<path d="M4 6h6v12H4z"/><path d="M14 6h6v12h-6z"/><path d="M12 4v16"/>'
+# lucide: flask-conical
+EXPERIMENT_ICON_PATH = (
+    '<path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45'
+    'l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/>'
+)
 _SURFACE_ICONS: dict[str, str] = {
     'redteam': (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
@@ -212,6 +223,10 @@ _SURFACE_ICONS: dict[str, str] = {
     'pairwise': (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
         f'stroke-linecap="round" stroke-linejoin="round">{PAIRWISE_ICON_PATH}</svg>'
+    ),
+    'experiment': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        f'stroke-linecap="round" stroke-linejoin="round">{EXPERIMENT_ICON_PATH}</svg>'
     ),
 }
 
@@ -310,6 +325,7 @@ _KIND_COLORS = {
     'Red team': 'var(--chart-1)',
     'Agent sim': 'var(--chart-2)',
     'Pairwise': 'var(--chart-3)',
+    'Experiments': 'var(--chart-4)',
 }
 
 
@@ -329,7 +345,7 @@ def landing_body(data: Landing) -> str:
     if data.total_runs == 0:
         return (
             '<section class="dash-wrap"><div class="runs-empty">'
-            'No reports found. Run a red team, simulation, or pairwise job to generate reports.'
+            'No reports found. Run a red team, simulation, pairwise or saved evaluatorq() job to generate reports.'
             '</div></section>'
         )
 
@@ -833,8 +849,14 @@ _DOWNLOAD_ICON = (
 
 def report_back_link(surface: str) -> str:
     """Render the 'back to run list' link shown above a report (matches v1)."""
-    target = f'/?surface={esc(surface)}' if surface in ('redteam', 'sim', 'pairwise') else '/'
-    label = {'redteam': 'Red team runs', 'sim': 'Agent sim runs', 'pairwise': 'Pairwise runs'}.get(surface, 'All runs')
+    labels = {
+        'redteam': 'Red team runs',
+        'sim': 'Agent sim runs',
+        'pairwise': 'Pairwise runs',
+        'experiment': 'Experiment runs',
+    }
+    target = f'/?surface={esc(surface)}' if surface in labels else '/'
+    label = labels.get(surface, 'All runs')
     return f'<a class="report-back" href="{target}">{_ARROW_LEFT} {esc(label)}</a>'
 
 

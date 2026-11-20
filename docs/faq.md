@@ -77,7 +77,7 @@ Cost and wall-clock scale with cases × turns × LLM calls. The levers are how m
 
 ### Where do results go, and how do I view a past run?
 
-Runs auto-save locally (red-team runs to `.evaluatorq/runs/`; simulation runs to `.evaluatorq/sim-runs/`). Browse them in the multi-run FastHTML dashboard with `eq dashboard` (no path browses both stores; `eq dashboard .evaluatorq/sim-runs` scopes to simulation), or list runs with `eq redteam runs` / `eq sim runs`. See [Dashboard](dashboard.md).
+Runs auto-save locally (red-team runs to `.evaluatorq/runs/`; simulation runs to `.evaluatorq/sim-runs/`). Browse them in the multi-run FastHTML dashboard with `eq dashboard` (no path browses every default store, including experiment runs saved with `evaluatorq(..., save=SaveMode.FINAL)`; `eq dashboard .evaluatorq/sim-runs` scopes to simulation), or list runs with `eq redteam runs` / `eq sim runs`. See [Dashboard](dashboard.md).
 
 ### Some spans are missing from my traces
 

@@ -37,6 +37,16 @@ Older screenshots use `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 
 | `sim-08-config.png` | Report → Config — run metadata and the persona dials |
 | `sim-09-compare.png` | Run comparison — two runs of the same agent, what changed, tiles, outcome bars and scorer means |
 
+## Experiments — `experiment-*.png`
+
+Source run: two synthetic `evaluatorq()` runs saved with `save=SaveMode.FINAL`, five factual questions each, one job that raises on one row, a `contains-expected` evaluator that sets `pass`, and a `helpfulness-judge` evaluator that reports token usage. The report is captured at 1400×1560 with no `ORQ_API_KEY`, so the settings toast shows in the corner.
+
+| File | Page |
+|---|---|
+| `experiment-landing.png` | Dashboard landing with only experiment runs — runs by type, evaluator spend and tokens, recent runs (1400×900) |
+| `experiment-run-list.png` | Experiments run list — each run scored by its pass rate (1400×600) |
+| `experiment-report.png` | Experiment report — headline counts, per-evaluator averages and pass rates, the row table with one errored row |
+
 ## Pending re-shoot
 
 Four shots do not show the thing their caption teaches. The decision is to re-shoot the set in one purpose-built capture session rather than keep documenting around it. Until then the three that exist are **unreferenced** — their `![...]` lines were removed from [`docs/dashboard.md`](../../dashboard.md); the prose stayed. Re-add each one in the same commit that replaces the file, not before. The prose caveats standing in for them are the only thing keeping the pages honest, so **do not delete them either**.

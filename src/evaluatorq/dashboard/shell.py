@@ -24,7 +24,7 @@ from pathlib import Path
 from evaluatorq.common.reports import esc, load_css
 from evaluatorq.dashboard.styles import DASHBOARD_CSS
 from evaluatorq.dashboard.theme import EDITORIAL_CSS
-from evaluatorq.dashboard.view import PAIRWISE_ICON_PATH, SURFACE_LABELS, head_assets
+from evaluatorq.dashboard.view import EXPERIMENT_ICON_PATH, PAIRWISE_ICON_PATH, SURFACE_LABELS, head_assets
 from evaluatorq.trace_finder.settings import load_settings
 
 
@@ -177,6 +177,12 @@ _NAV: list[tuple[str, str, str, str]] = [
         PAIRWISE_ICON_PATH,
     ),
     (
+        'experiment',
+        SURFACE_LABELS['experiment'],
+        '/?surface=experiment',
+        EXPERIMENT_ICON_PATH,
+    ),
+    (
         'find',
         'Trace search',
         '/find',
@@ -248,7 +254,7 @@ def current_sidebar_html(active_nav: str) -> str:
 def _resolve_nav(active_surface: str | None, active_nav: str | None) -> str:
     if active_nav:
         return active_nav
-    if active_surface in ('redteam', 'sim', 'pairwise'):
+    if active_surface in ('redteam', 'sim', 'pairwise', 'experiment'):
         return active_surface
     return 'dashboard'
 

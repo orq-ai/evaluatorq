@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.run_store_dir import get_store_dir
+from evaluatorq.common.run_store_dir import get_store_dir, write_unique_json
 from evaluatorq.contracts import Usage  # noqa: TC001  # runtime-needed: pydantic field type on PairwiseResponseMetrics
 from evaluatorq.pairwise import PairwiseComparison, PairwiseReport, build_report
 
@@ -148,28 +148,10 @@ class PairwiseRun(BaseModel):
             _ = target.write_text(payload, encoding='utf-8')
             return target
 
-        runs_dir = get_pairwise_runs_dir()
-        runs_dir.mkdir(parents=True, exist_ok=True)
         base = f'{self.created_at.strftime("%Y%m%d_%H%M%S")}_{_slug(self.run_name)}'
-        # Exclusive-create, matching the sim run store: the stamp only resolves
-        # to the second, so two runs of the same name in the same second would
-        # otherwise silently overwrite each other. 'x' also avoids the TOCTOU
-        # race an exists() check would leave open.
-        target = runs_dir / f'{base}.json'
-        for counter in range(1000):
-            try:
-                with target.open('x', encoding='utf-8') as fh:
-                    _ = fh.write(payload)
-            except FileExistsError:  # noqa: PERF203 — exclusive-create retry is the point
-                target = runs_dir / f'{base}_{counter + 1:03d}.json'
-            except OSError:
-                # 'x' created the file before the write failed (e.g. disk full);
-                # don't leave an empty orphan behind.
-                target.unlink(missing_ok=True)
-                raise
-            else:
-                return target
-        raise RuntimeError(f'could not find a free filename for {base} after 1000 attempts')
+        # Exclusive-create, matching the sim run store: two runs of the same name
+        # in the same second would otherwise silently overwrite each other.
+        return write_unique_json(get_pairwise_runs_dir(), base, payload)
 
     @classmethod
     def load(cls, path: Path | str) -> PairwiseRun:

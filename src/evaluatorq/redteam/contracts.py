@@ -348,14 +348,6 @@ class AgentCapability(StrEnum):
     USER_DATA = 'user_data'
 
 
-class SaveMode(StrEnum):
-    """Controls what gets persisted to disk after a red team run."""
-
-    NONE = 'none'
-    FINAL = 'final'
-    DETAIL = 'detail'
-
-
 class AttackSource(StrEnum):
     """Origin of an attack datapoint."""
 
@@ -443,6 +435,7 @@ from evaluatorq.contracts import (  # noqa: F401
     OutputMessage,
     ReasoningOutputItem,
     ResponseTrace,
+    SaveMode,  # shared with evaluatorq() since experiment runs save too
     StrategyToolCall,
     TextOutputItem,
     ToolCallOutputItem,

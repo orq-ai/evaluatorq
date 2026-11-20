@@ -143,7 +143,7 @@ plugins:
           - guides/targets.md: The system under test — built-in target kinds and how to write your own AgentTarget.
           - anthropic.md: Run red teaming, simulation and Insights on an Anthropic, Bedrock or Vertex client, with Claude model ids per role and server-side fallbacks.
           - coding-agent-targets.md: Run Claude Code, Codex CLI or OpenCode as the system under test, directly or through orq launch.
-          - dashboard.md: Browse red team and simulation reports in a local web dashboard.
+          - dashboard.md: Browse red team, simulation, pairwise and experiment reports in a local web dashboard.
           - trace-finder.md: Find semantic matches in recent Orq traces with a classify model.
           - fetching-traces.md: Fetch recorded Orq traces into your own code with fetch_traces(), and handle per-trace import failures.
           - formats.md: Convert an agent run between chat messages, OpenResponses items, OTel GenAI traces and ATIF trajectories.
