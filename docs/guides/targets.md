@@ -19,7 +19,7 @@ There are two ways to name a target:
 | `OrqResponsesTarget` | You want the Responses API through the Orq router, with full per-call config | Self-described: model, instructions, the tools you passed |
 | `CodingAgentTarget` | Your system under test is a coding-agent CLI (Claude Code, Codex, OpenCode) on this machine, run directly or via `orq launch` | Static: the agent's tool names plus the skills you injected. See [Coding agents as targets](../coding-agent-targets.md) |
 | `LangGraphTarget`, `OpenAIAgentTarget`, `PydanticAITarget`, `CrewAITarget` | Your agent is built in that framework | Whatever the wrapper can extract |
-| `ClaudeAgentSDKTarget` | Your agent is built with the Claude Agent SDK and described by a `ClaudeAgentOptions` | The system prompt, model and tool names in the options. See [Claude Agent SDK agents](#claude-agent-sdk-agents-claudeagentsdktarget) |
+| `ClaudeAgentSDKTarget` | Your agent is built with the Claude Agent SDK and described by a `ClaudeAgentOptions` | The system prompt and model in the options, and every tool the Claude Code runtime gives the agent, MCP tools included. See [Claude Agent SDK agents](#claude-agent-sdk-agents-claudeagentsdktarget) |
 | `CallableTarget` | Your agent is already a Python function | The function's name, or an `AgentContext` you pass |
 | `VercelAISdkTarget` | Your agent is served over HTTP by the Vercel AI SDK — a Next.js route handler or equivalent | Minimal — the endpoint URL, unless you pass an `AgentContext`. See [Over HTTP](#over-http-vercelaisdktarget) |
 | Your own `AgentTarget` subclass | Anything else — an HTTP endpoint the AI SDK protocol does not fit, a local pipeline, a bespoke tool loop | Whatever your `get_agent_context()` returns |
@@ -592,19 +592,30 @@ Every tool call the agent made is recorded with its input and paired with its re
 
 File changes are visible as the write, edit and shell calls that made them. The target does not diff the working directory.
 
+Each turn also runs in a trace span that carries its token counts and the cost the Claude Code runtime reported, as `evaluatorq.claude_agent_sdk.cost_usd`. The response's `usage` carries the token counts, cache reads and writes included, and its cost stays empty: the runtime's figure is not copied into it, so token-based pricing still applies.
+
+### What the attacker learns about the agent
+
+The agent context lists the tools the Claude Code runtime actually gives the agent, not only the ones the options name. With no `tools` set, that is every built-in tool; `disallowed_tools` takes some away, and each MCP server adds its tools as `mcp__<server>__<tool>`. Note that `allowed_tools` does not limit the list: it only approves tools without asking.
+
+To read the list, the target starts the runtime once with the options of a real turn, pointed at an address where no model answers, so no model request is made and nothing is billed. Your hooks and `can_use_tool` are left out of that start. If an MCP server is not connected at that moment its tools are missing, and a warning names it. If the runtime cannot start, the context lists the tools `tools` names, with a warning.
+
+For the system prompt, a string or a `custom` prompt is reported whole and a `file` prompt is read. Of the `claude_code` preset only the `append` text is reported, because the preset itself lives in the runtime.
+
 ### Isolation, and what it does not cover
 
 Each instance works in two private temporary directories, removed when the run closes it: the agent's working directory and its Claude configuration directory. Pass `workdir=` to start from a copy of a project; the original is never touched. Symbolic links in it are not copied, because a link would still point at its target on the host. Pass `keep_workdir=True` to keep the directories for inspection.
 
 | `isolation=` | What it sets |
 |---|---|
-| `"sandbox"` (default) | The private directories, plus: the SDK's command sandbox on, unsandboxed commands refused, the file tools refusing any path outside the working directory, and the host user's settings, memory files and account connectors not loaded. A `setting_sources` you set yourself is kept, and so are your other `settings`. |
+| `"sandbox"` (default) | The private directories, plus: the SDK's command sandbox on and required, unsandboxed commands refused, the file tools refusing any path outside the working directory, and no settings, memory files or account connectors loaded, the project's own included. A `setting_sources` you set yourself is kept, and so are your other `settings`. |
 | `"none"` | The private directories only. Your options are otherwise used as given, apart from the runtime retry setting described under [Errors](#errors). |
 
-Four limits to know before you rely on it:
+Five limits to know before you rely on it:
 
 - **With `isolation="none"` the working directory is where the agent starts, not a wall.** In a test run, an agent allowed to use `Bash` and `Write` wrote files elsewhere on the machine. The default closes both routes: the command sandbox stops shell commands, and a permissions setting stops the file tools.
-- **The command sandbox exists on macOS and Linux only**, according to the SDK's documentation. This target has been run live on macOS.
+- **The command sandbox exists on macOS and Linux only, and on Linux it needs `bubblewrap` and `socat`.** When the sandbox cannot start, the first turn raises `ClaudeAgentSDKUnavailableError` with code `agent_sdk.sandbox_unavailable` and no command runs. Without that check the runtime only prints a warning and runs every shell command on the host: in a Linux container without those two packages, a test agent wrote a file outside its working directory. This target has been run live on macOS, and on Linux in a container without the packages.
+- **The project's `CLAUDE.md` and `.claude/settings.json` are not loaded.** Project settings can define hooks, and the runtime runs hooks on the host, outside the sandbox: in a test run, a hook in the copied project's settings wrote a file outside the working directory. The target logs a warning when `workdir` holds these files. Put the instructions in `system_prompt`, or pass `setting_sources=["project"]` if you trust the project's hooks.
 - **Python tools you define in-process run in your process.** A custom tool function or hook has the access your script has. Nothing here confines it.
 - **A `claude` login stored under `~/.claude` is not seen**, because the configuration directory is private. Use an API key or a gateway.
 
@@ -617,12 +628,14 @@ When the agent must not be able to reach the host at all, run the whole evaluati
 | Code | Meaning |
 |---|---|
 | `agent_sdk.cli_not_found` | The Claude Code runtime is not installed. Not retried. |
-| `agent_sdk.api_error` | The model request failed, for example a wrong gateway address or a model the key cannot use. |
+| `agent_sdk.sandbox_unavailable` | `isolation="sandbox"` is set but the command sandbox cannot start on this machine. Not retried. |
+| `agent_sdk.authentication_failed`, `agent_sdk.billing_error`, `agent_sdk.invalid_request` | The model provider refused the request: a wrong key, no credit, or a request it rejects, such as an unknown model. These raise `ClaudeAgentSDKRequestError` and are not retried. |
+| `agent_sdk.api_error` | The model request failed in a way a retry can fix: a rate limit, a server error, or a gateway that cannot be reached. |
 | `agent_sdk.<subtype>`, such as `agent_sdk.error_max_turns` | The run ended on an error result; the subtype is the SDK's own. |
 | `agent_sdk.no_result` | The run ended without a final assistant message. |
 | `agent_sdk.sdk_error` | The SDK raised for another reason, such as a lost process. |
 
-The Claude Code runtime would retry a failed model request on its own before the turn fails; with its defaults, a wrong key took 174 seconds to come back in a test run. The target turns that off by setting `CLAUDE_CODE_MAX_RETRIES="0"` in the runtime's environment, in both isolation modes, so the run's `max_target_retries` is the only retry budget. A `CLAUDE_CODE_MAX_RETRIES` you set in `options.env` wins; any other value multiplies with `max_target_retries`.
+The Claude Code runtime would retry a failed model request on its own before the turn fails; with its defaults, a wrong key took 174 seconds to come back in a test run. The target turns that off by setting `CLAUDE_CODE_MAX_RETRIES="0"` in the runtime's environment, in both isolation modes and in the start that reads the tool list, so the run's `max_target_retries` is the only retry budget, and a refused request (the three non-retried codes above) fails after one attempt. A `CLAUDE_CODE_MAX_RETRIES` you set in `options.env` wins for turns; any value above `"0"` multiplies with `max_target_retries`.
 
 ## Writing your own target
 
