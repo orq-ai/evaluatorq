@@ -75,6 +75,7 @@ __all__ = [
 CUSTOM_TECHNIQUE = 'custom'
 _ID_PATTERN = re.compile(r'^[a-z][a-z0-9_]*$')
 _JUDGE_PLACEHOLDERS = ('{{output.response}}', '{{input.all_messages}}')
+_DEFINITIONS: dict[str, CustomVulnerability] = {}
 
 
 def register_technique(name: str) -> AttackTechnique | RegisteredValue:
@@ -105,6 +106,7 @@ def register_vulnerability_def(vdef: VulnerabilityDef) -> None:
 
 def clear_custom_registrations() -> None:
     """Forget every custom registration in every registry (test isolation)."""
+    _DEFINITIONS.clear()
     clear_custom_judges()
     clear_custom_strategies()
     clear_custom_vulnerabilities()
@@ -275,11 +277,18 @@ def register_vulnerability(definition: CustomVulnerability | None = None, /, **f
     name = definition.name or vid.replace('_', ' ').capitalize()
     mappings = definition.framework_mappings or {Framework.CUSTOM.value: [vid]}
     category = next((codes[0] for codes in mappings.values() if codes), vid)
-    domain = register_open_value(VulnerabilityDomain, definition.domain)
-
     if not definition.generate and not definition.attacks:
         msg = f'{vid!r} has generate: false and no attacks, so it would never be tested.'
         raise ValueError(msg)
+
+    previous = _DEFINITIONS.get(vid)
+    if previous is not None:
+        if previous == definition:
+            return register_open_value(Vulnerability, vid)
+        msg = f'{vid!r} is already registered with a different definition.'
+        raise ValueError(msg)
+
+    domain = register_open_value(VulnerabilityDomain, definition.domain)
 
     was_known = is_known_open_value(Vulnerability, vid)
     vuln = register_open_value(Vulnerability, vid)
@@ -332,13 +341,14 @@ def register_vulnerability(definition: CustomVulnerability | None = None, /, **f
             register_strategy(strategy.model_copy(update={'vulnerability': strategy.vulnerability or vuln}))
         if not definition.generate:
             disable_generation(vuln)
+    _DEFINITIONS[vid] = definition
     return vuln
 
 
 def custom_static_datapoints(categories: list[str] | None) -> list[Any]:
-    """Static-mode rows for the selected custom rules: one single-turn row per written attack.
+    """Static-mode rows for the selected custom rules: one single-turn row per written attack prompt.
 
-    A selected custom rule with no single-turn attack raises before the run starts.
+    A selected custom rule with no written attack prompt raises before the run starts.
     """
     from evaluatorq.redteam.adaptive.strategy_registry import get_strategies_for_vulnerability
     from evaluatorq.redteam.vulnerability_registry import custom_vulnerability_defs, get_primary_category
@@ -393,7 +403,7 @@ class CustomDefinitionError(ValueError):
     """A definitions file or entry is invalid; the message names the file and entry."""
 
 
-def _read_definitions_file(path: Path) -> list[Any]:
+def _parse_definitions_file(path: Path) -> Any:
     try:
         text = path.read_text(encoding='utf-8')
     except OSError as e:
@@ -420,6 +430,11 @@ def _read_definitions_file(path: Path) -> list[Any]:
         except yaml.YAMLError as e:
             msg = f'Cannot parse {path}: {e}'
             raise CustomDefinitionError(msg) from e
+    return data
+
+
+def _read_definitions_file(path: Path) -> list[Any]:
+    data = _parse_definitions_file(path)
     if data is None:
         return []
     if isinstance(data, dict) and 'vulnerabilities' in data:
@@ -533,8 +548,20 @@ def template_yaml(vuln_id: str) -> str:
 """
 
 
+def ensure_appendable(path: Path) -> None:
+    """Raise unless *path* is missing, empty, or a YAML file that holds a list of definitions."""
+    if path.suffix.lower() not in {'.yaml', '.yml'} or (
+        path.exists()
+        and path.read_text(encoding='utf-8').strip()
+        and not isinstance(_parse_definitions_file(path), list)
+    ):
+        msg = f'New entries can only be appended to a YAML file that holds a list of definitions, not {path}.'
+        raise CustomDefinitionError(msg)
+
+
 def append_definition(path: Path, block: str) -> None:
     """Append *block* to *path* as text, so the comments already in the file stay as they are."""
+    ensure_appendable(path)
     existing = path.read_text(encoding='utf-8') if path.exists() else ''
     if existing and not existing.endswith('\n'):
         existing += '\n'

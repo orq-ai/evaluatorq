@@ -146,3 +146,9 @@ def test_static_mode_stops_on_rule_without_attacks() -> None:
     register_vulnerability(id='refund_promises', description=RULE)
     with pytest.raises(ValueError, match='dynamic mode'):
         custom_static_datapoints(['refund_promises'])
+
+
+def test_reregistering_a_changed_definition_raises() -> None:
+    register_vulnerability(id='refund_promises', description=RULE)
+    with pytest.raises(ValueError, match='different definition'):
+        register_vulnerability(id='refund_promises', description=RULE, attacks=['hi'], generate=False)

@@ -157,3 +157,12 @@ def test_judge_show_prints_custom_and_builtin(tmp_path: Path) -> None:
     assert builtin.exit_code == 0, builtin.output
     missing = runner.invoke(app, ['judge', 'show', 'nope'])
     assert missing.exit_code == 1
+
+
+def test_no_input_refuses_a_mapping_file(tmp_path: Path) -> None:
+    rules = tmp_path / 'rules.yaml'
+    original = 'vulnerabilities:\n  - id: refund_promises\n    description: Never promise a refund.\n'
+    rules.write_text(original)
+    result = runner.invoke(app, ['new-vulnerability', 'other_rule', '--no-input', '--file', str(rules)])
+    assert result.exit_code != 0
+    assert rules.read_text() == original

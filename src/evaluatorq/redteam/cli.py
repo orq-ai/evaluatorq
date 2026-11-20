@@ -920,6 +920,7 @@ def new_vulnerability(
         CustomDefinitionError,
         append_definition,
         definition_yaml,
+        ensure_appendable,
         load_custom_vulnerabilities,
         template_yaml,
     )
@@ -928,6 +929,7 @@ def new_vulnerability(
         raise typer.BadParameter('new-vulnerability writes YAML; use a .yaml or .yml file.', param_hint="'--file'")
     try:
         existing_ids = {d.id for d in load_custom_vulnerabilities(file)} if file.exists() else set()
+        ensure_appendable(file)
     except CustomDefinitionError as e:
         typer.echo(f'Error: {e}', err=True)
         raise typer.Exit(code=1) from None
