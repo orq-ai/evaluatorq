@@ -319,15 +319,31 @@ def _tiles(cmp: Comparison) -> str:
             'sub_html': f'<span class="cmp-tile-ab"{title}>{esc(fmt(va))} &rarr; {esc(fmt(vb))}</span>{pill}{note_html}',
         }
 
-    # Target agent's own cost. An unknown side shows "unknown" and an n/a change, never a
-    # $0 baseline; a lower bound on either side says so beside the change.
-    figs = [
-        cost_figure(
-            agg.target_usage, unknown_tip=TARGET_COST_UNKNOWN_TIP, missing=agg.target_missing, total=agg.conversations
-        )
-        for agg in (a, b)
+    # Target agent's own cost per conversation that reported usage, so a run where fewer
+    # conversations reported does not read as cheaper. An unknown side shows "unknown" and an
+    # n/a change, never a $0 baseline. Unequal coverage keeps the change neutral: the two
+    # averages are over different conversations. Unpriced calls still make it a lower bound.
+    figs = [cost_figure(agg.target_usage, unknown_tip=TARGET_COST_UNKNOWN_TIP) for agg in (a, b)]
+    reported = [agg.conversations - agg.target_missing for agg in (a, b)]
+    cost_a, cost_b = (
+        None if agg.target_usage is None or agg.target_usage.total_cost is None else agg.target_usage.total_cost / n
+        for agg, n in zip((a, b), reported, strict=True)
+    )
+    cost_tip = ' '.join(
+        f'{which}: {fig.tip}'
+        if fig.unknown
+        else f'{which}: average over the {n} of {agg.conversations} conversations that reported target usage.'
+        + (f' {fig.tip}' if fig.tip else '')
+        for which, fig, n, agg in zip('AB', figs, reported, (a, b), strict=True)
+    )
+    coverage = [(n, agg.conversations) for n, agg in zip(reported, (a, b), strict=True)]
+    coverage_differs = not any(fig.unknown for fig in figs) and coverage[0] != coverage[1]
+    cost_notes = [
+        'A {} of {}, B {} of {} conversations reported usage'.format(*coverage[0], *coverage[1])
+        if coverage_differs
+        else '',
+        'lower bound' if any(fig.qualifier for fig in figs) else '',
     ]
-    cost_a, cost_b = (None if agg.target_usage is None else agg.target_usage.total_cost for agg in (a, b))
 
     return kpi_cards(
         [
@@ -360,15 +376,15 @@ def _tiles(cmp: Comparison) -> str:
             tile('Avg turns', a.avg_turns, b.avg_turns, lambda v: fmt_num(v, 1), lambda d: f'{d:+.1f}', higher=None),
             tile('Errors', a.errors, b.errors, lambda v: f'{v:.0f}', lambda d: f'{d:+.0f}', higher=False),
             tile(
-                'Target cost',
+                'Target cost / conv.',
                 cost_a,
                 cost_b,
                 lambda v: 'unknown' if v is None else fmt_cost(v),
                 lambda d: f'{"+" if d > 0 else "-"}{fmt_cost(abs(d))}',
-                higher=False,
+                higher=None if coverage_differs else False,
                 flat=COST_FLAT_DELTA,
-                tip=' '.join(f'{which}: {fig.tip}' for which, fig in zip('AB', figs, strict=True) if fig.tip),
-                note='lower bound' if any(fig.qualifier for fig in figs) else '',
+                tip=cost_tip,
+                note='; '.join(n for n in cost_notes if n),
             ),
         ],
         modifier='cmp',

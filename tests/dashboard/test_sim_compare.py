@@ -513,7 +513,7 @@ def test_outcome_filter_makes_goal_rate_not_comparable():
     assert 'Goal rate held steady' not in heads and 'Goal rate rose' not in heads
     tiles = _tiles(cmp)
     assert tiles.count('Hidden: you filtered by goal outcome') == 2
-    # the hidden tiles drop their A -> B values; the other four (with Target cost) keep them
+    # the hidden tiles drop their A -> B values; the other four (with Target cost / conv.) keep them
     assert tiles.count('cmp-tile-ab') == 4
     # the goal scorer row and the heatmap's goal-rate change hide too
     rows = [ScoreRow('goal_achieved', 0.5, 0.75), ScoreRow('helpfulness', 0.6, 0.7)]
