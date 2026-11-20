@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, cast
 
 from loguru import logger
 
+from evaluatorq.common.llm_client import LLMConfigurationError
+
 from .common.output_adapters import output_error_text
 from .job_helper import JobError
 from .progress import Phase, ProgressService, safe_update_progress
@@ -93,6 +95,8 @@ async def process_data_point(
             )
         ]
 
+    except LLMConfigurationError:
+        raise
     except Exception as error:
         logger.warning('Data point {} failed before job execution: {}', row_index, error)
         # Placeholder only when resolution itself failed; row_index keeps them distinct.
@@ -207,6 +211,8 @@ async def process_job(
 
         except JobError as e:
             # Extract job name from JobError
+            if isinstance(e.original_error, LLMConfigurationError):
+                raise e.original_error from e
             job_name = e.job_name
             error = str(e.original_error)
             set_job_name_attribute(job_span, job_name)
@@ -219,6 +225,8 @@ async def process_job(
                 error=error,
                 evaluator_scores=[],
             )
+        except LLMConfigurationError:
+            raise
         except Exception as e:
             error = str(e)
             set_span_error(job_span, error)
@@ -354,6 +362,8 @@ async def process_evaluator(
                 error=None,
             )
 
+        except LLMConfigurationError:
+            raise
         except Exception as error:
             set_span_error(eval_span, str(error))
             record_span_payload(eval_span, key=EVALUATION_OUTPUT_KEYS, payload={'error': str(error)})

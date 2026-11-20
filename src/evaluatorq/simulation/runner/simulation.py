@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
-from evaluatorq.common.llm_client import as_llm_client
+from evaluatorq.common.llm_client import LLMConfigurationError, as_llm_client
 from evaluatorq.common.messages import pair_tool_rows, tool_call_text
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
@@ -878,6 +878,8 @@ class SimulationRunner:
                             },
                         )
                         raise
+        except LLMConfigurationError:
+            raise
         except Exception as e:
             logger.error('SimulationRunner.run() failed: %s', e, exc_info=True)
             error_msg = str(e)
@@ -1264,13 +1266,28 @@ class SimulationRunner:
             raise ValueError(f'max_concurrency must be >= 1, got {max_concurrency}')
         semaphore = asyncio.Semaphore(max_concurrency)
 
+        # A configuration error is the same for every datapoint. The first one stops the batch: rows still running
+        # are cancelled and rows waiting for a slot never start, so no further conversation is paid for.
+        configuration_errors: list[LLMConfigurationError] = []
+        tasks: list[asyncio.Task[SimulationResult]] = []
+
         async def run_single(dp: SimulationDatapoint) -> SimulationResult:
             async with semaphore:
                 await await_maybe(self._hooks.on_datapoint_start(dp))
-                return await self._run_with_timeout(dp, max_turns, timeout_per_simulation)
+                try:
+                    return await self._run_with_timeout(dp, max_turns, timeout_per_simulation)
+                except LLMConfigurationError as error:
+                    configuration_errors.append(error)
+                    current = asyncio.current_task()
+                    for task in tasks:
+                        if task is not current and not task.done():
+                            task.cancel()
+                    raise
 
-        tasks = [run_single(dp) for dp in datapoints]
+        tasks.extend(asyncio.create_task(run_single(dp)) for dp in datapoints)
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        if configuration_errors:
+            raise configuration_errors[0]
 
         final_results: list[SimulationResult] = []
         for i, result in enumerate(results):

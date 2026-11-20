@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from loguru import logger
 
 from evaluatorq.common.judge import ClassifyQuestion, ClassifyRequest, JudgeError, run_classify
+from evaluatorq.common.llm_client import LLMConfigurationError
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import LLMCallConfig
 
@@ -189,6 +190,8 @@ async def merge_similar(
             if answer.noul >= threshold:
                 _union(parent, a, b)
             return True
+        except LLMConfigurationError:
+            raise
         except Exception as exc:  # noqa: BLE001 — isolate unexpected pair failure; cancellation still propagates.
             logger.warning('Insights merge classify failed for clusters {} vs {}: {}', a, b, exc)
             return False
