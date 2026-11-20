@@ -36,7 +36,9 @@ import asyncio
 import hashlib
 import inspect
 import math
-from dataclasses import dataclass
+import re
+import time
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import httpx
@@ -86,6 +88,9 @@ class Pricing:
     cache_write: float | None = None
     audio_input: float | None = None
     tier: ContextTier | None = None
+    # True when the flat input, output and cache rates are the simple mean of a peak and an
+    # off-peak rate (DeepSeek's time-of-day pricing); see `_card_rates`.
+    time_of_day_average: bool = False
 
 
 class _ModelInfoFields(NamedTuple):
@@ -470,7 +475,226 @@ def _parse_pricing(provider: str, model_id: str, metadata: dict[str, object]) ->
     )
 
 
-def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
+# --- time-of-day pricing -----------------------------------------------------------------------
+#
+# A card's ``metadata.pricing.variants`` is a list of conditional price overrides, each a CEL
+# ``when`` plus optional price dimensions. The platform cascades every matching variant in
+# declaration order, later values winning per dimension. DeepSeek publishes time-of-day prices
+# this way: a dated set ``request_unix >= N`` (the off-peak rate from that moment on) followed by
+# the same date ANDed with a UTC peak-hour window (the peak rate). Only those two clause shapes
+# are read here; a variant with any other condition (``tier == "batch"``, ``input_tokens > ...``)
+# is left to the flat and extended-context logic above.
+
+_DATED_CLAUSE = re.compile(r'request_unix\s*>=\s*(\d+)')
+_IDENTIFIER = re.compile(r'[A-Za-z_]\w*')
+# Rate dimensions this reader fills, mapped to the variant keys that carry them (first one wins).
+_VARIANT_DIMENSIONS: dict[str, tuple[str, ...]] = {
+    'input': ('input',),
+    'output': ('output',),
+    'cache_read': ('cache_read',),
+    'cache_write': ('cache_write', 'cache_write_5m'),
+}
+_Rates = dict[str, float | None]
+
+
+@dataclass(frozen=True)
+class _TimeVariant:
+    """One date / time-of-day variant: its dated-set start (0 when undated), whether it is a peak window, its rates per 1k."""
+
+    start: int
+    peak: bool
+    rates: _Rates
+
+
+@dataclass(frozen=True)
+class _TimeOfDayOverride:
+    """Hand-kept averaged rates for a card whose variants carry no prices (USD per 1M tokens)."""
+
+    # The ``request_unix >= N`` start of the card's dated set these rates were copied for.
+    dated_set_start: int
+    input: float
+    output: float
+    cache_read: float | None
+    sources: tuple[str, ...]
+
+
+# Rates for time-of-day-priced cards whose ``pricing.variants`` hold only ``when`` (no prices),
+# so the card's flat rates are the stale pre-time-of-day ones. Each rate is the simple mean of
+# the peak and off-peak rate. This table goes away with BACK-2442, the platform fix that puts
+# prices on the variants; once a card carries them, `_card_rates` reads them and ignores the entry.
+_TIME_OF_DAY_PRICE_OVERRIDES: dict[str, _TimeOfDayOverride] = {
+    # Peak $1.32 in / $0.044 cache hit / $3.96 out; off-peak $0.66 / $0.022 / $1.98 per 1M,
+    # since 2026-08-16 16:00 UTC (request_unix >= 1786896000).
+    'deepseek/deepseek-v4-pro': _TimeOfDayOverride(
+        dated_set_start=1786896000,
+        input=0.99,
+        output=2.97,
+        cache_read=0.033,
+        sources=(
+            'https://api-docs.deepseek.com/quick_start/pricing',
+            'orquesta-web libs/models/catalog/data/providers/deepseek/offerings/deepseek-v4-pro.toml',
+        ),
+    ),
+    # Peak $0.30 in / $0.006 cache hit / $1.20 out; off-peak $0.15 / $0.003 / $0.60 per 1M,
+    # since 2026-09-10 04:00 UTC (request_unix >= 1789012800).
+    'deepseek/deepseek-flash': _TimeOfDayOverride(
+        dated_set_start=1789012800,
+        input=0.225,
+        output=0.9,
+        cache_read=0.0045,
+        sources=(
+            'https://api-docs.deepseek.com/quick_start/pricing',
+            'orquesta-web libs/models/catalog/data/providers/deepseek/offerings/deepseek-v4-flash.toml',
+        ),
+    ),
+}
+
+
+def _and_clauses(expr: str) -> list[str] | None:
+    """The top-level ``&&`` clauses of a CEL expression, outer parentheses removed; ``None`` if unbalanced."""
+    clauses: list[str] = []
+    depth, begin = 0, 0
+    for i, char in enumerate(expr):
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            if depth < 0:
+                return None
+        elif depth == 0 and expr.startswith('&&', i):
+            clauses.append(expr[begin:i])
+            begin = i + 2
+    if depth != 0:
+        return None
+    clauses.append(expr[begin:])
+    stripped = [_strip_parens(clause.strip()) for clause in clauses]
+    return None if any(not clause for clause in stripped) else stripped
+
+
+def _strip_parens(clause: str) -> str:
+    """``clause`` without parentheses that wrap all of it."""
+    while clause.startswith('(') and clause.endswith(')'):
+        depth = 0
+        for i, char in enumerate(clause):
+            depth += {'(': 1, ')': -1}.get(char, 0)
+            if depth == 0 and i < len(clause) - 1:
+                return clause  # the first paren closes early: `(a) || (b)`
+        clause = clause[1:-1].strip()
+    return clause
+
+
+def _variant_rate_per_1k(raw: object) -> float | None:
+    """A variant price as USD per 1k: a ``{cost, currency, unit, per}`` object, or a bare per-1M number."""
+    if not isinstance(raw, dict):
+        per_million = _finite_nonneg(raw)
+        return None if per_million is None else per_million / 1000
+    cost, per = _finite_nonneg(raw.get('cost')), raw.get('per', 1_000_000)
+    if cost is None or str(raw.get('currency') or 'usd').lower() != 'usd':
+        return None
+    if raw.get('unit', 'tokens') != 'tokens' or per not in (1, 1_000, 1_000_000) or isinstance(per, bool):
+        return None
+    return cost * 1000 / per
+
+
+def _time_variant(variant: object) -> _TimeVariant | None:
+    """``variant`` when its condition is only a date and/or a ``request_unix`` time-of-day window, else ``None``."""
+    if not isinstance(variant, dict):
+        return None
+    when = variant.get('when')
+    clauses = _and_clauses(when) if isinstance(when, str) else None
+    if not clauses:
+        return None
+    start, peak = 0, False
+    for clause in clauses:
+        dated = _DATED_CLAUSE.fullmatch(clause)
+        if dated:
+            start = max(start, int(dated.group(1)))
+        elif '%' in clause and set(_IDENTIFIER.findall(clause)) == {'request_unix'}:
+            peak = True
+        else:
+            return None
+    rates = {
+        dim: next((r for key in keys if (r := _variant_rate_per_1k(variant.get(key))) is not None), None)
+        for dim, keys in _VARIANT_DIMENSIONS.items()
+    }
+    return _TimeVariant(start, peak, rates)
+
+
+def _cascade(flat: _Rates, variants: list[_TimeVariant], now: float, *, peak: bool) -> _Rates:
+    """The rates the platform bills at ``now``, off-peak or at peak: matching variants overlaid in order."""
+    rates = dict(flat)
+    for variant in variants:
+        if variant.start <= now and (peak or not variant.peak):
+            rates.update({dim: rate for dim, rate in variant.rates.items() if rate is not None})
+    return rates
+
+
+def _mean(a: float | None, b: float | None) -> float | None:
+    """The mean of two rates, or ``None`` when either is missing."""
+    return None if a is None or b is None else (a + b) / 2
+
+
+def _card_rates(entry: dict[str, object], *, now: float | None = None) -> tuple[float | None, float | None, Pricing]:
+    """A card's flat input and output rates (USD per 1k) and its `Pricing`, with time-of-day pricing folded in.
+
+    A card whose ``metadata.pricing.variants`` split the currently effective dated set (the latest
+    ``request_unix >= N`` that has passed) into an off-peak and a peak variant is priced at the
+    **simple mean** of the two, per dimension: input, output, cache read and cache write. The mean
+    is not weighted by how many hours are peak, nor by when a caller's traffic runs; a run made
+    entirely off-peak is overstated and one made entirely at peak is understated. `Pricing.time_of_day_average`
+    is then ``True``. A dated set without a peak variant prices at its own rates.
+
+    Cards whose variants carry no prices fall back to `_TIME_OF_DAY_PRICE_OVERRIDES`, but only
+    while the card's current dated set starts where the entry was copied for; a newer set means
+    the entry is stale, which logs a warning and keeps the card's flat rates.
+    """
+    provider, model_id = str(entry.get('provider')), str(entry.get('model_id'))
+    metadata = _entry_metadata(entry)
+    inp, out = _usd_price(entry, 'input'), _usd_price(entry, 'output')
+    pricing = _parse_pricing(provider, model_id, metadata)
+    table = metadata.get('pricing')
+    raw_variants = table.get('variants') if isinstance(table, dict) else None
+    variants = [v for v in map(_time_variant, raw_variants) if v] if isinstance(raw_variants, list) else []
+    now = time.time() if now is None else now
+    current = max((v.start for v in variants if v.start <= now), default=None)
+    if current is None:
+        return inp, out, pricing
+    card_id = f'{provider}/{model_id}'
+    override = _TIME_OF_DAY_PRICE_OVERRIDES.get(card_id)
+    split = any(v.peak and v.start == current for v in variants)
+    if any(rate is not None for v in variants for rate in v.rates.values()):
+        if override is not None:
+            logger.debug('{} carries variant prices; ignoring its time-of-day override', card_id)
+        flat = {'input': inp, 'output': out, 'cache_read': pricing.cache_read, 'cache_write': pricing.cache_write}
+        off_peak = _cascade(flat, variants, now, peak=False)
+        rates = off_peak
+        if split:
+            at_peak = _cascade(flat, variants, now, peak=True)
+            rates = {dim: _mean(off_peak[dim], at_peak[dim]) for dim in flat}
+        pricing = replace(
+            pricing, cache_read=rates['cache_read'], cache_write=rates['cache_write'], time_of_day_average=split
+        )
+        return rates['input'], rates['output'], pricing
+    if override is None or not split:
+        return inp, out, pricing
+    if override.dated_set_start != current:
+        logger.warning(
+            'Time-of-day price override for {} is stale: it was copied for the price set starting at '
+            'request_unix {}, but the card now starts one at {}; pricing it at the card flat rates',
+            card_id,
+            override.dated_set_start,
+            current,
+        )
+        return inp, out, pricing
+    cache_read = None if override.cache_read is None else override.cache_read / 1000
+    return (
+        override.input / 1000,
+        override.output / 1000,
+        replace(pricing, cache_read=cache_read, time_of_day_average=True),
+    )
+
+
+def _parse_catalogue(payload: object, *, now: float | None = None) -> dict[str, ModelInfo]:
     """Build the model table from a ``/v2/models`` payload.
 
     Keyed twice: on the bare ``model_id`` (``gpt-5-mini``), which is how callers
@@ -481,8 +705,11 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
     and otherwise the first seen. The qualified key is what makes a pinned id
     price at its own host: hosts republish each other's models and do not always
     match on price, and collapsing them returned tensorix's $1.75/$3.50 for
-    ``deepseek/deepseek-v4-pro``, which bills $0.435/$0.87, a fourfold overstate
-    on a seated judge. Provider-specific entries retain their own prices.
+    ``deepseek/deepseek-v4-pro``, whose own card then read $0.435/$0.87, a fourfold
+    overstate on a seated judge. Provider-specific entries retain their own prices.
+
+    ``now`` (epoch seconds, default the current time) picks the dated price set of a
+    card with time-of-day pricing; see `_card_rates`.
     """
     if not isinstance(payload, list):
         logger.warning(
@@ -497,7 +724,6 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
         model_id, provider = entry.get('model_id'), entry.get('provider')
         if not isinstance(model_id, str) or not isinstance(provider, str):
             continue
-        inp, out = _usd_price(entry, 'input'), _usd_price(entry, 'output')
         metadata = _entry_metadata(entry)
         classify_flag = metadata.get('supports_classify')
         if classify_flag is not None and not isinstance(classify_flag, bool):
@@ -507,7 +733,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
                 model_id,
                 classify_flag,
             )
-        pricing = _parse_pricing(provider, model_id, metadata)
+        inp, out, pricing = _card_rates(entry, now=now)
         info = ModelInfo(
             input_cost_per_1k=inp,
             output_cost_per_1k=out,
