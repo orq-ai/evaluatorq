@@ -122,7 +122,7 @@ Every definition is checked after loading and before the first LLM call. A missi
 
 ## Modes
 
-Generated attacks need the dynamic pipeline. In `dynamic` mode custom rules work fully, and in `hybrid` mode they run in the dynamic part. In `static` mode a selected custom rule runs only its own `attacks`, each as a single-turn prompt. A selected rule with no attacks stops a static run before it starts, with an error that says to switch mode or add attacks.
+Generated attacks need the dynamic pipeline. In `dynamic` mode custom rules work fully, and in `hybrid` mode they run in the dynamic part. In `static` mode a selected custom rule runs only its own `attacks`, each as a single-turn prompt. A rule selected with `-V` that has no attacks stops a static run before it starts, with an error that says to switch mode or add attacks. Without `-V`, such a rule is skipped with a warning.
 
 ## Python API
 
