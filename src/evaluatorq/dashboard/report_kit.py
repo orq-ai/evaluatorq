@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.common.reports import cost_coverage, esc, fmt_cost
+from evaluatorq.common.reports import coverage_qualifier, esc, fmt_cost
 from evaluatorq.common.reports.html_helpers import pct
 
 if TYPE_CHECKING:
@@ -620,23 +620,25 @@ def cost_figure(
     the coverage in the same ``(N of M calls)`` words the reports use.
     """
     if usage is None:
-        return CostFigure('unknown', tip=unknown_tip)
+        return CostFigure(value='unknown', tip=unknown_tip)
     if usage.total_cost is None:
-        return CostFigure('unknown', tip='Unknown: the provider reported tokens but no cost for these calls.')
-    parts = [cost_coverage(usage.priced_calls, usage.calls) if usage.cost_is_partial else '']
-    if missing and total:
-        parts.append(cost_coverage(total - missing, total, noun=noun))
-    labels = [p.strip().removeprefix('(').removesuffix(')') for p in parts if p]
-    if not labels:
-        return CostFigure(fmt_cost(usage.total_cost))
-    coverage = ', '.join(labels)
-    return CostFigure(fmt_cost(usage.total_cost), f'({coverage})', f'Lower bound: the cost covers only {coverage}.')
+        return CostFigure(value='unknown', tip='Unknown: the provider reported tokens but no cost for these calls.')
+    qualifier = coverage_qualifier(
+        priced_calls=usage.priced_calls, calls=usage.calls, reported=total - missing, items=total, noun=noun
+    )
+    if not qualifier:
+        return CostFigure(value=fmt_cost(usage.total_cost))
+    return CostFigure(
+        value=fmt_cost(usage.total_cost),
+        qualifier=qualifier,
+        tip=f'Lower bound: the cost covers only {qualifier[1:-1]}.',
+    )
 
 
 def hero_cost_line(
     total: Usage | None,
-    target: Usage | None,
     *,
+    target: Usage | None,
     target_missing: int = 0,
     items: int = 0,
     noun: str = 'conversations',
@@ -648,7 +650,7 @@ def hero_cost_line(
     cheap target judged by an expensive model no longer reads as expensive.
     """
 
-    def item(label: str, figure: CostFigure, cls: str) -> str:
+    def item(label: str, *, figure: CostFigure, cls: str) -> str:
         title = f' title="{esc(figure.tip)}"' if figure.tip else ''
         unknown = ' report-hero-cost-value--unknown' if figure.unknown else ''
         qual = f' <span class="report-hero-cost-qual">{esc(figure.qualifier)}</span>' if figure.qualifier else ''
@@ -663,8 +665,8 @@ def hero_cost_line(
     )
     return (
         '<p class="report-hero-cost">'
-        f'{item("Total cost", total_fig, "report-hero-cost-total")}'
+        f'{item("Total cost", figure=total_fig, cls="report-hero-cost-total")}'
         '<span class="report-hero-cost-sep" aria-hidden="true">·</span>'
-        f'{item("Target cost", target_fig, "report-hero-cost-target")}'
+        f'{item("Target cost", figure=target_fig, cls="report-hero-cost-target")}'
         '</p>'
     )

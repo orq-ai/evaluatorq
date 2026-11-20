@@ -277,3 +277,13 @@ def test_cost_figure_names_both_coverage_gaps_in_one_qualifier() -> None:
     assert (fig.value, fig.qualifier) == ('$0.0040', '(1 of 2 calls, 3 of 4 attacks)')
     assert fig.tip == 'Lower bound: the cost covers only 1 of 2 calls, 3 of 4 attacks.'
     assert cost_figure(None, unknown_tip='why').unknown
+
+
+def test_reports_and_dashboard_word_the_coverage_the_same_way() -> None:
+    from evaluatorq.common.reports import fmt_cost_coverage
+    from evaluatorq.dashboard.report_kit import cost_figure
+
+    fig = cost_figure(_usage(0.004, calls=2, priced=1), unknown_tip='', missing=1, total=4, noun='attacks')
+    text = fmt_cost_coverage(0.004, priced_calls=1, calls=2, reported=3, items=4, noun='attacks')
+
+    assert text == f'{fig.value} {fig.qualifier}'

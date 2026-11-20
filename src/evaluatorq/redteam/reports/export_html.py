@@ -987,12 +987,16 @@ def _render_token_per_agent_bar_chart(per_agent: list[dict[str, Any]]) -> str:
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
-def _render_token_cost_cards(overall: dict[str, Any], target: dict[str, Any] | None) -> str:
-    """The token-usage section's cost row: input, output and total cost, then the target agent's own."""
+def _render_token_cost_cards(overall: dict[str, Any], *, target: dict[str, Any] | None) -> str:
+    """The token-usage section's cost row: input, output and total cost, then the target agent's own.
+
+    The target card shows even when the run has no cost at all, as ``unknown``,
+    matching the Markdown report's row.
+    """
     input_cost = overall.get('input_cost')
     output_cost = overall.get('output_cost')
     total_cost = overall.get('total_cost')
-    if input_cost is None and output_cost is None and total_cost is None:
+    if input_cost is None and output_cost is None and total_cost is None and not target:
         return ''
     cost_cards = ['<div class="kpi-row">']
     if input_cost is not None:
@@ -1088,7 +1092,7 @@ def _render_token_usage_html(section: ReportSection) -> str:
         if cache_cards:
             parts.append('<div class="kpi-row">' + ''.join(cache_cards) + '</div>')
 
-        parts.append(_render_token_cost_cards(overall, data.get('target')))
+        parts.append(_render_token_cost_cards(overall, target=data.get('target')))
 
     if per_agent:
         chart = _render_token_per_agent_bar_chart(per_agent)

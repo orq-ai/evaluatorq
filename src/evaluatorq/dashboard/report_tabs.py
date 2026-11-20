@@ -1767,7 +1767,7 @@ def _sim_hero(run: SimulationRun, compare_html: str = '', *, target_label: str |
     # Whole-run figures, like the run's saved totals: the hero does not follow the filter.
     _, target_missing = sum_usage_coverage([r.target_token_usage for r in run.results])
     cost_html = hero_cost_line(
-        run.token_usage_total, run.target_token_usage, target_missing=target_missing, items=len(run.results)
+        run.token_usage_total, target=run.target_token_usage, target_missing=target_missing, items=len(run.results)
     )
     return (
         '<header class="report-hero">'
@@ -2979,7 +2979,7 @@ def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
     _, target_missing = target_token_usage_coverage(report.results)
     cost_html = hero_cost_line(
         report.summary.token_usage_total,
-        report.summary.token_usage_target,
+        target=report.summary.token_usage_target,
         target_missing=target_missing,
         items=len(report.results),
         noun='attacks',

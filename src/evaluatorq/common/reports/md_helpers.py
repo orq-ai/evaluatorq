@@ -49,17 +49,33 @@ def cost_coverage(priced_calls: int, calls: int, *, noun: str = 'calls') -> str:
     return ''
 
 
+def coverage_qualifier(*, priced_calls: int, calls: int, reported: int, items: int, noun: str) -> str:
+    """Both coverage gaps of a summed cost in one label, e.g. ``'(1 of 2 calls, 3 of 4 attacks)'``.
+
+    *priced_calls* of the *calls* had a cost; *reported* of the *items* recorded
+    any usage at all. Either gap makes the sum a lower bound. ``''`` when there is
+    no gap, under the same rules as `cost_coverage`. Every report and dashboard
+    surface words a target cost through this, so they cannot drift apart.
+    """
+    labels = [
+        f'{shown:,} of {total:,} {what}'
+        for shown, total, what in ((priced_calls, calls, 'calls'), (reported, items, noun))
+        if cost_coverage(shown, total)
+    ]
+    return f'({", ".join(labels)})' if labels else ''
+
+
 def fmt_cost_coverage(
     cost: float | None, *, priced_calls: int, calls: int, reported: int, items: int, noun: str
 ) -> str:
-    """A summed cost with both of its coverage labels, e.g. ``'$0.0040 (1 of 2 calls) (3 of 4 attacks)'``.
+    """A summed cost with its coverage label, e.g. ``'$0.0040 (1 of 2 calls, 3 of 4 attacks)'``.
 
-    ``'unknown'`` when *cost* is ``None``. *reported* of the *items* recorded any
-    usage at all; the rest are missing from the sum, which makes it a lower bound.
+    ``'unknown'`` when *cost* is ``None``. See `coverage_qualifier` for the label.
     """
     if cost is None:
         return 'unknown'
-    return f'{fmt_cost(cost)}{cost_coverage(priced_calls, calls)}{cost_coverage(reported, items, noun=noun)}'
+    qualifier = coverage_qualifier(priced_calls=priced_calls, calls=calls, reported=reported, items=items, noun=noun)
+    return f'{fmt_cost(cost)} {qualifier}' if qualifier else fmt_cost(cost)
 
 
 CACHED_TOKENS_LABEL = 'Cached Input Tokens'

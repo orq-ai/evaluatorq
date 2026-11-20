@@ -915,6 +915,43 @@ class TestDynamicConverterValuePropagation:
         assert report.results[0].execution.token_usage_target is None
         assert report.summary.token_usage_target is None
 
+    @staticmethod
+    def _target_cost_card(page: str) -> str | None:
+        import re
+
+        match = re.search(r'<div class="kpi-value">([^<]*)</div><div class="kpi-label">Target Agent Cost</div>', page)
+        return match.group(1) if match else None
+
+    def test_html_report_shows_the_target_cost_card_with_its_coverage(self):
+        from evaluatorq.redteam.reports import export_html
+
+        priced = {'total_tokens': 40, 'calls': 2, 'total_cost': 0.004, 'priced_calls': 2}
+        results = [
+            _make_dynamic_mock_result(
+                token_usage={'total_tokens': 360, 'calls': 4, 'total_cost': 0.3, 'priced_calls': 4},
+                token_usage_target=priced,
+            ),
+            _make_dynamic_mock_result(token_usage={'total_tokens': 360, 'calls': 4, 'total_cost': 0.3, 'priced_calls': 4}),
+        ]
+        report = dynamic_evaluatorq_results_to_report(
+            agent_context=_make_agent_context(), categories_tested=['ASI01'], results=results
+        )
+
+        assert self._target_cost_card(export_html(report)) == '$0.0040 (1 of 2 attacks)'
+
+    def test_html_report_shows_an_unknown_target_cost_when_the_run_has_no_cost(self):
+        from evaluatorq.redteam.reports import export_html
+
+        report = dynamic_evaluatorq_results_to_report(
+            agent_context=_make_agent_context(),
+            categories_tested=['ASI01'],
+            results=[_make_dynamic_mock_result(token_usage={'total_tokens': 150, 'calls': 1})],
+        )
+        assert report.summary.token_usage_total is not None
+        assert report.summary.token_usage_total.total_cost is None
+
+        assert self._target_cost_card(export_html(report)) == 'unknown'
+
     def test_a_report_saved_before_target_usage_existed_loads_with_none(self):
         report = dynamic_evaluatorq_results_to_report(
             agent_context=_make_agent_context(),
