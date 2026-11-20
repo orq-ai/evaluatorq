@@ -21,11 +21,11 @@ from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     RED_TEAM_TIE_OUTCOME,
+    AnyVulnerability,
     AttackEvaluationResult,
     EvaluatorConfig,
     LLMCallConfig,
     OutputMessage,
-    Vulnerability,
     evaluator_model_for,
 )
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
@@ -131,7 +131,7 @@ class OWASPEvaluator:
 
     async def evaluate_vulnerability(
         self,
-        vuln: Vulnerability,
+        vuln: AnyVulnerability,
         messages: list[dict[str, Any]] | list[Message],
         output_messages: Sequence[OutputMessage],
     ) -> AttackEvaluationResult:
@@ -380,7 +380,7 @@ async def evaluate_attack(
     output_messages: Sequence[OutputMessage],
     evaluator_model: str | None = None,
     *,
-    vulnerability: Vulnerability | None = None,
+    vulnerability: AnyVulnerability | None = None,
 ) -> AttackEvaluationResult:
     """Convenience function to evaluate a single attack.
 

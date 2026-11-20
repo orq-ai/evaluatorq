@@ -31,3 +31,13 @@ def _clean_custom_delivery_registry():
     clear_custom_delivery_methods()
     yield
     clear_custom_delivery_methods()
+
+
+@pytest.fixture(autouse=True)
+def _clean_custom_registrations():
+    """Custom vulnerabilities, strategies, judges and open-set values are process-wide (RES-1922)."""
+    from evaluatorq.redteam.custom import clear_custom_registrations
+
+    clear_custom_registrations()
+    yield
+    clear_custom_registrations()

@@ -12,7 +12,13 @@ from rich.text import Text
 
 from evaluatorq.common.reports import rate_style
 from evaluatorq.common.reports.html_helpers import pct
-from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, RedTeamReport, ReportSummary
+from evaluatorq.redteam.contracts import (
+    OWASP_CATEGORY_NAMES,
+    RedTeamReport,
+    ReportSummary,
+    is_known_open_value,
+    resolve_open_value,
+)
 from evaluatorq.redteam.vulnerability_registry import VULNERABILITY_DEFS, Vulnerability
 
 if TYPE_CHECKING:
@@ -21,11 +27,9 @@ if TYPE_CHECKING:
 
 def _format_vulnerability_label(vuln_str: str) -> str:
     """Format 'goal_hijacking' -> 'Goal Hijacking (ASI01)'."""
-    try:
-        vuln = Vulnerability(vuln_str)
-    except ValueError:
+    if not is_known_open_value(Vulnerability, vuln_str):
         return vuln_str
-    vdef = VULNERABILITY_DEFS.get(vuln)
+    vdef = VULNERABILITY_DEFS.get(resolve_open_value(Vulnerability, vuln_str))
     if vdef:
         cats = ', '.join(code for codes in vdef.framework_mappings.values() for code in codes)
         return f'{vdef.name} ({cats})' if cats else vdef.name
