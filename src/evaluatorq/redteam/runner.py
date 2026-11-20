@@ -77,6 +77,7 @@ from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     SUPPORTED_TARGET_KINDS,
     AgentContext,
+    AnyVulnerability,
     AttackSource,
     AttackTechnique,
     DeliveryMethod,
@@ -91,8 +92,10 @@ from evaluatorq.redteam.contracts import (
     TargetConfig,
     TargetKind,
     Vulnerability,
+    known_open_values,
     normalize_category,
     parse_target,
+    resolve_open_value,
 )
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str, resolve_delivery_methods
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
@@ -188,9 +191,9 @@ def _resolve_attack_techniques(
         return None
     try:
         raw_values = set(values)
-        return {AttackTechnique(value) for value in raw_values}
+        return {resolve_open_value(AttackTechnique, value) for value in raw_values}
     except (TypeError, ValueError) as exc:
-        valid = ', '.join(technique.value for technique in AttackTechnique)
+        valid = ', '.join(known_open_values(AttackTechnique))
         raise ValueError(f'Unknown attack technique(s) {values!r}; expected one of: {valid}.') from exc
 
 
@@ -915,8 +918,8 @@ def _resolve_vulns_and_categories(
     replay: RedTeamReplay | None,
     vulnerabilities: list[str] | None,
     categories: list[str] | None,
-) -> tuple[list[Vulnerability] | None, list[str]]:
-    resolved_vulns: list[Vulnerability] | None
+) -> tuple[list[AnyVulnerability] | None, list[str]]:
+    resolved_vulns: list[AnyVulnerability] | None
     if replay is not None:
         # A replay's scope is whatever it recorded. Resolving vulnerabilities
         # (and running `_apply_evaluability_gate` on the result) would re-derive a
@@ -937,7 +940,7 @@ def _resolve_vulns_and_categories(
             # category codes — a code is unknown only when it is neither. Using
             # resolve_category_safe alone would mislabel a valid vulnerability ID (e.g.
             # 'goal_hijacking') as unrecognized in a mixed list.
-            valid_vuln_ids = {v.value for v in Vulnerability}
+            valid_vuln_ids = set(known_open_values(Vulnerability))
             unknown = [c for c in categories if c not in valid_vuln_ids and resolve_category_safe(c) is None]
             raise ValueError(
                 f'Unrecognized categor{"y" if len(unknown) == 1 else "ies"}: '
@@ -969,9 +972,9 @@ def _resolve_vulns_and_categories(
 
 def _apply_evaluability_gate(
     *,
-    resolved_vulns: list[Vulnerability] | None,
+    resolved_vulns: list[AnyVulnerability] | None,
     resolved_categories: list[str],
-) -> tuple[list[Vulnerability] | None, list[str], list[str]]:
+) -> tuple[list[AnyVulnerability] | None, list[str], list[str]]:
     # Evaluability gate: a vulnerability with no registered evaluator can be attacked
     # but not scored, so prune it up front (raise if none are scorable) rather than
     # burning tokens on attacks that always read "no verdict". Currently inert — every
@@ -1061,7 +1064,7 @@ class _PipelineDispatchInputs:
     mode: Pipeline | str | None
     name: str | None
     categories: list[str]
-    resolved_vulns: list[Vulnerability] | None
+    resolved_vulns: list[AnyVulnerability] | None
     max_turns: int
     max_per_category: int | None
     attack_model: str
@@ -1419,7 +1422,7 @@ async def red_team(
             ``mode="dynamic"`` instead of silently overwriting it.
         categories: OWASP categories to test (e.g., ``["ASI01", "ASI03"]``).
             Defaults to all available categories. Ignored if ``vulnerabilities`` is set.
-        vulnerabilities: Vulnerability IDs to test (e.g., ``["goal_hijacking", "prompt_injection"]``).
+        vulnerabilities: AnyVulnerability IDs to test (e.g., ``["goal_hijacking", "prompt_injection"]``).
             Takes precedence over ``categories``.
         strategies: Restrict the run to attack strategies whose ``name`` matches
             one of the supplied values. Filtering applies to both registry
@@ -2293,7 +2296,7 @@ async def _prepare_target(
     filter_selection: tuple[str, list[str]] | None = None,
     mode: Pipeline,
     categories: list[str] | None,
-    resolved_vulns: list[Vulnerability] | None,
+    resolved_vulns: list[AnyVulnerability] | None,
     max_turns: int,
     max_per_category: int | None,
     attack_model: str,
@@ -2823,7 +2826,7 @@ def _ctx_end_meta(
 class _DynamicEstimationInputs:
     replay_datapoints: list[DataPoint] | None
     trace_datapoints: list[DataPoint] | None
-    resolved_vulns: list[Vulnerability] | None
+    resolved_vulns: list[AnyVulnerability] | None
     resolved_categories: list[str]
     first_agent_context: AgentContext
     first_caps_for_estimate: AgentCapabilities | None
@@ -2955,7 +2958,7 @@ class _TargetPrepInputs:
     mode: Pipeline
     filter_selection: tuple[str, list[str]] | None
     categories: list[str] | None
-    resolved_vulns: list[Vulnerability] | None
+    resolved_vulns: list[AnyVulnerability] | None
     max_turns: int
     max_per_category: int | None
     attack_model: str
@@ -3104,7 +3107,7 @@ class _AgentTargetDatapointInputs:
     at_label: str
     resolved_categories: list[str]
     at_ctx: AgentContext
-    resolved_vulns: list[Vulnerability] | None
+    resolved_vulns: list[AnyVulnerability] | None
     max_per_category: int | None
     max_turns: int
     generate_strategies: bool
@@ -3287,7 +3290,7 @@ async def _run_dynamic_or_hybrid(
     mode: Pipeline,
     name: str | None = None,
     categories: list[str] | None,
-    resolved_vulns: list[Vulnerability] | None = None,
+    resolved_vulns: list[AnyVulnerability] | None = None,
     max_turns: int,
     max_per_category: int | None,
     attack_model: str,
@@ -3906,7 +3909,7 @@ class _ConfirmPayloadInputs:
     strategy_breakdown: dict[str, Any]
     all_target_labels: list[str]
     dataset: Any
-    resolved_vulns: list[Vulnerability] | None
+    resolved_vulns: list[AnyVulnerability] | None
     replay_of: str | None
 
 

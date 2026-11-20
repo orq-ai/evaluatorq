@@ -40,6 +40,8 @@ from evaluatorq.redteam.contracts import (
     Pipeline,
     SaveMode,
     Vulnerability,
+    known_open_values,
+    resolve_open_value,
 )
 from evaluatorq.redteam.run_config import RedTeamCliConfig
 from evaluatorq.redteam.runner import DEFAULT_MAX_TURNS
@@ -353,11 +355,11 @@ def _normalise_run_config(cfg: RedTeamCliConfig) -> RedTeamCliConfig:
     if vulnerabilities:
         from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
 
-        valid_ids = {v.value for v in Vulnerability} | set(CATEGORY_TO_VULNERABILITY.keys())
+        valid_ids = set(known_open_values(Vulnerability)) | set(CATEGORY_TO_VULNERABILITY.keys())
         for v in vulnerabilities:
             if v not in valid_ids:
                 raise typer.BadParameter(
-                    f'Unknown vulnerability ID: {v!r}. Valid IDs: {sorted(vi.value for vi in Vulnerability)}'
+                    f'Unknown vulnerability ID: {v!r}. Valid IDs: {sorted(known_open_values(Vulnerability))}'
                 )
 
     if strategies:
@@ -906,7 +908,11 @@ def _collect_sample_errors(samples: Any) -> tuple[list[str], str]:
         category = parsed.input.category
         if category_key(category) not in requested:
             raw_vuln = parsed.input.vulnerability
-            vuln = Vulnerability(raw_vuln) if raw_vuln else resolve_category_safe(category_key(category))
+            vuln = (
+                resolve_open_value(Vulnerability, raw_vuln)
+                if raw_vuln
+                else resolve_category_safe(category_key(category))
+            )
             hint = f" Use '{get_primary_category(vuln)}'." if vuln is not None else ''
             errors.append(
                 f'  {row}.input.category: {category!r} is not in the default category set, '

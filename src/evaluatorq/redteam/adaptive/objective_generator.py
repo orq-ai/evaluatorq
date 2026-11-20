@@ -22,13 +22,13 @@ from evaluatorq.redteam.contracts import (
     SEVERITY_DEFINITIONS,
     AgentCapability,
     AgentContext,
+    AnyVulnerability,
     AttackStrategy,
     AttackTechnique,
     DeliveryMethod,
     LLMConfig,
     Severity,
     TurnType,
-    Vulnerability,
     attacker_model_for,
 )
 from evaluatorq.redteam.tracing import with_llm_span
@@ -323,7 +323,7 @@ async def _call_llm_for_objectives(
 
 
 async def generate_objectives_for_vulnerability(
-    vuln: Vulnerability,
+    vuln: AnyVulnerability,
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
     model: str | None = None,
@@ -467,7 +467,7 @@ def create_strategy_from_objective(
     objective: GeneratedObjective,
     turn_type: TurnType | None = None,
     objective_index: int = 0,
-    vulnerability: Vulnerability | None = None,
+    vulnerability: AnyVulnerability | None = None,
 ) -> AttackStrategy:
     """Create an AttackStrategy from a generated objective.
 
@@ -483,7 +483,7 @@ def create_strategy_from_objective(
         AttackStrategy instance with both vulnerability and category fields populated
     """
     # Prefer the explicitly-passed vulnerability; fall back to resolving from category.
-    resolved_vuln: Vulnerability | None = vulnerability
+    resolved_vuln: AnyVulnerability | None = vulnerability
     if resolved_vuln is None:
         resolved_vuln = resolve_category_safe(category)
 
@@ -534,7 +534,7 @@ def _objectives_to_strategies(
     category: str,
     turn_type: TurnType | None,
     log_label: str,
-    vulnerability: Vulnerability | None = None,
+    vulnerability: AnyVulnerability | None = None,
 ) -> list[AttackStrategy]:
     """Convert a list of generated objectives to AttackStrategy instances.
 
@@ -580,7 +580,7 @@ def _objectives_to_strategies(
 
 
 async def generate_strategies_for_vulnerability(
-    vuln: Vulnerability,
+    vuln: AnyVulnerability,
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
     model: str | None = None,
