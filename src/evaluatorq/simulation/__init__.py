@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from evaluatorq.common.replay import ReplayError
     from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.integrations.callable_integration import CallableTarget
+    from evaluatorq.integrations.claude_agent_sdk_integration import ClaudeAgentSDKTarget
     from evaluatorq.integrations.crewai_integration import CrewAITarget
     from evaluatorq.integrations.langgraph_integration import LangGraphTarget
     from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
@@ -236,6 +237,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str | None]] = {  # noqa: RUF067
     ),
     'AgentTarget': ('evaluatorq.contracts', 'AgentTarget'),
     'CallableTarget': ('evaluatorq.integrations.callable_integration', 'CallableTarget'),
+    'ClaudeAgentSDKTarget': ('evaluatorq.integrations.claude_agent_sdk_integration', 'ClaudeAgentSDKTarget'),
     'CrewAITarget': ('evaluatorq.integrations.crewai_integration', 'CrewAITarget'),
     'LangGraphTarget': ('evaluatorq.integrations.langgraph_integration', 'LangGraphTarget'),
     'OpenAIAgentTarget': ('evaluatorq.integrations.openai_agents_integration', 'OpenAIAgentTarget'),
@@ -361,6 +363,7 @@ __all__ = [
     'AgentTarget',
     'BaseAgent',
     'CallableTarget',
+    'ClaudeAgentSDKTarget',
     'CommunicationStyle',
     'ConversationStrategy',
     'CrewAITarget',

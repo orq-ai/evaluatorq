@@ -26,10 +26,10 @@ from collections.abc import (  # noqa: TC003 — used in real (non-TYPE_CHECKING
     Callable,
 )
 from pathlib import Path  # noqa: TC003 — used in a real (non-TYPE_CHECKING) field annotation, see note below
-from typing import Any
+from typing import Annotated, Any
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PlainValidator, WithJsonSchema, field_validator
 
 # NOTE: these two are used directly in field annotations below (not just for
 # static typing) — pydantic resolves annotations at class-creation time even
@@ -47,6 +47,22 @@ from evaluatorq.simulation.reports.recommendations import SimulationRecommendati
 DEFAULT_TARGET_AGENT_TIMEOUT_MS = DEFAULT_TARGET_TIMEOUT_MS
 DEFAULT_MAX_TARGET_RETRIES = 2
 DEFAULT_MAX_TOOL_RESULT_CHARS = 500
+
+
+def check_repetitions(value: object) -> int:
+    """Return *value* if it is a whole number of at least 1, else raise ``ValueError``.
+
+    The one check behind every ``repetitions`` input: the SDK entry points call it
+    before anything is generated, and `RepetitionCount` runs it inside the config
+    models. ``True`` and ``2.0`` are rejected instead of read as a count.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f'repetitions must be an integer of at least 1, got {value!r}')
+    return value
+
+
+RepetitionCount = Annotated[int, PlainValidator(check_repetitions), WithJsonSchema({'type': 'integer', 'minimum': 1})]
+"""A ``repetitions`` field type: validated by `check_repetitions` alone."""
 
 
 class SimulationConfig(BaseModel):
@@ -78,9 +94,9 @@ class SimulationConfig(BaseModel):
     max_turns: int | None = None
     """None means "unset": resolved in ``_simulate_core`` to a replayed run's
     cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
-    repetitions: int = Field(default=1, ge=1, strict=True)
-    """Separate conversations run per case. Strict, so ``True`` and ``2.0`` are
-    rejected instead of read as a count."""
+    repetitions: RepetitionCount | None = None
+    """Separate conversations run per case. None means "unset": resolved in
+    ``_simulate_core`` to a replayed run's count when replaying, else to 1."""
     llm_config: LLMCallConfig = Field(default_factory=LLMCallConfig)
     """Sampling/transport settings for every simulation-side LLM call — five roles:
     the user simulator, the judge, the persona / scenario / first-message

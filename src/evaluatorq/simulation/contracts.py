@@ -8,7 +8,16 @@ from __future__ import annotations
 from datetime import datetime  # noqa: TC003
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, computed_field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictStr,
+    ValidationError,
+    computed_field,
+    field_validator,
+)
 from typing_extensions import TypedDict
 
 from evaluatorq.common.responses import scrub_wire_schema
@@ -621,6 +630,19 @@ class SimulationResult(BaseModel):
         '(excludes user-simulator and judge calls), in turn order. Empty for non-Orq targets and for '
         'runs saved before this field existed.',
     )
+
+    @field_validator('metadata', mode='after')
+    @classmethod
+    def _read_legacy_trial_index(cls, metadata: dict[str, Any]) -> dict[str, Any]:
+        """Runs saved by 1.97.0 call the repetition position ``trial_index``; read it as ``repetition_index``.
+
+        The saved ``datapoint_id`` keeps its ``#t<index>`` suffix: nothing parses the
+        suffix, and ``base_datapoint_id`` already groups a case's conversations.
+        """
+        if 'trial_index' in metadata and 'repetition_index' not in metadata:
+            metadata = {**metadata, 'repetition_index': metadata['trial_index']}
+            del metadata['trial_index']
+        return metadata
 
     @property
     def last_trace_id(self) -> str | None:

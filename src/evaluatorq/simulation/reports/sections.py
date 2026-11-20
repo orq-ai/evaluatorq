@@ -588,6 +588,22 @@ def _build_errors_section(results: list[SimulationResult]) -> ReportSection | No
     )
 
 
+def achieved_of_n(cell: dict[str, Any]) -> str:
+    """``(k of n)`` for a heatmap cell that holds several conversations, else ``''``.
+
+    ``k`` counts the conversations that reached the goal. A single conversation
+    gets no count: one result says nothing about how stable the case is.
+    """
+    n = cell.get('n') or 0
+    if n <= 1:
+        return ''
+    achieved = cell.get('goal_achieved_conversations')
+    if achieved is None:
+        # A cell built before the count was stored: success_rate is exactly achieved / n.
+        achieved = round((cell.get('success_rate') or 0.0) * n)
+    return f'({achieved} of {n})'
+
+
 def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> ReportSection:
     persona_names: dict[str, str] = {}
     scenario_names: dict[str, str] = {}
@@ -630,6 +646,8 @@ def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> 
             'success_rate': (sum(v) / len(v)) if v else 0.0,
             'avg_score': (sum(sc) / len(sc)) if (sc := scores[persona_id, scenario_id]) else 0.0,
             'n': len(v),
+            # Conversations in the cell that reached the goal: with ``n`` the "passed k of n" a repeated case reports.
+            'goal_achieved_conversations': sum(v),
             'completed_conversations': sum(1 for r in results_by_pair[persona_id, scenario_id] if not _is_errored(r)),
             'errored_conversations': sum(1 for r in results_by_pair[persona_id, scenario_id] if _is_errored(r)),
         }

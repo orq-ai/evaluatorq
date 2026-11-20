@@ -38,7 +38,7 @@ from evaluatorq.common.reports import (
 from evaluatorq.common.reports import (
     truncate as _truncate,
 )
-from evaluatorq.simulation.reports.sections import build_report_sections
+from evaluatorq.simulation.reports.sections import achieved_of_n, build_report_sections
 from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
 
 if TYPE_CHECKING:
@@ -283,14 +283,18 @@ def _render_persona_scenario_heatmap_section(section: ReportSection) -> str:
     scenarios = d.get('scenarios', [])
     if not personas or not scenarios:
         return f'## {section.title}\n\nNo data.'
-    lookup = {(c['persona'], c['scenario']): c['success_rate'] for c in d.get('cells', [])}
+    lookup = {(c['persona'], c['scenario']): c for c in d.get('cells', [])}
     headers = ['Scenario', *personas]
     table_rows = []
     for s in scenarios:
         row = [s]
         for p in personas:
-            rate = lookup.get((p, s))
-            row.append(f'{rate:.0%}' if rate is not None else '—')
+            cell = lookup.get((p, s))
+            if cell is None:
+                row.append('—')
+                continue
+            note = achieved_of_n(cell)
+            row.append(f'{cell["success_rate"]:.0%} {note}' if note else f'{cell["success_rate"]:.0%}')
         table_rows.append(row)
     table = _md_table(headers, table_rows)
     return f'## {section.title}\n\n{table}'

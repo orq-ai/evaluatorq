@@ -461,6 +461,7 @@ class TestTargetsThatKeepTheirOwnHistory:
             ('evaluatorq.redteam.backends.orq', 'ORQAgentTarget'),
             ('evaluatorq.integrations.langgraph_integration.target', 'LangGraphTarget'),
             ('evaluatorq.integrations.pydantic_ai_integration.target', 'PydanticAITarget'),
+            ('evaluatorq.integrations.claude_agent_sdk_integration.target', 'ClaudeAgentSDKTarget'),
         ],
     )
     def test_the_targets_the_guide_names_are_rejected(self, module: str, name: str) -> None:

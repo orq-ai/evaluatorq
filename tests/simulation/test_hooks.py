@@ -64,7 +64,7 @@ def datapoint_factory():
 
 def _meta() -> SimulationRunMeta:
     return SimulationRunMeta(
-        num_datapoints=1,
+        num_cases=1,
         model='m',
         max_turns=3,
         datapoint_parallelism=1,
@@ -415,11 +415,11 @@ class RunLevelRecorder(DefaultHooks):
         self.run_completed = 0
 
     def on_confirm(self, meta) -> Any:
-        self.confirmed.append(meta['num_datapoints'])
+        self.confirmed.append(meta['num_cases'])
         return True
 
     def on_run_start(self, meta) -> Any:
-        self.run_started.append(meta['num_datapoints'])
+        self.run_started.append(meta['num_cases'])
 
     def on_evaluator_complete(self, datapoint_id, name, score, result) -> Any:
         self.evaluator_events.append((datapoint_id, name, score.score.value))
@@ -1093,7 +1093,7 @@ def test_rich_hooks_reusable_across_runs():
 
     hooks = RichHooks(console=Console(file=io.StringIO(), force_terminal=False))
     meta: SimulationRunMeta = SimulationRunMeta(
-        num_datapoints=2,
+        num_cases=2,
         model='m',
         max_turns=3,
         datapoint_parallelism=2,
@@ -1144,11 +1144,11 @@ async def test_simulate_fires_run_level_hooks_async(datapoint_factory):
             self.run_completed = 0
 
         async def on_confirm(self, meta):
-            self.confirmed.append(meta['num_datapoints'])
+            self.confirmed.append(meta['num_cases'])
             return True
 
         async def on_run_start(self, meta):
-            self.run_started.append(meta['num_datapoints'])
+            self.run_started.append(meta['num_cases'])
 
         async def on_evaluator_complete(self, datapoint_id, name, score, result):
             self.evaluator_events.append((datapoint_id, name, score.score.value))
@@ -1325,21 +1325,21 @@ def test_rich_stage_end_prints_failed_line_on_error():
     from rich.console import Console
 
     h = RichHooks(console=Console(file=buf, width=100, force_terminal=False))
-    asyncio.run(h.on_stage_end(SimStage.GENERATE, {'error': RuntimeError('generation blew up'), 'num_datapoints': 0}))
+    asyncio.run(h.on_stage_end(SimStage.GENERATE, {'error': RuntimeError('generation blew up'), 'num_cases': 0}))
     out = buf.getvalue()
     assert 'Generating Datapoints failed' in out
     assert 'RuntimeError: generation blew up' in out
 
 
 def test_rich_stage_end_generate_prints_count():
-    """RichHooks.on_stage_end with GENERATE and num_datapoints in meta prints count."""
+    """RichHooks.on_stage_end with GENERATE and num_cases in meta prints count."""
     buf = io.StringIO()
     from rich.console import Console
 
     h = RichHooks(console=Console(file=buf, width=80, force_terminal=False))
-    asyncio.run(h.on_stage_end(SimStage.GENERATE, {'num_datapoints': 42}))
+    asyncio.run(h.on_stage_end(SimStage.GENERATE, {'num_cases': 42}))
     assert '42' in buf.getvalue()
-    assert 'datapoints' in buf.getvalue()
+    assert 'cases generated' in buf.getvalue()
 
 
 def test_rich_stage_end_simulate_prints_nothing():
@@ -1392,7 +1392,7 @@ def test_default_hooks_stage_methods_are_silent():
     """DefaultHooks.on_stage_start and on_stage_end run without raising."""
     hooks = DefaultHooks()
     asyncio.run(hooks.on_stage_start(SimStage.GENERATE, {}))
-    asyncio.run(hooks.on_stage_end(SimStage.GENERATE, {'num_datapoints': 5}))
+    asyncio.run(hooks.on_stage_end(SimStage.GENERATE, {'num_cases': 5}))
     asyncio.run(hooks.on_stage_start(SimStage.SIMULATE, {}))
     asyncio.run(hooks.on_stage_end(SimStage.SIMULATE, {}))
 
@@ -1413,7 +1413,7 @@ def test_simstage_exported_from_package():
 def _meta_with_target(n: int = 2) -> SimulationRunMeta:
     """Variant of _meta() with a non-trivial target for Task 6 tests."""
     return SimulationRunMeta(
-        num_datapoints=n,
+        num_cases=n,
         model='openai/gpt-5.4-mini',
         max_turns=5,
         datapoint_parallelism=3,
