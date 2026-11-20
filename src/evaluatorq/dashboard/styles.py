@@ -4246,6 +4246,7 @@ _MODELS_CSS = """
 .models-name { display: block; font-weight: 600; color: var(--text-strong); }
 .models-id { display: block; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
 .models-frontier { color: var(--orange-700); font-weight: 600; }
+.models-fallback { font-size: 10px; padding: 0 4px; border: 1px solid var(--border-subtle); border-radius: 4px; color: var(--text-faint); cursor: help; }
 .models-excluded { font-size: 12px; color: var(--text-faint); }
 .models-excluded ul { margin: 6px 0 0; padding-left: 18px; }
 """

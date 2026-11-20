@@ -13,13 +13,18 @@ from evaluatorq import models as models_mod
 from evaluatorq.common import model_frontier
 from evaluatorq.common.model_frontier import (
     INDEX_AXES,
+    LIST_MIX,
+    PRICE_MIXES,
     X_AXIS_SPECS,
+    PriceMix,
     ScoredModel,
     available_efforts,
     available_indices,
     matches_vendor,
     model_vendor,
+    parse_mix,
     scored_model_from_card,
+    x_axis_spec,
 )
 from evaluatorq.models import (
     dominated_by,
@@ -168,7 +173,10 @@ class TestKernelAgreement:
                 assert a.dominates(b) is _old_dominates(a, b)
                 assert dominates(a, b) is _old_dominates(a, b)
         assert model_frontier.pareto_frontier(garden) == _old_frontier(garden)
-        assert {m.router_id for m in pareto_frontier(garden)} == {p.model.router_id for p in pareto(garden).frontier}
+        # The view defaults to the cache-aware blend; on the list blend it must agree with seating.
+        assert {m.router_id for m in pareto_frontier(garden)} == {
+            p.model.router_id for p in pareto(garden, mix='list').frontier
+        }
 
 
 class TestAxisTable:
@@ -199,8 +207,10 @@ class TestPareto:
         assert [e.router_id for e in result.excluded] == ['e/free']
 
     def test_pareto_score_is_score_per_dollar(self) -> None:
-        point = next(p for p in pareto([MID]).points)
+        point = next(p for p in pareto([MID], mix='list').points)
         assert point.pareto_score == pytest.approx(40.0 / 2.0)
+        # The default blend: no cache rate on MID, so reads bill at input: (7*1 + 2*1 + 1*5) / 10 = 1.4.
+        assert pareto([MID]).points[0].pareto_score == pytest.approx(40.0 / 1.4)
 
     def test_nearest_dominator_is_the_cheapest_frontier_model_at_least_as_smart(self) -> None:
         weak = model('z/weak', 10.0, 10.0, 10.0)
@@ -278,6 +288,149 @@ class TestPareto:
         assert dominated_by(dearer_junk, [junk, STRONG]) == junk
 
 
+# Opus 5.5's card rates: input 4, output 20, cache read 0.2, cache write 5 (USD per 1M, 2026-11-20).
+OPUS = model('anthropic/opus', 48.0, 4.0, 20.0, cache_read_price=0.2, cache_write_price=5.0, aa_cache_read_price=0.2)
+
+
+class TestPriceMix:
+    def test_agentic_is_the_artificial_analysis_blend(self) -> None:
+        # (7 * 0.2 + 2 * 4 + 1 * 20) / 10
+        assert PRICE_MIXES['agentic'].price(OPUS) == pytest.approx(2.94)
+        assert x_of(OPUS) == OPUS.price == 8.0  # the seating default stays 3:1
+        assert x_of(OPUS, mix='agentic') == pytest.approx(2.94)
+
+    @pytest.mark.parametrize('seed', range(3))
+    def test_list_mix_is_the_seating_price_float_for_float(self, seed: int) -> None:
+        rng = random.Random(seed)
+        for _ in range(200):
+            m = model('a/m', 30.0, rng.uniform(0.01, 30), rng.uniform(0.01, 90), cache_read_price=rng.uniform(0, 1))
+            assert LIST_MIX.price(m) == m.price
+
+    def test_explicit_ratio_with_a_write_share(self) -> None:
+        mix = parse_mix('7:1:1:1')
+        assert (mix.read, mix.write, mix.fresh, mix.output, mix.name) == (7, 1, 1, 1, None)
+        # (7 * 0.2 + 1 * 5 + 1 * 4 + 1 * 20) / 10
+        assert mix.price(OPUS) == pytest.approx(3.04)
+
+    def test_names_and_equivalent_ratios_resolve_to_the_named_blend(self) -> None:
+        assert parse_mix('agentic') is PRICE_MIXES['agentic']
+        assert parse_mix(' List ') is PRICE_MIXES['list']
+        assert parse_mix('7:0:2:1') is PRICE_MIXES['agentic']
+        assert parse_mix('70:0:20:10') is PRICE_MIXES['agentic']
+        assert parse_mix('0:0:3:1') is PRICE_MIXES['list']
+        custom = PriceMix(read=1, fresh=1, output=1)
+        assert parse_mix(custom) is custom
+
+    @pytest.mark.parametrize(
+        ('text', 'message'),
+        [
+            ('cheap', 'unknown price mix'),
+            ('7:2:1', 'unknown price mix'),
+            ('7:x:2:1', 'not a number'),
+            ('7:-1:2:1', 'negative or non-finite'),
+            ('inf:0:2:1', 'negative or non-finite'),
+            ('nan:0:2:1', 'negative or non-finite'),
+            ('0:0:0:0', 'no non-zero share'),
+        ],
+    )
+    def test_bad_mixes_are_refused(self, text: str, message: str) -> None:
+        with pytest.raises(ValueError, match=message):
+            parse_mix(text)
+
+    def test_a_mix_built_directly_is_validated_too(self) -> None:
+        with pytest.raises(ValueError):
+            PriceMix(read=-1, fresh=1, output=1)
+        with pytest.raises(ValueError):
+            PriceMix(fresh=0, output=0)
+
+    def test_labels_name_the_blend(self) -> None:
+        assert x_axis_spec('price', PRICE_MIXES['agentic']).short_label == 'Price $/1M (7:2:1 cached)'
+        assert x_axis_spec('price', PRICE_MIXES['list']).short_label == 'Price $/1M (3:1 list)'
+        custom = parse_mix('7:1:1:1')
+        assert x_axis_spec('price', custom).short_label == 'Price $/1M (7:1:1:1)'
+        assert x_axis_spec('price', custom).label == 'Price, USD per 1M tokens (7:1:1:1 read:write:fresh:output)'
+        assert x_axis_spec('output_speed', custom) is X_AXIS_SPECS['output_speed']
+        assert pareto([MID]).x_spec.label == 'Price, USD per 1M tokens (7:2:1 cached)'
+
+
+class TestCacheFallbacks:
+    def test_host_rate_wins(self) -> None:
+        assert OPUS.cache_read_rate() == (0.2, 'host')
+        assert OPUS.cache_write_rate() == (5.0, 'host')
+
+    def test_artificial_analysis_price_when_the_host_lists_none(self) -> None:
+        berget = model('berget/kimi', 46.5, 3.0, 12.0, aa_cache_read_price=0.2)
+        assert berget.cache_read_rate() == (0.2, 'artificial_analysis')
+        # (7 * 0.2 + 2 * 3 + 12) / 10
+        assert PRICE_MIXES['agentic'].price(berget) == pytest.approx(1.94)
+
+    def test_artificial_analysis_price_is_capped_at_the_host_input_rate(self) -> None:
+        cheap_host = model('h/m', 30.0, 0.1, 0.4, aa_cache_read_price=0.5)
+        assert cheap_host.cache_read_rate() == (0.1, 'artificial_analysis')
+
+    def test_input_rate_when_the_card_has_no_cache_price(self) -> None:
+        assert MID.cache_read_rate() == (1.0, 'input')
+        assert MID.cache_write_rate() == (1.0, 'input')
+
+    def test_points_carry_the_source_and_the_result_lists_fallbacks(self) -> None:
+        aa = model('berget/kimi', 46.5, 3.0, 12.0, aa_cache_read_price=0.2)
+        result = pareto([OPUS, aa, MID])
+        sources = {p.model.router_id: (p.cache_read_source, p.cache_write_source) for p in result.points}
+        assert sources == {
+            'anthropic/opus': ('host', None),
+            'berget/kimi': ('artificial_analysis', None),
+            'b/mid': ('input', None),
+        }
+        assert {p.model.router_id for p in result.price_fallbacks} == {'berget/kimi', 'b/mid'}
+
+    def test_write_share_reports_the_write_source(self) -> None:
+        result = pareto([OPUS, MID], mix='7:1:1:1')
+        sources = {p.model.router_id: (p.cache_read_source, p.cache_write_source) for p in result.points}
+        assert sources == {'anthropic/opus': ('host', 'host'), 'b/mid': ('input', 'input')}
+
+    def test_no_source_without_a_cache_share_or_off_the_price_axis(self) -> None:
+        assert all(p.cache_read_source is None and not p.price_fallback for p in pareto([MID], mix='list').points)
+        assert pareto([MID], mix='list').price_fallbacks == []
+        timed = model('a/t', 30.0, 1.0, 1.0, time_to_first_token_seconds=0.5)
+        result = pareto([timed], x='time_to_first_token')
+        assert result.mix is None
+        assert result.points[0].cache_read_source is None
+
+    def test_card_rates_come_from_the_catalogue_pricing_parser(self) -> None:
+        v2 = {
+            'intelligence_index': 40.0,
+            'aa_pricing': {'price_1m_cache_hit_tokens': 0.25, 'price_1m_cache_write_tokens': None},
+        }
+        metadata = {
+            'autorouter': {'v2': v2},
+            'million_tokens_cache_read_cost': 0.1,
+            'million_tokens_cache_write_cost': 1.25,
+        }
+        parsed = scored_model_from_card(card('anthropic', 'm', metadata=metadata))
+        assert parsed is not None
+        assert (parsed.cache_read_price, parsed.cache_write_price, parsed.aa_cache_read_price) == (0.1, 1.25, 0.25)
+
+    def test_missing_or_malformed_cache_fields_read_as_absent(self) -> None:
+        v2 = {'intelligence_index': 40.0, 'aa_pricing': {'price_1m_cache_hit_tokens': 'n/a'}}
+        metadata = {'autorouter': {'v2': v2}, 'million_tokens_cache_read_cost': -1}
+        parsed = scored_model_from_card(card('openai', 'm', metadata=metadata))
+        assert parsed is not None
+        assert (parsed.cache_read_price, parsed.cache_write_price, parsed.aa_cache_read_price) == (None, None, None)
+
+
+class TestSeatingKeepsTheListBlend:
+    def test_cache_rates_change_the_view_but_not_seating(self) -> None:
+        # Same 3:1 price; only the cache rate differs, so the agentic view has a cheaper model.
+        cached = model('a/cached', 40.0, 2.0, 8.0, cache_read_price=0.1)
+        uncached = model('b/uncached', 41.0, 2.0, 8.0)
+        assert cached.price == uncached.price
+        assert uncached.dominates(cached)
+        assert dominates(uncached, cached)
+        assert [m.router_id for m in model_frontier.pareto_frontier([cached, uncached])] == ['b/uncached']
+        assert [p.model.router_id for p in pareto([cached, uncached], mix='list').frontier] == ['b/uncached']
+        assert [p.model.router_id for p in pareto([cached, uncached]).frontier] == ['b/uncached', 'a/cached']
+
+
 class TestVendor:
     def test_one_key_for_host_and_developer_spellings(self) -> None:
         gemini = model('google-ai/gemini', 40.0, 1.0, 1.0, developer='Google')
@@ -294,10 +447,20 @@ class TestVendor:
 
 class TestSummary:
     def test_summary_is_the_model_and_the_point(self) -> None:
-        [point] = pareto([MID]).points
+        [point] = pareto([MID], mix='list').points
         row = point.summary()
         assert set(ScoredModel.model_fields) <= set(row)
-        for key in ('price', 'score', 'x', 'pareto_score', 'on_frontier', 'dominated_by', 'dominators'):
+        for key in (
+            'price',
+            'score',
+            'x',
+            'pareto_score',
+            'on_frontier',
+            'dominated_by',
+            'dominators',
+            'cache_read_source',
+            'cache_write_source',
+        ):
             assert key in row
         assert 'model' not in row
         assert row['price'] == MID.price
@@ -349,11 +512,12 @@ def _flat(output: str) -> str:
 
 
 class TestCli:
-    def _run(self, *args: str) -> Any:
+    def _run(self, *args: str, columns: int | None = None) -> Any:
         from evaluatorq.cli import _register_subapps, app
 
         _register_subapps(app)
-        return CliRunner().invoke(app, ['models', 'pareto', *args])
+        env = {'COLUMNS': str(columns)} if columns else None
+        return CliRunner().invoke(app, ['models', 'pareto', *args], env=env)
 
     def test_json_frontier(self, fake_catalogue: list[ScoredModel]) -> None:
         result = self._run('--json')
@@ -434,6 +598,33 @@ class TestCli:
         monkeypatch.setattr(models_mod, 'load_models', fake_load)
         payload = json.loads(self._run('--provider', 'openai', '--provider', 'google', '--json').stdout)
         assert sorted(p['router_id'] for p in payload['points']) == ['azure/gpt-x', 'google-ai/gemini']
+
+    def test_default_mix_is_cache_aware_and_list_is_one_flag_away(self, fake_catalogue: list[ScoredModel]) -> None:
+        default = self._run(columns=200)
+        assert default.exit_code == 0, default.output
+        assert 'Price $/1M (7:2:1 cached)' in default.stdout
+        assert 'Cache read $/1M' in default.stdout
+        assert '(input)' in default.stdout  # the fakes list no cache rate
+        listed = self._run('--mix', 'list', columns=200)
+        assert 'Price $/1M (3:1 list)' in listed.stdout
+        assert 'Cache read $/1M' not in listed.stdout
+
+    def test_json_names_the_mix_and_the_rate_source(self, fake_catalogue: list[ScoredModel]) -> None:
+        payload = json.loads(self._run('--json', '--mix', '7:1:1:1').stdout)
+        assert payload['mix']['read'] == 7.0
+        assert (payload['mix']['write'], payload['mix']['name']) == (1.0, None)
+        assert payload['x_label'] == 'Price, USD per 1M tokens (7:1:1:1 read:write:fresh:output)'
+        mid = next(p for p in payload['points'] if p['router_id'] == 'b/mid')
+        assert (mid['cache_read_source'], mid['cache_write_source']) == ('input', 'input')
+        assert mid['x'] == pytest.approx((7 + 1 + 1 + 5) / 10)
+
+    def test_bad_mix_and_mix_off_the_price_axis_are_usage_errors(self, fake_catalogue: list[ScoredModel]) -> None:
+        bad = self._run('--mix', '7:2:1')
+        assert bad.exit_code == 2
+        assert 'unknown price mix' in _flat(bad.output)
+        off_axis = self._run('--x', 'output_speed', '--mix', 'list')
+        assert off_axis.exit_code == 2
+        assert 'a price mix applies only to --x price' in _flat(off_axis.output)
 
     def test_table_goes_to_stdout_with_the_axis_label(self, monkeypatch: pytest.MonkeyPatch) -> None:
         timed = model('a/t', 30.0, 1.0, 1.0, time_to_first_token_seconds=0.75)
@@ -548,3 +739,31 @@ class TestDashboardPage:
         assert 'value="coding"' not in text
         assert 'value="economics"' not in text
         assert '<option value="intelligence" selected>' in text  # an empty index falls back to the default
+
+    def test_mix_control_switches_the_blend_and_marks_fallbacks(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        from evaluatorq.dashboard import models_views
+
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
+            del client, include_disabled
+            return fake_catalogue
+
+        fake_catalogue.append(OPUS)
+        monkeypatch.setattr(models_views, 'load_models', fake_load)
+        text = client.get('/models').text
+        assert '<option value="agentic" selected>Agentic: 7:2:1 cached</option>' in text
+        assert 'Price $/1M (7:2:1 cached)' in text
+        assert 'Cache read $/1M' in text
+        assert 'class="models-fallback"' in text
+        assert '4 priced with a cache rate their host does not list.' in text
+        listed = client.get('/models?mix=list').text
+        assert '<option value="list" selected>' in listed
+        assert 'Price $/1M (3:1 list)' in listed
+        assert 'class="models-fallback"' not in listed
+        custom = client.get('/models?mix=7:1:1:1').text
+        assert '<option value="7:1:1:1" selected>Custom: 7:1:1:1</option>' in custom
+        assert '<option value="agentic" selected>' in client.get('/models?mix=nope').text
+        assert 'name="mix" onchange="this.form.submit()" disabled' in client.get('/models?x=output_speed').text
