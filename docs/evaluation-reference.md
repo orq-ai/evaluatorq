@@ -532,7 +532,9 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-The file holds every row the run returned: data point inputs, job outputs, job and evaluator errors, every score with its explanation, and the token usage your evaluators reported. It also records the run's name, description, dataset id, start and end time and the evaluatorq version. It does not hold the cost of the calls your jobs make to the target, because evaluatorq never sees that cost. `load_experiment_run(path)` returns an `ExperimentRun` with the rows under `results`; `evaluator_stats()` gives each evaluator's average over numeric scores and its pass rate over the scores that set `pass`.
+The file holds every row the run returned: data point inputs, job outputs, job and evaluator errors, every score with its explanation, and the token usage your evaluators reported. It also records the run's name, description, dataset id, start and end time, when the file was written, the evaluatorq version and, when the results were uploaded to Orq, the experiment URL. It does not hold the cost of the calls your jobs make to the target, because evaluatorq never sees that cost. `load_experiment_run(path)` returns an `ExperimentRun` with the rows under `results`; `evaluator_stats()` gives each evaluator's average over numeric scores and its pass rate over the scores that set `pass`, `pass_rate()` gives that share across every evaluator, and `row_counts()` counts the rows and the rows that errored, the same numbers the dashboard shows.
+
+The file is written as soon as the results exist, before the results table prints and before the upload to Orq. If the upload raises, the run is already on disk; if it returns an experiment URL, evaluatorq adds the URL to the saved file.
 
 Two runs with the same name in the same second do not overwrite each other: the second file gets a `_001` suffix. Each saved run also gets a run manifest, the small status file the dashboard reads to show a run as running, finished or failed.
 

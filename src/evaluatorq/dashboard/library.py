@@ -167,8 +167,7 @@ def _card(path: Path) -> ReportCard | None:
     surface, data = load_surface(path)
     if surface is None:
         return None
-    # An experiment run records its start as started_at; every other surface writes created_at.
-    created = data.get('created_at') or data.get('started_at')
+    created = data.get('created_at')
     try:
         created_at = datetime.fromisoformat(str(created)) if created else datetime.now(tz=timezone.utc)
     except (TypeError, ValueError):

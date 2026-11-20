@@ -14,6 +14,7 @@ from loguru import logger
 from evaluatorq import DataPoint, EvaluationResult, SaveMode, evaluatorq, load_experiment_run
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.job_helper import job
+from evaluatorq.send_results import OrqResponse
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -42,7 +43,11 @@ async def judge(params: ScorerParameter) -> EvaluationResult:
 
 
 async def run(
-    *, save: SaveMode | str = SaveMode.NONE, output_dir: Path | str | None = None
+    *,
+    save: SaveMode | str = SaveMode.NONE,
+    output_dir: Path | str | None = None,
+    upload: bool = False,
+    url_out: list[str] | None = None,
 ) -> list[DataPointResult]:
     return await evaluatorq(
         'capitals',
@@ -53,7 +58,9 @@ async def run(
         print_results=False,
         save=save,
         output_dir=output_dir,
-        _send_results=False,
+        _send_results=upload,
+        _orq_api_key='test-key' if upload else None,
+        _experiment_url_out=url_out,
     )
 
 
@@ -91,13 +98,21 @@ async def test_final_writes_run_and_completed_manifest(store: Path) -> None:
     assert manifest['surface'] == 'experiment'
     assert manifest['status'] == 'completed'
     assert manifest['report_path'] == str(files[0].resolve())
-    assert manifest['summary'] == {'total_results': 2, 'scorer_averages': {'mentions-paris': 1.0}}
+    assert manifest['summary'] == {
+        'total_results': 2,
+        'scorer_averages': {'mentions-paris': 1.0},
+        'pass_rate': 1.0,
+        'errored_rows': 1,
+        'judge_tokens': 120,
+    }
 
     loaded = load_experiment_run(files[0])
     assert loaded.run_name == 'capitals'
     assert loaded.description == 'tiny QA'
     assert loaded.evaluator_names == ['mentions-paris']
     assert loaded.ended_at >= loaded.started_at
+    assert loaded.created_at >= loaded.ended_at
+    assert loaded.experiment_url is None
     assert loaded.results == results
 
 
@@ -190,6 +205,53 @@ async def test_a_failed_save_logs_fails_the_manifest_and_still_returns_results(
     [manifest] = _manifests(tmp_path)
     assert manifest['status'] == 'error'
     assert 'disk full' in json.dumps(manifest)
+
+
+def _fake_upload(monkeypatch: pytest.MonkeyPatch, *, url: str | None = None, error: Exception | None = None) -> None:
+    module = importlib.import_module('evaluatorq.evaluatorq')
+
+    async def upload(*_args: object, **_kwargs: object) -> OrqResponse:
+        if error is not None:
+            raise error
+        return OrqResponse(sheet_id='s', manifest_id='m', experiment_name='capitals', rows_created=2, experiment_url=url)
+
+    monkeypatch.setattr(module, 'send_results_to_orq', upload)
+
+
+@pytest.mark.asyncio
+async def test_the_uploaded_experiment_url_is_saved_and_handed_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    url = 'https://my.orq.ai/workspace/experiments/abc'
+    _fake_upload(monkeypatch, url=url)
+    url_out: list[str] = ['earlier']
+    await run(save=SaveMode.FINAL, output_dir=tmp_path, upload=True, url_out=url_out)
+    assert url_out == ['earlier', url]
+    loaded = load_experiment_run(next(tmp_path.glob('capitals_*.json')))
+    assert loaded.experiment_url == url
+    assert len(loaded.results) == 2
+    assert _manifests(tmp_path)[0]['status'] == 'completed'
+
+
+@pytest.mark.asyncio
+async def test_an_upload_with_no_url_saves_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _fake_upload(monkeypatch, url=None)
+    url_out: list[str] = []
+    await run(save=SaveMode.FINAL, output_dir=tmp_path, upload=True, url_out=url_out)
+    assert url_out == []
+    assert load_experiment_run(next(tmp_path.glob('capitals_*.json'))).experiment_url is None
+
+
+@pytest.mark.asyncio
+async def test_the_saved_run_survives_a_raising_upload(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _fake_upload(monkeypatch, error=RuntimeError('orq is down'))
+    with pytest.raises(RuntimeError, match='orq is down'):
+        await run(save=SaveMode.FINAL, output_dir=tmp_path, upload=True)
+    loaded = load_experiment_run(next(tmp_path.glob('capitals_*.json')))
+    assert len(loaded.results) == 2
+    assert loaded.experiment_url is None
+    [manifest] = _manifests(tmp_path)
+    assert manifest['status'] == 'completed'
 
 
 class _Writer:

@@ -28,6 +28,7 @@ from loguru import logger
 
 from evaluatorq.common.reports.palette import SEVERITY_ORDER
 from evaluatorq.dashboard import library
+from evaluatorq.experiment_run import ExperimentRun
 from evaluatorq.simulation.metrics import is_errored_result
 
 if TYPE_CHECKING:
@@ -379,53 +380,37 @@ def _pairwise_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     )
 
 
-def _experiment_usages(data: dict[str, object]) -> list[object]:
-    """Every evaluator ``token_usage`` dict in a saved experiment run; scores without one are skipped."""
-    usages: list[object] = []
-    for result in _results(data):
-        jobs = result.get('job_results')
-        for job in jobs if isinstance(jobs, list) else []:
-            scores = job.get('evaluator_scores') if isinstance(job, dict) else None
-            for score in scores if isinstance(scores, list) else []:
-                verdict = score.get('score') if isinstance(score, dict) else None
-                usage = verdict.get('token_usage') if isinstance(verdict, dict) else None
-                if isinstance(usage, dict):
-                    usages.append(usage)
-    return usages
+def _load_experiment(card: library.ReportCard) -> ExperimentRun | None:
+    """The card's saved experiment run through the cached model loader; ``None`` when unreadable or invalid."""
+    if card.path is None:
+        return None
+    try:
+        return library.load_model_cached(card.path, ExperimentRun.model_validate)
+    except (OSError, ValueError):
+        return None
 
 
-def _experiment_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
+def _experiment_row(card: library.ReportCard) -> RunRow:
     """Score an experiment run by its pass rate: the share of scores that set ``pass`` which passed.
 
     Averages are on each evaluator's own scale (0-1, 1-5, a raw count), so no
     single average reads against the shared ``>= 0.8`` threshold. A run where no
-    evaluator set ``pass`` has no score rather than an invented one.
+    evaluator set ``pass`` has no score rather than an invented one. The pass
+    rate and the errored rule are `ExperimentRun`'s, so this row and the report
+    never disagree.
     """
-    passed = pass_set = 0
-    all_errored = True
-    results = _results(data)
-    for result in results:
-        jobs = result.get('job_results')
-        jobs = [j for j in jobs if isinstance(j, dict)] if isinstance(jobs, list) else []
-        if result.get('error') is None and any(j.get('error') is None for j in jobs):
-            all_errored = False
-        for job in jobs:
-            scores = job.get('evaluator_scores')
-            for score in scores if isinstance(scores, list) else []:
-                verdict = score.get('score') if isinstance(score, dict) else None
-                value = verdict.get('pass_', verdict.get('pass')) if isinstance(verdict, dict) else None
-                if score.get('error') is None and isinstance(value, bool):
-                    pass_set += 1
-                    passed += value
+    run = _load_experiment(card)
     return RunRow(
         id=card.id,
         surface='experiment',
         name=card.name,
         when=card.created_at.strftime('%Y-%m-%d %H:%M'),
         headline=card.headline,
-        score=passed / pass_set if pass_set else None,
-        status=_lifecycle_status(broken=bool(card.error), all_errored=bool(results) and all_errored),
-        error=bool(card.error),
+        score=run.pass_rate() if run is not None else None,
+        status=_lifecycle_status(
+            broken=bool(card.error) or run is None, all_errored=run is not None and run.row_counts().all_errored
+        ),
+        error=bool(card.error) or run is None,
     )
 
 
@@ -468,6 +453,9 @@ def run_rows(roots: list[Path] | None = None) -> list[RunRow]:
         if card.status in ('running', 'error', 'cancelled') or card.path is None:
             rows.append(_card_status_row(card))
             continue
+        if card.surface == 'experiment':
+            rows.append(_experiment_row(card))
+            continue
         try:
             data = library.read_json_cached(card.path)
         except (OSError, ValueError):
@@ -478,8 +466,6 @@ def run_rows(roots: list[Path] | None = None) -> list[RunRow]:
             rows.append(_sim_row(card, data))
         elif card.surface == 'pairwise':
             rows.append(_pairwise_row(card, data))
-        elif card.surface == 'experiment':
-            rows.append(_experiment_row(card, data))
     return rows
 
 
@@ -615,30 +601,24 @@ def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
     )
 
 
+_KIND_LABELS = {'redteam': 'Red team', 'sim': 'Agent sim', 'pairwise': 'Pairwise', 'experiment': 'Experiments'}
+"""Landing chart label per surface, in display order."""
+
+
 def landing(roots: list[Path] | None = None) -> Landing:
     """Compute the Dashboard landing aggregates across all run stores."""
     rows = run_rows(roots)
-    redteam = [r for r in rows if r.surface == 'redteam']
-    sim = [r for r in rows if r.surface == 'sim']
-    pairwise = [r for r in rows if r.surface == 'pairwise']
-    experiments = [r for r in rows if r.surface == 'experiment']
+    runs = {surface: sum(1 for r in rows if r.surface == surface) for surface in _KIND_LABELS}
     manifests = library.scan(roots)
     redteam_tiles = _redteam_tiles([card for card in manifests if card.surface == 'redteam'])
     sim_tiles = _sim_tiles([card for card in manifests if card.surface == 'sim'])
-    pairwise_manifests = [card for card in manifests if card.surface == 'pairwise']
-    experiment_manifests = [card for card in manifests if card.surface == 'experiment']
     rt = redteam_tiles.stats
 
     # Roll up severity counts + token usage + resistant/vulnerable from raw JSON.
     severity_counts = redteam_tiles.by_severity
-    total_tokens = rt.tokens + sim_tiles.tokens
-    rt_tokens = rt.tokens
-    sim_tokens = sim_tiles.tokens
-    rt_cost = rt.cost
-    sim_cost = sim_tiles.cost
+    tokens = {'redteam': rt.tokens, 'sim': sim_tiles.tokens, 'pairwise': 0, 'experiment': 0}
+    costs: dict[str, list[float]] = {'redteam': [rt.cost], 'sim': [sim_tiles.cost], 'pairwise': [], 'experiment': []}
     costed_runs = rt.costed_runs + sim_tiles.costed_runs
-    pw_tokens = 0
-    pw_costs: list[float] = []
     judge_input_costs: list[float] = []
     judge_output_costs: list[float] = []
     priced_calls_total = rt.priced_calls + sim_tiles.priced_calls
@@ -651,23 +631,19 @@ def landing(roots: list[Path] | None = None) -> Landing:
     # Pairwise judge calls and experiment evaluator calls roll up the same way:
     # one Usage-shaped dict per LLM-backed score. An experiment's target cost is
     # not saved, so its spend is the evaluators' spend only.
-    exp_tokens = 0
-    exp_costs: list[float] = []
-    usage_sources = [
-        ('pairwise', data, [_comparison_usage(entry) for entry in _entries(data)])
-        for _card, data in _iter_report_data(pairwise_manifests)
-    ] + [('experiment', data, _experiment_usages(data)) for _card, data in _iter_report_data(experiment_manifests)]
-    for kind, _data, usages in usage_sources:
-        tok = sum(_tokens_total(u) for u in usages)
-        total_tokens += tok
-        costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
-        if kind == 'pairwise':
-            pw_tokens += tok
-            pw_costs.extend(costs)
-        else:
-            exp_tokens += tok
-            exp_costs.extend(costs)
-        if costs:
+    usage_sources: list[tuple[str, list[object]]] = [
+        ('pairwise', [_comparison_usage(entry) for entry in _entries(data)])
+        for _card, data in _iter_report_data([card for card in manifests if card.surface == 'pairwise'])
+    ]
+    experiments = [_load_experiment(card) for card in manifests if card.surface == 'experiment']
+    usage_sources += [
+        ('experiment', [usage.model_dump() for usage in run.judge_usages()]) for run in experiments if run is not None
+    ]
+    for surface, usages in usage_sources:
+        tokens[surface] += sum(_tokens_total(u) for u in usages)
+        run_costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
+        costs[surface].extend(run_costs)
+        if run_costs:
             costed_runs += 1
         inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
         if inputs:
@@ -685,8 +661,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
     # Every cost total is folded with ``math.fsum`` for the same reason the tile
     # totals are: a plain ``sum`` makes the result depend on how the per-run
     # values happen to be grouped, so two views of the same workspace disagree.
-    pw_cost = math.fsum(pw_costs)
-    exp_cost = math.fsum(exp_costs)
+    cost = {surface: math.fsum(values) for surface, values in costs.items()}
     input_cost_total = math.fsum([rt.input_cost, sim_tiles.input_cost, *judge_input_costs])
     output_cost_total = math.fsum([rt.output_cost, sim_tiles.output_cost, *judge_output_costs])
 
@@ -694,31 +669,9 @@ def landing(roots: list[Path] | None = None) -> Landing:
     severity = [(sev, severity_counts[sev]) for sev in (*SEVERITY_ORDER, UNKNOWN_SEVERITY) if severity_counts.get(sev)]
     # Zero-count kinds are dropped, matching tokens_by_kind / cost_by_kind: a
     # workspace with no pairwise runs should not carry an empty 'Pairwise' bar.
-    by_kind = [
-        (k, n)
-        for k, n in (
-            ('Red team', len(redteam)),
-            ('Agent sim', len(sim)),
-            ('Pairwise', len(pairwise)),
-            ('Experiments', len(experiments)),
-        )
-        if n
-    ]
-    tokens_by_kind = [
-        (k, n)
-        for k, n in (
-            ('Red team', rt_tokens),
-            ('Agent sim', sim_tokens),
-            ('Pairwise', pw_tokens),
-            ('Experiments', exp_tokens),
-        )
-        if n
-    ]
-    cost_by_kind = [
-        (k, c)
-        for k, c in (('Red team', rt_cost), ('Agent sim', sim_cost), ('Pairwise', pw_cost), ('Experiments', exp_cost))
-        if c > 0
-    ]
+    by_kind = [(label, runs[surface]) for surface, label in _KIND_LABELS.items() if runs[surface]]
+    tokens_by_kind = [(label, tokens[surface]) for surface, label in _KIND_LABELS.items() if tokens[surface]]
+    cost_by_kind = [(label, cost[surface]) for surface, label in _KIND_LABELS.items() if cost[surface] > 0]
 
     # Attack-weighted resistance, so the headline stat agrees with the donut.
     # The per-run mean is misleading: runs with zero evaluated attacks default
@@ -728,16 +681,16 @@ def landing(roots: list[Path] | None = None) -> Landing:
 
     return Landing(
         total_runs=len(rows),
-        redteam_runs=len(redteam),
-        sim_runs=len(sim),
+        redteam_runs=runs['redteam'],
+        sim_runs=runs['sim'],
         resistance_rate=resistance_rate,
-        total_tokens=total_tokens,
+        total_tokens=sum(tokens.values()),
         by_kind=by_kind,
         severity=severity,
         tokens_by_kind=tokens_by_kind,
         resistant=max(resistant, 0),
         vulnerable=max(vulnerable, 0),
-        total_cost=math.fsum([rt_cost, sim_cost, pw_cost, exp_cost]) if costed_runs else None,
+        total_cost=math.fsum(cost.values()) if costed_runs else None,
         costed_runs=costed_runs,
         cost_by_kind=cost_by_kind,
         total_input_cost=input_cost_total if has_input_cost else None,

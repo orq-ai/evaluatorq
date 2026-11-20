@@ -169,3 +169,55 @@ def test_exports_carry_every_row(client: TestClient) -> None:
     assert rows[2]['Error'] == 'upstream model timed out'
     assert rows[3]['Error'] == 'datapoint fetch failed'
     assert client.get(f'{link}/export.json').status_code == 200
+
+
+def _kpi(body: str, label: str) -> str:
+    match = re.search(rf'<div class="kpi-value">([^<]*)</div><div class="kpi-label">{label}</div>', body)
+    assert match is not None, label
+    return match.group(1)
+
+
+def _save(run: ExperimentRun, runs: Path) -> None:
+    writer = start_manifest(run_id=run.run_id, surface=ManifestSurface.EXPERIMENT, run_name=run.run_name, runs_dir=runs)
+    path = save_experiment_run(run, output_dir=runs)
+    writer.complete(report_path=path.resolve(), summary=run.manifest_summary())
+
+
+def test_run_list_summary_and_report_agree_on_errored_and_pass_counts(tmp_path: Path) -> None:
+    run = _experiment()
+    counts = run.row_counts()
+    assert (counts.rows, counts.job_results, counts.errored) == (4, 3, 2)
+    assert run.pass_rate() == pytest.approx(0.5)
+    _save(run, tmp_path)
+
+    [row] = [r for r in metrics.run_rows([tmp_path]) if r.surface == 'experiment']
+    assert row.score == pytest.approx(run.pass_rate())
+    assert row.status == 'finished'
+    summary = run.manifest_summary()
+    assert (summary.get('pass_rate'), summary.get('errored_rows'), summary.get('judge_tokens')) == (0.5, 2, 150)
+    body = experiment_report_body(run)
+    assert _kpi(body, 'Errored rows') == str(counts.errored)
+    assert _kpi(body, 'Pass rate') == '50%'
+    assert _kpi(body, 'Job results') == str(counts.job_results)
+
+
+def test_run_list_and_report_agree_when_every_row_errored(tmp_path: Path) -> None:
+    run = _experiment().model_copy(
+        update={
+            'results': [
+                DataPointResult(
+                    data_point=DataPoint(inputs={'question': 'q'}),
+                    job_results=[JobResult(job_name='answer', output='fine')],
+                    error='datapoint failed after its job ran',
+                ),
+                DataPointResult(data_point=DataPoint(inputs={'question': 'lost'}), error='datapoint fetch failed'),
+            ]
+        }
+    )
+    counts = run.row_counts()
+    assert counts.all_errored
+    _save(run, tmp_path)
+    [row] = [r for r in metrics.run_rows([tmp_path]) if r.surface == 'experiment']
+    assert row.status == 'error'
+    assert row.score is None
+    assert _kpi(experiment_report_body(run), 'Errored rows') == str(counts.rows)

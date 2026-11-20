@@ -16,6 +16,7 @@ from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
 from .common.output_adapters import has_meaningful_output
 from .common.parallelism import resolve_datapoint_parallelism
+from .common.private_files import write_private_atomic
 from .common.trace_input import load_traces
 from .contracts import ManifestSurface, SaveMode
 from .experiment_run import ExperimentRun, get_experiment_runs_dir, save_experiment_run
@@ -509,18 +510,17 @@ class _EvaluationFinishInputs:
     start_time: datetime
     path: str | None
     base_url: str | None
-    experiment_url_out: list[str] | None
 
 
-async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
+async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> str | None:
     """Display and upload a finished run's results, the last phase of ``evaluatorq``.
 
     Prints the table when asked, then uploads to Orq only when both an API key and
-    ``send_results`` are present. Callers that opted in by passing a sink list get
-    the created experiment's URL appended to ``inputs.experiment_url_out`` — that
-    list is the only value this writes back, since simulation persists the URL on
-    its ``SimulationRun`` report. A run with no sink, no key or no URL writes
-    nothing and is not an error.
+    ``send_results`` are present.
+
+    Returns:
+        The created Orq experiment's URL, or ``None`` when nothing was uploaded or
+        the upload returned no URL, which is not an error.
     """
     print_results = inputs.print_results
     orq_api_key = inputs.orq_api_key
@@ -532,7 +532,6 @@ async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
     start_time = inputs.start_time
     path = inputs.path
     base_url = inputs.base_url
-    experiment_url_out = inputs.experiment_url_out
 
     # Display results table
     if print_results:
@@ -551,10 +550,9 @@ async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
             path=path,
             base_url=base_url,
         )
-        # Hand the created experiment's URL back to callers that opted in with a
-        # sink list (e.g. simulation persists it on the SimulationRun report).
-        if experiment_url_out is not None and upload_response is not None and upload_response.experiment_url:
-            experiment_url_out.append(upload_response.experiment_url)
+        if upload_response is not None and upload_response.experiment_url:
+            return upload_response.experiment_url
+    return None
 
 
 async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResult:
@@ -796,22 +794,89 @@ def _finish_manifest_on_error(writer: 'ManifestWriter') -> Generator[None]:
         raise
 
 
-def _save_experiment(writer: 'ManifestWriter', run: ExperimentRun, output_dir: Path | str | None) -> None:
-    """Write the finished run and complete its manifest.
+class _ExperimentSave:
+    """Everything ``evaluatorq(save=SaveMode.FINAL)`` writes: the run manifest and the run file.
 
-    A write failure is logged and marks the manifest errored. It does not raise,
-    because the run has already been paid for and its results are still returned.
+    `start` opens the manifest and marks it cancelled or errored if the run raises.
+    `write` saves the run as soon as its results exist, before they are printed or
+    uploaded, so a failing upload cannot lose results that were already paid for.
+    `record_experiment_url` then adds the upload's URL to the saved file.
     """
-    try:
-        path = save_experiment_run(run, output_dir=output_dir)
-    except (OSError, RuntimeError) as exc:
-        logger.error(
-            'Could not save experiment run {!r}: {}; the results are returned but not on disk', run.run_name, exc
+
+    def __init__(self, writer: 'ManifestWriter', output_dir: Path | str | None) -> None:
+        self._writer = writer
+        self._output_dir = output_dir
+        self._saved: tuple[ExperimentRun, Path] | None = None
+
+    @classmethod
+    def start(cls, stack: AsyncExitStack, *, name: str, output_dir: Path | str | None) -> '_ExperimentSave':
+        """Open the run's manifest; *stack* closes it as cancelled or errored when the run raises."""
+        from .common.run_manifest import start_manifest
+
+        writer = start_manifest(
+            run_id=uuid.uuid4().hex,
+            surface=ManifestSurface.EXPERIMENT,
+            run_name=name,
+            runs_dir=Path(output_dir) if output_dir is not None else get_experiment_runs_dir(),
         )
-        writer.fail(f'save failed: {type(exc).__name__}: {exc}')
-        return
-    logger.info('Saved experiment run to {}', path)
-    writer.complete(report_path=path.resolve(), summary=run.manifest_summary())
+        _ = stack.enter_context(_finish_manifest_on_error(writer))
+        return cls(writer, output_dir)
+
+    def write(
+        self,
+        *,
+        name: str,
+        description: str | None,
+        dataset_id: str | None,
+        started_at: datetime,
+        ended_at: datetime,
+        evaluator_names: list[str],
+        results: EvaluatorqResult,
+    ) -> None:
+        """Write the finished run and complete its manifest.
+
+        A write failure is logged and marks the manifest errored. It does not raise,
+        because the run has already been paid for and its results are still returned.
+        """
+        from . import __version__
+
+        run = ExperimentRun(
+            run_id=self._writer.manifest.run_id,
+            run_name=name,
+            description=description,
+            dataset_id=dataset_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_seconds=(ended_at - started_at).total_seconds(),
+            evaluatorq_version=__version__,
+            evaluator_names=evaluator_names,
+            results=results,
+        )
+        try:
+            path = save_experiment_run(run, output_dir=self._output_dir)
+        except (OSError, RuntimeError) as exc:
+            logger.error('Could not save experiment run {!r}: {}; the results are returned but not on disk', name, exc)
+            self._writer.fail(f'save failed: {type(exc).__name__}: {exc}')
+            return
+        logger.info('Saved experiment run to {}', path)
+        self._writer.complete(report_path=path.resolve(), summary=run.manifest_summary())
+        self._saved = (run, path)
+
+    def record_experiment_url(self, url: str | None) -> None:
+        """Rewrite the saved run with the uploaded experiment's *url*; a no-op when either is missing.
+
+        A failed rewrite is logged and leaves the saved run without the link.
+        """
+        if url is None or self._saved is None:
+            return
+        run, path = self._saved
+        run = run.model_copy(update={'experiment_url': url})
+        try:
+            write_private_atomic(path, run.to_json(), private_directory=False)
+        except OSError as exc:
+            logger.warning('Could not add the Orq experiment URL to the saved run {}: {}', path, exc)
+            return
+        self._saved = (run, path)
 
 
 async def evaluatorq(
@@ -972,17 +1037,7 @@ async def evaluatorq(
 
         start_time = datetime.now(timezone.utc)
 
-        manifest: ManifestWriter | None = None
-        if save_run:
-            from .common.run_manifest import start_manifest
-
-            manifest = start_manifest(
-                run_id=uuid.uuid4().hex,
-                surface=ManifestSurface.EXPERIMENT,
-                run_name=name,
-                runs_dir=Path(output_dir) if output_dir is not None else get_experiment_runs_dir(),
-            )
-            _ = span_stack.enter_context(_finish_manifest_on_error(manifest))
+        saver = _ExperimentSave.start(span_stack, name=name, output_dir=output_dir) if save_run else None
 
         dataset_id: str | None = None
 
@@ -1032,11 +1087,17 @@ async def evaluatorq(
                 show_progress=print_results,
             )
 
-        end_time = datetime.now(timezone.utc)
-        # A saved run records the uploaded experiment's URL, so collect it even when the caller did not ask.
-        url_sink = _experiment_url_out if _experiment_url_out is not None else ([] if manifest is not None else None)
-        urls_before = len(url_sink) if url_sink is not None else 0
-        await _finish_evaluation(
+        if saver is not None:
+            saver.write(
+                name=name,
+                description=description,
+                dataset_id=dataset_id,
+                started_at=start_time,
+                ended_at=datetime.now(timezone.utc),
+                evaluator_names=[evaluator['name'] for evaluator in evaluators_list],
+                results=results,
+            )
+        experiment_url = await _finish_evaluation(
             _EvaluationFinishInputs(
                 print_results=print_results,
                 orq_api_key=orq_api_key,
@@ -1048,30 +1109,11 @@ async def evaluatorq(
                 start_time=start_time,
                 path=path,
                 base_url=_base_url,
-                experiment_url_out=url_sink,
             )
         )
-
-        if manifest is not None:
-            from . import __version__
-
-            new_urls = url_sink[urls_before:] if url_sink is not None else []
-            _save_experiment(
-                manifest,
-                ExperimentRun(
-                    run_id=manifest.manifest.run_id,
-                    run_name=name,
-                    description=description,
-                    dataset_id=dataset_id,
-                    started_at=start_time,
-                    ended_at=end_time,
-                    duration_seconds=(end_time - start_time).total_seconds(),
-                    evaluatorq_version=__version__,
-                    evaluator_names=[evaluator['name'] for evaluator in evaluators_list],
-                    experiment_url=new_urls[-1] if new_urls else None,
-                    results=results,
-                ),
-                output_dir,
-            )
+        if experiment_url is not None and _experiment_url_out is not None:
+            _experiment_url_out.append(experiment_url)
+        if saver is not None:
+            saver.record_experiment_url(experiment_url)
 
         return results

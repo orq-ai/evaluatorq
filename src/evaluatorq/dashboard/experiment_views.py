@@ -9,7 +9,6 @@ full text stays in the saved run and opens from the cell.
 from __future__ import annotations
 
 import json
-import math
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.output_adapters import output_to_text
@@ -126,41 +125,6 @@ def _evaluator_table(stats: list[EvaluatorStats]) -> str:
     return f'<table class="exp-evaluators"><thead><tr>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table>'
 
 
-def _counts(run: ExperimentRun) -> tuple[int, int]:
-    """``(job results, errored rows)``: a datapoint error with no job results counts as one errored row."""
-    jobs = 0
-    errored = 0
-    for result in run.results:
-        job_results = result.job_results or []
-        jobs += len(job_results)
-        if not job_results:
-            errored += result.error is not None
-        errored += sum(1 for job in job_results if job.error is not None or result.error is not None)
-    return jobs, errored
-
-
-def overall_pass_rate(stats: list[EvaluatorStats]) -> float | None:
-    """Share of all scores that set ``pass`` which passed, across evaluators; ``None`` when none set it."""
-    pass_set = sum(s.pass_set for s in stats)
-    return sum(s.passed for s in stats) / pass_set if pass_set else None
-
-
-def _judge_usage(run: ExperimentRun) -> tuple[int, float | None]:
-    """``(total tokens, total cost)`` of the evaluators' own LLM calls; cost ``None`` when none was reported."""
-    tokens = 0
-    costs: list[float] = []
-    for result in run.results:
-        for job in result.job_results or []:
-            for score in job.evaluator_scores or []:
-                usage = score.score.token_usage
-                if usage is None:
-                    continue
-                tokens += usage.total_tokens
-                if usage.total_cost is not None:
-                    costs.append(usage.total_cost)
-    return tokens, (math.fsum(costs) if costs else None)
-
-
 def _hero(run: ExperimentRun) -> str:
     when = run.started_at.strftime('%Y-%m-%d %H:%M %Z')
     duration = 'under 1s' if run.duration_seconds < 1 else humanize_duration(run.duration_seconds)
@@ -181,12 +145,13 @@ def experiment_report_body(run: ExperimentRun) -> str:
     """Render a saved experiment run: KPIs, per-evaluator averages and pass rates, and one row per job result."""
     stats = run.evaluator_stats()
     names = [s.name for s in stats]
-    jobs, errored = _counts(run)
-    pass_rate = overall_pass_rate(stats)
-    tokens, cost = _judge_usage(run)
+    counts = run.row_counts()
+    errored = counts.errored
+    pass_rate = run.pass_rate()
+    tokens, cost = run.judge_usage()
     kpis = kpi_cards([
         {'label': 'Datapoints', 'value': str(len(run.results))},
-        {'label': 'Job results', 'value': str(jobs)},
+        {'label': 'Job results', 'value': str(counts.job_results)},
         {
             'label': 'Errored rows',
             'value': str(errored),

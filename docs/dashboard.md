@@ -460,7 +460,7 @@ An **experiment run** is one call to `evaluatorq()` saved with `save=SaveMode.FI
 eq dashboard .evaluatorq/experiment-runs  # scope to experiment runs
 ```
 
-The run list scores each run by its **pass rate**: the share of evaluator scores that set `pass` and passed, across every evaluator. A run whose evaluators never set `pass` has no score rather than an invented one, because each evaluator's average is on its own scale (0 to 1, 1 to 5, a raw count) and no single average reads against one threshold. A run is marked errored when every row errored.
+The run list scores each run by its **pass rate**: the share of evaluator scores that set `pass` and passed, across every evaluator. A run whose evaluators never set `pass` has no score rather than an invented one, because each evaluator's average is on its own scale (0 to 1, 1 to 5, a raw count) and no single average reads against one threshold. A run is marked errored when every row errored, counting rows the way the report's **Errored rows** figure does: one row per job result, plus one for each data point that failed before any job ran.
 
 The report page has three panels below the headline counts.
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime  # noqa: TC003 — runtime-required by the pydantic fields below
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,7 +24,7 @@ from evaluatorq.contracts import RUN_SUMMARY_TOTAL_KEY
 from evaluatorq.types import DataPointResult  # noqa: TC001 — runtime-required by the pydantic field below
 
 if TYPE_CHECKING:
-    from evaluatorq.contracts import RunSummary
+    from evaluatorq.contracts import RunSummary, Usage
 
 EXPERIMENT_RUNS_SUBDIR = 'experiment-runs'
 EXPERIMENT_RUN_VERSION = 1
@@ -64,6 +64,30 @@ class EvaluatorStats:
         return self.passed / self.pass_set if self.pass_set else None
 
 
+@dataclass(frozen=True)
+class RowCounts:
+    """How many rows a run has and how many of them errored.
+
+    A row is one job result, or one datapoint that has no job results. A row
+    errored when its job raised or its datapoint did; this is the one errored
+    rule the report, the run list and the manifest summary share.
+
+    Attributes:
+        rows: Job results, plus one per datapoint with none.
+        job_results: Job results across every datapoint.
+        errored: Rows whose job or datapoint raised.
+    """
+
+    rows: int
+    job_results: int
+    errored: int
+
+    @property
+    def all_errored(self) -> bool:
+        """True when the run has rows and every one of them errored."""
+        return self.rows > 0 and self.errored == self.rows
+
+
 def numeric_score(value: object) -> float | None:
     """The value as a number for averaging, or ``None`` when it is not one.
 
@@ -93,6 +117,9 @@ class ExperimentRun(BaseModel):
     started_at: datetime
     ended_at: datetime
     duration_seconds: float = Field(ge=0.0)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(tz=timezone.utc), description='When this file was first written'
+    )
     evaluatorq_version: str
     evaluator_names: list[str] = Field(default_factory=list, description='Configured evaluators, in order')
     experiment_url: str | None = Field(default=None, description='The Orq experiment URL when results were uploaded')
@@ -138,10 +165,52 @@ class ExperimentRun(BaseModel):
             )
         return stats
 
+    def pass_rate(self) -> float | None:
+        """Share of all scores that set ``pass`` which passed, across evaluators; ``None`` when none set it."""
+        stats = self.evaluator_stats()
+        pass_set = sum(s.pass_set for s in stats)
+        return sum(s.passed for s in stats) / pass_set if pass_set else None
+
+    def row_counts(self) -> RowCounts:
+        """Rows, job results and errored rows, by the rule `RowCounts` describes."""
+        rows = jobs = errored = 0
+        for result in self.results:
+            job_results = result.job_results or []
+            if not job_results:
+                rows += 1
+                errored += result.error is not None
+                continue
+            rows += len(job_results)
+            jobs += len(job_results)
+            errored += sum(1 for job in job_results if job.error is not None or result.error is not None)
+        return RowCounts(rows=rows, job_results=jobs, errored=errored)
+
+    def judge_usages(self) -> list[Usage]:
+        """Every evaluator score's ``token_usage``, in result order; scores without one are skipped."""
+        return [
+            score.score.token_usage
+            for result in self.results
+            for job in result.job_results or []
+            for score in job.evaluator_scores or []
+            if score.score.token_usage is not None
+        ]
+
+    def judge_usage(self) -> tuple[int, float | None]:
+        """``(total tokens, total cost)`` of the evaluators' own LLM calls; cost ``None`` when none was reported."""
+        usages = self.judge_usages()
+        costs = [u.total_cost for u in usages if u.total_cost is not None]
+        return sum(u.total_tokens for u in usages), (math.fsum(costs) if costs else None)
+
     def manifest_summary(self) -> RunSummary:
         """Compact headline stats for the run manifest, so a run list never reads the full file."""
         averages = {s.name: s.average for s in self.evaluator_stats() if s.average is not None}
-        return {RUN_SUMMARY_TOTAL_KEY: len(self.results), 'scorer_averages': averages}
+        return {
+            RUN_SUMMARY_TOTAL_KEY: len(self.results),
+            'scorer_averages': averages,
+            'pass_rate': self.pass_rate(),
+            'errored_rows': self.row_counts().errored,
+            'judge_tokens': self.judge_usage()[0],
+        }
 
     def to_json(self) -> str:
         """Serialize the run so `load_experiment_run` reads back the same values.
