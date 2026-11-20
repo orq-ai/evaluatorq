@@ -477,7 +477,7 @@ The **Models** page plots every model in the Orq catalogue as one dot, score aga
 
 ![Models page: intelligence index against list price, frontier in orange](assets/dashboard/models-01-frontier.png)
 
-The selects above the chart change the score (intelligence or a domain index such as legal), the reasoning effort, the x axis (list price, output speed or time to first token) and the developer. **Include disabled models** adds models switched off in the workspace. Hollow dots are scores Orq estimated rather than measured; **Hide estimated scores** drops them. The table below lists every plotted model with its prices, score per dollar and, for a dominated model, the frontier model that beats it. Click a column header to sort.
+The selects above the chart change the score (intelligence or a domain index such as legal), the reasoning effort, the x axis (list price, output speed or time to first token) and the developer. The score and effort selects list only the indices and efforts at least one loaded model has a score on. **Include disabled models** adds models switched off in the workspace. Hollow dots are scores Orq estimated rather than measured; **Hide estimated scores** drops them. The table below lists every plotted model with its prices, score per dollar and, for a dominated model, the frontier model that beats it. Click a column header to sort.
 
 ![Models page on the legal index: fewer models carry a score, so most are not plotted](assets/dashboard/models-02-legal.png)
 

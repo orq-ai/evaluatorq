@@ -18,12 +18,21 @@ from starlette.responses import HTMLResponse
 from starlette.routing import Route
 
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
+from evaluatorq.common.model_frontier import (
+    INDEX_AXES,
+    X_AXIS_SPECS,
+    available_efforts,
+    available_indices,
+    matches_vendor,
+    model_vendor,
+)
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.palette import COLORS
 from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.dashboard import model_choices
+from evaluatorq.dashboard.auth import auth_or_reason
 from evaluatorq.dashboard.shell import page
-from evaluatorq.models import INDICES, X_AXES, ModelCatalogueError, load_models, pareto
+from evaluatorq.models import X_AXES, ModelCatalogueError, load_models, pareto
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -34,25 +43,6 @@ if TYPE_CHECKING:
 
 ROUTE = '/models'
 
-INDEX_LABELS: dict[str, str] = {
-    'intelligence': 'Intelligence',
-    'economics': 'Economics',
-    'engineering': 'Engineering',
-    'finance_and_accounting': 'Finance and accounting',
-    'healthcare_and_medical': 'Healthcare and medical',
-    'legal': 'Legal',
-    'strategy_and_ops': 'Strategy and ops',
-    'coding': 'Coding',
-    'agentic': 'Agentic',
-}
-X_LABELS: dict[str, str] = {
-    'price': 'List price, USD per 1M tokens (3:1 input/output)',
-    'output_speed': 'Output speed, tokens per second',
-    'time_to_first_token': 'Time to first token, seconds',
-}
-_EFFORT_ORDER = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'reasoning')
-
-# (query value, header label, sort key). Numeric keys sort descending first.
 _COLUMNS: tuple[tuple[str, str], ...] = (
     ('model', 'Model'),
     ('developer', 'Developer'),
@@ -74,19 +64,6 @@ def _choice(value: str | None, allowed: tuple[str, ...], default: str) -> str:
     return value if value in allowed else default
 
 
-def _efforts(models: list[ScoredModel]) -> list[str]:
-    seen = {effort for m in models for effort in m.effort_indices}
-    return sorted(seen, key=lambda e: (_EFFORT_ORDER.index(e) if e in _EFFORT_ORDER else len(_EFFORT_ORDER), e))
-
-
-def _vendor(model: ScoredModel) -> str:
-    return (model.developer or model.provider or '').lower()
-
-
-def _fmt(value: float | None, digits: int = 2) -> str:
-    return '—' if value is None else f'{value:.{digits}f}'
-
-
 def _alert(message: str) -> str:
     return (
         '<div class="models-alert" role="alert">'
@@ -94,7 +71,9 @@ def _alert(message: str) -> str:
     )
 
 
-def _filters_html(q: dict[str, str], *, efforts: list[str], vendors: list[str], index: str, effort: str, x: str) -> str:
+def _filters_html(
+    q: dict[str, str], *, indices: list[str], efforts: list[str], vendors: list[str], index: str, effort: str, x: str
+) -> str:
     def options(values: list[tuple[str, str]], current: str) -> str:
         return ''.join(
             f'<option value="{esc(v)}"{" selected" if v == current else ""}>{esc(label)}</option>'
@@ -114,11 +93,11 @@ def _filters_html(q: dict[str, str], *, efforts: list[str], vendors: list[str], 
     return (
         f'<form class="models-filters" method="get" action="{ROUTE}">'
         f'<label>Score <select name="index" onchange="this.form.submit()">'
-        f'{options([(i, INDEX_LABELS[i]) for i in INDICES if i not in ("coding", "agentic")], index)}</select></label>'
+        f'{options([(i, INDEX_AXES[i].label) for i in indices], index)}</select></label>'
         f'<label>Reasoning level <select name="effort" onchange="this.form.submit()"{effort_disabled}>'
         f'{options([("", "Default level"), *((e, e) for e in efforts)], effort)}</select></label>'
         f'<label>X axis <select name="x" onchange="this.form.submit()">'
-        f'{options([(v, X_LABELS[v].split(",")[0]) for v in X_AXES], x)}</select></label>'
+        f'{options([(v, X_AXIS_SPECS[v].short_label) for v in X_AXES], x)}</select></label>'
         f'<label>Developer <select name="developer" onchange="this.form.submit()">'
         f'{options([("", "All developers"), *((v, v) for v in vendors)], q.get("developer", ""))}</select></label>'
         f'{checkbox("disabled", "Include disabled models")}'
@@ -145,15 +124,15 @@ def _chart(result: ParetoResult) -> str:
     ]
     if not rows:
         return ''
-    lower_is_better = result.x in ('price', 'time_to_first_token')
+    spec = X_AXIS_SPECS[result.x]
     frontier = sorted((r for r in rows if r['status'] == 'Frontier'), key=itemgetter('x'))
-    x_enc: dict[str, Any] = {'field': 'x', 'type': 'quantitative', 'title': X_LABELS[result.x]}
+    x_enc: dict[str, Any] = {'field': 'x', 'type': 'quantitative', 'title': spec.label}
     if result.x == 'price':
         x_enc['scale'] = {'type': 'log'}
     y_enc = {
         'field': 'score',
         'type': 'quantitative',
-        'title': f'{INDEX_LABELS[result.index]} index' + (f' ({result.effort})' if result.effort else ''),
+        'title': f'{INDEX_AXES[result.index].label} index' + (f' ({result.effort})' if result.effort else ''),
         'scale': {'zero': False},
     }
     color = {
@@ -166,7 +145,7 @@ def _chart(result: ParetoResult) -> str:
         {'field': 'model', 'title': 'Model'},
         {'field': 'router_id', 'title': 'Router id'},
         {'field': 'score', 'title': 'Score'},
-        {'field': 'x', 'title': X_LABELS[result.x].split(',')[0], 'format': '.3~f'},
+        {'field': 'x', 'title': spec.short_label, 'format': f'.{spec.digits}~f'},
         {'field': 'pareto_score', 'title': 'Score per $'},
         {'field': 'estimated', 'title': 'Score'},
         {'field': 'dominated_by', 'title': 'Dominated by'},
@@ -189,7 +168,7 @@ def _chart(result: ParetoResult) -> str:
                 'mark': {
                     'type': 'line',
                     # Lower-is-better x: the frontier holds its score until the next, dearer step up.
-                    'interpolate': 'step-after' if lower_is_better else 'step-before',
+                    'interpolate': 'step-after' if spec.lower_is_better else 'step-before',
                     'color': COLORS['orange_300'],
                     'strokeWidth': 1.5,
                     'opacity': 0.7,
@@ -211,14 +190,14 @@ def _chart(result: ParetoResult) -> str:
 
 
 def _sort_key(column: str, x: str) -> Callable[[ParetoPoint], Any]:
-    lower_x = x in ('price', 'time_to_first_token')
+    spec = X_AXIS_SPECS[x]
     keys: dict[str, Callable[[ParetoPoint], Any]] = {
         'model': lambda p: p.model.router_id,
-        'developer': lambda p: (_vendor(p.model), p.model.router_id),
+        'developer': lambda p: (model_vendor(p.model), p.model.router_id),
         'score': lambda p: -p.score,
         'input': lambda p: p.model.input_price,
         'output': lambda p: p.model.output_price,
-        'x': lambda p: p.x if lower_x else -p.x,
+        'x': lambda p: spec.best_first(p.x),
         'pareto': lambda p: -(p.pareto_score or 0.0),
         'estimated': lambda p: (not p.model.is_estimated, -p.score),
         'dominated_by': lambda p: (p.dominated_by or '', -p.score),
@@ -229,12 +208,13 @@ def _sort_key(column: str, x: str) -> Callable[[ParetoPoint], Any]:
 def _table(result: ParetoResult, q: dict[str, str]) -> str:
     sort = q.get('sort', 'score')
     reverse = q.get('dir') == 'rev'
+    spec, price = X_AXIS_SPECS[result.x], X_AXIS_SPECS['price']
     points: list[ParetoPoint] = sorted(result.points, key=_sort_key(sort, result.x), reverse=reverse)
     head: list[str] = []
     for key, label in _COLUMNS:
         if key == 'pareto' and result.x != 'price':
             continue
-        label = X_LABELS[result.x].split(',')[0] if key == 'x' else label
+        label = spec.short_label if key == 'x' else label
         active = key == sort
         params = {**q, 'sort': key, 'dir': 'rev' if active and not reverse else ''}
         caret = ('▲' if reverse else '▼') if active else '⇅'
@@ -253,12 +233,13 @@ def _table(result: ParetoResult, q: dict[str, str]) -> str:
             ),
             f'<td>{esc(m.developer or m.provider or "—")}</td>',
             f'<td class="num">{p.score:.1f}</td>',
-            f'<td class="num">{_fmt(m.input_price, 3)}</td>',
-            f'<td class="num">{_fmt(m.output_price, 3)}</td>',
-            f'<td class="num">{_fmt(p.x, 3 if result.x == "price" else 2)}</td>',
+            f'<td class="num">{price.format(m.input_price)}</td>',
+            f'<td class="num">{price.format(m.output_price)}</td>',
+            f'<td class="num">{spec.format(p.x)}</td>',
         ]
         if result.x == 'price':
-            cells.append(f'<td class="num">{_fmt(p.pareto_score, 1)}</td>')
+            pareto_cell = '—' if p.pareto_score is None else f'{p.pareto_score:.1f}'
+            cells.append(f'<td class="num">{pareto_cell}</td>')
         cells.extend((
             f'<td>{"estimated" if m.is_estimated else ""}</td>',
             f'<td>{esc(p.dominated_by) if p.dominated_by else "<span class=models-frontier>frontier</span>"}</td>',
@@ -285,12 +266,9 @@ async def _load(req: Request, *, include_disabled: bool) -> tuple[list[ScoredMod
     """The catalogue models, or None and the reason the page shows instead."""
     from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
 
-    try:
-        auth = selected_dashboard_auth(req.app)
-    except ValueError as exc:
-        return None, str(exc)
-    if auth.method == 'environment' and not auth.api_key:
-        return None, 'ORQ_API_KEY is not set. Choose an authentication method in Settings.'
+    auth, reason = auth_or_reason(lambda: selected_dashboard_auth(req.app))
+    if auth is None:
+        return None, reason
     try:
         async with model_choices.catalogue_client(auth) as client:
             return await load_models(client, include_disabled=include_disabled), None
@@ -304,7 +282,6 @@ async def _load(req: Request, *, include_disabled: bool) -> tuple[list[ScoredMod
 async def models_page(req: Request) -> HTMLResponse:
     """Render the Pareto view over the live catalogue."""
     q = _query(req)
-    index = _choice(q.get('index'), INDICES, 'intelligence')
     x = _choice(q.get('x'), X_AXES, 'price')
     models, problem = await _load(req, include_disabled=bool(q.get('disabled')))
     intro = (
@@ -316,11 +293,13 @@ async def models_page(req: Request) -> HTMLResponse:
     if models is None:
         body = f'<div class="models-page">{intro}{_alert(problem or "The model catalogue is unavailable.")}</div>'
         return HTMLResponse(page('Models', body, active_nav='models'))
-    efforts = _efforts(models)
+    indices = available_indices(models)
+    index = _choice(q.get('index'), tuple(indices), 'intelligence')
+    efforts = available_efforts(models)
     effort = _choice(q.get('effort'), tuple(efforts), '') if index == 'intelligence' else ''
-    vendors = sorted({_vendor(m) for m in models if _vendor(m)})
-    developer = q.get('developer', '').lower()
-    pool = [m for m in models if not developer or _vendor(m) == developer or (m.provider or '').lower() == developer]
+    vendors = sorted({model_vendor(m) for m in models} - {''})
+    developer = q.get('developer', '')
+    pool = [m for m in models if not developer or matches_vendor(m, [developer])]
     result = pareto(
         pool,
         index=cast('Index', index),
@@ -334,7 +313,7 @@ async def models_page(req: Request) -> HTMLResponse:
     )
     body = (
         '<div class="models-page">'
-        f'{intro}{_filters_html(q, efforts=efforts, vendors=vendors, index=index, effort=effort, x=x)}{summary}'
+        f'{intro}{_filters_html(q, indices=indices, efforts=efforts, vendors=vendors, index=index, effort=effort, x=x)}{summary}'
         f'<div class="models-chart">{_chart(result)}</div>{_table(result, q)}{_excluded(result)}'
         '</div>'
     )

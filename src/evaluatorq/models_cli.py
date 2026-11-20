@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 
+from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 from evaluatorq.common.cli_json import echo_json
@@ -15,12 +17,6 @@ if TYPE_CHECKING:
     from evaluatorq.models import Index, ParetoPoint, ParetoResult, XAxis
 
 app = typer.Typer(help='Compare catalogue models.', no_args_is_help=True, context_settings=CONTEXT_SETTINGS)
-
-_X_LABELS = {
-    'price': 'Price $/1M (3:1)',
-    'output_speed': 'Output tok/s',
-    'time_to_first_token': 'TTFT s',
-}
 
 _PARETO_EPILOG = examples(
     'eq models pareto',
@@ -36,29 +32,26 @@ def models() -> None:
     """Compare the models in the Orq catalogue."""
 
 
-def _fmt_x(x: str, value: float) -> str:
-    if x == 'price':
-        return f'{value:.3f}'
-    return f'{value:.1f}' if x == 'output_speed' else f'{value:.2f}'
-
-
 def _print_table(result: ParetoResult, points: list[ParetoPoint], *, dominated: bool) -> None:
     from rich import box
     from rich.console import Console
     from rich.table import Table
 
+    from evaluatorq.common.model_frontier import X_AXIS_SPECS
+
+    spec = X_AXIS_SPECS[result.x]
     effort = result.effort or 'default effort'
     kind = 'Dominated models' if dominated else 'Pareto frontier'
     table = Table(title=f'{kind}: {result.index} index ({effort}) vs {result.x}', box=box.ROUNDED)
     table.add_column('Model', style='cyan')
     table.add_column('Score', justify='right')
-    table.add_column(_X_LABELS[result.x], justify='right')
+    table.add_column(spec.short_label, justify='right')
     if result.x == 'price':
         table.add_column('Score per $', justify='right')
     table.add_column('Est.', justify='center')
     table.add_column('Dominated by' if dominated else 'Frontier', style='white')
     for point in points:
-        row = [point.model.router_id, f'{point.score:.1f}', _fmt_x(result.x, point.x)]
+        row = [point.model.router_id, f'{point.score:.1f}', spec.format(point.x)]
         if result.x == 'price':
             row.append(f'{point.pareto_score:.1f}' if point.pareto_score is not None else '—')
         row.extend((
@@ -66,7 +59,7 @@ def _print_table(result: ParetoResult, points: list[ParetoPoint], *, dominated: 
             point.dominated_by or ('— (on the frontier)' if dominated else 'yes'),
         ))
         table.add_row(*row)
-    console = Console()
+    console = Console(file=sys.stdout)
     console.print(table)
     if result.excluded:
         console.print(
@@ -113,6 +106,7 @@ def pareto_cmd(
     ] = False,
 ) -> None:
     """Show which models nothing beats on score and x axis, or which are beaten and by what."""
+    from evaluatorq.common.model_frontier import available_efforts, available_indices, matches_vendor
     from evaluatorq.models import INDICES, X_AXES, find_model, load_models, pareto
 
     if index not in INDICES:
@@ -123,9 +117,20 @@ def pareto_cmd(
         raise typer.BadParameter('domain indices exist only at the default effort', param_hint='--effort')
 
     pool = asyncio.run(load_models(include_disabled=include_disabled))
+    indices = available_indices(pool)
+    if index not in indices:
+        raise typer.BadParameter(
+            f'no model in the catalogue has a {index} score; choose one of {", ".join(indices)}', param_hint='--index'
+        )
+    efforts = available_efforts(pool)
+    if effort is not None and effort not in efforts:
+        listed = ', '.join(efforts) or 'none'
+        raise typer.BadParameter(
+            f'no model in the catalogue has a score at effort {effort!r}; the catalogue has: {listed}',
+            param_hint='--effort',
+        )
     if provider:
-        wanted = {p.lower() for p in provider}
-        pool = [m for m in pool if wanted & {(m.provider or '').lower(), (m.developer or '').lower()}]
+        pool = [m for m in pool if matches_vendor(m, provider)]
     shown: set[str] | None = None
     if model:
         shown = set()

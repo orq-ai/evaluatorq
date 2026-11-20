@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import random
+from typing import Any, get_args
 
 import pytest
 from typer.testing import CliRunner
 
 from evaluatorq import models as models_mod
-from evaluatorq.common.model_frontier import ScoredModel, scored_model_from_card
+from evaluatorq.common import model_frontier
+from evaluatorq.common.model_frontier import (
+    INDEX_AXES,
+    X_AXIS_SPECS,
+    ScoredModel,
+    available_efforts,
+    available_indices,
+    matches_vendor,
+    model_vendor,
+    scored_model_from_card,
+)
 from evaluatorq.models import (
     dominated_by,
     dominates,
@@ -98,6 +109,85 @@ class TestDominance:
         assert dominates(fast, slow, x='output_speed')
         assert dominates(slow, fast, x='price')
 
+    def test_lower_time_to_first_token_is_better(self) -> None:
+        quick = model('a/quick', 30.0, 9.0, 9.0, time_to_first_token_seconds=0.4)
+        laggy = model('b/laggy', 30.0, 0.1, 0.1, time_to_first_token_seconds=2.5)
+        unmeasured = model('c/unmeasured', 90.0, 0.1, 0.1)
+        assert dominates(quick, laggy, x='time_to_first_token')
+        assert not dominates(laggy, quick, x='time_to_first_token')
+        result = pareto([quick, laggy, unmeasured], x='time_to_first_token')
+        assert [p.model.router_id for p in result.frontier] == ['a/quick']
+        assert result.points[1].dominated_by == 'a/quick'
+        assert result.points[1].pareto_score is None
+        assert [(e.router_id, e.reason) for e in result.excluded] == [('c/unmeasured', 'no time to first token data')]
+
+    def test_unknown_index_is_refused_for_a_pair(self) -> None:
+        with pytest.raises(ValueError, match='unknown index'):
+            dominates(MID, BAD, index='vibes')  # ty: ignore[invalid-argument-type]
+
+
+def _old_dominates(a: ScoredModel, b: ScoredModel) -> bool:
+    """`ScoredModel.dominates` as it was before it delegated to the shared kernel."""
+    if a.free or b.free:
+        return False
+    at_least_as_good = a.default_index >= b.default_index and a.price <= b.price
+    return at_least_as_good and (a.default_index > b.default_index or a.price < b.price)
+
+
+def _old_frontier(models: list[ScoredModel]) -> list[ScoredModel]:
+    """`common.model_frontier.pareto_frontier` as it was before it read the shared kernel."""
+    comparable = [m for m in models if not m.free]
+    frontier = [m for m in comparable if not any(_old_dominates(o, m) for o in comparable)]
+    return sorted(frontier, key=lambda m: -m.default_index)
+
+
+class TestKernelAgreement:
+    """Seating (router pools, juries, in-family upgrades) reads one kernel; it must decide as the old rule did."""
+
+    @pytest.mark.parametrize('seed', range(5))
+    def test_seating_rule_matches_the_old_one(self, seed: int) -> None:
+        rng = random.Random(seed)
+        garden = []
+        for i in range(40):
+            # A coarse grid forces ties on both axes; a few free cards and effort ladders ride along.
+            index = rng.choice([10.0, 20.0, 20.0, 30.0, 40.0])
+            ladder = {'low': index - 5, 'high': index + 5} if rng.random() < 0.3 else {}
+            garden.append(
+                model(
+                    f'p{i % 4}/m{i}',
+                    index,
+                    rng.choice([0.0, 0.5, 1.0, 1.0, 2.0]),
+                    rng.choice([0.0, 1.0, 2.0, 2.0, 4.0]),
+                    effort_parameter=bool(ladder),
+                    default_effort=rng.choice(['low', 'high']) if ladder else None,
+                    effort_indices=ladder,
+                )
+            )
+        for a in garden:
+            for b in garden:
+                assert a.dominates(b) is _old_dominates(a, b)
+                assert dominates(a, b) is _old_dominates(a, b)
+        assert model_frontier.pareto_frontier(garden) == _old_frontier(garden)
+        assert {m.router_id for m in pareto_frontier(garden)} == {p.model.router_id for p in pareto(garden).frontier}
+
+
+class TestAxisTable:
+    def test_one_row_per_literal_value(self) -> None:
+        assert tuple(INDEX_AXES) == get_args(models_mod.Index)
+        assert tuple(X_AXIS_SPECS) == get_args(models_mod.XAxis)
+
+    def test_direction_and_format(self) -> None:
+        assert [k for k, s in X_AXIS_SPECS.items() if s.lower_is_better] == ['price', 'time_to_first_token']
+        assert X_AXIS_SPECS['price'].format(0.4375) == '0.438'
+        assert X_AXIS_SPECS['output_speed'].format(None) == '—'
+
+    def test_available_indices_and_efforts_come_from_the_models(self) -> None:
+        laddered = model('a/l', 30.0, 1.0, 1.0, effort_indices={'high': 40.0, 'low': 20.0}, category_indices={'legal': 3.0})
+        flat = model('b/f', 30.0, 1.0, 1.0, headline_effort='medium')
+        assert available_indices([laddered, flat]) == ['intelligence', 'legal']
+        assert available_indices([]) == ['intelligence']
+        assert available_efforts([laddered, flat]) == ['low', 'medium', 'high']
+
 
 class TestPareto:
     def test_frontier_and_nearest_dominator(self) -> None:
@@ -154,6 +244,33 @@ class TestPareto:
         assert pareto_frontier([MID, guess]) == [guess]
 
 
+class TestVendor:
+    def test_one_key_for_host_and_developer_spellings(self) -> None:
+        gemini = model('google-ai/gemini', 40.0, 1.0, 1.0, developer='Google')
+        assert model_vendor(gemini) == 'google'
+        assert matches_vendor(gemini, ['google'])
+        assert matches_vendor(gemini, ['google-ai'])
+        assert not matches_vendor(gemini, ['openai', ''])
+
+    def test_host_or_developer_matches(self) -> None:
+        azure_gpt = model('azure/gpt-x', 40.0, 1.0, 1.0, developer='openai')
+        assert matches_vendor(azure_gpt, ['azure'])
+        assert matches_vendor(azure_gpt, ['OpenAI'])
+
+
+class TestSummary:
+    def test_summary_is_the_model_and_the_point(self) -> None:
+        [point] = pareto([MID]).points
+        row = point.summary()
+        assert set(ScoredModel.model_fields) <= set(row)
+        for key in ('price', 'score', 'x', 'pareto_score', 'on_frontier', 'dominated_by', 'dominators'):
+            assert key in row
+        assert 'model' not in row
+        assert row['price'] == MID.price
+        assert row['pareto_score'] == pytest.approx(20.0)
+        json.dumps(row)
+
+
 class TestOnePerModel:
     def test_prefers_the_developer_listing(self) -> None:
         own = model('openai/gpt-x', 40.0, 2.0, 8.0, developer='openai', aa_slug='gpt-x')
@@ -192,6 +309,11 @@ def fake_catalogue(monkeypatch: pytest.MonkeyPatch) -> list[ScoredModel]:
     return pool
 
 
+def _flat(output: str) -> str:
+    """Rich wraps a usage error inside a box; read it as one line."""
+    return ' '.join(output.replace('│', ' ').split())
+
+
 class TestCli:
     def _run(self, *args: str) -> Any:
         from evaluatorq.cli import _register_subapps, app
@@ -222,6 +344,53 @@ class TestCli:
 
     def test_bad_index_is_a_usage_error(self, fake_catalogue: list[ScoredModel]) -> None:
         assert self._run('--index', 'vibes').exit_code == 2
+
+    def test_index_no_loaded_model_has_is_a_usage_error(self, fake_catalogue: list[ScoredModel]) -> None:
+        result = self._run('--index', 'coding')
+        assert result.exit_code == 2
+        assert 'no model in the catalogue has a coding score' in _flat(result.output)
+
+    def test_effort_no_loaded_model_has_is_a_usage_error(self, fake_catalogue: list[ScoredModel]) -> None:
+        result = self._run('--effort', 'turbo')
+        assert result.exit_code == 2
+        assert "no model in the catalogue has a score at effort 'turbo'" in _flat(result.output)
+
+    def test_effort_a_loaded_model_has_runs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        laddered = model('a/l', 30.0, 1.0, 1.0, effort_indices={'high': 45.0})
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False, all_hosts: bool = False) -> list[ScoredModel]:
+            del client, include_disabled, all_hosts
+            return [laddered, MID]
+
+        monkeypatch.setattr(models_mod, 'load_models', fake_load)
+        payload = json.loads(self._run('--effort', 'high', '--json').stdout)
+        assert [(p['router_id'], p['score']) for p in payload['points']] == [('a/l', 45.0)]
+
+    def test_provider_filter_matches_host_or_developer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        azure_gpt = model('azure/gpt-x', 40.0, 1.0, 1.0, developer='openai')
+        gemini = model('google-ai/gemini', 40.0, 1.0, 1.0, developer='google')
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False, all_hosts: bool = False) -> list[ScoredModel]:
+            del client, include_disabled, all_hosts
+            return [azure_gpt, gemini, MID]
+
+        monkeypatch.setattr(models_mod, 'load_models', fake_load)
+        payload = json.loads(self._run('--provider', 'openai', '--provider', 'google', '--json').stdout)
+        assert sorted(p['router_id'] for p in payload['points']) == ['azure/gpt-x', 'google-ai/gemini']
+
+    def test_table_goes_to_stdout_with_the_axis_label(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        timed = model('a/t', 30.0, 1.0, 1.0, time_to_first_token_seconds=0.75)
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False, all_hosts: bool = False) -> list[ScoredModel]:
+            del client, include_disabled, all_hosts
+            return [timed, MID]
+
+        monkeypatch.setattr(models_mod, 'load_models', fake_load)
+        result = self._run('--x', 'time_to_first_token')
+        assert result.exit_code == 0, result.output
+        assert 'TTFT s' in result.stdout
+        assert '0.75' in result.stdout
+        assert 'a/t' in result.stdout
 
 
 class TestDashboardPage:
@@ -276,7 +445,27 @@ class TestDashboardPage:
             del client, include_disabled
             return fake_catalogue
 
+        fake_catalogue.append(model('f/legal', 30.0, 1.0, 1.0, category_indices={'legal': 50.0}))
         monkeypatch.setattr(models_views, 'load_models', fake_load)
         text = client.get('/models?index=legal&effort=high').text
         assert 'name="effort" onchange="this.form.submit()" disabled' in text
-        assert '0 on the frontier, 0 dominated, 5 not plotted.' in text
+        assert '1 on the frontier, 0 dominated, 5 not plotted.' in text
+
+    def test_index_dropdown_lists_only_indices_a_model_has(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        from evaluatorq.dashboard import models_views
+
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
+            del client, include_disabled
+            return fake_catalogue
+
+        fake_catalogue.append(model('f/legal', 30.0, 1.0, 1.0, category_indices={'legal': 50.0}))
+        monkeypatch.setattr(models_views, 'load_models', fake_load)
+        text = client.get('/models?index=coding').text
+        assert '<option value="legal">Legal</option>' in text
+        assert 'value="coding"' not in text
+        assert 'value="economics"' not in text
+        assert '<option value="intelligence" selected>' in text  # an empty index falls back to the default

@@ -117,7 +117,7 @@ $ eq models pareto --model gpt-6.1-sol --index legal --json 2>/dev/null
 }
 ```
 
-The output above is trimmed: each point also carries its prices, developer, effort ladder, domain scores and speed, and `excluded` lists every model left out. The JSON lists only the models you asked for; `dominators` names the winners but does not carry their scores. Run without `--model` to see the winner's row. Log lines go to stderr, so `2>/dev/null` leaves clean JSON on stdout.
+The output above is trimmed: each point also carries every `ScoredModel` field (prices, developer, effort ladder, domain scores, speed and latency) and the blended `price`, and `excluded` lists every model left out. The JSON lists only the models you asked for; `dominators` names the winners but does not carry their scores. Run without `--model` to see the winner's row. Log lines go to stderr, so `2>/dev/null` leaves clean JSON on stdout.
 
 A bare id such as `gpt-6.1-sol` must match exactly one model; otherwise the CLI exits `2` and `find_model` returns `None`. `--model` only sees the one listing kept per model (see [One dot per model](#one-dot-per-model)), so the full id of a host that was not kept also exits `2`. Comparing a specific host is Python-only, through `load_models(all_hosts=True)`.
 
@@ -127,8 +127,8 @@ The y axis is a score and the x axis is a cost. Both have a default and both can
 
 | Axis | Flag / argument | Values | Better is |
 |---|---|---|---|
-| Score (y) | `--index` / `index=` | `intelligence` (default), `economics`, `engineering`, `finance_and_accounting`, `healthcare_and_medical`, `legal`, `strategy_and_ops`; `coding` and `agentic` are accepted but currently empty | higher |
-| Reasoning effort | `--effort` / `effort=` | an effort the model accepts, such as `high`; only with `intelligence` | — |
+| Score (y) | `--index` / `index=` | `intelligence` (default), `economics`, `engineering`, `finance_and_accounting`, `healthcare_and_medical`, `legal`, `strategy_and_ops`; `coding` and `agentic` are defined but currently empty | higher |
+| Reasoning effort | `--effort` / `effort=` | an effort at least one catalogue model has a score at, such as `high`; only with `intelligence` | — |
 | Cost (x) | `--x` / `x=` | `price` (default), `output_speed`, `time_to_first_token` | lower price, higher speed, lower latency |
 
 ```bash
@@ -140,7 +140,7 @@ eq models pareto --effort high --x output_speed --measured-only
 
 A domain index covers only the models AA has scored on it (22 of 73 for `legal` on 2026-11-20), and only at each model's default effort, so `--index legal --effort high` is refused. Fewer scored models also means fewer competitors: a model dominated on `legal` was compared against 21 others, not 72. Under `--effort`, models that list no score at that effort drop out of the comparison.
 
-`coding` and `agentic` are accepted but currently empty. Orq's catalogue carries no value for them on any model, so every model lands under "not plotted".
+`coding` and `agentic` are defined but currently empty: Orq's catalogue carries no value for them on any model. The CLI refuses an index or an effort that no loaded model has a score on and exits `2`, and the dashboard lists only the indices and efforts some model has. `pareto()` in Python accepts them and lists every model under `excluded`.
 
 ## One dot per model
 

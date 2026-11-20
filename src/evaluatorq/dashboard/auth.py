@@ -14,7 +14,7 @@ from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import list_orq_profiles, resolve_orq_client
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from evaluatorq.common.orq_client import OrqProfile
     from evaluatorq.trace_finder.settings import DashboardSettings
@@ -72,6 +72,24 @@ def resolve_dashboard_auth(
     if method == 'cli_oauth':
         return DashboardAuth(method, None, settings.orq_oauth_server or DEFAULT_ORQ_BASE_URL)
     raise ValueError('Unknown dashboard authentication method. Choose one in Settings.')
+
+
+MISSING_ENVIRONMENT_KEY = 'ORQ_API_KEY is not set. Choose an authentication method in Settings.'
+
+
+def auth_or_reason(resolve: Callable[[], DashboardAuth]) -> tuple[DashboardAuth | None, str | None]:
+    """Run `resolve` and return the credential it found, or None and the sentence a page shows instead.
+
+    A resolution failure and the environment method without `ORQ_API_KEY` both
+    come back as a reason, so every surface words the missing-key case alike.
+    """
+    try:
+        auth = resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        return None, str(exc)
+    if auth.method == 'environment' and not auth.api_key:
+        return None, MISSING_ENVIRONMENT_KEY
+    return auth, None
 
 
 def _account_fields(auth: DashboardAuth) -> dict[str, Any]:

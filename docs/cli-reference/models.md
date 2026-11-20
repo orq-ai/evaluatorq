@@ -11,10 +11,10 @@ eq models pareto [OPTIONS]
 | Flag | Type / Default | Description |
 |---|---|---|
 | `--dominated` | `bool` / `false` | List dominated models and the frontier model that beats each, instead of the frontier. |
-| `--provider` | `str` (repeatable) | Compare only models from this provider or developer, such as `openai`. |
+| `--provider` | `str` (repeatable) | Compare only models from this provider or developer, such as `openai`. Case and an `-ai` suffix are ignored, so `google` also matches `google-ai`. |
 | `--model` | `str` (repeatable) | Show only this model, still compared against every other model. A `provider/model` id, or a bare id held by exactly one model. Shown whether it is on the frontier or not. |
-| `--effort` | `str` / none | Score the intelligence index at this reasoning effort instead of each model's default. Only with `--index intelligence`. |
-| `--index` | `str` / `intelligence` | The y axis: `intelligence`, `economics`, `engineering`, `finance_and_accounting`, `healthcare_and_medical`, `legal` or `strategy_and_ops`. |
+| `--effort` | `str` / none | Score the intelligence index at this reasoning effort instead of each model's default. Only with `--index intelligence`, and only an effort at least one catalogue model has a score at. |
+| `--index` | `str` / `intelligence` | The y axis: `intelligence`, `economics`, `engineering`, `finance_and_accounting`, `healthcare_and_medical`, `legal` or `strategy_and_ops`. An index no catalogue model has a score on, such as `coding` or `agentic` today, is refused. |
 | `--x` | `str` / `price` | The x axis: `price` (3:1 blended list price per million tokens), `output_speed` or `time_to_first_token`. |
 | `--include-disabled` | `bool` / `false` | Include models switched off in the workspace. |
 | `--measured-only` | `bool` / `false` | Leave out models whose score Orq estimated rather than measured. |
@@ -47,4 +47,4 @@ eq models pareto --effort high --x output_speed --measured-only
 |---|---|
 | `0` | The analysis ran. An empty result is still `0`: a `--model` match left out of the comparison prints `<id> is not plotted: <reason>.` on stderr and an empty table. |
 | `1` | The catalogue could not be read: no Orq credentials, or the request failed. |
-| `2` | A usage error: an unknown `--index` or `--x`, `--effort` with a domain index, or a `--model` that matches no model or more than one. |
+| `2` | A usage error: an unknown `--index` or `--x`, an `--index` no catalogue model has a score on, an `--effort` no catalogue model has a score at, `--effort` with a domain index, or a `--model` that matches no model or more than one. |
