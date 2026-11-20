@@ -21,6 +21,7 @@ from .common.messages import coerce_content_text
 from .common.output_adapters import has_meaningful_output
 from .common.parallelism import resolve_datapoint_parallelism
 from .common.private_files import write_private_atomic
+from .common.save_mode import resolve_save_mode
 from .common.trace_input import load_traces
 from .contracts import ManifestSurface, SaveMode
 from .experiment_run import ExperimentRun, get_experiment_runs_dir, save_experiment_run
@@ -832,28 +833,15 @@ def _require_writable_dir(runs_dir: Path) -> None:
         ) from exc
 
 
-def _resolve_experiment_save(*, save: SaveMode | str | bool, output_dir: Path | str | None) -> Path | None:
-    """Validate ``save`` before any work is spent; the folder to save the run in, or None to save nothing.
+def _resolve_experiment_save(*, mode: SaveMode, output_dir: Path | str | None) -> Path | None:
+    """The folder to save the run in, or None to save nothing; checked before any work is spent.
 
     With ``SaveMode.FINAL`` the folder is created and probed with a real write here, so a
     folder that cannot be written fails the call before any datapoint runs or any API spend.
 
-    ``True`` and ``False`` mean ``SaveMode.FINAL`` and ``SaveMode.NONE``, as ``simulate(save=...)`` takes.
-
     Raises:
-        ValueError: ``save`` is not a bool or a `SaveMode` value, is ``SaveMode.DETAIL``, or the
-            save folder is not writable.
+        ValueError: The save folder is not writable.
     """
-    if isinstance(save, bool):
-        save = SaveMode.FINAL if save else SaveMode.NONE
-    try:
-        mode = SaveMode(save)
-    except ValueError:
-        raise ValueError(f'Invalid save value {save!r}. Use SaveMode.NONE, SaveMode.FINAL, True or False.') from None
-    if mode == SaveMode.DETAIL:
-        raise ValueError(
-            'save=SaveMode.DETAIL only applies to red_team(): an experiment has no stage artifacts. Use SaveMode.FINAL.'
-        )
     if mode == SaveMode.NONE and output_dir is not None:
         logger.warning(
             'output_dir={} is ignored because save is SaveMode.NONE; pass save=SaveMode.FINAL to write the run there.',
@@ -994,7 +982,7 @@ async def evaluatorq(
     inference: bool | None = None,
     single_trace: bool = False,
     on_datapoint_complete: DataPointComplete | None = None,
-    save: SaveMode | str | bool = SaveMode.NONE,
+    save: SaveMode = SaveMode.NONE,
     output_dir: Path | str | None = None,
     _send_results: bool = True,
     _base_url: str | None = None,
@@ -1060,8 +1048,8 @@ async def evaluatorq(
         save: ``SaveMode.FINAL`` writes the run, with every result and evaluator token usage, to
               ``.evaluatorq/experiment-runs/<name>_<timestamp>.json`` and records it in a run
               manifest, so ``eq dashboard`` lists it. Defaults to ``SaveMode.NONE``, which writes
-              nothing. ``True`` and ``False`` are accepted as ``SaveMode.FINAL`` and ``SaveMode.NONE``.
-              Applies whether the run is configured by ``params`` or by keyword arguments.
+              nothing. ``True`` and ``False`` still work as ``SaveMode.FINAL`` and ``SaveMode.NONE``
+              but are deprecated and warn. Applies whether the run is configured by ``params`` or by keyword arguments.
               ``SaveMode.DETAIL`` raises ``ValueError``. The save folder is created and checked
               with a test write before the run starts, so a folder that cannot be written raises
               ``ValueError`` before any datapoint runs. If the write still fails when the run ends,
@@ -1097,7 +1085,7 @@ async def evaluatorq(
         ```
     """
     datapoint_parallelism = resolve_datapoint_parallelism(datapoint_parallelism, parallelism, caller='evaluatorq')
-    runs_dir = _resolve_experiment_save(save=save, output_dir=output_dir)
+    runs_dir = _resolve_experiment_save(mode=resolve_save_mode(save=save, allow_detail=False), output_dir=output_dir)
     resolved = _normalise_params(
         _EvaluationInputs(
             params=params,

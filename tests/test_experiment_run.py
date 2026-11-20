@@ -7,7 +7,7 @@ import asyncio
 import importlib
 import json
 import os
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from loguru import logger
@@ -45,7 +45,7 @@ async def judge(params: ScorerParameter) -> EvaluationResult:
 
 async def run(
     *,
-    save: SaveMode | str | bool = SaveMode.NONE,
+    save: SaveMode | str = SaveMode.NONE,
     output_dir: Path | str | None = None,
     upload: bool = False,
     url_out: list[str] | None = None,
@@ -57,7 +57,7 @@ async def run(
         jobs=[job('answer', answer)],
         evaluators=[{'name': 'mentions-paris', 'scorer': judge}],
         print_results=False,
-        save=save,
+        save=cast('SaveMode', save),
         output_dir=output_dir,
         _send_results=upload,
         _orq_api_key='test-key' if upload else None,
@@ -124,10 +124,13 @@ async def test_save_accepts_the_string_value(store: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_save_true_saves_and_save_false_writes_nothing(store: Path) -> None:
-    await run(save=False)
+async def test_bool_save_still_works_and_warns_at_the_callers_line(store: Path) -> None:
+    with pytest.warns(DeprecationWarning, match='save=True/False is deprecated') as recorded:
+        await evaluatorq('capitals', data=DATA, jobs=[job('answer', answer)], print_results=False, save=cast('Any', False))
     assert not store.exists()
-    await run(save=True)
+    assert recorded[0].filename == __file__
+    with pytest.warns(DeprecationWarning, match='save=True/False is deprecated'):
+        await evaluatorq('capitals', data=DATA, jobs=[job('answer', answer)], print_results=False, save=cast('Any', True))
     assert len(list((store / 'experiment-runs').glob('capitals_*.json'))) == 1
 
 

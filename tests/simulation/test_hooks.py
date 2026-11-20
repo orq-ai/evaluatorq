@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from evaluatorq.contracts import SaveMode
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.hooks import (
     DefaultHooks,
@@ -1661,7 +1662,7 @@ async def test_manifest_errors_when_on_run_start_raises(datapoint_factory):
             user_simulator=typing.cast(typing.Any, _StubUserSim()),
             judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             hooks=BadStart(),
-            save=True,
+            save=SaveMode.FINAL,
         )
 
     manifests = list_manifests(get_sim_runs_dir())

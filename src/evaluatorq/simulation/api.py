@@ -25,7 +25,9 @@ from evaluatorq.common.llm_client import as_llm_client, resolve_orq_credential, 
 from evaluatorq.common.llm_limit import active_llm_parallelism, llm_concurrency_limit
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM, resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
+from evaluatorq.common.save_mode import resolve_save_mode
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
+from evaluatorq.contracts import SaveMode
 from evaluatorq.simulation._config import (
     DEFAULT_MAX_TARGET_RETRIES,
     DEFAULT_MAX_TOOL_RESULT_CHARS,
@@ -282,7 +284,7 @@ async def simulate(
     orq_folder_path: str | None = None,
     exit_on_failure: bool | None = None,
     raise_on_execution_failure: bool | None = None,
-    save: bool = False,
+    save: SaveMode = SaveMode.NONE,
     report: str | Path | None = None,
     report_path: str | Path | None = None,
     executive_summary: bool = True,
@@ -436,13 +438,14 @@ async def simulate(
             Pass ``False`` for interactive / exploratory runs where a dead row
             should surface as a warning + error metadata instead.
         exit_on_failure: Existing alias for ``raise_on_execution_failure``.
-        save: When ``True``, persist the completed run to the local run store
+        save: ``SaveMode.FINAL`` persists the completed run to the local run store
             (``.evaluatorq/sim-runs/`` unless ``report_path`` is set). Unlike the CLI
             (which auto-saves to ``.evaluatorq/sim-runs/`` by default), the SDK
-            defaults to ``save=False`` — the caller opts in.
+            defaults to ``SaveMode.NONE`` — the caller opts in. ``SaveMode.DETAIL``
+            raises ``ValueError``. ``True`` and ``False`` still work but are deprecated.
         report_path: Optional path for the full SimulationRun report JSON
-            (results + scorer averages + metadata), written when ``save=True``.
-            When omitted and ``save`` is ``True``, the run is auto-saved under
+            (results + scorer averages + metadata), written with ``SaveMode.FINAL``.
+            When omitted and ``save`` is ``SaveMode.FINAL``, the run is auto-saved under
             ``.evaluatorq/sim-runs/``.
         report: Existing alias for ``report_path``.
         executive_summary: When ``True`` (the default), generate the LLM
@@ -567,7 +570,7 @@ async def simulate(
         experiment_description=experiment_description,
         orq_folder_path=orq_folder_path,
         raise_on_execution_failure=raise_on_execution_failure,
-        save=save,
+        save=resolve_save_mode(save=save, allow_detail=False) == SaveMode.FINAL,
         report_path=report_path,
         executive_summary=executive_summary,
         recommendations=recommendations,
@@ -773,7 +776,7 @@ async def generate_and_simulate(
     exit_on_failure: bool | None = None,
     raise_on_execution_failure: bool | None = None,
     emit_datapoints: EmitDatapoints | None = None,
-    save: bool = False,
+    save: SaveMode = SaveMode.NONE,
     report: str | Path | None = None,
     report_path: str | Path | None = None,
     executive_summary: bool = True,
@@ -850,14 +853,15 @@ async def generate_and_simulate(
     before simulation — used by the CLI's ``--datapoints`` to persist the
     exact inputs.
 
-    ``save``: When ``True``, persist the completed run to the local run store
+    ``save``: ``SaveMode.FINAL`` persists the completed run to the local run store
     (``.evaluatorq/sim-runs/`` unless ``report_path`` is set). Unlike the CLI (which
     auto-saves to ``.evaluatorq/sim-runs/`` by default), the SDK defaults to
-    ``save=False`` — the caller opts in.
+    ``SaveMode.NONE`` — the caller opts in. ``SaveMode.DETAIL`` raises ``ValueError``.
+    ``True`` and ``False`` still work but are deprecated.
 
     ``report_path``: Optional path for the full SimulationRun report JSON
-    (results + scorer averages + metadata), written when ``save=True``.
-    When omitted and ``save`` is ``True``, the run is auto-saved under
+    (results + scorer averages + metadata), written with ``SaveMode.FINAL``.
+    When omitted and ``save`` is ``SaveMode.FINAL``, the run is auto-saved under
     ``.evaluatorq/sim-runs/``.
     ``report`` remains an equivalent alias.
     ``exit_on_failure`` remains an alias for ``raise_on_execution_failure``.
@@ -964,7 +968,7 @@ async def generate_and_simulate(
         orq_folder_path=orq_folder_path,
         raise_on_execution_failure=raise_on_execution_failure,
         emit_datapoints=emit_datapoints,
-        save=save,
+        save=resolve_save_mode(save=save, allow_detail=False) == SaveMode.FINAL,
         report_path=report_path,
         executive_summary=executive_summary,
         recommendations=recommendations,
@@ -1978,7 +1982,7 @@ def _persist_run(
     manifest is still marked completed (with no report path). The manifest
     transition happens on every path, saved or not.
     """
-    # Persist only when the caller opts in (save=True).
+    # Persist only when the caller opts in (save=SaveMode.FINAL).
     # TODO(RES-963): inline because on_run_complete carries no run metadata and
     # hooks aren't yet composable; move to a save hook once that lands.
     saved_path = None

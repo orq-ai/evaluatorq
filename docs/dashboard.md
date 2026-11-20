@@ -122,7 +122,7 @@ The dashboard auto-discovers JSON report files in the configured root directorie
 | Default store | Written by |
 |---|---|
 | `.evaluatorq/runs/*.json` | `red_team()` / `eq redteam run` |
-| `.evaluatorq/sim-runs/*.json` | `eq sim run` (auto-saves unless `--no-save`); `simulate()` only when called with `save=True` |
+| `.evaluatorq/sim-runs/*.json` | `eq sim run` (auto-saves unless `--no-save`); `simulate()` only when called with `save=SaveMode.FINAL` |
 | `.evaluatorq/pairwise-runs/*.json` | `PairwiseRun.save()` (see [Pairwise Judging](pairwise-judging.md#saving-a-run-and-viewing-it-in-the-dashboard)) |
 | `.evaluatorq/experiment-runs/*.json` | `evaluatorq()` only when called with `save=SaveMode.FINAL` (see [Saving a run locally](evaluation-reference.md#saving-a-run-locally)) |
 
@@ -363,7 +363,7 @@ Click a row to expand the evaluator's verdict, its reasoning, and the full messa
 
 ## Reading a simulation run
 
-Runs are saved to `.evaluatorq/sim-runs/<name>_<timestamp>.json` — automatically by `eq sim run` (unless you pass `--no-save`), and by `simulate()` when called with `save=True`. `eq dashboard` browses those files locally, no external service:
+Runs are saved to `.evaluatorq/sim-runs/<name>_<timestamp>.json` — automatically by `eq sim run` (unless you pass `--no-save`), and by `simulate()` when called with `save=SaveMode.FINAL`. `eq dashboard` browses those files locally, no external service:
 
 ```bash
 uv add "evaluatorq[dashboard]"
@@ -373,7 +373,7 @@ eq dashboard .evaluatorq/sim-runs  # scope to simulation runs
 ```
 
 !!! warning "The Python examples above don't save by default"
-    `simulate()` and `generate_and_simulate()` default to `save=False`, so a script copy-pasted from earlier on this page leaves the dashboard empty. Pass `save=True`, or drive the run from the CLI (`eq sim run`), which saves unless you pass `--no-save`.
+    `simulate()` and `generate_and_simulate()` default to `save=SaveMode.NONE`, so a script copy-pasted from earlier on this page leaves the dashboard empty. Pass `save=SaveMode.FINAL`, or drive the run from the CLI (`eq sim run`), which saves unless you pass `--no-save`.
 
 What follows walks the dashboard the way you'd read a finished run: land, pick the run, then work down the report tabs from headline to transcript. The screenshots come from one example run — 10 personas × 5 scenarios against a refund agent — so your own numbers will differ. [Filters](#filters), [trace links](#orq-trace-links) and [downloads](#downloads) are documented above. For the simulation concepts behind these numbers, see the [Agent Simulation guide](guides/agent-simulation.md).
 
@@ -381,7 +381,7 @@ What follows walks the dashboard the way you'd read a finished run: land, pick t
 
 `eq dashboard` opens on a cross-surface overview: jobs run, spend, tokens and the red team / agent sim split across every stored run. Agent simulation sits next to red teaming in the left rail.
 
-Zeros everywhere and an empty rail mean no report files were found, not that the run failed — the usual cause is the `save=False` default in the warning above. Launch `eq dashboard` from the directory holding `.evaluatorq/`.
+Zeros everywhere and an empty rail mean no report files were found, not that the run failed — the usual cause is the `save=SaveMode.NONE` default in the warning above. Launch `eq dashboard` from the directory holding `.evaluatorq/`.
 
 ![The dashboard landing page: jobs run, spend, tokens and run mix across all stored runs.](assets/dashboard/sim-01-landing.png){ .dashboard-shot }
 

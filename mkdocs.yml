@@ -227,6 +227,9 @@ plugins:
           # `show_submodules` on the integrations page, whose signatures annotate
           # against both. Anchors verified present in the built HTML.
           - "../#evaluatorq.DataPoint"
+          # Same `../` quirk: `simulate()` and `generate_and_simulate()` annotate
+          # `save` with the top-level `SaveMode`. Anchor verified present.
+          - "../#evaluatorq.SaveMode"
           # Same `../` mapping quirk as the two above. `EvaluatorConfig` subclasses
           # `LLMCallConfig`, so the redteam page renders a "Bases:" crossref; the
           # class itself is deduped onto the simulation page by `_canonical_owner`.

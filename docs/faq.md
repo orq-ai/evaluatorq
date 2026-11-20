@@ -239,15 +239,16 @@ See [Agent Simulation](guides/agent-simulation.md).
 
 Yes — pass a `SimulationRecommendationConfig`. Only results with a fixable failure signal get an LLM call; the metric thresholds that decide that, plus the prompt budgets, the result cap and the suggestion cap, are fields on the config. It's the same `recommendations=` flag red teaming uses: `True` for defaults, `False` to skip the LLM call, an instance to tune.
 
-`eq sim run` and `simulate()` both generate them by default. The returned `SimulationResult` list has nowhere to carry suggestions, so from Python they are only observable when you save the run with `save=True` (optionally choosing `report_path=`), or through the dashboard; without either, they are generated, discarded and a warning says so. Pass `recommendations=False` to skip the call:
+`eq sim run` and `simulate()` both generate them by default. The returned `SimulationResult` list has nowhere to carry suggestions, so from Python they are only observable when you save the run with `save=SaveMode.FINAL` (optionally choosing `report_path=`), or through the dashboard; without either, they are generated, discarded and a warning says so. Pass `recommendations=False` to skip the call:
 
 ```python
+from evaluatorq import SaveMode
 from evaluatorq.simulation import simulate
 from evaluatorq.simulation.reports import SimulationRecommendationConfig
 
 results = await simulate(
     target="agent:my-support-agent",
-    save=True,
+    save=SaveMode.FINAL,
     recommendations=SimulationRecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
 )
 ```

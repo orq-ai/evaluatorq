@@ -39,7 +39,7 @@ async def evaluatorq(
 | `inference` | `bool` | `True` | Run the jobs; set `False` to score data that already has outputs |
 | `single_trace` | `bool` | `False` | Open one span for the whole run so every row shares a trace — see [One trace per run](tracing.md#one-trace-per-run-single_tracetrue) |
 | `on_datapoint_complete` | `DataPointComplete` \| `None` | `None` | Callback run once per data point as it finishes — see [Reacting to each row as it finishes](#reacting-to-each-row-as-it-finishes) |
-| `save` | `SaveMode` \| `str` \| `bool` | `SaveMode.NONE` | `SaveMode.FINAL` (or `True`) writes the finished run to disk so `eq dashboard` lists it — see [Saving a run locally](#saving-a-run-locally) |
+| `save` | `SaveMode` \| `str` | `SaveMode.NONE` | `SaveMode.FINAL` writes the finished run to disk so `eq dashboard` lists it — see [Saving a run locally](#saving-a-run-locally). `SaveMode.DETAIL` raises `ValueError`; `True` and `False` still work but raise a `DeprecationWarning` |
 | `output_dir` | `Path` \| `str` \| `None` | `None` | Folder for a saved run instead of `.evaluatorq/experiment-runs`; created and checked for writes before the run starts; ignored with a warning unless `save=SaveMode.FINAL` |
 
 Parameters can also be passed positionally as an `EvaluatorParams` model or a plain dict — the three forms below are equivalent:

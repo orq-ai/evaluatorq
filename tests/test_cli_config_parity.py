@@ -245,3 +245,20 @@ def test_explicit_empty_alias_name_is_not_replaced_by_the_default(
 ) -> None:
     config = model.model_validate({'evaluation_name': ''})
     assert config.run_name == ''
+
+
+@pytest.mark.parametrize('model', [SimulateRunConfig, SimulateCliConfig, GenerateAndSimulateCliConfig])
+def test_a_simulation_config_still_takes_a_bool_save(model: type[BaseModel]) -> None:
+    import warnings
+
+    from pydantic import ValidationError
+
+    from evaluatorq.contracts import SaveMode
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        assert getattr(model.model_validate({'save': True}), 'save') == SaveMode.FINAL
+        assert getattr(model.model_validate({'save': False}), 'save') == SaveMode.NONE
+        assert getattr(model.model_validate({'save': 'final'}), 'save') == SaveMode.FINAL
+    with pytest.raises(ValidationError, match='only applies to red teaming'):
+        model.model_validate({'save': 'detail'})
