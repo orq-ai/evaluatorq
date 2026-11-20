@@ -146,6 +146,7 @@ plugins:
           - dashboard.md: Browse red team and simulation reports in a local web dashboard.
           - trace-finder.md: Find semantic matches in recent Orq traces with a classify model.
           - fetching-traces.md: Fetch recorded Orq traces into your own code with fetch_traces(), and handle per-trace import failures.
+          - model-pareto.md: Find the Orq catalogue models nothing beats on score and price, and which model beats yours.
           - formats.md: Convert an agent run between chat messages, OpenResponses items, OTel GenAI traces and ATIF trajectories.
           - signals.md: Deterministic measurements and tags computed from agent trajectories.
           - insights.md: Label and discover patterns in a population of Orq traces.
@@ -182,6 +183,7 @@ plugins:
           - cli-reference/redteam.md: CLI reference for the eq redteam command.
           - cli-reference/simulation.md: CLI reference for the eq sim command.
           - cli-reference/dashboard.md: CLI reference for the eq dashboard command.
+          - cli-reference/models.md: CLI reference for the eq models command.
         Examples:
           # `**/` is load-bearing under the plugin's fnmatch: it requires a subdirectory, so this
           # matches example CONTENT at any depth (examples/<group>/<page>.md) but excludes the
@@ -237,6 +239,10 @@ plugins:
           # formats type. Htmlproofer cannot map this generated page URL back
           # to the virtual formats source page; the anchor exists in formats.
           - "../formats/#evaluatorq.formats.AtifTrajectory"
+          # The root page's jury preset docstrings raise `ModelCatalogueError`, which
+          # `evaluatorq.models` re-exports. Htmlproofer cannot map the generated
+          # `models/` page URL back to a source file; the anchor exists there.
+          - "models/#evaluatorq.models.ModelCatalogueError"
 
 markdown_extensions:
   - tables
@@ -291,6 +297,7 @@ nav:
       - Dashboard: dashboard.md
       - Trace Finder: trace-finder.md
       - Fetching Traces: fetching-traces.md
+      - Model Pareto Frontier: model-pareto.md
       - Formats: formats.md
       - Signals: signals.md
       - Trace Insights: insights.md
@@ -321,6 +328,7 @@ nav:
           - Red Teaming: cli-reference/redteam.md
           - Simulation: cli-reference/simulation.md
           - Dashboard: cli-reference/dashboard.md
+          - Models: cli-reference/models.md
   - FAQ: faq.md
   - About:
       - Contributing: contributing.md

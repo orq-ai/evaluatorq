@@ -91,6 +91,29 @@ class ScoredModel(BaseModel):
     # False means the workspace has the model switched off: listed, scored,
     # not servable.
     enabled: bool | None = None
+    display_name: str | None = None
+    developer: str | None = Field(
+        default=None, description="The card's `model_developer`, e.g. `openai` for a GPT model served by Azure."
+    )
+    aa_slug: str | None = Field(
+        default=None, description='The Artificial Analysis entry the headline index comes from.'
+    )
+    is_estimated: bool = Field(
+        default=False,
+        description='The headline index is estimated (`aa_index_is_estimated`), not measured on the current index version.',
+    )
+    category_indices: dict[str, float] = Field(
+        default_factory=dict,
+        description='Artificial Analysis domain indices (e.g. `legal`, `economics`) at the headline effort, keyed without the '
+        '`artificial_analysis_` prefix and `_index` suffix. Only finite values are kept.',
+    )
+    output_tokens_per_second: float | None = Field(default=None, description='Artificial Analysis median output speed.')
+    time_to_first_token_seconds: float | None = Field(
+        default=None, description='Artificial Analysis median time to the first token.'
+    )
+    time_to_first_answer_token_seconds: float | None = Field(
+        default=None, description='Artificial Analysis median time to the first answer token, after any reasoning.'
+    )
 
     @property
     def price(self) -> float:
@@ -386,6 +409,30 @@ def _rung_indices(card: Mapping[str, object], v2: Mapping[str, Any]) -> dict[str
     return indices
 
 
+_AA_INDEX_PREFIX, _AA_INDEX_SUFFIX = 'artificial_analysis_', '_index'
+
+
+def _category_indices(v2: Mapping[str, Any]) -> dict[str, float]:
+    """The card's Artificial Analysis domain indices, without the headline intelligence index.
+
+    External data: a non-mapping `aa_evaluations`, or a null or non-numeric
+    entry, reads as absent. Coding and agentic indices are carried when the
+    catalogue fills them, which it does not at the time of writing.
+    """
+    evaluations = v2.get('aa_evaluations')
+    if not isinstance(evaluations, Mapping):
+        return {}
+    indices: dict[str, float] = {}
+    for key, raw in evaluations.items():
+        if not (isinstance(key, str) and key.startswith(_AA_INDEX_PREFIX) and key.endswith(_AA_INDEX_SUFFIX)):
+            continue
+        name = key[len(_AA_INDEX_PREFIX) : -len(_AA_INDEX_SUFFIX)]
+        score = _score(raw)
+        if name and name != 'intelligence' and score is not None:
+            indices[name] = score
+    return indices
+
+
 def _catalogue_effort(card: dict[str, object]) -> tuple[bool, str | None]:
     """Whether the card exposes a reasoningEffort parameter, and its default (None if not among the options).
 
@@ -415,6 +462,7 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
     effort_parameter, default_effort = _catalogue_effort(card)
     region = metadata.get('region')
     enabled = card.get('enabled')
+    display_name, developer, slug = card.get('display_name'), card.get('model_developer'), v2.get('aa_slug')
     return ScoredModel(
         router_id=f'{card["provider"]}/{card["model_id"]}',
         intelligence_index=headline,
@@ -427,6 +475,14 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
         effort_parameter=effort_parameter,
         default_effort=default_effort,
         enabled=enabled if isinstance(enabled, bool) else None,
+        display_name=display_name if isinstance(display_name, str) else None,
+        developer=developer if isinstance(developer, str) else None,
+        aa_slug=slug if isinstance(slug, str) else None,
+        is_estimated=v2.get('aa_index_is_estimated') is True,
+        category_indices=_category_indices(v2),
+        output_tokens_per_second=_score(v2.get('aa_median_output_tokens_per_second')),
+        time_to_first_token_seconds=_score(v2.get('aa_median_time_to_first_token_seconds')),
+        time_to_first_answer_token_seconds=_score(v2.get('aa_median_time_to_first_answer_token')),
     )
 
 

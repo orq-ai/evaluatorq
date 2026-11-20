@@ -4219,6 +4219,36 @@ _PAIRWISE_COMPARE_CSS = """
 @media (max-width:800px){.pw-compare .pw-cmp-cols{grid-template-columns:1fr}}
 """
 
+_MODELS_CSS = """
+/* ---- /models: Pareto view over the model catalogue ---- */
+.nav-item.nav-item-needs-auth { opacity: .45; }
+.models-page { display: flex; flex-direction: column; gap: 14px; }
+.models-intro, .models-summary { margin: 0; color: var(--text-body); font-size: 13px; line-height: 1.5; max-width: 900px; }
+.models-summary { color: var(--text-faint); font-size: 12px; }
+.models-alert { padding: 12px 14px; border: 1px solid var(--red-100); border-radius: 8px; background: var(--red-50); color: var(--red-700); font-size: 13px; }
+.models-alert p { margin: 0 0 4px; }
+.models-filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; font-size: 12px; color: var(--text-body); }
+.models-filters label { display: inline-flex; gap: 6px; align-items: center; }
+.models-filters select { font: inherit; padding: 4px 6px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface); color: var(--text-strong); }
+.models-filters select:disabled { opacity: .5; }
+.models-chart { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px; background: var(--surface); }
+.models-chart .vega-embed { width: 100%; }
+.models-table-wrap { overflow-x: auto; }
+.models-table { width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid var(--border-subtle); }
+.models-table th { text-align: left; background: var(--surface-sunken); border-bottom: 1px solid var(--border-subtle); white-space: nowrap; padding: 0; }
+.models-table th a { display: block; padding: 8px 10px; color: var(--text-strong); text-decoration: none; font-weight: 600; }
+.models-table th a:hover { color: var(--teal-600); }
+.models-caret { font-size: 9px; color: var(--text-faint); }
+.models-table td { padding: 8px 10px; border-top: 1px solid var(--border-subtle); vertical-align: top; }
+.models-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.models-row:not(.is-frontier) { color: var(--text-faint); }
+.models-name { display: block; font-weight: 600; color: var(--text-strong); }
+.models-id { display: block; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.models-frontier { color: var(--orange-700); font-weight: 600; }
+.models-excluded { font-size: 12px; color: var(--text-faint); }
+.models-excluded ul { margin: 6px 0 0; padding-left: 18px; }
+"""
+
 DASHBOARD_CSS = (
     _DASHBOARD_CSS_HEAD
     + _TAB_RULES
@@ -4237,6 +4267,7 @@ DASHBOARD_CSS = (
     + _PAIRWISE_REPORT_CSS
     + _PAIRWISE_COMPARISONS_CSS
     + _PAIRWISE_COMPARE_CSS
+    + _MODELS_CSS
 )
 
 # Report foundations and component rules, shared by offline HTML documents.

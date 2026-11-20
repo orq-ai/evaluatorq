@@ -471,8 +471,21 @@ The pairwise CSV writes one row per comparison: the question, the consensus winn
 
 Download links respect the currently active filter state — the CSV/JSON exports contain only the rows visible in the filtered report body.
 
+## Models { #models }
+
+The **Models** page plots every model in the Orq catalogue as one dot, score against list price, and joins the models nothing beats with an orange line: the Pareto frontier. It reads the live catalogue, so it needs the same Orq account as trace search. Without one, the sidebar item is greyed out and the page says how to connect.
+
+![Models page: intelligence index against list price, frontier in orange](assets/dashboard/models-01-frontier.png)
+
+The selects above the chart change the score (intelligence or a domain index such as legal), the reasoning effort, the x axis (list price, output speed or time to first token) and the developer. **Include disabled models** adds models switched off in the workspace. Hollow dots are scores Orq estimated rather than measured; **Hide estimated scores** drops them. The table below lists every plotted model with its prices, score per dollar and, for a dominated model, the frontier model that beats it. Click a column header to sort.
+
+![Models page on the legal index: fewer models carry a score, so most are not plotted](assets/dashboard/models-02-legal.png)
+
+The page and `eq models pareto` compute the same thing. What the frontier means and where list price misleads is in [Model Pareto frontier](model-pareto.md).
+
 ## Where to next
 
 - **[Red Teaming](guides/red-teaming.md)** — generate the red-team reports the dashboard browses.
 - **[Agent Simulation](guides/agent-simulation.md)** — generate simulation reports.
 - **[CLI Reference](cli-reference/overview.md)** — the `eq dashboard` command and options.
+- **[Model Pareto frontier](model-pareto.md)** — the frontier behind the Models page, from the CLI and Python.

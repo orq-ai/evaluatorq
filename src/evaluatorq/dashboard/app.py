@@ -1343,6 +1343,13 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     register_insights_routes(app)
     register_compression_inspector_routes(app)
 
+    # ------------------------------------------------------------------
+    # Routes: /models — Pareto view over the Orq model catalogue
+    # ------------------------------------------------------------------
+    from evaluatorq.dashboard.models_views import register_models_routes
+
+    register_models_routes(app)
+
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page
     # head's Script(src="/static/…") references (view.py head_assets); without the

@@ -969,6 +969,7 @@ __all__ = [
     'get_model_info',
     'is_known_classify_model',
     'model_cards',
+    'models_by_provider',
     'price_usage',
     'qualified_model',
     'register_model',
