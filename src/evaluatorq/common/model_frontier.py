@@ -44,11 +44,11 @@ from pydantic import BaseModel, Field
 
 from evaluatorq.common.llm_client import orq_base_url
 from evaluatorq.common.model_catalogue import (
+    _card_rates,
     _entry_metadata,
     _parse_default_reasoning_effort,
     _parse_reasoning_efforts,
     _reasoning_effort_config,
-    _usd_price,
     model_cards,
 )
 
@@ -408,7 +408,7 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
     autorouter = metadata.get('autorouter')
     v2 = (autorouter.get('v2') if isinstance(autorouter, dict) else None) or {}
     index = v2.get('intelligence_index') if isinstance(v2, dict) else None
-    input_cost, output_cost = _usd_price(card, 'input'), _usd_price(card, 'output')
+    input_cost, output_cost, _ = _card_rates(card)
     headline = _score(index)
     if headline is None or input_cost is None or output_cost is None:
         return None
