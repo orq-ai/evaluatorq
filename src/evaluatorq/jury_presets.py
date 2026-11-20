@@ -338,9 +338,10 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
         # $0.119). Wafer's card defaults to low, which AA does not score.
         'wafer/GLM-5.3-Flash',
     ),
-    # Same weights as the former greenpt reserve, whose public card is priced
-    # in EUR and so left out of the USD-only garden (2026-11-17).
-    reserve_judges=('alibaba/qwen3.6-35b-a3b',),
+    # Reseated 2026-11-20 from alibaba/qwen3.6-35b-a3b, which never returns a
+    # verdict (NO_STRUCTURED_VERDICT); the Qwen hosts that do are EUR-priced.
+    # MiniMax is a lineage the panel lacks: v5 29.1 for $0.15/$0.60.
+    reserve_judges=('wafer/MiniMax-M3.1-Flash',),
     use_when='No dependence on a closed frontier vendor; migration path to self-hosting.',
     estimated_cost_per_1k=8.70,
 )
@@ -457,9 +458,10 @@ _OLDER_GENERATION = (
 _NOT_A_JUDGE = 'Not a general text judge (translation, vision, omni, image, speech or classify-only endpoint). Public catalogue 2026-11-10.'
 _UNSCORED = 'No AA index on the public card (2026-11-17), so there is nothing to rank it on. Review again once scored.'
 _ALIBABA_RESERVE = (
-    "Alibaba only holds Portable's reserve, chosen for cost (alibaba/qwen3.6-35b-a3b, "
-    '$0.248/$1.485). This one is pricier per 1M or europe-pinned, so it is not a '
-    'cheaper reserve. Public catalogue 2026-11-17.'
+    'No panel seats a Qwen: the Alibaba host of qwen3.6-35b-a3b answered 0 of 10 '
+    'judge prompts with a verdict (2026-11-20), and the Qwen hosts that pass are '
+    'EUR-priced. This one is pricier per 1M or europe-pinned and unprobed, so it '
+    'is not a reserve candidate either. Public catalogue 2026-11-17.'
 )
 
 DOMINANCE_EXEMPTIONS: dict[str, str] = {
@@ -536,7 +538,7 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'deepseek-v4.1-flash-1017': _UNSCORED,
     'gemini-nano-banana-2.1': _NOT_A_JUDGE,
     'gemma-4-12b': 'munito EU host only, AA v5 index 2.6, under the 5.0 floor. 2026-11-17.',
-    'qwen3.8-max-0902': "AA v5 index 33.7 at max (its xhigh default unscored), $1.65/$4.95 per 1M, europe/us/apac. Alibaba holds only Portable's cost-chosen reserve ($0.248/$1.485), so a stronger, pricier Qwen is not a reserve upgrade; it would be a fourth-family judge, which no panel has a seat for. 2026-11-17.",
+    'qwen3.8-max-0902': "AA v5 index 33.7 at max (its xhigh default unscored), $1.65/$4.95 per 1M, europe/us/apac. No panel seats a Qwen (the Alibaba host gave 0 of 10 verdicts, 2026-11-20), so a stronger, pricier Qwen would be a fourth-family judge, which no panel has a seat for. 2026-11-17.",
     'glm-5.3-fast': 'AA v5 index 31.7 at $2.10/$6.60 per 1M against the seated wafer/GLM-5.3-Flash at 27.8 for $0.05/$0.20: stronger, far pricier. 2026-11-17.',
     'glm-5.3-flashx': 'Same 27.8 AA v5 index as the seated wafer/GLM-5.3-Flash at $0.37/$1.25 against $0.05/$0.20: same score, seven times the price. 2026-11-17.',
     'deepseek-v4.1-flash-fast': 'Baseten fast variant at $0.60/$2.40 per 1M, AA v5 index 29.4, the same as the seated tencent/deepseek-v4.1-flash at four times its 3:1 blend ($1.05 against $0.263). 2026-11-17.',

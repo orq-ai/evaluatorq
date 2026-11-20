@@ -23,7 +23,7 @@ Hosting in brackets is the region the catalog lists for each endpoint on 2026-11
 | **`balanced-trio`** (default) | `baseten/deepseek-v4.1-flash` (Global)<br>`openai/gpt-6-luna` (US)<br>`google-ai/gemini-3.8-flash` (Global) | majority | 4.45 | `deepseek/deepseek-flash` (Global) |
 | **`strong-jury`** | `anthropic/claude-opus-5-5` (Global)<br>`openai/gpt-6.1-sol` (US)<br>`google-ai/gemini-3.8-flash` (Global) | majority | 27.00 | `tencent/deepseek-v4.1-flash` (Singapore) |
 | **`cheap-aggregate`** | `google-ai/gemini-3.8-flash` (Global)<br>`tencent/deepseek-v4.1-flash` (Singapore)<br>`wafer/MiniMax-M3.1-Flash` (Global) | majority | 4.05 | `wafer/GLM-5.3-Flash` (Global) |
-| **`open-weight-portable`** | `tencent/deepseek-v4.1-flash` (Singapore)<br>`moonshotai/kimi-k3.1-pro` (Global)<br>`wafer/GLM-5.3-Flash` (Global) | majority | 8.70 | `alibaba/qwen3.6-35b-a3b` (US) |
+| **`open-weight-portable`** | `tencent/deepseek-v4.1-flash` (Singapore)<br>`moonshotai/kimi-k3.1-pro` (Global)<br>`wafer/GLM-5.3-Flash` (Global) | majority | 8.70 | `wafer/MiniMax-M3.1-Flash` (Global) |
 | **`eu-region`** | `aws/eu.anthropic.claude-haiku-5-5` (EU)<br>`google/eu.gemini-3.7-flash` (EU)<br>`openai/eu.gpt-6-luna` (EU) | majority | 4.18 | `google/eu.claude-sonnet-5` (EU) |
 | **`single-provider-trio`** | `openai/gpt-6.1-sol` (US)<br>`openai/gpt-6.1-terra` (US)<br>`openai/gpt-6-luna` (US) | majority | 12.40 | `openai/gpt-6-sol` (US) |
 

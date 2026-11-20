@@ -207,6 +207,12 @@ NO_STRUCTURED_VERDICT: dict[str, str] = {
         'The same weights on wafer/MiniMax-M3.1-Flash (same price, global) parsed '
         '10 of 10, so the fault is this host. 2026-11-17.'
     ),
+    'alibaba/qwen3.6-35b-a3b': (
+        'Ten judge prompts through run_judge on the prod router: 0 of 10 verdicts. '
+        'Responses json_schema is rejected with a 400 asking for the word "json", '
+        'and the json_object fallback returns the injected schema instead of a '
+        'verdict. greenpt (9/10) and scaleway (8/10) pass but are EUR-priced. 2026-11-20.'
+    ),
 }
 
 # Old models with a newer version in the live catalogue, keyed by exact router
