@@ -1,31 +1,29 @@
 name: Jury preset drift (weekly)
 
-# Jury presets and router pools are priced and ranked from the live /v2/models
-# garden, so nothing in the repo goes stale on a timer. What can drift is the
-# choice: a seat retires, loses its score, gets a newer model in its lineage, or
-# stops being on the frontier. The freshness suite catches that against the live
-# garden. When it fails, deterministic code (`python -m evaluatorq.preset_drift`)
-# lists what moved and which options the arithmetic allows, and a Pi agent,
-# launched through the orq CLI, proposes the register changes after confirming on the web
-# that each candidate really is newer or superseded. The result is always a real
-# pull request: a fix when the live suite passes again, otherwise a PR labelled
+# Jury presets and router pools are priced and ranked from the live garden, read
+# from the keyless public /v2/model-catalog, so nothing in the repo goes stale
+# on a timer. What can drift is the choice: a seat retires, loses its score,
+# gets a newer model in its lineage, or stops being on the frontier. The
+# freshness suite catches that against the live garden. When it fails,
+# deterministic code (`python -m evaluatorq.preset_drift`) lists what moved and
+# which options the arithmetic allows, and a Pi agent, launched through the orq
+# CLI, proposes the register changes after confirming on the web that each
+# candidate really is newer or superseded. The result is always a real pull
+# request: a fix when the live suite passes again, otherwise a PR labelled
 # `needs-human-attention`. Nothing is merged automatically.
 #
-# The PR is opened with the default GITHUB_TOKEN. GitHub does not treat that as a
-# person: in a rehearsal its CI runs sat as `action_required` until a maintainer
-# approved them, so the required checks need a click, or a push to the branch. Switch the push and `gh pr create` steps to a PAT or a GitHub
-# App token if the PR must arrive with checks already running.
+# The PR is opened with the default GITHUB_TOKEN. GitHub does not treat that as
+# a person: in a rehearsal its CI runs sat as `action_required` until a
+# maintainer approved them, so the required checks need a click, or a push to
+# the branch. Switch the push and `gh pr create` steps to a PAT or a GitHub App
+# token if the PR must arrive with checks already running.
 #
-# Needs repo secret ORQ_WORKSPACE_API_KEY: a workspace-scoped orq key that reads
-# the garden. A project-scoped key sees a truncated garden, so the suite's scope
-# check fails on purpose and missing models read as retired. Falls back to
-# ORQ_API_KEY so the workflow still runs (and reports that failure) before the
-# secret exists. The agent uses ORQ_REVIEW_API_KEY, the key with router access;
-# the workspace key is refused by the gateway.
+# The checks and the drift report need no key. The agent needs repo secret
+# ORQ_REVIEW_API_KEY, an orq key with router access.
 #
-# The agent runs with no GitHub credentials in its environment (the checkout does
-# not persist them), because it reads web pages and a page can try to instruct it.
-# Only the later push and PR steps hold the token.
+# The agent runs with no GitHub credentials in its environment (the checkout
+# does not persist them), because it reads web pages and a page can try to
+# instruct it. Only the later push and PR steps hold the token.
 
 on:
   schedule:
@@ -70,16 +68,12 @@ jobs:
       - name: Run live preset checks
         id: drift
         continue-on-error: true
-        env:
-          ORQ_API_KEY: ${{ secrets.ORQ_WORKSPACE_API_KEY || secrets.ORQ_API_KEY }}
         run: |
           set -o pipefail
           uv run pytest -m integration tests/integration/test_preset_freshness.py tests/unit/test_router_pools.py 2>&1 | tee drift-check.log
 
       - name: Build the deterministic drift report
         if: steps.drift.outcome == 'failure'
-        env:
-          ORQ_API_KEY: ${{ secrets.ORQ_WORKSPACE_API_KEY || secrets.ORQ_API_KEY }}
         run: |
           # Exit 1 means "findings", which is the expected case here.
           uv run python -m evaluatorq.preset_drift --output drift-report.json || true
@@ -113,7 +107,6 @@ jobs:
         continue-on-error: true
         timeout-minutes: 25
         env:
-          # The router key, not the workspace key: the workspace key reads the catalogue but the router refuses it (401).
           ORQ_API_KEY: ${{ secrets.ORQ_REVIEW_API_KEY }}
           DRIFT_SUMMARY: ${{ runner.temp }}/drift-summary.md
         run: |
@@ -135,8 +128,6 @@ jobs:
         id: recheck
         if: steps.drift.outcome == 'failure' && steps.existing.outputs.open == ''
         continue-on-error: true
-        env:
-          ORQ_API_KEY: ${{ secrets.ORQ_WORKSPACE_API_KEY || secrets.ORQ_API_KEY }}
         run: uv run pytest -m integration tests/integration/test_preset_freshness.py tests/unit/test_router_pools.py
 
       - name: Open the pull request

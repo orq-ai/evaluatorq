@@ -8,10 +8,10 @@ preset becomes a lie without a single line changing:
   3. a newer generation ships and the preset quietly stays a generation behind
   4. a lineage stops shipping and a seat ages with nothing flagging it
 
-These read the live garden: `/v2/models` for scores and rates, the public
-`/v2/model-catalog` for the roster and first-listed dates. They are marked
-`integration` and run weekly with a real key
-(`.github/workflows/preset-drift-weekly.yml`), not on every PR, so a gateway
+These read the live garden from the keyless public `/v2/model-catalog`:
+scores, rates, the roster and first-listed dates. They are marked
+`integration` and run weekly (`.github/workflows/preset-drift-weekly.yml`),
+not on every PR, so a gateway
 outage or our own billing state cannot block unrelated work. The checks of the
 checks run offline on hand-built cards, in the normal suite.
 """
@@ -22,11 +22,9 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.common.model_catalogue import model_cards
 from evaluatorq.common.model_frontier import (
     MANUAL_MODEL_CARDS,
     ScoredModel,
-    catalog_scope,
     headline_contradicts_its_own_rung,
     in_family_upgrades,
     load_garden_sync,
@@ -75,16 +73,6 @@ def listed() -> dict[str, int | None]:
 
 
 @live
-def test_the_garden_is_read_with_a_workspace_scoped_key():
-    """A project-scoped key hides every model the workspace has not enabled, so
-    the frontier and every check below would run on a truncated catalogue."""
-    assert catalog_scope(asyncio.run(model_cards())) == 'workspace', (
-        '/v2/models returned no disabled cards: the key is project-scoped. Run the drift '
-        'suite with a workspace-scoped ORQ_API_KEY.'
-    )
-
-
-@live
 @pytest.mark.parametrize('router_id', sorted(all_router_ids()))
 def test_every_shipped_judge_is_still_served(listed, router_id):
     """A retired judge is dead weight the user picks without being able to see."""
@@ -100,9 +88,7 @@ def test_every_shipped_judge_is_still_served(listed, router_id):
 def test_published_cost_matches_the_live_card_rates(garden, preset):
     """Every published $/1k recomputed from today's card rates; a repricing must break it loudly.
 
-    Card rates are not always what the router bills (zai/glm-5.3-flash has been
-    billed at $0.15/$0.50 against a $0.075/$0.25 card); the card leads, and the
-    gap is disclosed beside cheap-aggregate in docs/jury-presets.md.
+    Card rates are not always what the router bills; the card leads.
     """
     assert preset.cost_per_1k(garden) == preset.estimated_cost_per_1k, (
         f'{preset.name} publishes ${preset.estimated_cost_per_1k} per 1k but the live cards price it at '
@@ -323,7 +309,7 @@ class TestFrontier:
         """An unscored seat is one the upgrade check silently skips."""
         unscored = all_router_ids() - set(garden) - set(MANUAL_MODEL_CARDS) - set(UNSCORED_SEAT_WAIVERS)
         assert not unscored, (
-            f'{unscored} carry no autorouter intelligence/price pair, so no upgrade check runs against them.'
+            f'{unscored} have no scored, USD-priced public catalogue card, so no upgrade check runs against them.'
         )
 
 
@@ -381,7 +367,9 @@ def test_unscored_seat_waivers_are_dropped_once_the_seat_is_scored(garden):
         if router_id not in all_router_ids() or router_id in garden or router_id in MANUAL_MODEL_CARDS
     )
 
-    assert not pointless, f'{pointless} are excused for having no score but are unseated or now scored. Drop the entries.'
+    assert not pointless, (
+        f'{pointless} are excused for having no score but are unseated or now scored. Drop the entries.'
+    )
 
 
 @live

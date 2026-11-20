@@ -39,8 +39,9 @@ Do not edit tests, workflows, or anything else. Do not run `git commit`, `git pu
 
 1. `uv run ruff check src && uv run ruff format --check src`
 2. `uv run pytest -m 'not integration' tests/unit/test_jury_presets.py tests/unit/test_router_pools.py tests/unit/test_preset_drift.py tests/common/test_model_frontier.py`
+3. `uv run pytest -m integration tests/integration/test_preset_freshness.py tests/unit/test_router_pools.py`, the live check. It reads the keyless public model catalog.
 
-You cannot run the live check yourself: your key reaches the model router but not the workspace catalogue. The workflow re-runs it after you finish and decides from the result. So reason from `drift-report.json` and the sources you verified, and say in the summary what you expect the live check to do.
+The workflow re-runs it after you finish and decides from that result, so say in the summary what your step 3 run showed.
 
 ## What to write when you are done
 

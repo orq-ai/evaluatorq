@@ -1,17 +1,16 @@
 """Intelligence/price frontier over the model garden (RES-1347, RES-1346).
 
 Presets rot because models move, and until now the only computable axis was
-price, so "is this successor better?" was a judgement call. Every autorouter
-eligible model card carries Artificial Analysis intelligence scores in
-`metadata.autorouter.v2`, per reasoning effort where the model has one, beside
-its own input and output rates. That is the pair RES-1285 used to show 19 of 24
-models on a live workspace are dominated and structurally unselectable, and it
+price, so "is this successor better?" was a judgement call. Every scored card
+in the public model catalogue carries Artificial Analysis intelligence scores,
+per reasoning effort where the model has one, beside its own input and output
+rates. That is the pair RES-1285 used to show 19 of 24 models on a live workspace are dominated and structurally unselectable, and it
 is enough to decide seating arithmetically rather than by taste.
 
 Both axes are read where a judge actually runs. Judges are called with no
 reasoning effort, so the provider applies the catalogue default
-(`/v2/models` `parameters[reasoningEffort].config.default`), and each card is
-ranked on its score at that rung. Price is a 3:1 input/output blend.
+(`default_effort` on the card), and each card is ranked on its score at that
+rung. Price is a 3:1 input/output blend.
 
 Dominance is the whole rule: B dominates A when B is at least as intelligent and
 no more expensive, and strictly better on one of them. A dominated seat is dead
@@ -22,11 +21,12 @@ justify in words.
 This is shared by all four preset sets in RES-1347, since router pools, juries,
 classifiers and evaluator groups all pick models out of the same garden.
 
-Nothing here is committed: the garden is derived from the live `/v2/models`
-cards on every process (`load_garden`), read through `common.model_catalogue`
-so the pricing table and the garden can never describe different catalogues.
-The registers below (MANUAL_MODEL_CARDS, AA_FILLS, SUPERSEDED, UNROUTABLE,
-NEVER_SEAT) are reviewed judgements about that live data, each with its source.
+Nothing here is committed: the garden is derived from the keyless public
+`GET /v2/model-catalog` on every process (`load_garden`). That endpoint lists
+the whole platform catalogue whatever key the caller holds, where `/v2/models`
+filters to what one workspace or project enabled. The registers below
+(MANUAL_MODEL_CARDS, AA_FILLS, SUPERSEDED, UNROUTABLE, NEVER_SEAT) are reviewed
+judgements about that live data, each with its source.
 """
 
 from __future__ import annotations
@@ -36,26 +36,18 @@ import math
 import re
 from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from evaluatorq.common.env_config import env_float
 from evaluatorq.common.llm_client import orq_base_url
-from evaluatorq.common.model_catalogue import (
-    _entry_metadata,
-    _parse_default_reasoning_effort,
-    _parse_reasoning_efforts,
-    _reasoning_effort_config,
-    _usd_price,
-    model_cards,
-)
+from evaluatorq.common.model_catalogue import ModelCatalogueError, _finite_nonneg
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
-
-    from openai import AsyncOpenAI
 
 
 class ScoredModel(BaseModel):
@@ -76,21 +68,18 @@ class ScoredModel(BaseModel):
     output_price: float = Field(description='USD per 1M output tokens.')
     region: str | None = None
     provider: str | None = None
-    # The rung the headline was measured at, resolved through the benchmark
-    # slug where possible. Only used to catch a card contradicting itself.
+    # The rung the headline was measured at (see `_headline_rung`), when known.
+    # Only used to catch a card contradicting itself.
     headline_effort: str | None = None
     effort_indices: dict[str, float] = {}
     effort_parameter: bool = Field(
-        default=False, description='Whether the card exposes a reasoningEffort parameter at all.'
+        default=False, description='Whether the card lists reasoning_effort in supported_parameters.'
     )
     default_effort: str | None = Field(
         default=None,
         description='The catalogue default effort. None on a card with an effort parameter '
-        'means the default is unknown (missing, or not among the parameter options).',
+        'means the card states no default.',
     )
-    # False means the workspace has the model switched off: listed, scored,
-    # not servable.
-    enabled: bool | None = None
 
     @property
     def price(self) -> float:
@@ -145,14 +134,22 @@ class ScoredModel(BaseModel):
 # Below this index nothing is recommended anywhere: the tier is noise, and a
 # cheap seat filled from it makes a pool look complete while lowering what the
 # user gets. The value sits under every seat a reviewer has accepted (Claude
-# Haiku 4.5 at 23.7 is the platform's single-judge baseline) and above the band
-# it exists to exclude, which on the 2026-08-25 garden is Llama-3.3-70B at 9.4,
-# the 4o generation at 6.9 to 11.2, qwen3-coder at 13.6 and gpt-oss-20b at 14.9.
-MIN_SEAT_INDEX = 15.0
+# Haiku 4.5 at 5.7 is the platform's single-judge baseline) and above the band
+# it exists to exclude, which on the AA index v5 garden (staging, 2026-11-17) is
+# Llama-3.3-70B at 1.9, gpt-4o at 2.2, gpt-oss-20b at 2.4, qwen3-coder at 2.5
+# to 2.7 and gpt-oss-120b at 3.8. Re-derived from 15.0 on the v4.x garden for
+# the v5 switch; gpt-5.4-mini (3.3 at its none default) now falls under it.
+MIN_SEAT_INDEX = 5.0
+
+# MIN_SEAT_INDEX, NEVER_SEAT verdicts and the preset seats are calibrated on AA
+# index v5. A catalogue with no v5 rung still serves the old version (prod until
+# orquesta-web cc09670ca and 8851da930 ship) and would rank against the wrong
+# floor, so load_garden refuses it. A new major version needs a re-baseline too.
+REQUIRED_INDEX_VERSION = 'v5'
 
 # The index is a benchmark aggregate, and a floor cannot catch a model whose
-# benchmarks say more than its behaviour: gpt-oss-120b scores 23.8, a hair
-# above Haiku 4.5's 23.7, and does not perform beside it. Families here are
+# benchmarks say more than its behaviour: on index v4.3, when the verdict was
+# made, gpt-oss-120b scored 23.8 beside Haiku 4.5's 23.7 and did not perform beside it. Families here are
 # never seated at any score or price, with the verdict on record. Review
 # verdict from PR #330 (2026-08-24).
 NEVER_SEAT: dict[str, str] = {
@@ -161,10 +158,17 @@ NEVER_SEAT: dict[str, str] = {
         'Haiku 4.5 on the index and does not deliver beside it. Not to be '
         'recommended at any price tier.'
     ),
+    '-contributor': (
+        "Meta's Contributor tier (e.g. meta/muse-spark-1.3-contributor, $0.10/$0.20 "
+        'against $1.25/$4.25 standard) is discounted in exchange for Meta training on '
+        "prompts and completions, so seating it would send users' eval data to Meta "
+        'unasked. The standard tier ranks on its own card. Reported by TechCrunch '
+        '(2026-09-03).'
+    ),
 }
 
 
-# Listing is not callability. `GET /v2/models` advertises these router IDs and
+# Listing is not callability. The model catalogue advertises these router IDs and
 # `client.models.list()` returns them, so every listing-based freshness test passes,
 # but an actual completion call 404s: the host serves a catalog that does not
 # include the model the router ID names. Only a live probe can find this, which
@@ -190,6 +194,26 @@ UNROUTABLE: dict[str, str] = {
     ),
 }
 
+
+# Answers a `json_schema` response format with prose. The judge falls back to
+# json_object only when a provider rejects the request, not on a 200 of the
+# wrong shape, so such a seat never votes. Binds the cheap-aggregate derivation
+# only: a router pool member is not asked for a verdict. Keyed by exact router
+# ID, with the probe that found it.
+NO_STRUCTURED_VERDICT: dict[str, str] = {
+    'minimax/MiniMax-M3.1-Flash': (
+        'Ten judge prompts through the real structured-output path on the prod '
+        'router: 0 of 10 parsed, each answered in prose ("True. 7 x 8 = 56."). '
+        'The same weights on wafer/MiniMax-M3.1-Flash (same price, global) parsed '
+        '10 of 10, so the fault is this host. 2026-11-17.'
+    ),
+    'alibaba/qwen3.6-35b-a3b': (
+        'Ten judge prompts through run_judge on the prod router: 0 of 10 verdicts. '
+        'Responses json_schema is rejected with a 400 asking for the word "json", '
+        'and the json_object fallback returns the injected schema instead of a '
+        'verdict. greenpt (9/10) and scaleway (8/10) pass but are EUR-priced. 2026-11-20.'
+    ),
+}
 
 # Old models with a newer version in the live catalogue, keyed by exact router
 # ID. `unseatable_reason` refuses these. Name-derived successors are applied by
@@ -221,9 +245,9 @@ SUPERSEDED: dict[str, str] = {
     # Rankable once a headline measured at the default rung counts (2026-10-26).
     'anthropic/claude-opus-4-6': 'superseded by claude-opus-5 and claude-opus-5-5 on the same route.',
     'anthropic/claude-sonnet-4-6': 'superseded by claude-sonnet-5 on the same route.',
-    # Recorded by hand when gpt-5.4-mini had no score at its default (none) and could not be derived.
-    'openai/gpt-5-mini': 'superseded by openai/gpt-5.4-mini (listed, unscored at its default none); 2026-10-27.',
-    'azure/gpt-5-mini': 'superseded by openai/gpt-5.4-mini (listed, unscored at its default none); 2026-10-27.',
+    # Recorded by hand on 2026-10-27, when gpt-5.4-mini had no score at its default (none) and could not be derived.
+    'openai/gpt-5-mini': 'superseded by openai/gpt-5.4-mini (listed; 3.3 at its default none on v5, under the seat floor); 2026-11-17.',
+    'azure/gpt-5-mini': 'superseded by openai/gpt-5.4-mini (listed; 3.3 at its default none on v5, under the seat floor); 2026-11-17.',
 }
 
 
@@ -296,7 +320,7 @@ def derived_successor(router_id: str, garden: Mapping[str, ScoredModel]) -> str 
     """A seatable router ID in the garden with the same stem and tier and a higher version, if any.
 
     The successor must itself be comparable (priced, not free) and
-    seatable (not disabled, NEVER_SEAT, UNROUTABLE, SUPERSEDED or under the floor),
+    seatable (not NEVER_SEAT, UNROUTABLE, SUPERSEDED or under the floor),
     or a newer card nothing may be seated on would retire a model that still works.
 
     The highest version wins; ties go to the lowest router ID. Cross-tier
@@ -333,13 +357,13 @@ def headline_contradicts_its_own_rung(model: ScoredModel) -> bool:
     )
 
 
-def _effort_ladder(v2: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+def _effort_ladder(card: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     """The card's `reasoning_efforts` rungs, keeping only well-formed ones.
 
     External data: a ladder that is not a mapping, or a rung that is not one,
     reads as absent rather than raising and taking the whole garden down.
     """
-    ladder = v2.get('reasoning_efforts')
+    ladder = card.get('reasoning_efforts')
     if not isinstance(ladder, Mapping):
         return {}
     return {effort: entry for effort, entry in ladder.items() if isinstance(entry, Mapping)}
@@ -352,129 +376,263 @@ def _score(value: object) -> float | None:
     return float(value)
 
 
-def _scored_effort(v2: Mapping[str, Any]) -> str | None:
-    """The effort the card's headline index was measured at, via its benchmark slug."""
-    slug, index = v2.get('aa_slug'), v2.get('intelligence_index')
-    return next(
-        (
-            e
-            for e, entry in _effort_ladder(v2).items()
-            if entry.get('aa_slug') == slug and entry.get('intelligence_index') == index
-        ),
-        None,
-    )
+def _rung_version(entry: Mapping[str, Any]) -> str:
+    """The major AA index version a rung names, e.g. 'v5' for 'v5.1', or '' when it names none."""
+    return str(entry.get('index_version', '')).split('.')[0]
 
 
-def _rung_indices(card: Mapping[str, object], v2: Mapping[str, Any]) -> dict[str, float]:
-    """Each rung's index, dropping (with a warning) any that is present but not a finite number."""
+def _rung_indices(router_id: str, card: Mapping[str, Any]) -> dict[str, float]:
+    """Each REQUIRED_INDEX_VERSION rung's index, dropping (with a warning) any that is present but not a finite number.
+
+    A rung on another version is left out whatever its score, so a partly
+    migrated card never ranks a v4 number against the v5 floor and seats.
+    """
     indices: dict[str, float] = {}
-    for effort, entry in _effort_ladder(v2).items():
+    for effort, entry in _effort_ladder(card).items():
+        if _rung_version(entry) != REQUIRED_INDEX_VERSION:
+            continue
         raw = entry.get('intelligence_index')
         if raw is None:
             continue
         score = _score(raw)
         if score is None:
-            logger.warning(
-                '{}/{}: ignoring effort rung {!r} with a non-numeric index {!r}',
-                card.get('provider'),
-                card.get('model_id'),
-                effort,
-                raw,
-            )
+            logger.warning('{}: ignoring effort rung {!r} with a non-numeric index {!r}', router_id, effort, raw)
             continue
         indices[effort] = score
     return indices
 
 
-def _catalogue_effort(card: dict[str, object]) -> tuple[bool, str | None]:
-    """Whether the card exposes a reasoningEffort parameter, and its default (None if not among the options).
-
-    Read through the catalogue's own parsers, so `ModelInfo.default_reasoning_effort`
-    and the rung a seat is ranked at come from one reading of the card.
-    """
-    if _reasoning_effort_config(card) is None:
-        return False, None
-    options = _parse_reasoning_efforts(card) or frozenset()
-    default = _parse_default_reasoning_effort(card)
-    return True, default if default in options else None
-
-
-def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
-    """A ScoredModel from one `/v2/models` card, or None if it has no index or rates.
-
-    Card rates are USD per 1k tokens; ScoredModel prices are per 1M.
-    """
-    metadata = _entry_metadata(card)
-    autorouter = metadata.get('autorouter')
-    v2 = (autorouter.get('v2') if isinstance(autorouter, dict) else None) or {}
-    index = v2.get('intelligence_index') if isinstance(v2, dict) else None
-    input_cost, output_cost = _usd_price(card, 'input'), _usd_price(card, 'output')
-    headline = _score(index)
-    if headline is None or input_cost is None or output_cost is None:
+def _price_per_million(card: Mapping[str, Any], side: Literal['input', 'output']) -> float | None:
+    """A public card's base USD rate per 1M tokens, or None when it is missing or in another unit or currency."""
+    pricing = card.get('pricing')
+    rate = pricing.get(side) if isinstance(pricing, Mapping) else None
+    if not isinstance(rate, Mapping):
         return None
-    effort_parameter, default_effort = _catalogue_effort(card)
-    region = metadata.get('region')
-    enabled = card.get('enabled')
+    cost, per = _finite_nonneg(rate.get('cost')), _finite_nonneg(rate.get('per'))
+    currency = rate.get('currency')
+    if cost is None or not per or rate.get('unit') != 'tokens':
+        return None
+    if not isinstance(currency, str) or currency.upper() != 'USD':
+        return None
+    return round(cost / per * 1_000_000, 6)
+
+
+def _price_gap(card: Mapping[str, Any]) -> str | None:
+    """Why a card has no USD per-token price, or None when it has one."""
+    if _price_per_million(card, 'input') is not None and _price_per_million(card, 'output') is not None:
+        return None
+    pricing = card.get('pricing')
+    rates = [pricing.get(side) for side in ('input', 'output')] if isinstance(pricing, Mapping) else []
+    currencies = {rate.get('currency') for rate in rates if isinstance(rate, Mapping)}
+    if any(isinstance(currency, str) and currency.upper() != 'USD' for currency in currencies):
+        return 'non-USD price'
+    return 'no USD per-token price'
+
+
+def _headline_rung(
+    card: Mapping[str, Any], headline: float, rungs: Mapping[str, float], default: str | None
+) -> str | None:
+    """The rung the headline was measured at.
+
+    The default when the card says it was scored, else the one rung with the
+    same index.
+
+    The public card names no Artificial Analysis slug per rung, so an equal
+    index is the only other evidence. Two rungs on the headline's index prove
+    nothing, and neither does a host default on its own.
+    """
+    if default is not None and card.get('default_effort_scored') is True:
+        return default
+    matches = [effort for effort, index in rungs.items() if math.isclose(index, headline, rel_tol=0.0, abs_tol=1e-6)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def scored_model_from_card(card: Mapping[str, Any]) -> ScoredModel | None:
+    """A ScoredModel from one public `/v2/model-catalog` card, or None if it has no index or rates.
+
+    A card whose default effort rung names another AA index version is None
+    too, with a warning: its headline carries no version, so it cannot stand
+    in for the off-version rung the card would be ranked on.
+
+    The headline is `artificial_intelligence.artificial_analysis_intelligence_index`;
+    `_headline_rung` says which rung it was measured at, when that is known. A
+    card whose `location` is only `eu` is EU-pinned (`region='europe'`); every
+    other card is unpinned, since only `europe` constrains a seat.
+    """
+    router_id = card.get('id')
+    scores = card.get('artificial_intelligence')
+    headline = _score(scores.get('artificial_analysis_intelligence_index')) if isinstance(scores, Mapping) else None
+    input_price, output_price = _price_per_million(card, 'input'), _price_per_million(card, 'output')
+    if not isinstance(router_id, str) or headline is None or input_price is None or output_price is None:
+        return None
+    parameters = card.get('supported_parameters')
+    effort_parameter = isinstance(parameters, list) and 'reasoning_effort' in parameters
+    default = card.get('default_effort')
+    default_effort = default if effort_parameter and isinstance(default, str) and default else None
+    rungs = _rung_indices(router_id, card)
+    default_rung = _effort_ladder(card).get(default_effort) if default_effort is not None else None
+    if default_rung is not None and _rung_version(default_rung) != REQUIRED_INDEX_VERSION:
+        # The headline carries no version, so falling back to it would rank the
+        # off-version default rung's score after all.
+        logger.warning(
+            '{}: default effort rung {!r} is on AA index {!r}, not {}; the card is left out',
+            router_id,
+            default_effort,
+            default_rung.get('index_version'),
+            REQUIRED_INDEX_VERSION,
+        )
+        return None
+    location = card.get('location')
+    provider = card.get('provider')
     return ScoredModel(
-        router_id=f'{card["provider"]}/{card["model_id"]}',
+        router_id=router_id,
         intelligence_index=headline,
-        input_price=round(input_cost * 1000, 6),
-        output_price=round(output_cost * 1000, 6),
-        region=region if isinstance(region, str) else None,
-        provider=str(card.get('provider')),
-        headline_effort=_scored_effort(v2),
-        effort_indices=_rung_indices(card, v2),
+        input_price=input_price,
+        output_price=output_price,
+        region='europe' if location == ['eu'] else None,
+        provider=provider.get('id') if isinstance(provider, Mapping) else router_id.split('/')[0],
+        headline_effort=_headline_rung(card, headline, rungs, default_effort),
+        effort_indices=rungs,
         effort_parameter=effort_parameter,
         default_effort=default_effort,
-        enabled=enabled if isinstance(enabled, bool) else None,
     )
 
 
-def catalog_scope(cards: Iterable[Mapping[str, object]]) -> str:
-    """'workspace' when the response carries disabled cards, else 'project'.
-
-    A project-scoped key filters out everything the workspace has not enabled,
-    so zero disabled cards is its signature, and the frontier then derives from
-    what one workspace switched on rather than from the platform catalogue.
-    """
-    return 'workspace' if any(card.get('enabled') is False for card in cards) else 'project'
-
-
-def garden_from_cards(cards: Iterable[dict[str, object]]) -> dict[str, ScoredModel]:
+def garden_from_cards(cards: Iterable[Mapping[str, Any]]) -> dict[str, ScoredModel]:
     """Every scored card, keyed by router ID. Unscored or unpriced cards are left out."""
-    models = (scored_model_from_card(card) for card in cards if 'provider' in card and 'model_id' in card)
+    models = (scored_model_from_card(card) for card in cards)
     return {m.router_id: m for m in models if m is not None}
 
 
-_scope_warned: set[int] = set()
+# Base URL -> the non-deprecated public cards, fetched once per process.
+_public_cards: dict[str, tuple[dict[str, Any], ...]] = {}
 
 
-async def load_garden(client: AsyncOpenAI | None = None) -> dict[str, ScoredModel]:
-    """The live model garden: every scored `/v2/models` card, keyed by router ID.
+async def public_cards(*, timeout_s: float | None = None) -> tuple[dict[str, Any], ...]:
+    """Every non-deprecated card in the keyless public `GET /v2/model-catalog`, all pages.
 
-    Scores and prices come from one response, so they share a benchmark version.
-    The cards are fetched once per process and credential by
-    `common.model_catalogue.model_cards`; this only ranks them. A
-    project-scoped catalogue is used with a warning rather than refused, since
-    it is the only key most callers hold; the live drift suite fails on it.
+    Cached per host for the process. A failed fetch is not cached, so the next
+    call retries. `timeout_s` defaults to EVALUATORQ_CATALOGUE_TIMEOUT_S.
 
     Raises:
-        MissingLLMCredentialsError: No Orq key or OAuth session is available.
-        ModelCatalogueError: The catalogue fetch failed or was unreadable.
+        ModelCatalogueError: The fetch failed, a page was unreadable, or the
+            catalogue reported more pages but returned none or repeated a cursor.
     """
-    cards = await model_cards(client)
-    if catalog_scope(cards) == 'project' and id(cards) not in _scope_warned:
-        _scope_warned.add(id(cards))
-        logger.warning(
-            '/v2/models returned no disabled cards: this looks like a project-scoped key, so the '
-            'garden holds only what this workspace enabled. Use a workspace-scoped ORQ_API_KEY for '
-            'the full catalogue.'
+    base = orq_base_url()
+    cached = _public_cards.get(base)
+    if cached is not None:
+        return cached
+    url = f'{base}/v2/model-catalog'
+    cards: list[dict[str, Any]] = []
+    cursor: str | None = None
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s or env_float('EVALUATORQ_CATALOGUE_TIMEOUT_S')) as http:
+            while True:
+                response = await http.get(url, params={'starting_after': cursor} if cursor else None)
+                response.raise_for_status()
+                page = response.json()
+                raw = page.get('data') if isinstance(page, dict) else None
+                if not isinstance(raw, list):
+                    raise ModelCatalogueError(f'model catalogue page has no card list: {str(page)[:200]}')
+                data = [card for card in raw if isinstance(card, dict) and isinstance(card.get('id'), str)]
+                cards.extend(card for card in data if not card.get('deprecated'))
+                if not page.get('has_more'):
+                    break
+                if not data:
+                    raise ModelCatalogueError(
+                        'model catalogue reports more pages but returned none; the roster would be truncated'
+                    )
+                if data[-1]['id'] == cursor:
+                    raise ModelCatalogueError(
+                        f'model catalogue repeated the page after {cursor}; pagination does not advance'
+                    )
+                cursor = data[-1]['id']
+    except (httpx.HTTPError, ValueError) as exc:
+        status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        raise ModelCatalogueError(f'public model catalogue fetch failed: {exc}', status_code=status) from exc
+    if not cards:
+        raise ModelCatalogueError('public model catalogue returned no cards')
+    _public_cards[base] = result = tuple(cards)
+    return result
+
+
+def reset_public_cards() -> None:
+    """Clear the process-lifetime public card cache; exists for test isolation."""
+    _public_cards.clear()
+
+
+def _index_versions(card: Mapping[str, Any]) -> set[str]:
+    """The major AA index versions the card's effort rungs name, e.g. {'v5'}."""
+    return {_rung_version(rung) for rung in _effort_ladder(card).values()}
+
+
+async def load_garden() -> dict[str, ScoredModel]:
+    """The live model garden: every scored public catalogue card, keyed by router ID.
+
+    Needs no key. Scores and prices come from one response, so they share a
+    benchmark version.
+
+    A card whose ladder names no REQUIRED_INDEX_VERSION rung is left out with
+    a warning, since its scores sit on another scale, and so is one whose
+    default effort rung names another version. A card with no ladder
+    carries no version and is kept, with one warning naming them. A scored card
+    left out for its price, which is not a USD per-token one, is named in a
+    warning too.
+
+    Raises:
+        ModelCatalogueError: The catalogue fetch failed or was unreadable, no
+            card on it carried a USD price and a score, or no card has a rung
+            on REQUIRED_INDEX_VERSION.
+    """
+    cards = await public_cards()
+    versions = {card['id']: _index_versions(card) for card in cards}
+    if not any(REQUIRED_INDEX_VERSION in found for found in versions.values()):
+        found_any = sorted(set().union(*versions.values()))
+        raise ModelCatalogueError(
+            f'public model catalogue has no AA index {REQUIRED_INDEX_VERSION} rung '
+            f'(found {found_any or "none"}); the seat floor and presets are calibrated on '
+            f'{REQUIRED_INDEX_VERSION}'
         )
-    return garden_from_cards(cards)
+    off_scale = sorted(
+        router_id for router_id, found in versions.items() if found and REQUIRED_INDEX_VERSION not in found
+    )
+    if off_scale:
+        logger.warning(
+            '{} catalogue cards have no AA index {} rung and are left out: {}',
+            len(off_scale),
+            REQUIRED_INDEX_VERSION,
+            ', '.join(off_scale),
+        )
+    kept = [card for card in cards if card['id'] not in off_scale]
+    garden = garden_from_cards(kept)
+    unpriced: dict[str, list[str]] = {}
+    for card in kept:
+        scores = card.get('artificial_intelligence')
+        scored = (
+            isinstance(scores, Mapping) and _score(scores.get('artificial_analysis_intelligence_index')) is not None
+        )
+        reason = _price_gap(card)
+        if scored and reason:
+            unpriced.setdefault(reason, []).append(card['id'])
+    for reason, ids in sorted(unpriced.items()):
+        logger.warning(
+            '{} scored catalogue cards have a {} and are left out: {}', len(ids), reason, ', '.join(sorted(ids))
+        )
+    unversioned = sorted(router_id for router_id in garden if not versions[router_id])
+    if unversioned:
+        logger.warning(
+            '{} seatable catalogue cards have no effort ladder, so their index version is unknown and is taken as {}: {}',
+            len(unversioned),
+            REQUIRED_INDEX_VERSION,
+            ', '.join(unversioned),
+        )
+    if not garden:
+        raise ModelCatalogueError('public model catalogue has cards but none with a USD price and a score')
+    return garden
 
 
 def load_garden_sync() -> dict[str, ScoredModel]:
-    """`load_garden` for synchronous callers, using the ambient ``ORQ_API_KEY``.
+    """`load_garden` for synchronous callers.
 
     Refuses inside a running event loop, where blocking on the fetch would stall
     the loop: async callers `await load_garden()` and pass the garden in.
@@ -501,34 +659,15 @@ def _created_ms(created: object) -> int | None:
     return None
 
 
-async def public_listings(*, timeout_s: float = 60.0) -> dict[str, int | None]:
+async def public_listings(*, timeout_s: float | None = None) -> dict[str, int | None]:
     """Router ID to first-listed epoch milliseconds, for every non-deprecated public card.
 
-    `GET /v2/model-catalog` needs no key, so the roster and listing dates can be
-    read by anyone and in CI. It carries no reasoning-effort ladder, so scores
-    stay on the authenticated `/v2/models` path; this is the roster the
-    successor and age checks date models by.
+    The roster the successor and age checks date models by, scored or not.
 
     Raises:
-        RuntimeError: The catalogue reports more pages but returns none.
+        ModelCatalogueError: The catalogue fetch failed or was unreadable.
     """
-    url = f'{orq_base_url()}/v2/model-catalog'
-    listed: dict[str, int | None] = {}
-    cursor: str | None = None
-    async with httpx.AsyncClient(timeout=timeout_s) as http:
-        while True:
-            response = await http.get(url, params={'starting_after': cursor} if cursor else None)
-            response.raise_for_status()
-            page = response.json()
-            data = [card for card in page.get('data') or [] if isinstance(card, dict)]
-            listed.update({card['id']: _created_ms(card.get('created')) for card in data if not card.get('deprecated')})
-            if not page.get('has_more'):
-                return listed
-            if not data:
-                raise RuntimeError(
-                    'model catalogue reports more pages but returned none; the roster would be truncated'
-                )
-            cursor = str(data[-1]['id'])
+    return {card['id']: _created_ms(card.get('created')) for card in await public_cards(timeout_s=timeout_s)}
 
 
 # The cheap-tier ceiling: 3:1 blended USD per 1M tokens, strictly under. The
@@ -539,57 +678,26 @@ async def public_listings(*, timeout_s: float = 60.0) -> dict[str, int | None]:
 # three families, so no reserve (derivation in the 2-pager).
 MAX_BLEND = 2.0
 
-# Hand-written cards for models the router can call but `/v2/models` does not
-# list (for this key), so there is no live card to read their price or score
-# from. Each value carries its own source and date. The live catalogue wins:
-# an entry is used only while the router id is absent from the live garden, so
-# once a card appears the entry is dead and should be deleted. Never add a
+# Hand-written cards for models the router can call but the public catalogue
+# does not score, so there is no live card to read their score from. Each
+# value carries its own source and date. The live catalogue wins: an entry is
+# used only while the router id is absent from the live garden, so once a
+# scored card appears the entry is dead and should be deleted. Never add a
 # value that has no source.
 MANUAL_MODEL_CARDS: dict[str, dict[str, Any]] = {
-    'anthropic/claude-haiku-5-5': {
-        # Callable 2026-10-26 (chat completion 200); `aws/eu.anthropic.claude-haiku-5-5`
-        # is the listed EU sibling and its card carries the same ladder.
-        'input_price': 0.10,  # AA API data/llms/models, claude-haiku-5-5, 2026-10-26
-        'output_price': 0.50,  # same
-        'region': 'us',  # direct Anthropic route
-        'effort_parameter': True,
-        # Default effort read from the listed EU sibling's reasoningEffort parameter.
-        'default_effort': 'medium',
-        # AA API slugs claude-haiku-5-5-{low,medium,high,xhigh} and claude-haiku-5-5 (max),
-        # 2026-10-26; identical to the EU sibling's live ladder, so v4.3.x coherent.
-        'effort_indices': {'low': 29.5, 'medium': 34.5, 'high': 37.8, 'xhigh': 41.2, 'max': 43.4},
-        'headline_effort': 'max',
-        'intelligence_index': 43.4,
-    },
-    'openai/gpt-6.1-sol': {
-        # Callable 2026-11-10 (chat completion 200); listed in the public
-        # catalogue but absent from the project-scoped /v2/models.
-        'input_price': 2.00,  # public /v2/model-catalog card, 2026-11-10
-        'output_price': 10.00,  # same
-        'region': 'us',
-        'effort_parameter': True,
-        # Ladder and default read from the listed EU sibling `openai/eu.gpt-6.1-sol`
-        # (aa_slug gpt-6-1-sol-medium, aa_index_version v4.3), 2026-11-10.
-        'default_effort': 'medium',
-        'effort_indices': {'low': 42.1, 'medium': 47.8, 'high': 50.2, 'xhigh': 51.0, 'max': 51.8},
-        'headline_effort': 'medium',
-        'intelligence_index': 47.8,
-    },
     'openai/gpt-6.1-terra': {
-        # Callable 2026-11-10 (chat completion 200); listed in the public
-        # catalogue but absent from the project-scoped /v2/models, and neither
-        # it nor its EU sibling carries a v4.3 score.
-        'input_price': 1.00,  # public /v2/model-catalog card, 2026-11-10
+        # Callable 2026-11-10 (chat completion 200). The public card lists it
+        # and its rates but carries no score, default effort or ladder, nor does
+        # its EU sibling (prod and staging, 2026-11-17).
+        'input_price': 1.00,  # public /v2/model-catalog card, 2026-11-17
         'output_price': 5.00,  # same
-        'region': 'us',
         'effort_parameter': True,
-        # Inferred, not read: no Terra 6.1 card is visible to this key. Every
-        # GPT-6 generation card that is (Sol, Luna, EU 6.1 Sol) defaults to medium.
+        # Inferred, not read: every scored GPT-6 generation card (Sol, Luna,
+        # 6.1 Sol) defaults to medium.
         'default_effort': 'medium',
         'effort_indices': {},
         # AA v5.0.1 max (artificialanalysis.ai/models/gpt-6-1-terra, 2026-11-10).
-        # No medium rung, so it ranks on this headline, which is a different
-        # index version from the v4.3 garden.
+        # No medium rung, so it ranks on this headline.
         'headline_effort': 'max',
         'intelligence_index': 51.0,
     },
@@ -601,21 +709,9 @@ MANUAL_MODEL_CARDS: dict[str, dict[str, Any]] = {
 # catalogue default; the live ladder wins whenever it has the rung. Fill
 # nothing from another rung: DeepSeek flash and pro default to high or medium
 # and AA measures only max and none, so they rank on their headline index.
-AA_FILLS: dict[str, dict[str, Any]] = {
-    'zai/glm-5.3-flash': {
-        'effort': 'max',
-        'index': 41.8,
-        'source': (
-            'AA API data/llms/models slug glm-5-3-flash, 2026-10-26, index v4.3 (the card names the same slug). '
-            'The AA entry carries no rung label; the max rung was confirmed on the AA page by the user.'
-        ),
-    },
-    'tencent/glm-5.3-flash': {
-        'effort': 'max',
-        'index': 41.8,
-        'source': 'same AA entry as zai/glm-5.3-flash (host differs, weights are the same), 2026-10-26.',
-    },
-}
+# Empty since the AA index v5 switch (2026-11-17): the glm-5.3-flash entries
+# held a v4.3 value (41.8) and the v5 card now carries its own headline (27.8).
+AA_FILLS: dict[str, dict[str, Any]] = {}
 
 
 def with_aa_fills(garden: dict[str, ScoredModel]) -> dict[str, ScoredModel]:
@@ -648,8 +744,8 @@ def rank_cheapest_top(
     """The best cheap model of each family, strongest first: the cheap-aggregate derivation.
 
     Eligible: comparable (not free), seatable (not
-    NEVER_SEAT, UNROUTABLE, SUPERSEDED or under the floor), enabled, not
-    EU-pinned, without a newer eligible version of itself
+    NEVER_SEAT, UNROUTABLE, SUPERSEDED or under the floor), able to return a
+    structured verdict (not NO_STRUCTURED_VERDICT), not EU-pinned, without a newer eligible version of itself
     (`derived_successor` over the eligible set, so a successor that is itself EU-pinned or over the ceiling retires nothing), and a 3:1 blend strictly under `max_blend`. Prices are the garden's own, so pass
     the live garden. One model per family (`family_of`), the highest default
     index in it; ties break to the lower price, then router_id. Seats are the
@@ -659,7 +755,11 @@ def rank_cheapest_top(
     eligible = {
         router_id: m
         for router_id, m in garden.items()
-        if not m.free and seatable(m) and m.enabled is not False and m.region != 'europe' and m.price < max_blend
+        if not m.free
+        and seatable(m)
+        and router_id not in NO_STRUCTURED_VERDICT
+        and m.region != 'europe'
+        and m.price < max_blend
     }
     best: dict[str, ScoredModel] = {}
     for model in sorted(eligible.values(), key=lambda m: (-(m.default_index or 0), m.price, m.router_id)):
@@ -676,8 +776,6 @@ def rank_cheapest_top(
 
 def unseatable_reason(model: ScoredModel) -> str | None:
     """Why a model may not hold any recommended seat, pool or jury; None if it may."""
-    if model.enabled is False:
-        return 'disabled in the model catalogue'
     if model.free:
         return f'free (input {model.input_price}, output {model.output_price} per 1M)'
     if model.default_index < MIN_SEAT_INDEX:

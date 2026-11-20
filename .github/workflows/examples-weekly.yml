@@ -71,9 +71,8 @@ jobs:
           ORQ_API_KEY: ${{ secrets.ORQ_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        # The preset freshness suite and the live router-pool tests need a
-        # workspace-scoped key and run in preset-drift-weekly.yml; this key is
-        # project-scoped.
+        # The preset freshness suite and the live router-pool tests run in
+        # preset-drift-weekly.yml, so they are skipped here.
         run: >-
           uv run pytest -m integration
           --ignore=tests/integration/test_preset_freshness.py

@@ -276,9 +276,10 @@ def _offline_model_catalogue(request, monkeypatch):
     while leaving ``_load_catalogue`` itself real so its own tests can exercise
     it (they swap this cache back for a plain dict).
     """
-    from evaluatorq.common import model_catalogue
+    from evaluatorq.common import model_catalogue, model_frontier
 
     reset_catalogue_cache()
+    model_frontier.reset_public_cards()
     # `reset_catalogue_cache` deliberately spares `register_model` overrides —
     # they are caller intent, not cached state. That makes them process-lifetime
     # here, so a test that registers one silently repriced every later test in

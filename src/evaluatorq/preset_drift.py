@@ -9,7 +9,7 @@ listing dates, not release notes.
 
 `drift_report()` is pure over a garden and a listing map, so it runs offline on
 hand-built cards. `python -m evaluatorq.preset_drift` reads the live garden and
-prints the report as JSON (needs a workspace-scoped `ORQ_API_KEY`).
+prints the report as JSON (needs no key).
 """
 
 from __future__ import annotations
