@@ -787,15 +787,12 @@ def in_family_upgrades(
     return sorted(better, key=lambda m: -m.default_index)
 
 
-# The tier rule was authored at 3.0, which was a judgement about how far apart
-# price bands must sit before routing down is worth anything, not a figure
-# RES-1285 measured. On the open-weight frontier it cost more than it bought.
-# glm-5.2 sits 2.79x under kimi-k3, just inside the rule, so at 3.0 the only
-# trio that passes is kimi-k3 with both DeepSeek models: one vendor holding two
-# of three seats, which is the correlated-failure shape that retired the Max
-# Savings pool. 2.75 seats glm-5.2 in the middle band instead, at a 51.1
-# index against deepseek-v4-flash's 37.5, and changes no other pool.
-MIN_TIER_RATIO = 2.75
+# The tier rule was authored at 3.0 and later lowered to 2.75; both were
+# judgements about how far apart price bands must sit before routing down is
+# worth anything, not figures RES-1285 measured. A model at half the price of
+# the seat above it already halves the cost of every ask routed down to it,
+# which is worth considering, so a seat qualifies once it is 2x cheaper.
+MIN_TIER_RATIO = 2.0
 
 
 def derive_trio(
