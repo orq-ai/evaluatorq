@@ -40,7 +40,7 @@ async def evaluatorq(
 | `single_trace` | `bool` | `False` | Open one span for the whole run so every row shares a trace — see [One trace per run](tracing.md#one-trace-per-run-single_tracetrue) |
 | `on_datapoint_complete` | `DataPointComplete` \| `None` | `None` | Callback run once per data point as it finishes — see [Reacting to each row as it finishes](#reacting-to-each-row-as-it-finishes) |
 | `save` | `SaveMode` \| `str` | `SaveMode.NONE` | `SaveMode.FINAL` writes the finished run to disk so `eq dashboard` lists it — see [Saving a run locally](#saving-a-run-locally) |
-| `output_dir` | `Path` \| `str` \| `None` | `None` | Folder for a saved run instead of `.evaluatorq/experiment-runs`; ignored with a warning unless `save=SaveMode.FINAL` |
+| `output_dir` | `Path` \| `str` \| `None` | `None` | Folder for a saved run instead of `.evaluatorq/experiment-runs`; created and checked for writes before the run starts; ignored with a warning unless `save=SaveMode.FINAL` |
 
 Parameters can also be passed positionally as an `EvaluatorParams` model or a plain dict — the three forms below are equivalent:
 
@@ -538,7 +538,9 @@ The file is written as soon as the results exist, before the results table print
 
 Two runs with the same name in the same second do not overwrite each other: the second file gets a `_001` suffix. Each saved run also gets a run manifest, the small status file the dashboard reads to show a run as running, finished or failed.
 
-**A failed save does not fail the run.** If the file cannot be written, for example because the disk is full, evaluatorq logs `Could not save experiment run` at `ERROR` level, marks the manifest failed, and still returns the results. Check the log when a run you saved is missing from the dashboard. `SaveMode.DETAIL`, which red teaming uses to keep per-stage files, raises `ValueError` here, because an experiment has no stages.
+**An unwritable save folder fails before the run starts.** Before any data point runs or any model is called, evaluatorq creates the save folder if it is missing and writes and removes a small test file in it. If that fails, for example because the folder is read-only or the path points at a file, `evaluatorq()` raises `ValueError` with the folder in the message, and nothing has been spent. Pass a writable `output_dir`, or `save=SaveMode.NONE`.
+
+**A save that fails at the end does not fail the run.** If the file still cannot be written once the results exist, for example because the disk filled up during the run, evaluatorq logs `Could not save experiment run` at `ERROR` level with the folder, marks the manifest failed, and still returns and uploads the results. Check the log when a run you saved is missing from the dashboard. `SaveMode.DETAIL`, which red teaming uses to keep per-stage files, raises `ValueError` here, because an experiment has no stages.
 
 ### Suppressing terminal output
 

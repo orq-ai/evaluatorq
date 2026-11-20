@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
 import inspect
+import os
+import tempfile
 import uuid
 from collections.abc import Awaitable, Generator, Sequence
 from contextlib import AsyncExitStack
@@ -759,11 +761,35 @@ async def _run_in_memory_evaluation(
     return results
 
 
-def _resolve_experiment_save(*, save: SaveMode | str, output_dir: Path | str | None) -> bool:
-    """Validate ``save`` before any work is spent; True when the run should be written to disk.
+def _require_writable_dir(runs_dir: Path) -> None:
+    """Create *runs_dir* if missing and prove it is writable by creating and removing a file in it.
+
+    A real write, not ``os.access``: permission bits miss read-only mounts, ACLs and full disks.
 
     Raises:
-        ValueError: ``save`` is not a `SaveMode` value, or is ``SaveMode.DETAIL``.
+        ValueError: The folder could not be created or written to.
+    """
+    try:
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        descriptor, probe = tempfile.mkstemp(prefix='.evaluatorq-write-check-', suffix='.tmp', dir=runs_dir)
+        os.close(descriptor)
+        Path(probe).unlink()
+    except OSError as exc:
+        raise ValueError(
+            f'Cannot save the experiment run: the folder {runs_dir} is not writable ({exc}). '
+            'Pass a writable output_dir, or save=SaveMode.NONE to skip saving.'
+        ) from exc
+
+
+def _resolve_experiment_save(*, save: SaveMode | str, output_dir: Path | str | None) -> Path | None:
+    """Validate ``save`` before any work is spent; the folder to save the run in, or None to save nothing.
+
+    With ``SaveMode.FINAL`` the folder is created and probed with a real write here, so a
+    folder that cannot be written fails the call before any datapoint runs or any API spend.
+
+    Raises:
+        ValueError: ``save`` is not a `SaveMode` value, is ``SaveMode.DETAIL``, or the save
+            folder is not writable.
     """
     try:
         mode = SaveMode(save)
@@ -778,7 +804,11 @@ def _resolve_experiment_save(*, save: SaveMode | str, output_dir: Path | str | N
             'output_dir={} is ignored because save is SaveMode.NONE; pass save=SaveMode.FINAL to write the run there.',
             output_dir,
         )
-    return mode == SaveMode.FINAL
+    if mode != SaveMode.FINAL:
+        return None
+    runs_dir = Path(output_dir) if output_dir is not None else get_experiment_runs_dir()
+    _require_writable_dir(runs_dir)
+    return runs_dir
 
 
 @contextlib.contextmanager
@@ -803,24 +833,28 @@ class _ExperimentSave:
     `record_experiment_url` then adds the upload's URL to the saved file.
     """
 
-    def __init__(self, writer: 'ManifestWriter', output_dir: Path | str | None) -> None:
+    def __init__(self, writer: 'ManifestWriter', runs_dir: Path) -> None:
         self._writer = writer
-        self._output_dir = output_dir
+        self._runs_dir = runs_dir
         self._saved: tuple[ExperimentRun, Path] | None = None
 
     @classmethod
-    def start(cls, stack: AsyncExitStack, *, name: str, output_dir: Path | str | None) -> '_ExperimentSave':
-        """Open the run's manifest; *stack* closes it as cancelled or errored when the run raises."""
+    def start(cls, stack: AsyncExitStack, *, name: str, runs_dir: Path) -> '_ExperimentSave':
+        """Open the run's manifest in *runs_dir*; *stack* closes it as cancelled or errored when the run raises.
+
+        *runs_dir* was already probed by `_resolve_experiment_save`, so the manifest's first
+        write lands; `start_manifest` itself only logs a failed write.
+        """
         from .common.run_manifest import start_manifest
 
         writer = start_manifest(
             run_id=uuid.uuid4().hex,
             surface=ManifestSurface.EXPERIMENT,
             run_name=name,
-            runs_dir=Path(output_dir) if output_dir is not None else get_experiment_runs_dir(),
+            runs_dir=runs_dir,
         )
         _ = stack.enter_context(_finish_manifest_on_error(writer))
-        return cls(writer, output_dir)
+        return cls(writer, runs_dir)
 
     def write(
         self,
@@ -835,8 +869,8 @@ class _ExperimentSave:
     ) -> None:
         """Write the finished run and complete its manifest.
 
-        A write failure is logged and marks the manifest errored. It does not raise,
-        because the run has already been paid for and its results are still returned.
+        A write failure is logged at ERROR and marks the manifest errored. It does not raise,
+        because the run has already been paid for: its results are still returned and uploaded.
         """
         from . import __version__
 
@@ -853,9 +887,15 @@ class _ExperimentSave:
             results=results,
         )
         try:
-            path = save_experiment_run(run, output_dir=self._output_dir)
+            path = save_experiment_run(run, output_dir=self._runs_dir)
         except (OSError, RuntimeError) as exc:
-            logger.error('Could not save experiment run {!r}: {}; the results are returned but not on disk', name, exc)
+            logger.error(
+                'Could not save experiment run {!r} to {}: {}. The run itself is unaffected: its results '
+                'are still returned and uploaded, but are not on disk.',
+                name,
+                self._runs_dir,
+                exc,
+            )
             self._writer.fail(f'save failed: {type(exc).__name__}: {exc}')
             return
         logger.info('Saved experiment run to {}', path)
@@ -962,7 +1002,10 @@ async def evaluatorq(
               ``.evaluatorq/experiment-runs/<name>_<timestamp>.json`` and records it in a run
               manifest, so ``eq dashboard`` lists it. Defaults to ``SaveMode.NONE``, which writes
               nothing. Applies whether the run is configured by ``params`` or by keyword arguments.
-              ``SaveMode.DETAIL`` raises ``ValueError``.
+              ``SaveMode.DETAIL`` raises ``ValueError``. The save folder is created and checked
+              with a test write before the run starts, so a folder that cannot be written raises
+              ``ValueError`` before any datapoint runs. If the write still fails when the run ends,
+              it is logged at ERROR and the run's results are still returned and uploaded.
         output_dir: Folder to save the run in instead of ``.evaluatorq/experiment-runs``. Ignored,
               with a warning, unless ``save`` is ``SaveMode.FINAL``.
 
@@ -971,7 +1014,8 @@ async def evaluatorq(
 
     Raises:
         ValidationError: If parameters fail validation.
-        ValueError: If neither params nor required kwargs are provided, or ``save`` is invalid.
+        ValueError: If neither params nor required kwargs are provided, ``save`` is invalid, or
+            the save folder is not writable.
 
     Example:
         ```python
@@ -993,7 +1037,7 @@ async def evaluatorq(
         ```
     """
     datapoint_parallelism = resolve_datapoint_parallelism(datapoint_parallelism, parallelism, caller='evaluatorq')
-    save_run = _resolve_experiment_save(save=save, output_dir=output_dir)
+    runs_dir = _resolve_experiment_save(save=save, output_dir=output_dir)
     resolved = _normalise_params(
         _EvaluationInputs(
             params=params,
@@ -1037,7 +1081,7 @@ async def evaluatorq(
 
         start_time = datetime.now(timezone.utc)
 
-        saver = _ExperimentSave.start(span_stack, name=name, output_dir=output_dir) if save_run else None
+        saver = _ExperimentSave.start(span_stack, name=name, runs_dir=runs_dir) if runs_dir is not None else None
 
         dataset_id: str | None = None
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import os
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -183,6 +184,52 @@ async def test_output_dir_without_save_warns_and_writes_nothing(tmp_path: Path) 
     assert any('output_dir' in m and 'ignored' in m for m in messages)
 
 
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0), reason='needs POSIX permission bits and a non-root user')
+async def test_an_unwritable_save_folder_fails_before_any_job_runs(tmp_path: Path) -> None:
+    locked = tmp_path / 'locked'
+    locked.mkdir()
+    locked.chmod(0o500)
+    calls: list[int] = []
+
+    async def counted(_dp: DataPoint, row: int) -> str:
+        calls.append(row)
+        return 'Paris'
+
+    try:
+        with pytest.raises(ValueError, match='not writable') as raised:
+            await evaluatorq(
+                'capitals',
+                data=DATA,
+                jobs=[job('answer', counted)],
+                print_results=False,
+                save=SaveMode.FINAL,
+                output_dir=locked,
+                _send_results=False,
+            )
+    finally:
+        locked.chmod(0o700)
+    assert str(locked) in str(raised.value)
+    assert calls == []
+    assert not any(locked.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_a_save_folder_that_is_a_file_fails_before_any_work(tmp_path: Path) -> None:
+    blocker = tmp_path / 'not-a-folder'
+    blocker.write_text('x')
+    with pytest.raises(ValueError, match='not writable'):
+        await run(save=SaveMode.FINAL, output_dir=blocker / 'runs')
+
+
+@pytest.mark.asyncio
+async def test_the_pre_run_check_creates_the_folder_and_leaves_no_probe_file(tmp_path: Path) -> None:
+    out = tmp_path / 'new' / 'runs'
+    await run(save=SaveMode.FINAL, output_dir=out)
+    assert len(list(out.glob('capitals_*.json'))) == 1
+    assert not list(out.glob('.evaluatorq-write-check-*'))
+
+
 
 @pytest.mark.asyncio
 async def test_a_failed_save_logs_fails_the_manifest_and_still_returns_results(
@@ -194,14 +241,20 @@ async def test_a_failed_save_logs_fails_the_manifest_and_still_returns_results(
         raise OSError('disk full')
 
     monkeypatch.setattr(module, 'save_experiment_run', refuse)
+    _fake_upload(monkeypatch, url='https://my.orq.ai/experiments/exp-1')
+    url_out: list[str] = []
     messages: list[str] = []
     sink = logger.add(lambda m: messages.append(m.record['message']), level='ERROR')
     try:
-        results = await run(save=SaveMode.FINAL, output_dir=tmp_path)
+        results = await run(save=SaveMode.FINAL, output_dir=tmp_path, upload=True, url_out=url_out)
     finally:
         logger.remove(sink)
     assert len(results) == 2
-    assert any('Could not save experiment run' in m and 'disk full' in m for m in messages)
+    assert url_out == ['https://my.orq.ai/experiments/exp-1']
+    assert any(
+        'Could not save experiment run' in m and 'disk full' in m and str(tmp_path) in m and 'unaffected' in m
+        for m in messages
+    )
     [manifest] = _manifests(tmp_path)
     assert manifest['status'] == 'error'
     assert 'disk full' in json.dumps(manifest)
