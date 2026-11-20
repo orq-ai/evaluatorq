@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +13,7 @@ from evaluatorq.common.structured_output import token_budget_for_items
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.contracts import CommunicationStyle, Persona
+from evaluatorq.simulation.generators._placeholders import generate_real_items
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 if TYPE_CHECKING:
@@ -153,6 +155,26 @@ class PersonaGenerator(UsageTracking):
                 logger.warning('Failed to parse persona: %s', e)
         return personas
 
+    async def _generate(self, *, messages: list[dict[str, Any]], expected: int, label: str) -> list[Persona]:
+        return await generate_real_items(
+            call=functools.partial(
+                generate_structured,
+                client=self._client,
+                model=self._model,
+                messages=messages,
+                response_format=PersonaListResponse,
+                max_tokens=_persona_token_budget(expected),
+                api='responses',
+                config=self._config,
+            ),
+            items_of=lambda answer: answer.personas,
+            texts_of=lambda persona: (persona.name, persona.background),
+            salvage=self._parse_personas,
+            expected=expected,
+            label=label,
+            record_usage=self._accumulate,
+        )
+
     async def generate(
         self,
         *,
@@ -233,18 +255,7 @@ Return ONLY a JSON array, no other text."""
                 {'role': 'user', 'content': user_prompt},
             ]
 
-            result = await generate_structured(
-                self._client,
-                model=self._model,
-                messages=messages,
-                response_format=PersonaListResponse,
-                max_tokens=_persona_token_budget(num_personas),
-                label='PersonaGenerator.generate',
-                api='responses',
-                config=self._config,
-            )
-            self._accumulate(result.usage)
-            personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
+            personas = await self._generate(messages=messages, expected=num_personas, label='PersonaGenerator.generate')
 
             if len(personas) < num_personas:
                 logger.warning(
@@ -360,18 +371,9 @@ Return ONLY a JSON array, no other text."""
                 'orq.simulation.model': self._model,
             },
         ):
-            result = await generate_structured(
-                self._client,
-                model=self._model,
-                messages=messages,
-                response_format=PersonaListResponse,
-                max_tokens=_persona_token_budget(num_personas),
-                label='PersonaGenerator.generate_with_coverage',
-                api='responses',
-                config=self._config,
+            personas = await self._generate(
+                messages=messages, expected=num_personas, label='PersonaGenerator.generate_with_coverage'
             )
-            self._accumulate(result.usage)
-            personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
 
             # Validate coverage and fill gaps
             personas = self._ensure_style_coverage(personas, [CommunicationStyle(s) for s in styles])

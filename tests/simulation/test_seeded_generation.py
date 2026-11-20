@@ -7,6 +7,7 @@ mocked at the ``generate_structured`` layer so no network/key is needed.
 
 from __future__ import annotations
 
+import re
 import typing
 from typing import Any, cast
 
@@ -49,13 +50,25 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
     """Patch the LLM layer; record each call's user prompt."""
     prompts: dict[str, list[str]] = {"prompts": []}
 
+    def asked(prompt: str) -> int:
+        # Answer with as many items as the prompt asks for, so no answer is short enough to be asked again.
+        match = re.search(r"Generate (\d+)", prompt)
+        return int(match.group(1)) if match else 1
+
+    def name(index: int) -> str:
+        return "Seeded" if index == 0 else f"Seeded {index + 1}"
+
     async def fake_persona(client, *, messages, **_kw) -> StructuredResult[Any]:  # noqa: ANN001, ANN002
-        prompts["prompts"].append(messages[-1]["content"])
-        return StructuredResult(cast(Any, _Parsed(personas=[_persona()])), "")
+        prompt = messages[-1]["content"]
+        prompts["prompts"].append(prompt)
+        personas = [_persona(name=name(index)) for index in range(asked(prompt))]
+        return StructuredResult(cast(Any, _Parsed(personas=personas)), "")
 
     async def fake_scenario(client, *, messages, **_kw) -> StructuredResult[Any]:  # noqa: ANN001, ANN002
-        prompts["prompts"].append(messages[-1]["content"])
-        return StructuredResult(cast(Any, _Parsed(scenarios=[_scenario()])), "")
+        prompt = messages[-1]["content"]
+        prompts["prompts"].append(prompt)
+        scenarios = [_scenario(name=name(index)) for index in range(asked(prompt))]
+        return StructuredResult(cast(Any, _Parsed(scenarios=scenarios)), "")
 
     monkeypatch.setattr(
         "evaluatorq.openresponses.client.build_simulation_client",

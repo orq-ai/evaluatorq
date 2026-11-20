@@ -1157,3 +1157,76 @@ async def test_a_client_without_an_integer_retry_budget_is_left_alone() -> None:
 
     client.with_options.assert_not_called()
     client.chat.completions.parse.assert_awaited_once()
+
+# --- skip_schema_rungs: start the ladder at the forced tool call ---
+
+
+def _usage(tokens: int) -> Any:
+    from evaluatorq.contracts import TokenUsage
+
+    return TokenUsage(input_tokens=tokens, output_tokens=1, total_tokens=tokens + 1, calls=1)
+
+
+@pytest.mark.asyncio
+async def test_skip_schema_rungs_goes_straight_to_the_forced_tool_call() -> None:
+    client = _responses_client(_responses_result(SampleResponse(value='from responses')))
+    client.chat.completions.parse = AsyncMock(return_value=_tool_completion('{"value": "from the tool"}'))
+
+    parsed, _ = await _generate_via_responses(client, skip_schema_rungs=True)
+
+    assert parsed.value == 'from the tool'
+    client.responses.create.assert_not_awaited()
+    # One chat request, and it is the forced tool call: no strict parse before it, no json_schema or json_object.
+    assert client.chat.completions.parse.await_count == 1
+    tool_call = client.chat.completions.parse.await_args
+    assert tool_call is not None
+    assert tool_call.kwargs['tool_choice']['type'] == 'function'
+    client.chat.completions.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_without_skip_schema_rungs_the_responses_answer_is_returned() -> None:
+    client = _responses_client(_responses_result(SampleResponse(value='stub')))
+
+    parsed, _ = await _generate_via_responses(client)
+
+    assert parsed.value == 'stub'
+    client.chat.completions.parse.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_skip_schema_rungs_falls_through_to_json_object_and_sums_both_rungs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.common import structured_output
+    from evaluatorq.common.structured_output import StructuredResult
+
+    async def unexpected(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError('a schema rung ran')
+
+    async def tool_rung(*_args: Any, **_kwargs: Any) -> Any:
+        return StructuredResult(None, '', _usage(200))
+
+    async def json_object_rung(*_args: Any, **_kwargs: Any) -> Any:
+        return StructuredResult(None, '[{"value": "a bare array"}]', _usage(50))
+
+    async def strict_rung(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError('the strict parse rung ran')
+
+    assert structured_output._SCHEMA_FORMAT_RUNGS == {structured_output._leg_strict_parse, structured_output._leg_json_schema}
+    monkeypatch.setattr(structured_output, '_generate_structured_via_responses', unexpected)
+    monkeypatch.setattr(structured_output, '_CHAT_RUNGS', (strict_rung, unexpected, tool_rung, json_object_rung))
+    monkeypatch.setattr(structured_output, '_SCHEMA_FORMAT_RUNGS', frozenset({strict_rung, unexpected}))
+
+    result = await generate_structured(
+        _responses_client(_responses_result(None)),
+        model='local-model',
+        messages=[{'role': 'user', 'content': 'return json'}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label='Sample.generate',
+        api='responses',
+        skip_schema_rungs=True,
+    )
+
+    assert (result.parsed, result.raw) == (None, '[{"value": "a bare array"}]')
+    assert result.usage is not None
+    assert result.usage.input_tokens == 250
