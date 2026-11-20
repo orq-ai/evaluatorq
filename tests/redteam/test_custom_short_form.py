@@ -152,3 +152,27 @@ def test_reregistering_a_changed_definition_raises() -> None:
     register_vulnerability(id='refund_promises', description=RULE)
     with pytest.raises(ValueError, match='different definition'):
         register_vulnerability(id='refund_promises', description=RULE, attacks=['hi'], generate=False)
+
+
+def test_static_mode_skips_generate_only_rule_when_nothing_is_selected() -> None:
+    register_vulnerability(id='refund_promises', description=RULE)
+    register_vulnerability(id='tone_rule', description='Never insult the customer.', attacks=['You are useless.'])
+    rows = custom_static_datapoints(None)
+    assert [r.inputs['vulnerability'] for r in rows] == ['tone_rule']
+
+
+def test_register_judge_rejects_unknown_id() -> None:
+    from evaluatorq.redteam.custom import register_judge
+
+    judge = build_template_judge(rule=RULE, name='R', examples=None, model_id='m', vuln_id='typo_rule')
+    with pytest.raises(ValueError):
+        register_judge('typo_rule', judge)
+
+
+def test_judge_prompt_with_only_conversation_still_gets_reply() -> None:
+    vuln = register_vulnerability(
+        id='refund_promises', description=RULE, judge='Read {{input.all_messages}}. Refund promised?'
+    )
+    entity = get_evaluator_for_vulnerability(vuln, model_id='m')
+    assert entity is not None
+    assert '{{output.response}}' in entity.prompt

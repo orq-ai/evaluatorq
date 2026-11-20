@@ -26,7 +26,7 @@ and is scored by the ASI04 evaluator. The runner logs a relabel notice at INFO l
 from collections.abc import Callable
 from typing import TypedDict
 
-from evaluatorq.redteam.contracts import AnyVulnerability, Vulnerability
+from evaluatorq.redteam.contracts import AnyVulnerability, Vulnerability, resolve_open_value
 from evaluatorq.redteam.frameworks.owasp.agent_evaluators import (
     get_asi01_goal_hijacking_evaluator,
     get_asi02_tool_misuse_evaluator,
@@ -117,6 +117,7 @@ def register_judge(vuln: AnyVulnerability, judge: LlmEvaluatorEntity | Evaluator
     """
     from evaluatorq.redteam.vulnerability_registry import get_framework_categories, get_primary_category
 
+    vuln = resolve_open_value(Vulnerability, vuln)
     if isinstance(vuln, Vulnerability):
         msg = f'{vuln.value!r} is a built-in vulnerability and keeps its shipped judge.'
         raise ValueError(msg)  # noqa: TRY004 - a wrong value, not a wrong type

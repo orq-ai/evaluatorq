@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from evaluatorq.common.model_roles import role_model
@@ -225,8 +226,8 @@ Provide a 2-3 sentence explanation that quotes the part of the reply you based i
 
 
 def _judge_from_prompt(prompt: str, *, name: str, vuln_id: str, model_id: str | None) -> LlmEvaluatorEntity:
-    """A user-written judge prompt; the reply and conversation blocks are added when it has neither."""
-    if not any(p in prompt for p in _JUDGE_PLACEHOLDERS):
+    """A user-written judge prompt; the reply and conversation blocks are added when it lacks the reply."""
+    if '{{output.response}}' not in prompt:
         prompt = (
             f'{prompt.rstrip()}\n\n<model_response>\n{{{{output.response}}}}\n</model_response>\n\n'
             '<conversation>\n{{input.all_messages}}\n</conversation>\n\n'
@@ -308,39 +309,38 @@ def register_vulnerability(definition: CustomVulnerability | None = None, /, **f
             unregister_open_value(Vulnerability, vid)
         raise
 
-    if get_evaluator_for_vulnerability(vuln) is None:
-        strategies = [
-            attack
-            if isinstance(attack, AttackStrategy)
-            else _strategy_from_prompt(
-                attack,
-                index=i,
-                vuln=vuln,
-                category=category,
-                rule=definition.description,
-                severity=definition.severity,
-            )
-            for i, attack in enumerate(definition.attacks, start=1)
-        ]
-        judge = definition.judge
-        if isinstance(judge, LlmEvaluatorEntity):
-            register_judge(vuln, judge)
-        elif isinstance(judge, str):
-            register_judge(
-                vuln, lambda model_id=None: _judge_from_prompt(judge, name=name, vuln_id=vid, model_id=model_id)
-            )
-        else:
-            examples = definition.examples
-            register_judge(
-                vuln,
-                lambda model_id=None: build_template_judge(
-                    rule=definition.description, name=name, examples=examples, model_id=model_id, vuln_id=vid
-                ),
-            )
-        for strategy in strategies:
-            register_strategy(strategy.model_copy(update={'vulnerability': strategy.vulnerability or vuln}))
-        if not definition.generate:
-            disable_generation(vuln)
+    strategies = [
+        attack
+        if isinstance(attack, AttackStrategy)
+        else _strategy_from_prompt(
+            attack,
+            index=i,
+            vuln=vuln,
+            category=category,
+            rule=definition.description,
+            severity=definition.severity,
+        )
+        for i, attack in enumerate(definition.attacks, start=1)
+    ]
+    judge = definition.judge
+    if get_evaluator_for_vulnerability(vuln) is not None:
+        pass
+    elif isinstance(judge, LlmEvaluatorEntity):
+        register_judge(vuln, judge)
+    elif isinstance(judge, str):
+        register_judge(vuln, lambda model_id=None: _judge_from_prompt(judge, name=name, vuln_id=vid, model_id=model_id))
+    else:
+        examples = definition.examples
+        register_judge(
+            vuln,
+            lambda model_id=None: build_template_judge(
+                rule=definition.description, name=name, examples=examples, model_id=model_id, vuln_id=vid
+            ),
+        )
+    for strategy in strategies:
+        register_strategy(strategy.model_copy(update={'vulnerability': strategy.vulnerability or vuln}))
+    if not definition.generate:
+        disable_generation(vuln)
     _DEFINITIONS[vid] = definition
     return vuln
 
@@ -363,6 +363,11 @@ def custom_static_datapoints(categories: list[str] | None) -> list[Any]:
         category = get_primary_category(vdef.id)
         framework = next(iter(vdef.framework_mappings), Framework.CUSTOM.value)
         attacks = [s for s in get_strategies_for_vulnerability(vdef.id) if s.prompt_template]
+        if not attacks and selected is None:
+            logger.warning(
+                f'Skipping custom vulnerability {vdef.id.value!r} in static mode: it has no written attacks.'
+            )
+            continue
         if not attacks:
             msg = (
                 f'Custom vulnerability {vdef.id.value!r} has no written attacks, so static mode cannot test it. '
