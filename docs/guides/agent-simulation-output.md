@@ -122,7 +122,7 @@ Check `criteria_verified` before trusting `criteria_results`. When it is `false`
 
 `token_usage_known` is `false` when usage could only be partly collected. Treat `token_usage` as unknown then, not as a cheap run.
 
-`token_usage` adds up every call the conversation made: the simulated user, the judge and the target agent. `target_token_usage` is the target agent's own part of it, so you can see what the agent under test costs when an expensive judge model drives the total up. It is `null` when the target reported no usage, for example a plain callable target, and on runs saved before the field existed. Read `null` as unknown, not as free.
+`token_usage` adds up every call the conversation made: the simulated user, the judge and the target agent. `target_token_usage` is the target agent's own part of it, so you can see what the agent under test costs when an expensive judge model drives the total up. It is `null` when the target reported no usage, for example a plain callable target, and on runs saved before the field existed. Read `null` as unknown, not as free. When the target reports usage on some turns but not others, each silent turn counts as a call with no price, so `calls` is the number of target calls and `priced_calls` the ones that came with a cost. The reports then mark the cost as a lower bound, for example "$0.0010 (1 of 2 calls)".
 
 ## Reading the run
 

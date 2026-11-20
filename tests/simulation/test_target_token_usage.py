@@ -129,6 +129,40 @@ async def test_a_target_that_reports_no_usage_is_unknown_not_zero() -> None:
     assert run.target_token_usage is None
 
 
+class _SometimesReportingTarget(_Target):
+    """Reports usage on the first turn only, like a target whose provider drops usage on some replies."""
+
+    def __init__(self, first: TokenUsage) -> None:
+        super().__init__(first)
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        response = await super().respond(messages)
+        return response if self.calls == 1 else AgentResponse(text=response.text, usage=None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_orq_key')
+async def test_a_turn_without_target_usage_makes_the_cost_a_lower_bound() -> None:
+    from evaluatorq.common.reports import fmt_cost_coverage
+
+    first = TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15, total_cost=0.001)
+    target = _SometimesReportingTarget(first)
+
+    result = await _runner(target).run(datapoint=_datapoint())
+
+    assert target.calls == 2
+    usage = result.target_token_usage
+    assert usage is not None
+    # The reported turn left `calls` at 0; the runner counts it as one priced call,
+    # and the silent turn as one call with no price.
+    assert (usage.calls, usage.priced_calls) == (2, 1)
+    assert usage.total_cost == pytest.approx(0.001)
+    assert usage.cost_is_partial
+    assert fmt_cost_coverage(
+        usage.total_cost, priced_calls=usage.priced_calls, calls=usage.calls, reported=1, items=1, noun='conversations'
+    ) == '$0.0010 (1 of 2 calls)'
+
+
 def _result(target: TokenUsage | None) -> SimulationResult:
     return SimulationResult(
         messages=[],

@@ -92,6 +92,18 @@ class RunSinks:
     # NEVER set this from the runner's own ``model`` — that is the
     # user-simulator/judge model, not the target's.
     target_model: str | None = None
+    # Target calls that returned no usage at all.
+    target_unreported_calls: int = 0
+
+    def recorded_target_usage(self) -> TokenUsage | None:
+        """The target's usage with each unreported call counted as a call with no price.
+
+        That makes a total over some turns read as a lower bound, ``(N of M calls)``.
+        ``None`` while no call has reported usage: unknown, not zero.
+        """
+        if self.target_token_usage is None or not self.target_unreported_calls:
+            return self.target_token_usage
+        return self.target_token_usage + TokenUsage(calls=self.target_unreported_calls)
 
 
 def _refresh_token_usage(sinks: RunSinks, user_simulator: UserSimulatorAgent, judge: JudgeAgent) -> None:
@@ -595,7 +607,7 @@ def _partial_result(
         turn_metrics=sinks.turn_metrics,
         token_usage=sinks.token_usage,
         token_usage_known=sinks.token_usage_known,
-        target_token_usage=sinks.target_token_usage,
+        target_token_usage=sinks.recorded_target_usage(),
         criteria_results=sinks.criteria_results,
         criteria_verified=sinks.criteria_verified,
         metadata=metadata,
@@ -1006,7 +1018,13 @@ class SimulationRunner:
             # response. Its usage belongs in the run just like a success.
             agent_response_usage = call.response.usage
             agent_response_model = call.response.model
-            if agent_response_usage is not None:
+            if agent_response_usage is None:
+                sinks.target_unreported_calls += 1
+            else:
+                # One respond() is one target call; a target that leaves `calls` at 0
+                # would otherwise hide its turns from the coverage count.
+                if agent_response_usage.calls == 0:
+                    agent_response_usage = agent_response_usage.with_calls(1)
                 sinks.target_token_usage = sum_structured_usage([sinks.target_token_usage, agent_response_usage])
                 sinks.token_usage = sinks.token_usage + agent_response_usage
             # Capture the first non-None model the target reports; it
@@ -1123,7 +1141,7 @@ class SimulationRunner:
             turn_metrics=sinks.turn_metrics,
             token_usage=sinks.token_usage,
             token_usage_known=sinks.token_usage_known,
-            target_token_usage=sinks.target_token_usage,
+            target_token_usage=sinks.recorded_target_usage(),
             criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,
             criteria_verified=criteria_tracker.verified,
             metadata=judge_metadata,
@@ -1239,7 +1257,7 @@ class SimulationRunner:
             target_model=sinks.target_model,
             criteria_verified=criteria_tracker.verified,
             token_usage_known=sinks.token_usage_known,
-            target_token_usage=sinks.target_token_usage,
+            target_token_usage=sinks.recorded_target_usage(),
             audited_ids=criteria_tracker.audited_ids,
             evidence=criteria_tracker.evidence,
         )
