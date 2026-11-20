@@ -70,6 +70,7 @@ uv add "evaluatorq[all]"                   # every extra below
 | `anthropic` | `anthropic` | You pass an `AsyncAnthropic`, Bedrock or Vertex client instead of an OpenAI one. See [Anthropic SDK clients](anthropic.md) |
 | `otel` | The OpenTelemetry SDK and its OTLP exporter | You want [traces](tracing.md) |
 | `langchain`, `langgraph`, `openai-agents`, `pydantic-ai`, `crewai` | The framework itself | Your agent under test is built on that framework. See [Framework integrations](framework-integrations.md) |
+| `claude-agent-sdk` | `claude-agent-sdk` | Your agent under test is built on the Claude Agent SDK. See [Claude Agent SDK agents](guides/targets.md#claude-agent-sdk-agents-claudeagentsdktarget) |
 | `orq` | Nothing — `orq-ai-sdk` is already a base dependency | Never needed; it exists so `evaluatorq[orq]` does not fail |
 | `all` | Every extra in this table | You are exploring and would rather not decide yet |
 

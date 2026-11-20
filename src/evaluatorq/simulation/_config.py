@@ -26,10 +26,10 @@ from collections.abc import (  # noqa: TC003 — used in real (non-TYPE_CHECKING
     Callable,
 )
 from pathlib import Path  # noqa: TC003 — used in a real (non-TYPE_CHECKING) field annotation, see note below
-from typing import Any
+from typing import Annotated, Any
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PlainValidator, WithJsonSchema, field_validator
 
 # NOTE: these two are used directly in field annotations below (not just for
 # static typing) — pydantic resolves annotations at class-creation time even
@@ -47,6 +47,22 @@ from evaluatorq.simulation.reports.recommendations import SimulationRecommendati
 DEFAULT_TARGET_AGENT_TIMEOUT_MS = DEFAULT_TARGET_TIMEOUT_MS
 DEFAULT_MAX_TARGET_RETRIES = 2
 DEFAULT_MAX_TOOL_RESULT_CHARS = 500
+
+
+def check_repetitions(value: object) -> int:
+    """Return *value* if it is a whole number of at least 1, else raise ``ValueError``.
+
+    The one check behind every ``repetitions`` input: the SDK entry points call it
+    before anything is generated, and `RepetitionCount` runs it inside the config
+    models. ``True`` and ``2.0`` are rejected instead of read as a count.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f'repetitions must be an integer of at least 1, got {value!r}')
+    return value
+
+
+RepetitionCount = Annotated[int, PlainValidator(check_repetitions), WithJsonSchema({'type': 'integer', 'minimum': 1})]
+"""A ``repetitions`` field type: validated by `check_repetitions` alone."""
 
 
 class SimulationConfig(BaseModel):
@@ -78,9 +94,9 @@ class SimulationConfig(BaseModel):
     max_turns: int | None = None
     """None means "unset": resolved in ``_simulate_core`` to a replayed run's
     cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
-    repetitions: int = Field(default=1, ge=1, strict=True)
-    """Separate conversations run per case. Strict, so ``True`` and ``2.0`` are
-    rejected instead of read as a count."""
+    repetitions: RepetitionCount | None = None
+    """Separate conversations run per case. None means "unset": resolved in
+    ``_simulate_core`` to a replayed run's count when replaying, else to 1."""
     llm_config: LLMCallConfig = Field(default_factory=LLMCallConfig)
     """Sampling/transport settings for every simulation-side LLM call — five roles:
     the user simulator, the judge, the persona / scenario / first-message
@@ -239,28 +255,31 @@ def require_sim_models_served(
     simulating: bool = True,
     generating: bool = True,
 ) -> None:
-    """Stop a run before any work when the environment picked Anthropic and a simulation model is not a Claude id.
+    """Stop a run before any work when the client that serves a simulation call site is Anthropic and its model is not a Claude id.
 
-    Checks only the call sites whose client the environment resolves: an injected ``generation_client`` covers
-    generation, an injected agent covers its own role, and ``llm_config.client`` covers all of them. The programmatic
-    entry points call this so they fail at the start, as the ``sim`` CLI does, instead of at the first LLM call.
-    ``simulating=False`` checks generation only, for an entry point that never runs a conversation;
+    Every call site without an agent of its own runs on one client: ``generation_client`` when given, else
+    ``llm_config.client``, else one resolved from the environment. The generator and the runner both resolve it in
+    that order. A client that was passed in is checked when it is an Anthropic client; with none, the environment is
+    checked when ``ANTHROPIC_API_KEY`` is the one LLM key set. An injected agent brings its own client and model, so
+    its role is not checked.
+
+    The programmatic entry points call this so they fail at the start, as the ``sim`` CLI does, instead of at the
+    first LLM call. ``simulating=False`` checks generation only, for an entry point that never runs a conversation;
     ``generating=False`` skips the generator, for a run that is handed its datapoints and writes no summary or
     recommendations.
 
     Raises:
-        ModelClientMismatchError: Anthropic is the provider and a model the run will call is not served by it.
+        ModelClientMismatchError: The serving side is Anthropic and a model the run will call is not served by it.
     """
-    from evaluatorq.common.llm_client import require_models_served_by_provider
+    from evaluatorq.common.llm_client import require_models_served
 
     config = sim_llm_config(llm_config)
-    if config.client is not None:
-        return
-    injected = {'sim.generator': generation_client, 'sim.user': user_simulator, 'sim.judge': judge}
     wanted = {'sim.generator': generating, 'sim.user': simulating, 'sim.judge': simulating}
-    tasks = tuple(task for task in SIM_TASKS if injected[task] is None and wanted[task])
+    own_agent = {'sim.generator': None, 'sim.user': user_simulator, 'sim.judge': judge}
+    tasks = tuple(task for task in SIM_TASKS if wanted[task] and own_agent[task] is None)
     if tasks:
-        require_models_served_by_provider(sim_models(config, tasks))
+        passed_in = generation_client if generation_client is not None else config.client
+        require_models_served(sim_models(config, tasks), client=passed_in)
 
 
 def resolve_sim_llm_config(*, model: str | None, llm_config: LLMCallConfig | None, caller: str) -> LLMCallConfig:

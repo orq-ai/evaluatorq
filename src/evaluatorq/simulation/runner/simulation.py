@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
-from evaluatorq.common.llm_client import as_llm_client
+from evaluatorq.common.llm_client import LLMConfigurationError, as_llm_client
 from evaluatorq.common.messages import pair_tool_rows, tool_call_text
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
@@ -256,6 +256,20 @@ def _implements(obj: object, methods: tuple[str, ...]) -> bool:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def stamp_repetition_lineage(
+    result: SimulationResult, *, repetition_datapoint: SimulationDatapoint, lineage: tuple[str, int] | None
+) -> None:
+    """Record which conversation this is: its own id, the case it repeats, and its position among that case's repetitions.
+
+    ``lineage`` is ``(base case id, repetition index)``; ``None`` means the datapoint is
+    its own case run once, so the base id is its id and the repetition index is 0.
+    """
+    base_id, repetition_index = lineage if lineage is not None else (repetition_datapoint.id, 0)
+    result.metadata['datapoint_id'] = repetition_datapoint.id
+    result.metadata['base_datapoint_id'] = base_id
+    result.metadata['repetition_index'] = repetition_index
 
 
 def _error_result(
@@ -864,6 +878,8 @@ class SimulationRunner:
                             },
                         )
                         raise
+        except LLMConfigurationError:
+            raise
         except Exception as e:
             logger.error('SimulationRunner.run() failed: %s', e, exc_info=True)
             error_msg = str(e)
@@ -1250,19 +1266,34 @@ class SimulationRunner:
             raise ValueError(f'max_concurrency must be >= 1, got {max_concurrency}')
         semaphore = asyncio.Semaphore(max_concurrency)
 
+        # A configuration error is the same for every datapoint. The first one stops the batch: rows still running
+        # are cancelled and rows waiting for a slot never start, so no further conversation is paid for.
+        configuration_errors: list[LLMConfigurationError] = []
+        tasks: list[asyncio.Task[SimulationResult]] = []
+
         async def run_single(dp: SimulationDatapoint) -> SimulationResult:
             async with semaphore:
                 await await_maybe(self._hooks.on_datapoint_start(dp))
-                return await self._run_with_timeout(dp, max_turns, timeout_per_simulation)
+                try:
+                    return await self._run_with_timeout(dp, max_turns, timeout_per_simulation)
+                except LLMConfigurationError as error:
+                    configuration_errors.append(error)
+                    current = asyncio.current_task()
+                    for task in tasks:
+                        if task is not current and not task.done():
+                            task.cancel()
+                    raise
 
-        tasks = [run_single(dp) for dp in datapoints]
+        tasks.extend(asyncio.create_task(run_single(dp)) for dp in datapoints)
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        if configuration_errors:
+            raise configuration_errors[0]
 
         final_results: list[SimulationResult] = []
         for i, result in enumerate(results):
             dp = datapoints[i]
             if isinstance(result, SimulationResult):
-                result.metadata['datapoint_id'] = dp.id
+                stamp_repetition_lineage(result, repetition_datapoint=dp, lineage=None)
                 # Append before firing the unguarded on_datapoint_error so a
                 # raising hook doesn't drop the result from final_results —
                 # matches the BaseException branch's ordering below.
@@ -1278,7 +1309,7 @@ class SimulationRunner:
             elif isinstance(result, BaseException):
                 error_msg = f'{type(result).__name__}: {result}'
                 err = _error_result(error_msg, dp.persona, dp.scenario)
-                err.metadata['datapoint_id'] = dp.id
+                stamp_repetition_lineage(err, repetition_datapoint=dp, lineage=None)
                 final_results.append(err)
                 await await_maybe(self._hooks.on_datapoint_error(dp, result))
                 await await_maybe(self._hooks.on_datapoint_complete(err))

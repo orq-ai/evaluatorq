@@ -913,6 +913,7 @@ def _sim_heat_cell_count(cell: dict) -> str:
     count of 1 must not read as evidence of reliability.
     """
     from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.simulation.reports.sections import achieved_of_n
 
     n = cell.get('n') or 0
     if n <= 1:
@@ -924,7 +925,8 @@ def _sim_heat_cell_count(cell: dict) -> str:
     if score is not None:
         parts.append(f'mean goal-completion score {pct(score)}')
     if rate is not None:
-        parts.append(f'goal achieved in {pct(rate)}')
+        achieved = achieved_of_n(cell).strip('()')
+        parts.append(f'goal achieved in {achieved} ({pct(rate)})')
     title = esc(' · '.join(parts))
     return f'<span class="rk-heat-n" style="margin-left:8px;font-size:11px;font-weight:400;opacity:.85" title="{title}">n={n}</span>'
 
