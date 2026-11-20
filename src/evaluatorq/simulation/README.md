@@ -33,7 +33,7 @@ results = await simulate(
 )
 ```
 
-Both functions take `repetitions` (default 1): the number of separate fresh conversations run for each case. The cases are generated or resolved once and then expanded into trials in `_simulate_via_evaluatorq`; the saved run keeps the base cases and the count, so a replay does not multiply an already repeated run.
+Both functions take `repetitions` (default 1): the number of separate fresh conversations run for each case. The cases are generated or resolved once, and each one then runs that many times. The saved run keeps the base cases and the count, so a replay runs the same number of conversations again unless you pass a different `repetitions`.
 
 `run_name` labels this execution in run records, results, and traces. It is optional, and the existing `evaluation_name` keyword remains supported.
 

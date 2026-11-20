@@ -258,6 +258,20 @@ def _implements(obj: object, methods: tuple[str, ...]) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def stamp_repetition_lineage(
+    result: SimulationResult, *, repetition_datapoint: SimulationDatapoint, lineage: tuple[str, int] | None
+) -> None:
+    """Record which conversation this is: its own id, the case it repeats, and its position among that case's repetitions.
+
+    ``lineage`` is ``(base case id, repetition index)``; ``None`` means the datapoint is
+    its own case run once, so the base id is its id and the repetition index is 0.
+    """
+    base_id, repetition_index = lineage if lineage is not None else (repetition_datapoint.id, 0)
+    result.metadata['datapoint_id'] = repetition_datapoint.id
+    result.metadata['base_datapoint_id'] = base_id
+    result.metadata['repetition_index'] = repetition_index
+
+
 def _error_result(
     reason: str,
     persona: Persona | None = None,
@@ -1262,7 +1276,7 @@ class SimulationRunner:
         for i, result in enumerate(results):
             dp = datapoints[i]
             if isinstance(result, SimulationResult):
-                result.metadata['datapoint_id'] = dp.id
+                stamp_repetition_lineage(result, repetition_datapoint=dp, lineage=None)
                 # Append before firing the unguarded on_datapoint_error so a
                 # raising hook doesn't drop the result from final_results —
                 # matches the BaseException branch's ordering below.
@@ -1278,7 +1292,7 @@ class SimulationRunner:
             elif isinstance(result, BaseException):
                 error_msg = f'{type(result).__name__}: {result}'
                 err = _error_result(error_msg, dp.persona, dp.scenario)
-                err.metadata['datapoint_id'] = dp.id
+                stamp_repetition_lineage(err, repetition_datapoint=dp, lineage=None)
                 final_results.append(err)
                 await await_maybe(self._hooks.on_datapoint_error(dp, result))
                 await await_maybe(self._hooks.on_datapoint_complete(err))
