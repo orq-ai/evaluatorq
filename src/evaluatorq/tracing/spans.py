@@ -15,6 +15,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
 from evaluatorq.types import EvaluationResultCell
 
 from .setup import get_tracer  # noqa: F401  # backwards-compatible test/import hook
@@ -28,6 +31,16 @@ if TYPE_CHECKING:
 # longer than this (genai_traces.go: dynamicAttributeMaxStringLength). Keep the
 # span copy of evaluator explanations at or under it so they always render.
 _SPAN_TEXT_MAX_CHARS = 512
+
+# The GenAI conventions say gen_ai.evaluation.score.label SHOULD be low
+# cardinality; a string verdict longer than this is cut to keep it a label.
+_SCORE_LABEL_MAX_CHARS = 64
+
+# Longest ``error_type`` taken verbatim from a scorer's error payload for ``error.type``.
+_ERROR_TYPE_MAX_CHARS = 64
+_FALLBACK_ERROR_TYPE = 'evaluation_error'
+
+_EVALUATION_RESULT_EVENT = 'gen_ai.evaluation.result'
 
 
 @dataclass
@@ -196,6 +209,7 @@ def set_evaluation_attributes(
     evaluator_name: str | None = None,
     evaluator_type: str | None = None,
     raw_output: dict[str, Any] | None = None,
+    evaluated_span: Span | None = None,
 ) -> None:
     """
     Set evaluation result attributes on a span.
@@ -213,7 +227,11 @@ def set_evaluation_attributes(
             orq.evaluation.output verdict payload the Orq trace UI classifies +
             renders evaluator spans from are additionally emitted.
             When ``None`` (the default), only the legacy orq.score/explanation/pass
-            attributes are written, so red-team spans are unchanged.
+            attributes are written.
+        evaluated_span: The span whose output was scored (the ``orq.job`` span).
+            When given with ``evaluator_type``, it also receives a standard
+            ``gen_ai.evaluation.result`` event carrying the gen_ai.evaluation.*
+            attributes, as the OTel GenAI conventions place it.
     """
     from evaluatorq.common.tracing import EVALUATION_OUTPUT_KEYS, record_span_payload
 
@@ -266,12 +284,25 @@ def set_evaluation_attributes(
         span.set_attribute('gen_ai.evaluation.score.value', score_value)
     if explanation is not None:
         span.set_attribute('gen_ai.evaluation.explanation', explanation)
+    label = _score_label(score, pass_, evaluator_name)
     if pass_ is not None:
+        # Not in the GenAI conventions, but Orq stores, alerts and scores
+        # boolean verdicts from gen_ai.evaluation.passed with no fallback.
         span.set_attribute('gen_ai.evaluation.passed', pass_)
-        # Orq's own graders emit pass/fail here, not true/false.
-        label = 'pass' if pass_ else 'fail'
+    if label is not None:
         span.set_attribute('gen_ai.evaluation.score.label', label)
         span.set_attribute('orq.evaluator.score.label', label)
+
+    if evaluator_name is not None:
+        scorer_error = _scorer_error_type(raw_output, evaluator_name)
+        add_evaluation_result_event(
+            evaluated_span,
+            name=evaluator_name,
+            score_value=None if scorer_error else score_value,
+            label=None if scorer_error else label,
+            explanation=None if scorer_error else explanation,
+            error_type=scorer_error,
+        )
 
     # The evaluator span's "Output" panel renders orq.evaluation.output verbatim.
     # Ingestion routes this key to blob storage rather than the 512-char-capped
@@ -289,6 +320,86 @@ def set_evaluation_attributes(
         payload=verdict,
         optional_fields={'raw_output': raw_output} if raw_output is not None else None,
     )
+
+
+def add_evaluation_result_event(
+    evaluated_span: Span | None,
+    *,
+    name: str,
+    score_value: float | None = None,
+    label: str | None = None,
+    explanation: str | None = None,
+    error_type: str | None = None,
+) -> None:
+    """Add the OTel GenAI ``gen_ai.evaluation.result`` event to the evaluated span.
+
+    With ``error_type`` the event carries only the name and ``error.type``, as the conventions
+    prescribe for an evaluation that did not produce a score. A ``None`` span emits nothing.
+    """
+    if evaluated_span is None:
+        return
+    event: dict[str, str | float] = {'gen_ai.evaluation.name': name}
+    if error_type is not None:
+        event['error.type'] = error_type
+    else:
+        if score_value is not None:
+            event['gen_ai.evaluation.score.value'] = score_value
+        if label is not None:
+            event['gen_ai.evaluation.score.label'] = label
+        if explanation is not None:
+            event['gen_ai.evaluation.explanation'] = explanation
+    evaluated_span.add_event(_EVALUATION_RESULT_EVENT, attributes=event)
+
+
+def _scorer_error_type(raw_output: dict[str, Any] | None, evaluator_name: str) -> str | None:
+    """Return ``error.type`` when a scorer returned an inconclusive result instead of raising.
+
+    Scorers mark that by putting ``EVAL_ERROR_RAW_OUTPUT_KEY`` in ``raw_output``. Its value is
+    an error payload whose ``error_type`` names the cause; a non-empty string of at most
+    ``_ERROR_TYPE_MAX_CHARS`` there, or as the value itself, is used as is. Anything else
+    becomes ``'evaluation_error'`` with a warning.
+    """
+    if not raw_output or EVAL_ERROR_RAW_OUTPUT_KEY not in raw_output:
+        return None
+    payload = raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]
+    candidate = payload.get('error_type') if isinstance(payload, dict) else payload
+    if isinstance(candidate, str) and candidate.strip() and len(candidate) <= _ERROR_TYPE_MAX_CHARS:
+        return candidate
+    logger.warning(
+        'evaluator {!r} returned an error result without a usable error_type ({!r}); '
+        'the trace event reports error.type={!r}',
+        evaluator_name,
+        candidate,
+        _FALLBACK_ERROR_TYPE,
+    )
+    return _FALLBACK_ERROR_TYPE
+
+
+def _score_label(
+    score: str | float | bool | dict[str, Any] | EvaluationResultCell | None,  # noqa: FBT001
+    pass_: bool | None,  # noqa: FBT001
+    evaluator_name: str | None,
+) -> str | None:
+    """Return the gen_ai.evaluation.score.label for a verdict, or ``None``.
+
+    A pass/fail verdict maps to ``pass``/``fail``, as Orq's own graders emit.
+    Otherwise a non-empty string score is its own label, cut to
+    ``_SCORE_LABEL_MAX_CHARS`` with a warning so the cut is never silent.
+    """
+    if pass_ is not None:
+        return 'pass' if pass_ else 'fail'
+    if not isinstance(score, str) or not score:
+        return None
+    if len(score) <= _SCORE_LABEL_MAX_CHARS:
+        return score
+    logger.warning(
+        'evaluator {!r} returned a {}-character string score; the trace label is cut to {} characters '
+        '(the full value is kept in the result and in orq.evaluation.output)',
+        evaluator_name,
+        len(score),
+        _SCORE_LABEL_MAX_CHARS,
+    )
+    return score[: _SCORE_LABEL_MAX_CHARS - 1] + '…'
 
 
 def set_job_name_attribute(span: Span | None, job_name: str) -> None:

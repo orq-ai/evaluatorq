@@ -23,6 +23,8 @@ from .types import (
 )
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
     from .tracing.context import TracingContext
 
 
@@ -260,11 +262,23 @@ async def process_job(
             async def run_evaluator_with_semaphore(evaluator: Evaluator) -> EvaluatorScore:
                 if semaphore is None:
                     return await process_evaluator(
-                        evaluator, data_point, output, progress_service, tracing_context, row_index=row_index
+                        evaluator,
+                        data_point,
+                        output,
+                        progress_service,
+                        tracing_context,
+                        row_index=row_index,
+                        job_span=job_span,
                     )
                 async with semaphore:
                     return await process_evaluator(
-                        evaluator, data_point, output, progress_service, tracing_context, row_index=row_index
+                        evaluator,
+                        data_point,
+                        output,
+                        progress_service,
+                        tracing_context,
+                        row_index=row_index,
+                        job_span=job_span,
                     )
 
             # Run all evaluators concurrently, bounded by the per-datapoint semaphore.
@@ -287,6 +301,7 @@ async def process_evaluator(
     progress_service: ProgressService | None = None,
     tracing_context: 'TracingContext | None' = None,
     row_index: int | None = None,
+    job_span: 'Span | None' = None,
 ) -> EvaluatorScore:
     """
     Process a single evaluator.
@@ -300,6 +315,8 @@ async def process_evaluator(
         row_index: Dataset index of the data point, forwarded to the scorer as
             ``ScorerParameter['row']`` so per-item logic (e.g. cyclic judge
             assignment) can key on dataset position instead of arrival order
+        job_span: The ``orq.job`` span whose output is scored. It receives the
+            standard ``gen_ai.evaluation.result`` event for this evaluator.
 
     Returns:
         EvaluatorScore with the evaluation result or error
@@ -308,6 +325,7 @@ async def process_evaluator(
     from .common.tracing import EVALUATION_INPUT_KEYS, EVALUATION_OUTPUT_KEYS, record_span_payload, set_span_error
     from .tracing.spans import (
         EvaluationSpanOptions,
+        add_evaluation_result_event,
         set_evaluation_attributes,
         with_evaluation_span,
     )
@@ -354,6 +372,7 @@ async def process_evaluator(
                 evaluator_name=evaluator_name,
                 evaluator_type=evaluator.get('evaluator_type', 'python_eval'),
                 raw_output=score.raw_output,
+                evaluated_span=job_span,
             )
 
             return EvaluatorScore(
@@ -367,6 +386,7 @@ async def process_evaluator(
         except Exception as error:
             set_span_error(eval_span, str(error))
             record_span_payload(eval_span, key=EVALUATION_OUTPUT_KEYS, payload={'error': str(error)})
+            add_evaluation_result_event(job_span, name=evaluator_name, error_type=type(error).__name__)
             # Return error result with empty score
             return EvaluatorScore(
                 evaluator_name=evaluator_name,
