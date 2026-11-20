@@ -378,7 +378,7 @@ def _target_cost_tile(a: Aggregates, b: Aggregates) -> dict:
     return {
         'label': 'Target cost',
         'value': figs[1][0],
-        'sub_html': f'<span class="cmp-tile-ab cmp-tile-ab--wrap"{title}>{esc(figs[0][0])} &rarr; {esc(figs[1][0])}</span>{change}{note}',
+        'sub_html': f'<span class="cmp-tile-ab cmp-tile-wrap"{title}>{esc(figs[0][0])} &rarr; {esc(figs[1][0])}</span>{change}{note}',
     }
 
 

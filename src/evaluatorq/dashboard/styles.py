@@ -3142,7 +3142,7 @@ _SIM_COMPARE_CSS = """
 .kpi-band--cmp .kpi-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .cmp-tile-ab { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
 /* Two dollar figures do not fit one narrow tile line; let the cost pair wrap at the arrow. */
-.cmp-tile-ab--wrap { white-space: normal; }
+.cmp-tile-ab.cmp-tile-wrap { white-space: normal; }
 .cmp-tile-note { font-size: 12px; color: var(--text-muted); line-height: 1.35; }
 
 .cmp-scores-note { margin: -4px 0 16px; }
