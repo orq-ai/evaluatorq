@@ -317,6 +317,7 @@ async def process_evaluator(
     from .common.tracing import EVALUATION_INPUT_KEYS, EVALUATION_OUTPUT_KEYS, record_span_payload, set_span_error
     from .tracing.spans import (
         EvaluationSpanOptions,
+        add_evaluation_error_event,
         set_evaluation_attributes,
         with_evaluation_span,
     )
@@ -375,6 +376,12 @@ async def process_evaluator(
         except Exception as error:
             set_span_error(eval_span, str(error))
             record_span_payload(eval_span, key=EVALUATION_OUTPUT_KEYS, payload={'error': str(error)})
+            add_evaluation_error_event(
+                job_span,
+                error,
+                evaluator_name=evaluator_name,
+                evaluator_type=evaluator.get('evaluator_type', 'python_eval'),
+            )
             # Return error result with empty score
             return EvaluatorScore(
                 evaluator_name=evaluator_name,

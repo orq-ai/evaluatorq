@@ -540,9 +540,8 @@ def test_set_evaluation_attributes_emits_evaluator_span_when_typed() -> None:
     }
 
 
-def test_set_evaluation_attributes_emits_orq_passed_next_to_gen_ai_passed() -> None:
-    """Orq reads gen_ai.evaluation.passed with no fallback, so it stays; the
-    orq.evaluator.passed copy survives a later move out of the gen_ai namespace."""
+def test_set_evaluation_attributes_keeps_gen_ai_passed() -> None:
+    """Orq reads gen_ai.evaluation.passed with no fallback, so it stays although the conventions lack it."""
     from unittest.mock import MagicMock
     from evaluatorq.tracing.spans import set_evaluation_attributes
 
@@ -550,7 +549,6 @@ def test_set_evaluation_attributes_emits_orq_passed_next_to_gen_ai_passed() -> N
     set_evaluation_attributes(span, 0.0, pass_=False, evaluator_name='e', evaluator_type='python_eval')
     attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
     assert attrs['gen_ai.evaluation.passed'] is False
-    assert attrs['orq.evaluator.passed'] is False
     assert attrs['gen_ai.evaluation.score.label'] == 'fail'
 
 

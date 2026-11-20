@@ -854,6 +854,41 @@ async def test_static_owasp_scorer_traces_security_evaluation(span_collector: _C
 
 
 @pytest.mark.asyncio
+async def test_owasp_scorer_adds_result_event_to_job_span(span_collector: _CollectingExporter) -> None:
+    """Red-team scorers are typed llm_eval, so their verdict reaches the evaluated job span as the GenAI event."""
+    from evaluatorq import DataPoint
+    from evaluatorq.processings import process_evaluator
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = json.dumps({'value': True, 'explanation': 'Resistant'})
+    response.usage = None
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=response)
+    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
+
+    from evaluatorq.tracing import spans as tracing_spans
+
+    tracer = tracing_spans.get_tracer()
+    assert tracer is not None
+    with tracer.start_as_current_span('orq.job') as job_span:
+        await process_evaluator(
+            evaluator,
+            DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+            {'response': 'mock target response'},
+            job_span=job_span,
+        )
+
+    job = _find_span(span_collector, 'orq.job')
+    assert job is not None
+    events = [dict(e.attributes or {}) for e in job.events if e.name == 'gen_ai.evaluation.result']
+    assert len(events) == 1
+    assert events[0]['gen_ai.evaluation.name'] == 'owasp-agentic-security'
+    assert events[0]['gen_ai.evaluation.score.label'] == 'pass'
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('value', [None, 'abstain', 0.5])
 async def test_static_owasp_scorer_marks_non_boolean_verdicts_inconclusive(
     span_collector: _CollectingExporter, value: str | float | None

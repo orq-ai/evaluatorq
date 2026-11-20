@@ -320,3 +320,19 @@ async def test_job_span_carries_one_result_event_per_evaluator(spans: InMemorySp
     }
     for name in ('orq.evaluation match', 'orq.evaluation relevance'):
         assert not [e for e in _span(spans, name).events if e.name == 'gen_ai.evaluation.result']
+
+
+@pytest.mark.asyncio
+async def test_failed_evaluator_adds_result_event_with_error_type(spans: InMemorySpanExporter) -> None:
+    """A raising scorer still reports to the evaluated span, as the conventions' error.type allows."""
+
+    async def job(_data: DataPoint, _row: int) -> dict[str, Any]:
+        return {'name': 'echo', 'output': 'reply'}
+
+    async def broken(_params: ScorerParameter) -> EvaluationResult:
+        raise RuntimeError('judge unavailable')
+
+    await process_job(job, DataPoint(inputs={}), row_index=0, evaluators=[{'name': 'broken', 'scorer': broken}])
+
+    events = [dict(e.attributes or {}) for e in _span(spans, 'orq.job').events if e.name == 'gen_ai.evaluation.result']
+    assert events == [{'gen_ai.evaluation.name': 'broken', 'error.type': 'RuntimeError'}]

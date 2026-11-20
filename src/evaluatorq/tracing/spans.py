@@ -36,7 +36,7 @@ _SPAN_TEXT_MAX_CHARS = 512
 _SCORE_LABEL_MAX_CHARS = 64
 
 # OTel GenAI event for one evaluation result, attached to the evaluated span.
-EVALUATION_RESULT_EVENT = 'gen_ai.evaluation.result'
+_EVALUATION_RESULT_EVENT = 'gen_ai.evaluation.result'
 
 
 @dataclass
@@ -285,7 +285,6 @@ def set_evaluation_attributes(
         # Not in the GenAI conventions, but Orq stores, alerts and scores
         # boolean verdicts from gen_ai.evaluation.passed with no fallback.
         span.set_attribute('gen_ai.evaluation.passed', pass_)
-        span.set_attribute('orq.evaluator.passed', pass_)
     if label is not None:
         span.set_attribute('gen_ai.evaluation.score.label', label)
         span.set_attribute('orq.evaluator.score.label', label)
@@ -329,7 +328,26 @@ def _add_evaluation_result_event(
         event['gen_ai.evaluation.score.label'] = label
     if explanation is not None:
         event['gen_ai.evaluation.explanation'] = explanation
-    evaluated_span.add_event(EVALUATION_RESULT_EVENT, attributes=event)
+    evaluated_span.add_event(_EVALUATION_RESULT_EVENT, attributes=event)
+
+
+def add_evaluation_error_event(
+    evaluated_span: Span | None,
+    error: BaseException,
+    *,
+    evaluator_name: str,
+    evaluator_type: str | None,
+) -> None:
+    """Record a failed evaluator as a ``gen_ai.evaluation.result`` event with ``error.type``.
+
+    Same opt-in as the success event: untyped evaluators and a missing span emit nothing.
+    """
+    if evaluated_span is None or evaluator_type is None:
+        return
+    evaluated_span.add_event(
+        _EVALUATION_RESULT_EVENT,
+        attributes={'gen_ai.evaluation.name': evaluator_name, 'error.type': type(error).__name__},
+    )
 
 
 def _score_label(
