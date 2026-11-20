@@ -95,7 +95,7 @@ class RouterPool(BaseModel):
     )
     relaxed_tier_rule: bool = Field(
         default=False,
-        description='True when no trio under this constraint reaches 2.75x tiers and the pool '
+        description='True when no trio under this constraint reaches 2x tiers and the pool '
         'took the widest spread available instead. A relaxed pool routes for less '
         'saving than an open one, and the flag is how a caller can say so.',
     )

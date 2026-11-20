@@ -97,7 +97,7 @@ A preset that is not in `PRESETS` still owes you a reason. `DROPPED_PRESETS` rec
 
 ## Router pools
 
-`evaluatorq.router_pools` derives candidate pools for the autorouter from the same live garden. A router calls one model per request rather than every member, so a pool is chosen for value under a constraint rather than for independent errors: each pool is three models on the Pareto frontier of what the constraint allows, with adjacent price tiers at least 2.75x apart. Membership is derived on first use, never committed.
+`evaluatorq.router_pools` derives candidate pools for the autorouter from the same live garden. A router calls one model per request rather than every member, so a pool is chosen for value under a constraint rather than for independent errors: each pool is three models on the Pareto frontier of what the constraint allows, with adjacent price tiers at least 2x apart. Membership is derived on first use, never committed.
 
 ```python
 from evaluatorq.router_pools import get_pools, get_underivable_pools
