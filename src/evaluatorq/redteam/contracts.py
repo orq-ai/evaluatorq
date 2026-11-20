@@ -2012,10 +2012,9 @@ class ReportSummary(BaseModel):
     )
     token_usage_target: TokenUsage | None = Field(
         default=None,
-        description="The target agent's own usage summed over every result's execution.token_usage_target: the "
+        description="The sum of the results' execution.token_usage_target, skipping results without one: the "
         'agent under test alone, without the attacker, seed replay, judges or post-processing. A part of '
-        'token_usage_total, never added to it. Results whose target reported nothing are skipped. None when no result reported '
-        'target usage, and for reports saved before this field existed: unknown, not zero.',
+        'token_usage_total, never added to it. None when no result has one.',
     )
     by_vulnerability: dict[str, VulnerabilitySummary] = Field(default_factory=dict)
     by_category: dict[str, CategorySummary] = Field(default_factory=dict)

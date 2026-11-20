@@ -16,6 +16,7 @@ import re
 from typing import TYPE_CHECKING, Any, cast
 
 from evaluatorq.common.reports import esc
+from evaluatorq.common.structured_output import sum_usage_coverage
 from evaluatorq.dashboard.trace_links import run_trace_url, trace_link_button
 from evaluatorq.simulation.metrics import TURN_METRICS, is_errored_result
 
@@ -1764,18 +1765,17 @@ def _sim_hero(run: SimulationRun, compare_html: str = '', *, target_label: str |
     inner = run_btn + trace_link_button(run.experiment_url, 'Open experiment in Orq') + compare_html
     actions = f'<div class="report-hero-actions">{inner}</div>' if inner else ''
     # Whole-run figures, like the run's saved totals: the hero does not follow the filter.
+    _, target_missing = sum_usage_coverage([r.target_token_usage for r in run.results])
     cost_html = hero_cost_line(
-        run.token_usage_total,
-        run.target_token_usage,
-        target_missing=sum(1 for r in run.results if r.target_token_usage is None),
-        items=len(run.results),
+        run.token_usage_total, run.target_token_usage, target_missing=target_missing, items=len(run.results)
     )
     return (
         '<header class="report-hero">'
         '<p class="report-hero-kicker">Agent Simulation</p>'
         f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
-        f'<p class="report-hero-sub">target {esc(target_label or run.target_kind)}</p>'
-        f'{cost_html}{actions}</header>'
+        '<div class="report-hero-meta">'
+        f'<p class="report-hero-sub">target {esc(target_label or run.target_kind)}</p>{cost_html}</div>'
+        f'{actions}</header>'
     )
 
 
@@ -2973,12 +2973,14 @@ def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
     run_btn = trace_link_button(run_trace_url(report.run_id, report.experiment_url), 'View all run traces ↗')
     actions = f'<div class="report-hero-actions">{run_btn}</div>' if run_btn else ''
     from evaluatorq.dashboard.report_kit import hero_cost_line
+    from evaluatorq.redteam.reports.converters import target_token_usage_coverage
 
     # Whole-run figures from the saved summary: the hero does not follow the filter.
+    _, target_missing = target_token_usage_coverage(report.results)
     cost_html = hero_cost_line(
         report.summary.token_usage_total,
         report.summary.token_usage_target,
-        target_missing=sum(1 for r in report.results if r.execution is None or r.execution.token_usage_target is None),
+        target_missing=target_missing,
         items=len(report.results),
         noun='attacks',
     )
@@ -2986,8 +2988,7 @@ def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
         '<header class="report-hero rt-hero">'
         f'<p class="report-hero-kicker">{esc(kicker)}</p>'
         f'<h2 class="report-hero-title rt-hero-title">{esc(_rt_run_name(report))}{agents_pill}</h2>'
-        f'{agent_pills_html}'
-        f'{cost_html}'
+        f'<div class="report-hero-meta">{agent_pills_html}{cost_html}</div>'
         f'{actions}'
         '</header>'
     )

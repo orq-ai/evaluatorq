@@ -1318,6 +1318,34 @@ class TestStaticEvaluatorqResults:
         assert result.evaluation is not None
         assert result.evaluation.token_usage is None
 
+    def test_a_static_target_that_reports_no_usage_has_unknown_target_cost(self):
+        """No usage on the reply is unknown, never $0, in the result, the summary and the report text."""
+        from evaluatorq.redteam.reports.export_md import export_markdown
+
+        reports = static_evaluatorq_results_to_reports(results=[_make_static_mock_result()], agent_key='my-agent')
+        report = reports['target-job']
+        execution = report.results[0].execution
+        assert execution is not None
+        assert execution.token_usage_target is None
+        assert report.summary.token_usage_target is None
+
+        # Total cost known (the judge billed), target cost unknown: the report says so rather than $0.
+        judged = static_evaluatorq_results_to_reports(
+            results=[_make_static_mock_result(evaluator_token_usage={'total_tokens': 6, 'calls': 1, 'total_cost': 0.002, 'priced_calls': 1})],
+            agent_key='my-agent',
+        )['target-job']
+        md = export_markdown(judged)
+        assert '| Target Agent Cost | unknown |' in md
+        assert 'Target Agent Cost | $0.0000' not in md
+
+    def test_report_text_shows_static_target_cost(self):
+        from evaluatorq.redteam.reports.export_md import export_markdown
+
+        usage = {'prompt_tokens': 20, 'completion_tokens': 10, 'total_tokens': 30, 'calls': 1, 'total_cost': 0.003, 'priced_calls': 1}
+        report = static_evaluatorq_results_to_reports(results=[_make_static_mock_result(token_usage=usage)], agent_key='my-agent')['target-job']
+
+        assert '| Target Agent Cost | $0.0030 |' in export_markdown(report)
+
     def test_judge_and_target_usage_kept_separate_and_raw_output_threaded(self):
         """Judge cost → evaluation, target cost → execution, each a single call;
         the judge's raw output is threaded onto the evaluation."""

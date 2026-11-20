@@ -165,3 +165,45 @@ def test_a_run_saved_before_target_usage_existed_loads_with_none() -> None:
 
     assert loaded.target_token_usage is None
     assert loaded.results[0].target_token_usage is None
+
+
+def test_coverage_counts_the_conversations_without_target_usage() -> None:
+    from evaluatorq.common.structured_output import sum_usage_coverage
+
+    known = TokenUsage(total_tokens=4, total_cost=0.01, calls=1, priced_calls=1)
+
+    assert sum_usage_coverage([known, None, known]) == (known + known, 1)
+    assert sum_usage_coverage([None, None]) == (None, 2)
+
+
+def test_markdown_export_shows_target_cost_with_its_coverage() -> None:
+    from evaluatorq.simulation.reports import export_markdown
+
+    known = TokenUsage(total_tokens=4, total_cost=0.01, calls=1, priced_calls=1)
+
+    md = export_markdown([_result(known), _result(None)], target='t')
+
+    assert '| Target Agent Cost | $0.0100 (1 of 2 conversations) |' in md
+
+
+def test_markdown_export_shows_unknown_target_cost_not_zero() -> None:
+    from evaluatorq.simulation.reports import export_markdown
+
+    md = export_markdown([_result(None)], target='t')
+
+    assert '| Target Agent Cost | unknown |' in md
+
+
+def test_html_export_from_bare_results_carries_target_cost_into_the_header() -> None:
+    import html
+    import re
+
+    from evaluatorq.simulation.reports import export_html
+
+    known = TokenUsage(total_tokens=4, total_cost=0.01, calls=1, priced_calls=1)
+
+    page = export_html([_result(known)], target='t')
+
+    line = re.search(r'<p class="report-hero-cost">(.*?)</p>', page, re.S)
+    assert line is not None
+    assert 'Target cost $0.0100' in ' '.join(html.unescape(re.sub(r'<[^>]+>', ' ', line.group(1))).split())

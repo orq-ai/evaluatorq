@@ -36,16 +36,30 @@ def fmt_cost(cost: float | None) -> str:
     return f'${cost:,.4f}'
 
 
-def cost_coverage(priced_calls: int, calls: int) -> str:
+def cost_coverage(priced_calls: int, calls: int, *, noun: str = 'calls') -> str:
     """Label a cost total that only some calls contributed to, e.g. ``' (3 of 10 calls)'``.
 
     Returns ``''`` when every call was priced, or when ``priced_calls`` is 0 —
     reports written before this was tracked have no coverage data, and claiming
-    "0 of N" for them would be a lie in the other direction.
+    "0 of N" for them would be a lie in the other direction. *noun* names what
+    was counted when the items are not calls, e.g. ``'conversations'``.
     """
     if 0 < priced_calls < calls:
-        return f' ({priced_calls:,} of {calls:,} calls)'
+        return f' ({priced_calls:,} of {calls:,} {noun})'
     return ''
+
+
+def fmt_cost_coverage(
+    cost: float | None, *, priced_calls: int, calls: int, reported: int, items: int, noun: str
+) -> str:
+    """A summed cost with both of its coverage labels, e.g. ``'$0.0040 (1 of 2 calls) (3 of 4 attacks)'``.
+
+    ``'unknown'`` when *cost* is ``None``. *reported* of the *items* recorded any
+    usage at all; the rest are missing from the sum, which makes it a lower bound.
+    """
+    if cost is None:
+        return 'unknown'
+    return f'{fmt_cost(cost)}{cost_coverage(priced_calls, calls)}{cost_coverage(reported, items, noun=noun)}'
 
 
 CACHED_TOKENS_LABEL = 'Cached Input Tokens'

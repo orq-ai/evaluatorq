@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import as_llm_client
 from evaluatorq.common.messages import pair_tool_rows, tool_call_text
+from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
@@ -76,8 +77,7 @@ class RunSinks:
     messages: list[Message] = field(default_factory=list)
     turn_metrics: list[TurnMetrics] = field(default_factory=list)
     token_usage: TokenUsage = field(default_factory=TokenUsage)
-    # None until the target reports usage on a turn: a target that never reports
-    # any (a plain callable) has unknown spend, not zero.
+    # None until the target reports usage on a turn.
     target_token_usage: TokenUsage | None = None
     token_usage_known: bool = True
     criteria_verified: bool | None = None
@@ -1007,11 +1007,7 @@ class SimulationRunner:
             agent_response_usage = call.response.usage
             agent_response_model = call.response.model
             if agent_response_usage is not None:
-                sinks.target_token_usage = (
-                    agent_response_usage
-                    if sinks.target_token_usage is None
-                    else sinks.target_token_usage + agent_response_usage
-                )
+                sinks.target_token_usage = sum_structured_usage([sinks.target_token_usage, agent_response_usage])
                 sinks.token_usage = sinks.token_usage + agent_response_usage
             # Capture the first non-None model the target reports; it
             # should be stable across turns for a given target. Never the

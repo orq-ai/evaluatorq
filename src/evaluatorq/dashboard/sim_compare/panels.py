@@ -6,13 +6,13 @@ from collections import Counter
 from itertools import cycle
 from typing import Any
 
-from evaluatorq.common.reports import esc, kpi_cards, pct
+from evaluatorq.common.reports import esc, fmt_cost, kpi_cards, pct
 from evaluatorq.dashboard.filters import _sim_options_from_results
-from evaluatorq.dashboard.report_kit import panel
+from evaluatorq.dashboard.report_kit import TARGET_COST_UNKNOWN_TIP, cost_figure, panel
 from evaluatorq.dashboard.report_tabs import sim_entity_dialog
 from evaluatorq.dashboard.sim_compare.fmt import delta_pill, fmt_num, run_key
 from evaluatorq.dashboard.sim_compare.heatmap import where_panel
-from evaluatorq.dashboard.sim_compare.model import FLAT_DELTA, Aggregates, Comparison, MatchedPair, ScoreRow, Side
+from evaluatorq.dashboard.sim_compare.model import COST_FLAT_DELTA, FLAT_DELTA, Comparison, MatchedPair, ScoreRow, Side
 from evaluatorq.dashboard.sim_compare.state import TableState, first_page, run_query, swap_link, toggled
 from evaluatorq.dashboard.sim_compare.table import render_conversations, resolve_view
 from evaluatorq.dashboard.view import GOAL_OUTCOME_LABEL, _render_sim_filter_rail, filter_fragment
@@ -295,6 +295,9 @@ def _tiles(cmp: Comparison) -> str:
         *,
         higher: bool | None,
         outcome: bool = False,
+        flat: float = FLAT_DELTA,
+        tip: str = '',
+        note: str = '',
     ) -> dict:
         if outcome and cmp.outcome_filter:
             return {
@@ -304,13 +307,27 @@ def _tiles(cmp: Comparison) -> str:
             }
         d = None if va is None or vb is None else vb - va
         # An unchanged value already reads as "x → x"; a "no change" pill on top is noise.
-        flat = d is not None and abs(d) < FLAT_DELTA
-        pill = '' if flat else delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
+        unchanged = d is not None and abs(d) < flat
+        pill = (
+            '' if unchanged else delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher, flat=flat)
+        )
+        title = f' title="{esc(tip)}"' if tip else ''
+        note_html = f'<span class="cmp-tile-note">{esc(note)}</span>' if note else ''
         return {
             'label': label,
             'value': fmt(vb),
-            'sub_html': f'<span class="cmp-tile-ab">{esc(fmt(va))} &rarr; {esc(fmt(vb))}</span>{pill}',
+            'sub_html': f'<span class="cmp-tile-ab"{title}>{esc(fmt(va))} &rarr; {esc(fmt(vb))}</span>{pill}{note_html}',
         }
+
+    # Target agent's own cost. An unknown side shows "unknown" and an n/a change, never a
+    # $0 baseline; a lower bound on either side says so beside the change.
+    figs = [
+        cost_figure(
+            agg.target_usage, unknown_tip=TARGET_COST_UNKNOWN_TIP, missing=agg.target_missing, total=agg.conversations
+        )
+        for agg in (a, b)
+    ]
+    cost_a, cost_b = (None if agg.target_usage is None else agg.target_usage.total_cost for agg in (a, b))
 
     return kpi_cards(
         [
@@ -342,44 +359,20 @@ def _tiles(cmp: Comparison) -> str:
             ),
             tile('Avg turns', a.avg_turns, b.avg_turns, lambda v: fmt_num(v, 1), lambda d: f'{d:+.1f}', higher=None),
             tile('Errors', a.errors, b.errors, lambda v: f'{v:.0f}', lambda d: f'{d:+.0f}', higher=False),
-            _target_cost_tile(a, b),
+            tile(
+                'Target cost',
+                cost_a,
+                cost_b,
+                lambda v: 'unknown' if v is None else fmt_cost(v),
+                lambda d: f'{"+" if d > 0 else "-"}{fmt_cost(abs(d))}',
+                higher=False,
+                flat=COST_FLAT_DELTA,
+                tip=' '.join(f'{which}: {fig.tip}' for which, fig in zip('AB', figs, strict=True) if fig.tip),
+                note='lower bound' if any(fig.qualifier for fig in figs) else '',
+            ),
         ],
         modifier='cmp',
     )
-
-
-def _target_cost_tile(a: Aggregates, b: Aggregates) -> dict:
-    """Target agent's own cost, A to B. Unknown on either side shows as unknown with no
-    delta (never a $0 baseline); a lower bound on either side says so beside the delta."""
-    from evaluatorq.common.reports import fmt_cost
-    from evaluatorq.dashboard.report_kit import TARGET_COST_UNKNOWN_TIP, cost_figure, pill
-
-    figs = [
-        cost_figure(
-            agg.target_usage, unknown_tip=TARGET_COST_UNKNOWN_TIP, missing=agg.target_missing, total=agg.conversations
-        )
-        for agg in (a, b)
-    ]
-    cost_a, cost_b = (agg.target_usage.total_cost if agg.target_usage is not None else None for agg in (a, b))
-    if cost_a is None or cost_b is None:
-        change = pill('n/a', tone='neutral')
-    elif cost_a == cost_b:
-        change = ''
-    else:
-        # Built here, not with delta_pill: its FLAT_DELTA is a score threshold, and costs
-        # are routinely sub-cent, so it would call most cost changes "no change".
-        d = cost_b - cost_a
-        arrow = '▲' if d > 0 else '▼'
-        change = pill(f'{arrow} {"+" if d > 0 else "-"}{fmt_cost(abs(d))}', tone='danger' if d > 0 else 'good')
-    tips = ' '.join(f'{which}: {tip}' for which, (_, _, tip) in zip('AB', figs, strict=True) if tip)
-    lower = any(qualifier for _, qualifier, _ in figs)
-    note = '<span class="cmp-tile-note">lower bound</span>' if lower else ''
-    title = f' title="{esc(tips)}"' if tips else ''
-    return {
-        'label': 'Target cost',
-        'value': figs[1][0],
-        'sub_html': f'<span class="cmp-tile-ab cmp-tile-wrap"{title}>{esc(figs[0][0])} &rarr; {esc(figs[1][0])}</span>{change}{note}',
-    }
 
 
 def _stack_rows(

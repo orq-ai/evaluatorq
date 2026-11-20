@@ -796,7 +796,7 @@ def export_html(
     for callers that do not have the saved run wrapper.
     """
     from evaluatorq.common.reports.standalone import simulation_html
-    from evaluatorq.simulation.contracts import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun, run_target_token_usage
 
     if isinstance(results, SimulationRun):
         run = results
@@ -815,5 +815,6 @@ def export_html(
             experiment_url=experiment_url,
             recommendations=recommendations,
             token_usage_total=run_token_usage_total,
+            target_token_usage=run_target_token_usage(results),
         )
     return simulation_html(run)

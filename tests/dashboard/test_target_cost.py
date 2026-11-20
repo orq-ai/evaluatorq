@@ -175,3 +175,30 @@ def test_compare_with_an_old_run_shows_unknown_and_no_delta(tmp_path: Path) -> N
     assert 'unknown → $0.0080' in tile
     assert 'n/a' in tile
     assert '▲' not in tile and '▼' not in tile
+
+
+def test_a_conversation_without_target_usage_makes_the_cost_a_lower_bound(tmp_path: Path) -> None:
+    run = _sim_run('A', 0.01)
+    run.results[1].target_token_usage = None
+    run.target_token_usage = _usage(0.01)
+    a, b = tmp_path / 'a.json', tmp_path / 'b.json'
+    a.write_text(run.model_dump_json())
+    b.write_text(_sim_run('B', 0.01).model_dump_json())
+    client = _client(tmp_path)
+
+    header = ' '.join(_hero_cost(client.get(f'/r/{report_id(a)}').text).split())
+    tile = _target_tile(client.get(f'/compare/sim?a={report_id(a)}&b={report_id(b)}').text)
+
+    assert 'Target cost $0.0100 (1 of 2 conversations)' in header
+    assert '$0.0100 → $0.0200' in tile
+    assert 'lower bound' in tile
+
+
+def test_cost_figure_names_both_coverage_gaps_in_one_qualifier() -> None:
+    from evaluatorq.dashboard.report_kit import cost_figure
+
+    fig = cost_figure(_usage(0.004, calls=2, priced=1), unknown_tip='', missing=1, total=4, noun='attacks')
+
+    assert (fig.value, fig.qualifier) == ('$0.0040', '(1 of 2 calls, 3 of 4 attacks)')
+    assert fig.tip == 'Lower bound: the cost covers only 1 of 2 calls, 3 of 4 attacks.'
+    assert cost_figure(None, unknown_tip='why').unknown

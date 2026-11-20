@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import itertools
 import math
+from dataclasses import dataclass
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.common.reports import esc
+from evaluatorq.common.reports import cost_coverage, esc, fmt_cost
 from evaluatorq.common.reports.html_helpers import pct
 
 if TYPE_CHECKING:
@@ -593,31 +594,43 @@ TARGET_COST_UNKNOWN_TIP = (
 )
 
 
+@dataclass(frozen=True)
+class CostFigure:
+    """A cost total ready to display."""
+
+    value: str
+    """``fmt_cost`` of the total, or ``'unknown'``."""
+    qualifier: str = ''
+    """The coverage label of a lower bound, e.g. ``'(1 of 2 calls)'``; empty for a full total."""
+    tip: str = ''
+    """Tooltip explaining an unknown value or a lower bound; empty when there is nothing to explain."""
+
+    @property
+    def unknown(self) -> bool:
+        return self.value == 'unknown'
+
+
 def cost_figure(
     usage: Usage | None, *, unknown_tip: str, missing: int = 0, total: int = 0, noun: str = 'conversations'
-) -> tuple[str, str, str]:
-    """``(value, qualifier, tooltip)`` for a cost total, never ``$0`` for an unknown one.
+) -> CostFigure:
+    """Display a cost total. It is unknown when *usage* is ``None`` or carries no cost.
 
-    ``value`` is ``'unknown'`` when *usage* is ``None`` or carries no cost. The
-    qualifier marks a lower bound: some calls had no price (``cost_is_partial``),
-    or *missing* of the *total* items reported no usage at all.
+    A known total is a lower bound when some calls had no price (``cost_is_partial``)
+    or *missing* of the *total* items reported no usage at all; the qualifier names
+    the coverage in the same ``(N of M calls)`` words the reports use.
     """
-    from evaluatorq.common.reports import cost_coverage, fmt_cost
-
     if usage is None:
-        return 'unknown', '', unknown_tip
+        return CostFigure('unknown', tip=unknown_tip)
     if usage.total_cost is None:
-        return 'unknown', '', 'Unknown: the provider reported tokens but no cost for these calls.'
-    qualifiers: list[str] = []
-    tips: list[str] = []
-    if usage.cost_is_partial:
-        qualifiers.append(cost_coverage(usage.priced_calls, usage.calls).strip())
-        tips.append(f'only {usage.priced_calls} of {usage.calls} calls reported a cost')
+        return CostFigure('unknown', tip='Unknown: the provider reported tokens but no cost for these calls.')
+    parts = [cost_coverage(usage.priced_calls, usage.calls) if usage.cost_is_partial else '']
     if missing and total:
-        qualifiers.append(f'({total - missing} of {total} {noun})')
-        tips.append(f'{missing} of {total} {noun} recorded no usage')
-    tip = f'Lower bound: {"; ".join(tips)}.' if tips else ''
-    return fmt_cost(usage.total_cost), ' '.join(qualifiers), tip
+        parts.append(cost_coverage(total - missing, total, noun=noun))
+    labels = [p.strip().removeprefix('(').removesuffix(')') for p in parts if p]
+    if not labels:
+        return CostFigure(fmt_cost(usage.total_cost))
+    coverage = ', '.join(labels)
+    return CostFigure(fmt_cost(usage.total_cost), f'({coverage})', f'Lower bound: the cost covers only {coverage}.')
 
 
 def hero_cost_line(
@@ -635,14 +648,13 @@ def hero_cost_line(
     cheap target judged by an expensive model no longer reads as expensive.
     """
 
-    def item(label: str, figure: tuple[str, str, str], cls: str) -> str:
-        value, qualifier, tip = figure
-        title = f' title="{esc(tip)}"' if tip else ''
-        unknown = ' report-hero-cost-value--unknown' if value == 'unknown' else ''
-        qual = f' <span class="report-hero-cost-qual">{esc(qualifier)}</span>' if qualifier else ''
+    def item(label: str, figure: CostFigure, cls: str) -> str:
+        title = f' title="{esc(figure.tip)}"' if figure.tip else ''
+        unknown = ' report-hero-cost-value--unknown' if figure.unknown else ''
+        qual = f' <span class="report-hero-cost-qual">{esc(figure.qualifier)}</span>' if figure.qualifier else ''
         return (
             f'<span class="report-hero-cost-item {cls}"{title}>{esc(label)} '
-            f'<b class="report-hero-cost-value{unknown}">{esc(value)}</b>{qual}</span>'
+            f'<b class="report-hero-cost-value{unknown}">{esc(figure.value)}</b>{qual}</span>'
         )
 
     total_fig = cost_figure(total, unknown_tip='Unknown: this run recorded no cost.')

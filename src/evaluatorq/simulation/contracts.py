@@ -6,12 +6,13 @@ Uses Pydantic models for maximum compatibility with generators/runner/agents.
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, computed_field
 from typing_extensions import TypedDict
 
 from evaluatorq.common.responses import scrub_wire_schema
+from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.contracts import (
     DEFAULT_PIPELINE_MODEL,
     Message,
@@ -20,6 +21,9 @@ from evaluatorq.contracts import (
     StrEnum,
     TokenUsage,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 DEFAULT_MODEL = DEFAULT_PIPELINE_MODEL
 """The built-in fast model, kept for imports. Simulation call sites resolve their model
@@ -742,13 +746,11 @@ class SimulationRun(BaseModel):
     field unchanged rather than folding in a zero. ``None`` only for runs
     saved before this field existed."""
     target_token_usage: TokenUsage | None = None
-    """The target agent's own usage summed over every conversation's
-    ``SimulationResult.target_token_usage``: the agent under test alone, with no
-    user simulator, judge, generation or summary spend. A part of
-    ``token_usage_total``, never added to it. ``None`` when no conversation
-    reported target usage, and for runs saved before this field existed, so an
-    unknown target cost never reads as $0. Conversations whose target reported
-    nothing are skipped, so the total covers only the ones that did."""
+    """The sum of the conversations' ``SimulationResult.target_token_usage``
+    (see `run_target_token_usage`), skipping conversations without one: the
+    agent under test alone, with no user simulator, judge, generation or
+    summary spend. A part of ``token_usage_total``, never added to it. ``None``
+    when no conversation has one."""
     run_id: str | None = None
     """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
     conversation's ``thread_id`` (``{run_id}:{index}``). Powers the dashboard's
@@ -779,6 +781,11 @@ class SimulationRun(BaseModel):
             'total_results': self.total_results,
             'scorer_averages': dict(self.scorer_averages),
         }
+
+
+def run_target_token_usage(results: Sequence[SimulationResult]) -> TokenUsage | None:
+    """``SimulationRun.target_token_usage`` for *results*: the one place a run's target usage is summed."""
+    return sum_structured_usage([r.target_token_usage for r in results])
 
 
 # ---------------------------------------------------------------------------

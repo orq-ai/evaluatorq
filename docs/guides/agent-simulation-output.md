@@ -126,7 +126,7 @@ Check `criteria_verified` before trusting `criteria_results`. When it is `false`
 
 ## Reading the run
 
-`token_usage_total` is everything the run spent. `target_token_usage` on the run is the sum of the conversations' `target_token_usage`, skipping conversations that have none, and is `null` when none of them have one. It is a part of `token_usage_total`, not an addition to it. The dashboard shows both in the report header and the change in target cost on the run comparison page.
+`token_usage_total` is everything the run spent. `target_token_usage` on the run is the sum of the conversations' `target_token_usage`, skipping conversations that have none, and is `null` when none of them have one. It is a part of `token_usage_total`, not an addition to it. The dashboard shows both in the report header and the change in target cost on the run comparison page, and the token usage table of the dashboard and of the HTML and Markdown exports has a "Target Agent Cost" row.
 
 `scorer_averages` is the mean of each evaluator's `metadata["evaluator_scores"]` over the results that have one. A conversation where an evaluator failed is left out of that evaluator's average rather than counted as zero, so a run with many failures can still show a high average. Count `metadata["evaluator_errors"]` to see how many were left out.
 
