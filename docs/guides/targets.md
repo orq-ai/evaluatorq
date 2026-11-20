@@ -592,13 +592,13 @@ Every tool call the agent made is recorded with its input and paired with its re
 
 File changes are visible as the write, edit and shell calls that made them. The target does not diff the working directory.
 
-Each turn also runs in a trace span that carries its token counts and the cost the Claude Code runtime reported, as `evaluatorq.claude_agent_sdk.cost_usd`. The response's `usage` carries the token counts, cache reads and writes included, and its cost stays empty: the runtime's figure is not copied into it, so token-based pricing still applies.
+Each turn also runs in a trace span that carries its token counts and the cost the Claude Code runtime reported, as `evaluatorq.claude_agent_sdk.cost_usd`. A turn whose model request failed records them too when the runtime reported them, before the error is raised. The response's `usage` carries the token counts, cache reads and writes included, and its cost stays empty: the runtime's figure is not copied into it, so token-based pricing still applies.
 
 ### What the attacker learns about the agent
 
 The agent context lists the tools the Claude Code runtime actually gives the agent, not only the ones the options name. With no `tools` set, that is every built-in tool; `disallowed_tools` takes some away, and each MCP server adds its tools as `mcp__<server>__<tool>`. Note that `allowed_tools` does not limit the list: it only approves tools without asking.
 
-To read the list, the target starts the runtime once with the options of a real turn, pointed at an address where no model answers, so no model request is made and nothing is billed. Your hooks and `can_use_tool` are left out of that start. If an MCP server is not connected at that moment its tools are missing, and a warning names it. If the runtime cannot start, the context lists the tools `tools` names, with a warning.
+To read the list, the target starts the runtime once with the options of a real turn, pointed at an address where no model answers, so no model request is made and nothing is billed. Your hooks and `can_use_tool` are left out of that start. If an MCP server is not connected at that moment its tools are missing, and a warning names it. If the runtime cannot start, the context lists the tools `tools` names, or the ones `allowed_tools` names when `tools` is not a list, minus `disallowed_tools`, with a warning.
 
 For the system prompt, a string or a `custom` prompt is reported whole and a `file` prompt is read. Of the `claude_code` preset only the `append` text is reported, because the preset itself lives in the runtime.
 

@@ -20,7 +20,7 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -38,7 +38,7 @@ from claude_agent_sdk import (
 )
 from loguru import logger
 
-from evaluatorq.backends.coding_agent import parse_claude
+from evaluatorq.backends.coding_agent import ParsedTurn, parse_claude
 from evaluatorq.common.target_call import NonRetryableTargetError
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, with_llm_span
 from evaluatorq.contracts import (
@@ -51,6 +51,9 @@ from evaluatorq.contracts import (
     ToolInfo,
     content_to_text,
 )
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
 
 Isolation = Literal['sandbox', 'none']
 
@@ -268,8 +271,10 @@ class ClaudeAgentSDKTarget(AgentTarget):
         """Send the latest user turn to the agent's session and return what the agent did and said.
 
         The turn runs in a ``with_llm_span`` span that carries its token usage and the cost the runtime reported
-        (``evaluatorq.claude_agent_sdk.cost_usd``), the way `CodingAgentTarget` records them. ``AgentResponse.usage``
-        carries the token counts only, so token-based pricing still applies to it.
+        (``evaluatorq.claude_agent_sdk.cost_usd``), the way `CodingAgentTarget` records them. A turn that fails after
+        the runtime reported its result records them too before the error propagates, so a failed model request still
+        shows what it cost. ``AgentResponse.usage`` carries the token counts only, so token-based pricing still applies
+        to it.
         """
         if not messages or messages[-1].role != 'user':
             raise ValueError("ClaudeAgentSDKTarget.respond requires messages[-1].role == 'user'")
@@ -280,19 +285,13 @@ class ClaudeAgentSDKTarget(AgentTarget):
             input_messages=[m.to_chat_completion() for m in messages],
             attributes={'orq.redteam.llm_purpose': 'target', 'evaluatorq.claude_agent_sdk.isolation': self._isolation},
         ) as span:
-            events = await self._run_turn(prompt)
+            events = await self._run_turn(prompt, span=span)
             turn = parse_claude(events)
+            _record_turn_usage(span, turn=turn)
             if turn.text is None or not turn.text.strip():
                 raise ClaudeAgentSDKError('agent_sdk.no_result', 'the run ended without a final assistant message')
             if turn.session_id is None:
                 logger.warning('ClaudeAgentSDKTarget: no session id in the result; the next turn starts a new session')
-            if turn.usage is None:
-                logger.warning('ClaudeAgentSDKTarget: no usage in the result; usage is None')
-            else:
-                record_token_usage(span, usage=turn.usage, total_cost=turn.cost_usd)
-            set_span_attrs(
-                span, {'evaluatorq.claude_agent_sdk.cost_usd': turn.cost_usd, 'gen_ai.response.id': turn.session_id}
-            )
             self._session_id = turn.session_id
             return AgentResponse(
                 output=[*turn.tool_calls, TextOutputItem(text=turn.text, annotations=[])],
@@ -301,8 +300,11 @@ class ClaudeAgentSDKTarget(AgentTarget):
                 response_id=turn.session_id,
             )
 
-    async def _run_turn(self, prompt: str) -> list[dict[str, Any]]:
-        """Run one ``query()`` and return its events, or raise the `ClaudeAgentSDKError` that says why it failed."""
+    async def _run_turn(self, prompt: str, *, span: Span | None) -> list[dict[str, Any]]:
+        """Run one ``query()`` and return its events, or raise the `ClaudeAgentSDKError` that says why it failed.
+
+        When the run reported a result before failing, its usage and cost are recorded on ``span`` before the raise.
+        """
         events: list[dict[str, Any]] = []
         try:
             async for message in query(prompt=prompt, options=self.turn_options()):
@@ -317,6 +319,7 @@ class ClaudeAgentSDKTarget(AgentTarget):
             # A run that ends on an error result raises after yielding that result; report the result, which says why.
             failed = _failure(events)
             if failed is not None:
+                _record_turn_usage(span, turn=parse_claude(events))
                 raise failed from exc
             detail = f'{type(exc).__name__}: {exc} {getattr(exc, "stderr", None) or ""}'.strip()
             if self._isolation == 'sandbox' and any(marker in detail for marker in SANDBOX_UNAVAILABLE_MARKERS):
@@ -328,6 +331,7 @@ class ClaudeAgentSDKTarget(AgentTarget):
             raise ClaudeAgentSDKError('agent_sdk.sdk_error', detail) from exc
         failed = _failure(events)
         if failed is not None:
+            _record_turn_usage(span, turn=parse_claude(events))
             raise failed
         return events
 
@@ -344,7 +348,8 @@ class ClaudeAgentSDKTarget(AgentTarget):
         it without a model request, the runtime starts with the options of a real turn, pointed at an address where
         no model answers, and is stopped as soon as it has announced its tools. Hooks and ``can_use_tool`` are left
         out of that start, since no tool runs. When the runtime cannot be started, the tools the options name are
-        listed instead, with a warning.
+        listed instead (``tools`` when it is a list, else ``allowed_tools``, minus ``disallowed_tools``), with a
+        warning.
         """
         options = self._options
         try:
@@ -356,7 +361,9 @@ class ClaudeAgentSDKTarget(AgentTarget):
                 type(exc).__name__,
                 exc,
             )
-            tools = [name for name in options.tools or [] if name not in options.disallowed_tools]
+            # `tools` is a list or a preset; with no list, `allowed_tools` names the tools the agent may use.
+            named = options.tools if isinstance(options.tools, list) else options.allowed_tools
+            tools = [name for name in named if name not in options.disallowed_tools]
         else:
             tools = [str(name) for name in init.get('tools', [])]
             for server in init.get('mcp_servers', []):
@@ -497,6 +504,15 @@ def _symlinks(directory: str, names: list[str]) -> list[str]:
             directory,
         )
     return links
+
+
+def _record_turn_usage(span: Span | None, *, turn: ParsedTurn) -> None:
+    """Put the turn's token usage, the runtime's cost and the session id on ``span``; warn when usage is missing."""
+    if turn.usage is None:
+        logger.warning('ClaudeAgentSDKTarget: no usage in the result; usage is None')
+    else:
+        record_token_usage(span, usage=turn.usage, total_cost=turn.cost_usd)
+    set_span_attrs(span, {'evaluatorq.claude_agent_sdk.cost_usd': turn.cost_usd, 'gen_ai.response.id': turn.session_id})
 
 
 def _failure(events: list[dict[str, Any]]) -> ClaudeAgentSDKError | None:

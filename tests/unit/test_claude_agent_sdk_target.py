@@ -695,6 +695,20 @@ async def test_agent_context_falls_back_to_the_named_tools_with_a_warning_when_t
     assert 'could not read the tool list from the Claude Code runtime (CLINotFoundError' in capsys.readouterr().err
 
 
+@pytest.mark.asyncio
+async def test_agent_context_falls_back_to_allowed_tools_when_the_options_name_no_tool_list(
+    fake_client: type[FakeClient], capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_client.init = CLINotFoundError('Claude Code not found')
+    options = ClaudeAgentOptions(
+        tools={'type': 'preset', 'preset': 'claude_code'}, allowed_tools=['Read', 'Bash'], disallowed_tools=['Bash']
+    )
+    context = await ClaudeAgentSDKTarget(options).get_agent_context()
+
+    assert context.get_tool_names() == ['Read']
+    assert 'could not read the tool list' in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ('prompt', 'text'),
     [
@@ -778,6 +792,38 @@ async def test_cached_tokens_and_the_runtime_cost_reach_the_response_and_the_spa
     attributes = span.attributes or {}
     assert attributes['evaluatorq.claude_agent_sdk.cost_usd'] == 0.0123
     assert attributes['gen_ai.response.id'] == 'sess-c'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'stream',
+    [
+        # The run raises after yielding the error result.
+        _api_failure('Failed to authenticate. API Error: 401', error='authentication_failed', status=401),
+        # The run ends on the error result without raising.
+        [_assistant(TextBlock(text='Overloaded'), error='server_error'), _result('s', text='Overloaded', error='success')],
+    ],
+)
+async def test_a_failed_turn_still_puts_its_usage_and_cost_on_the_span(
+    fake: Any, monkeypatch: pytest.MonkeyPatch, stream: list[Any]
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr('evaluatorq.common.tracing.get_tracer', lambda: provider.get_tracer('agent-sdk-tests'))
+    fake(stream)
+    target = ClaudeAgentSDKTarget(ClaudeAgentOptions(model='claude-haiku-5-5'))
+    try:
+        with pytest.raises(ClaudeAgentSDKError):
+            await target.respond(_user())
+    finally:
+        await target.close()
+        provider.shutdown()
+
+    (span,) = exporter.get_finished_spans()
+    attributes = span.attributes or {}
+    assert attributes['evaluatorq.claude_agent_sdk.cost_usd'] == 0.01
+    assert (attributes['gen_ai.usage.input_tokens'], attributes['gen_ai.usage.output_tokens']) == (11, 7)
 
 
 def test_messages_with_nothing_for_the_transcript_are_skipped() -> None:
