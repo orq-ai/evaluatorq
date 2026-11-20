@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import sys
 from typing import TYPE_CHECKING, Annotated, cast
 
@@ -15,7 +16,7 @@ from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.model_frontier import MIN_SEAT_INDEX
 
 if TYPE_CHECKING:
-    from evaluatorq.models import Index, ParetoPoint, ParetoResult, PriceMix, XAxis
+    from evaluatorq.models import Index, ParetoPoint, ParetoResult, PriceMix, ScoredModel, XAxis
 
 app = typer.Typer(help='Compare catalogue models.', no_args_is_help=True, context_settings=CONTEXT_SETTINGS)
 
@@ -40,7 +41,9 @@ def models() -> None:
 _SOURCE_MARK = {'host': '', 'artificial_analysis': ' (AA)', 'input': ' (input)'}
 
 
-def _print_table(result: ParetoResult, points: list[ParetoPoint], *, dominated: bool) -> None:
+def _print_table(
+    result: ParetoResult, points: list[ParetoPoint], *, dominated: bool, left_out_by_provider: int
+) -> None:
     from rich import box
     from rich.console import Console
     from rich.table import Table
@@ -99,6 +102,8 @@ def _print_table(result: ParetoResult, points: list[ParetoPoint], *, dominated: 
         console.print(
             f'[dim]{missing} model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.[/dim]'
         )
+    if left_out_by_provider:
+        console.print(f'[dim]{left_out_by_provider} model(s) from other providers left out by --provider.[/dim]')
 
 
 def _checked_options(*, index: str, x: str, effort: str | None, mix: str | None) -> PriceMix:
@@ -134,8 +139,8 @@ def pareto_cmd(
         list[str] | None,
         typer.Option(
             '--model',
-            help='Show only this model, still compared against every other one. A provider/model id, or a bare id held by '
-            'exactly one model. Repeatable.',
+            help='Show only this model, compared against every other model in the comparison, including when --provider '
+            'would leave it out. A provider/model id, or a bare id held by exactly one model. Repeatable.',
         ),
     ] = None,
     effort: Annotated[
@@ -192,18 +197,28 @@ def pareto_cmd(
             f'no model in the catalogue has a score at effort {effort!r}; the catalogue has: {listed}',
             param_hint='--effort',
         )
-    if provider:
-        pool = [m for m in pool if matches_vendor(m, provider)]
+    if not math.isfinite(min_score):
+        raise typer.BadParameter('must be a finite number', param_hint='--min-score')
+    # Resolve --model against the whole catalogue first, so --provider cannot make a named model unknown.
     shown: set[str] | None = None
+    named: dict[str, ScoredModel] = {}
     if model:
         shown = set()
         for model_id in model:
-            match = find_model(pool, model_id)
+            match = find_model(pool, model_id=model_id)
             if match is None:
                 raise typer.BadParameter(
                     f'{model_id!r} matches no model, or more than one; pass the provider/model id', param_hint='--model'
                 )
             shown.add(match.router_id)
+            named[match.router_id] = match
+    left_out_by_provider = 0
+    if provider:
+        kept = [m for m in pool if matches_vendor(m, provider)]
+        kept_ids = {m.router_id for m in kept}
+        kept.extend(m for router_id, m in named.items() if router_id not in kept_ids)
+        left_out_by_provider = len(pool) - len(kept)
+        pool = kept
 
     result = pareto(
         pool,
@@ -232,10 +247,11 @@ def pareto_cmd(
             'min_score': result.min_score,
             'points': [p.summary() for p in points],
             'excluded': [e.model_dump() for e in result.excluded],
+            'left_out_by_provider': left_out_by_provider,
         })
         return
     if not points:
         what = 'dominated' if dominated else 'on the frontier'
         typer.echo(f'No models {what} for these filters.')
         return
-    _print_table(result, points, dominated=dominated)
+    _print_table(result, points, dominated=dominated, left_out_by_provider=left_out_by_provider)

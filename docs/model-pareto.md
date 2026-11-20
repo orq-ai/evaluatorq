@@ -57,7 +57,7 @@ Read the table from the top down: each row is cheaper than the one above it and 
 
 Models scoring below 15 are left out before the frontier is drawn. Without the floor, the cheap end of the frontier holds models that are there only because nothing is cheaper: with the floor off and the 3:1 list blend, the frontier adds `tensorix/qwen/qwen3-coder-30b-a3b-instruct` at a score of 2.7 and $0.107 per 1M tokens. 15 is the same floor evaluatorq uses when it picks default models for its own roles, `MIN_SEAT_INDEX`.
 
-Set the floor with `--min-score` or `min_score=`. `0` shows every model:
+Set the floor with `--min-score` or `min_score=`. `--min-score 0` or `min_score=None` shows every model:
 
 === "CLI"
 
@@ -72,7 +72,7 @@ Set the floor with `--min-score` or `min_score=`. `0` shows every model:
 
     from evaluatorq.models import load_models, pareto
 
-    result = pareto(asyncio.run(load_models()), min_score=0, mix="list")
+    result = pareto(asyncio.run(load_models()), min_score=None, mix="list")
     print(len(result.frontier), "on the frontier")
     ```
 
@@ -96,7 +96,7 @@ The floor applies to whichever score you put on the y axis, so with `--index leg
 
 ## Is my model dominated?
 
-`--model` shows one model, compared against every other model in the comparison, whichever side of the frontier it falls on:
+`--model` shows one model, compared against every other model in the comparison, whichever side of the frontier it falls on. With `--provider`, the comparison is the models that provider keeps plus the one you named, even when it comes from another provider:
 
 === "CLI"
 
@@ -112,7 +112,7 @@ The floor applies to whichever score you put on the y axis, so with `--index leg
     from evaluatorq.models import dominated_by, find_model, load_models
 
     models = asyncio.run(load_models())
-    mine = find_model(models, "gpt-6.1-sol")
+    mine = find_model(models, model_id="gpt-6.1-sol")
     if mine is None:
         raise SystemExit("unknown id, or held by more than one host")
     winner = dominated_by(mine, models, mix="list")
@@ -163,8 +163,9 @@ $ eq models pareto --model gpt-6.1-sol --index legal --json 2>/dev/null
   ],
   "excluded": [
     {"router_id": "alibaba/qwen3.5-27b", "reason": "no legal score", "below_min_score": false},
-    {"router_id": "alibaba/qwen3.5-35b-a3b", "reason": "no legal score", "below_min_score": false}
-  ]
+    {"router_id": "cerebras/gpt-oss-120b", "reason": "score 8.1 is below min_score 15", "below_min_score": true}
+  ],
+  "left_out_by_provider": 0
 }
 ```
 
@@ -180,7 +181,7 @@ The y axis is a score and the x axis is a cost. Both have a default and both can
 
 | Axis | Flag / argument | Values | Better is |
 |---|---|---|---|
-| Score (y) | `--index` / `index=` | `intelligence` (default), `economics`, `engineering`, `finance_and_accounting`, `healthcare_and_medical`, `legal`, `strategy_and_ops`; `coding` and `agentic` are defined but currently empty | higher |
+| Score (y) | `--index` / `index=` | `intelligence` (default), `economics`, `engineering`, `finance_and_accounting`, `healthcare_and_medical`, `legal`, `strategy_and_ops` | higher |
 | Reasoning effort | `--effort` / `effort=` | an effort at least one catalogue model has a score at, such as `high`; only with `intelligence` | — |
 | Cost (x) | `--x` / `x=` | `price` (default), `output_speed`, `time_to_first_token` | lower price, higher speed, lower latency |
 | Price blend | `--mix` / `mix=` | `agentic` (default), `list`, or a `READ:WRITE:FRESH:OUTPUT` ratio; only with `price` | — |
@@ -194,7 +195,7 @@ eq models pareto --effort high --x output_speed --measured-only
 
 A domain index covers only the models AA has scored on it (25 of 73 for `legal` on 2026-11-20), and only at each model's default effort, so `--index legal --effort high` is refused. Fewer scored models also means fewer competitors: on 2026-11-20 at the default floor, a model on `legal` was compared against 19 others, against 34 on `intelligence`. Under `--effort`, models that list no score at that effort drop out of the comparison.
 
-`coding` and `agentic` are defined but currently empty: Orq's catalogue carries no value for them on any model. The CLI refuses an index or an effort that no loaded model has a score on and exits `2`, and the dashboard lists only the indices and efforts some model has. `pareto()` in Python accepts them and lists every model under `excluded`.
+The CLI refuses an index or an effort that no loaded model has a score on and exits `2`, and the dashboard lists only the indices and efforts some model has. `pareto()` in Python accepts them and lists every model under `excluded`.
 
 ## The price axis
 
@@ -273,6 +274,7 @@ $ eq models pareto --provider azure --min-score 0
 ╰──────────────────┴───────┴───────────────────────────┴─────────────┴─────────────────┴──────┴──────────╯
 Price blends the rates per 1M tokens as 7:0:2:1 (cache read : cache write : fresh input : output). Pass --mix list for the 3:1 input/output list blend.
 1 shown model(s) price a cache rate their host does not list: (AA) is the Artificial Analysis price on the same card, (input) bills those tokens at the input rate.
+70 model(s) from other providers left out by --provider.
 ```
 
 On 2026-11-20, 106 of the 119 priced models with a score list their own cache-read rate, 7 fall back to the Artificial Analysis price and 6 to the input rate. With one listing per model and the default floor, none of the plotted models falls back. A missing rate is often a catalogue gap rather than a real price: Azure OpenAI does discount cached input, but its cards list no cache rate.
