@@ -87,6 +87,7 @@ class ReportSummary:
     errors_by_type: dict[str, int]
     pre_execution_errors: int
     token_usage_total: TokenUsage | None
+    token_usage_target: TokenUsage | None
     token_usage_by_source: dict[str, TokenUsage]
     post_processing_token_usage: TokenUsage | None
     min_evaluation_coverage: float | None
@@ -142,6 +143,8 @@ A `null` verdict is not a pass. Code that tests `if not result.vulnerable` count
 
 `agent` identifies the tested target with its key, model name and display name; each value can be `null` when the target does not provide it. `agent_contexts` holds richer per-agent context, keyed by agent key.
 
+`execution` holds how the attack ran: turns, duration, and its token usage. `execution.token_usage` covers the attacker, the target and any seed-conversation replay together. `execution.token_usage_target` is the target agent's own replies to the attack, and `execution.token_usage_bootstrap` is the seed-conversation replay, counted apart from it. For a static attack the execution is the target's one reply, so the two usage fields are equal. `token_usage_target` is `null` when the target reported no usage and on reports saved before the field existed: unknown, not free.
+
 `evaluation.raw_output` holds the judge's verbatim reply. It is for debugging; parse the verdict from `passed` and `explanation`, not from there.
 
 `focus_area_recommendations` contains the generated remediation advice when recommendations are enabled. `applied_recommendations` contains recommendation strings already applied to an agent through `reports.apply`; it is empty when none have been applied.
@@ -155,6 +158,7 @@ A `null` verdict is not a pass. Code that tests `if not result.vulnerable` count
 - `min_evaluation_coverage` records the coverage floor the run was configured with, so a saved report says which policy it was judged against.
 - Each `by_*` field is a dict keyed by that dimension (vulnerability id, OWASP category, technique, and so on), each value carrying `total_attacks` and `resistance_rate`. All except `by_vulnerability` also carry `vulnerability_rate`.
 - `token_usage_total` includes `post_processing_token_usage`, the recommendation and executive-summary calls. `token_usage_by_source` covers the attack portion only.
+- `token_usage_target` is the target agent's own usage, summed over the results' `execution.token_usage_target`. It is a part of `token_usage_total`, not an addition to it, and answers what the agent under test cost apart from the attacker and judges. It is `null` when no result recorded target usage, including reports saved before the field existed. The dashboard shows it as "Target cost" next to the total in the report header.
 
 `errors` at the top level lists datapoints that failed before an attack ran, for example a template that could not be filled. They are not in `results` and not in `total_attacks`; `summary.pre_execution_errors` is their count, an integer.
 

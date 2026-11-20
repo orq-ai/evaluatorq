@@ -288,6 +288,8 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
             final_response=raw_output.text,
             response=raw_output.text,
             token_usage=raw_output.usage,
+            # The whole payload is one target response, so all of it is the target's.
+            token_usage_target=raw_output.usage,
             **error_fields,
             # ponytail: the assistant turn only. An AgentResponse carries no request
             # side, so there is no fuller conversation to reconstruct here.
@@ -514,7 +516,10 @@ def static_sample_to_result(
         evaluation=evaluation,
         vulnerable=vulnerable,
         evaluation_error=evaluation_error,
-        execution=ExecutionDetails(turns=1, max_turns=1, token_usage=execution_usage),
+        # A static attack's execution is the target's one inference, so its usage is all target usage.
+        execution=ExecutionDetails(
+            turns=1, max_turns=1, token_usage=execution_usage, token_usage_target=execution_usage
+        ),
         error=row.error,
         error_type=_classify_error(row.error, existing_type=row.error_type),
         error_stage=getattr(row, 'error_stage', None),
@@ -704,6 +709,7 @@ def dynamic_evaluatorq_results_to_report(
             objective_achieved=job_output.objective_achieved,
             objective_rationale=job_output.objective_rationale,
             token_usage=token_usage,
+            token_usage_target=job_output.token_usage_target,
             token_usage_bootstrap=job_output.token_usage_bootstrap,
             seed_context=job_output.seed_context,
             backtracked_turns=job_output.backtracked_turns,
@@ -919,6 +925,17 @@ def _aggregate_token_usage(results: list[RedTeamResult]) -> TokenUsage | None:
             total = total + r.evaluation.token_usage
             found = True
     return total if found else None
+
+
+def _aggregate_target_token_usage(results: list[RedTeamResult]) -> TokenUsage | None:
+    """Sum the target agent's own usage (``execution.token_usage_target``) across results.
+
+    ``None`` when no result reported target usage, so an unknown target cost never
+    renders as $0.
+    """
+    from evaluatorq.common.structured_output import sum_structured_usage
+
+    return sum_structured_usage([r.execution.token_usage_target if r.execution else None for r in results])
 
 
 def _aggregate_token_usage_by_source(results: list[RedTeamResult]) -> dict[str, TokenUsage]:
@@ -1266,6 +1283,7 @@ def compute_report_summary(
         pre_execution_errors=len(run_errors),
         errors_by_type=errors_by_type,
         token_usage_total=_aggregate_token_usage(results),
+        token_usage_target=_aggregate_target_token_usage(results),
         token_usage_by_source=_aggregate_token_usage_by_source(results),
         by_vulnerability=vuln_summaries,
         by_category=cat_summaries,

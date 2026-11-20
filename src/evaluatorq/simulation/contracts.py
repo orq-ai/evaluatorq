@@ -581,6 +581,12 @@ class SimulationResult(BaseModel):
         description='Whether token usage was fully collected. False means the result contains partial usage and '
         'must be treated as unknown rather than as a zero-cost run.',
     )
+    target_token_usage: TokenUsage | None = Field(
+        default=None,
+        description="The target agent's own share of token_usage: only the calls to the agent under test, "
+        'without the user simulator and judge. None when the target reported no usage (a plain callable, '
+        'an error before the first target call) and for runs saved before this field existed: unknown, not zero.',
+    )
     turn_metrics: list[TurnMetrics] = Field(description='Per-turn judge scores and token usage.')
     metadata: dict[str, Any] = Field(
         default_factory=dict,
@@ -735,6 +741,14 @@ class SimulationRun(BaseModel):
     reports no usage (no LLM creds, an error, or nothing billed) leaves this
     field unchanged rather than folding in a zero. ``None`` only for runs
     saved before this field existed."""
+    target_token_usage: TokenUsage | None = None
+    """The target agent's own usage summed over every conversation's
+    ``SimulationResult.target_token_usage``: the agent under test alone, with no
+    user simulator, judge, generation or summary spend. A part of
+    ``token_usage_total``, never added to it. ``None`` when no conversation
+    reported target usage, and for runs saved before this field existed, so an
+    unknown target cost never reads as $0. Conversations whose target reported
+    nothing are skipped, so the total covers only the ones that did."""
     run_id: str | None = None
     """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
     conversation's ``thread_id`` (``{run_id}:{index}``). Powers the dashboard's

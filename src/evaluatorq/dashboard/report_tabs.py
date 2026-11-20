@@ -1758,15 +1758,24 @@ def _sim_hero(run: SimulationRun, compare_html: str = '', *, target_label: str |
     # KPI cards intentionally omitted: the same metrics render in the 5-card
     # band inside the Overview tab (_sim_kpi_band), so a hero band duplicated
     # them above the tabs. Hero is now just title + subtitle.
+    from evaluatorq.dashboard.report_kit import hero_cost_line
+
     run_btn = trace_link_button(run_trace_url(run.run_id, run.experiment_url), 'View all run traces ↗')
     inner = run_btn + trace_link_button(run.experiment_url, 'Open experiment in Orq') + compare_html
     actions = f'<div class="report-hero-actions">{inner}</div>' if inner else ''
+    # Whole-run figures, like the run's saved totals: the hero does not follow the filter.
+    cost_html = hero_cost_line(
+        run.token_usage_total,
+        run.target_token_usage,
+        target_missing=sum(1 for r in run.results if r.target_token_usage is None),
+        items=len(run.results),
+    )
     return (
         '<header class="report-hero">'
         '<p class="report-hero-kicker">Agent Simulation</p>'
         f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
         f'<p class="report-hero-sub">target {esc(target_label or run.target_kind)}</p>'
-        f'{actions}</header>'
+        f'{cost_html}{actions}</header>'
     )
 
 
@@ -2963,11 +2972,22 @@ def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
     kicker = f'Red Team · {pipeline.capitalize()}' if pipeline else 'Red Team'
     run_btn = trace_link_button(run_trace_url(report.run_id, report.experiment_url), 'View all run traces ↗')
     actions = f'<div class="report-hero-actions">{run_btn}</div>' if run_btn else ''
+    from evaluatorq.dashboard.report_kit import hero_cost_line
+
+    # Whole-run figures from the saved summary: the hero does not follow the filter.
+    cost_html = hero_cost_line(
+        report.summary.token_usage_total,
+        report.summary.token_usage_target,
+        target_missing=sum(1 for r in report.results if r.execution is None or r.execution.token_usage_target is None),
+        items=len(report.results),
+        noun='attacks',
+    )
     return (
         '<header class="report-hero rt-hero">'
         f'<p class="report-hero-kicker">{esc(kicker)}</p>'
         f'<h2 class="report-hero-title rt-hero-title">{esc(_rt_run_name(report))}{agents_pill}</h2>'
         f'{agent_pills_html}'
+        f'{cost_html}'
         f'{actions}'
         '</header>'
     )

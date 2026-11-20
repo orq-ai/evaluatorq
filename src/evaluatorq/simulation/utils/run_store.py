@@ -208,6 +208,9 @@ def build_simulation_run(
                 logger.warning('Dropping non-numeric score from scorer %r: %r', scorer_name, score)
 
     scorer_averages = {k: sum(v) / len(v) for k, v in scorer_totals.items() if v}
+    from evaluatorq.common.structured_output import sum_structured_usage
+
+    target_token_usage = sum_structured_usage([getattr(result, 'target_token_usage', None) for result in results])
 
     return SimulationRun(
         run_name=run_name,
@@ -225,6 +228,7 @@ def build_simulation_run(
         evaluator_names=evaluator_names,
         total_results=len(results),
         scorer_averages=scorer_averages,
+        target_token_usage=target_token_usage,
         results=results,
         datapoints=list(datapoints) if datapoints else None,
         replay_version=REPLAY_VERSION if datapoints else None,

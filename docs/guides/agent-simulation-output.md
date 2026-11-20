@@ -49,6 +49,7 @@ class SimulationRun:
     total_results: int
     scorer_averages: dict[str, float]
     token_usage_total: TokenUsage | None
+    target_token_usage: TokenUsage | None
     executive_summary: str | None
     recommendations: list[SimulationRecommendation] | None
     applied_suggestions: list[str]
@@ -75,6 +76,7 @@ class SimulationResult:
     turn_metrics: list[TurnMetrics]
     token_usage: TokenUsage
     token_usage_known: bool
+    target_token_usage: TokenUsage | None
     evaluator_details: dict[str, dict[str, Any]]
     metadata: dict[str, Any]
     thread_id: str | None
@@ -120,7 +122,11 @@ Check `criteria_verified` before trusting `criteria_results`. When it is `false`
 
 `token_usage_known` is `false` when usage could only be partly collected. Treat `token_usage` as unknown then, not as a cheap run.
 
+`token_usage` adds up every call the conversation made: the simulated user, the judge and the target agent. `target_token_usage` is the target agent's own part of it, so you can see what the agent under test costs when an expensive judge model drives the total up. It is `null` when the target reported no usage, for example a plain callable target, and on runs saved before the field existed. Read `null` as unknown, not as free.
+
 ## Reading the run
+
+`token_usage_total` is everything the run spent. `target_token_usage` on the run is the sum of the conversations' `target_token_usage`, skipping conversations that have none, and is `null` when none of them have one. It is a part of `token_usage_total`, not an addition to it. The dashboard shows both in the report header and the change in target cost on the run comparison page.
 
 `scorer_averages` is the mean of each evaluator's `metadata["evaluator_scores"]` over the results that have one. A conversation where an evaluator failed is left out of that evaluator's average rather than counted as zero, so a run with many failures can still show a high average. Count `metadata["evaluator_errors"]` to see how many were left out.
 
@@ -202,4 +208,4 @@ sys.exit(1 if problems else 0)
 
 ## Runs from older versions
 
-Fields added after a run was saved load as their default: `criteria_verified`, `thread_id`, `response_traces`, `run_id`, `datapoints`, `token_usage_total` and `orq_base_url` are `null` or empty. A `null` there means "not recorded". `criteria_verified: null` in particular does not mean verified.
+Fields added after a run was saved load as their default: `criteria_verified`, `thread_id`, `response_traces`, `run_id`, `datapoints`, `token_usage_total`, `target_token_usage` and `orq_base_url` are `null` or empty. A `null` there means "not recorded". `criteria_verified: null` in particular does not mean verified.

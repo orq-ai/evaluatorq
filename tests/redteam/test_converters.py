@@ -444,6 +444,7 @@ def _make_dynamic_mock_result(
     objective_rationale: str | None = None,
     token_usage: dict[str, Any] | None = None,
     token_usage_bootstrap: dict[str, Any] | None = None,
+    token_usage_target: dict[str, Any] | None = None,
     seed_context: list[dict[str, Any]] | None = None,
     evaluator_token_usage: dict[str, Any] | None = None,
     evaluator_raw_output: dict[str, Any] | None = None,
@@ -471,6 +472,8 @@ def _make_dynamic_mock_result(
         output['token_usage'] = token_usage
     if token_usage_bootstrap is not None:
         output['token_usage_bootstrap'] = token_usage_bootstrap
+    if token_usage_target is not None:
+        output['token_usage_target'] = token_usage_target
     if seed_context is not None:
         output['seed_context'] = seed_context
     if output_error is not None:
@@ -615,6 +618,14 @@ class TestCoerceJobOutputPayload:
         assert result.error_code == 'provider-boom'
         assert result.error_turn == 3
         assert result.error_details == {'provider': 'example'}
+
+    def test_agent_response_usage_is_all_target_usage(self):
+        from evaluatorq.contracts import AgentResponse, TokenUsage
+
+        usage = TokenUsage(input_tokens=5, output_tokens=2, total_tokens=7, calls=1)
+        result = _coerce_job_output_payload(AgentResponse(text='hi', usage=usage))
+        assert result.token_usage == usage
+        assert result.token_usage_target == usage
 
     def test_dict_input_with_final_response(self):
         raw = {'final_response': 'Hello there', 'turns': 3}
@@ -864,6 +875,61 @@ class TestDynamicConverterValuePropagation:
         assert result.execution.token_usage is not None
         assert result.execution.token_usage.prompt_tokens == 100
         assert result.execution.token_usage.total_tokens == 150
+
+    def test_target_usage_is_kept_on_execution_and_summed_in_the_summary(self):
+        target = {'prompt_tokens': 30, 'completion_tokens': 10, 'total_tokens': 40, 'calls': 2, 'total_cost': 0.004, 'priced_calls': 2}
+        results = [
+            _make_dynamic_mock_result(
+                token_usage={'prompt_tokens': 300, 'completion_tokens': 60, 'total_tokens': 360, 'calls': 4, 'total_cost': 0.3, 'priced_calls': 4},
+                token_usage_target=target,
+            )
+            for _ in range(2)
+        ]
+
+        report = dynamic_evaluatorq_results_to_report(
+            agent_context=_make_agent_context(), categories_tested=['ASI01'], results=results
+        )
+
+        execution = report.results[0].execution
+        assert execution is not None
+        assert execution.token_usage_target is not None
+        assert execution.token_usage_target.total_tokens == 40
+        assert execution.token_usage_target.total_cost == pytest.approx(0.004)
+        assert report.summary.token_usage_target is not None
+        assert report.summary.token_usage_target.total_cost == pytest.approx(0.008)
+        assert report.summary.token_usage_target.calls == 4
+        # The target's share sits inside the total, it is never added to it.
+        assert report.summary.token_usage_total is not None
+        assert report.summary.token_usage_total.total_cost == pytest.approx(0.6)
+
+        loaded = RedTeamReport.model_validate_json(report.model_dump_json())
+        assert loaded.summary.token_usage_target == report.summary.token_usage_target
+        assert loaded.results[0].execution is not None
+        assert loaded.results[0].execution.token_usage_target == execution.token_usage_target
+
+    def test_no_target_usage_is_unknown_not_zero(self):
+        report = dynamic_evaluatorq_results_to_report(
+            agent_context=_make_agent_context(), categories_tested=['ASI01'], results=[_make_dynamic_mock_result()]
+        )
+        assert report.results[0].execution is not None
+        assert report.results[0].execution.token_usage_target is None
+        assert report.summary.token_usage_target is None
+
+    def test_a_report_saved_before_target_usage_existed_loads_with_none(self):
+        report = dynamic_evaluatorq_results_to_report(
+            agent_context=_make_agent_context(),
+            categories_tested=['ASI01'],
+            results=[_make_dynamic_mock_result(token_usage_target={'total_tokens': 4, 'calls': 1})],
+        )
+        data = report.model_dump(mode='json')
+        data['summary'].pop('token_usage_target')
+        data['results'][0]['execution'].pop('token_usage_target')
+
+        loaded = RedTeamReport.model_validate(data)
+
+        assert loaded.summary.token_usage_target is None
+        assert loaded.results[0].execution is not None
+        assert loaded.results[0].execution.token_usage_target is None
 
     def test_trace_replay_fields_round_trip_into_execution_and_result(self):
         bootstrap = {'prompt_tokens': 4, 'completion_tokens': 3, 'total_tokens': 7, 'calls': 1}
@@ -1245,6 +1311,9 @@ class TestStaticEvaluatorqResults:
         assert result.execution is not None
         assert result.execution.token_usage is not None
         assert result.execution.token_usage.total_tokens == 30
+        # A static attack's execution is the target's one inference, so it is all target usage.
+        assert result.execution.token_usage_target == result.execution.token_usage
+        assert reports['target-job'].summary.token_usage_target == result.execution.token_usage
         # No judge usage on this mock → evaluation carries no token usage.
         assert result.evaluation is not None
         assert result.evaluation.token_usage is None

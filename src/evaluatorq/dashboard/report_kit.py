@@ -20,6 +20,8 @@ from evaluatorq.common.reports.html_helpers import pct
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from evaluatorq.contracts import Usage
+
 
 def short_model(model: str) -> str:
     """Return the readable final component of a provider-qualified model ID."""
@@ -583,3 +585,74 @@ def meta_grid(items: list[tuple[str, str | None]]) -> str:
         for k, v in rows
     )
     return f'<div class="rk-meta-grid">{cells}</div>'
+
+
+TARGET_COST_UNKNOWN_TIP = (
+    "Unknown: this run did not record the target agent's own usage. Runs saved before target usage was "
+    'tracked, and targets that report no usage, show unknown rather than $0.'
+)
+
+
+def cost_figure(
+    usage: Usage | None, *, unknown_tip: str, missing: int = 0, total: int = 0, noun: str = 'conversations'
+) -> tuple[str, str, str]:
+    """``(value, qualifier, tooltip)`` for a cost total, never ``$0`` for an unknown one.
+
+    ``value`` is ``'unknown'`` when *usage* is ``None`` or carries no cost. The
+    qualifier marks a lower bound: some calls had no price (``cost_is_partial``),
+    or *missing* of the *total* items reported no usage at all.
+    """
+    from evaluatorq.common.reports import cost_coverage, fmt_cost
+
+    if usage is None:
+        return 'unknown', '', unknown_tip
+    if usage.total_cost is None:
+        return 'unknown', '', 'Unknown: the provider reported tokens but no cost for these calls.'
+    qualifiers: list[str] = []
+    tips: list[str] = []
+    if usage.cost_is_partial:
+        qualifiers.append(cost_coverage(usage.priced_calls, usage.calls).strip())
+        tips.append(f'only {usage.priced_calls} of {usage.calls} calls reported a cost')
+    if missing and total:
+        qualifiers.append(f'({total - missing} of {total} {noun})')
+        tips.append(f'{missing} of {total} {noun} recorded no usage')
+    tip = f'Lower bound: {"; ".join(tips)}.' if tips else ''
+    return fmt_cost(usage.total_cost), ' '.join(qualifiers), tip
+
+
+def hero_cost_line(
+    total: Usage | None,
+    target: Usage | None,
+    *,
+    target_missing: int = 0,
+    items: int = 0,
+    noun: str = 'conversations',
+) -> str:
+    """The report header's spend line: the run's total cost next to the target agent's own cost.
+
+    The total covers every call the run made (simulated user or attacker, judges,
+    generation, summaries); the target cost is the agent under test alone, so a
+    cheap target judged by an expensive model no longer reads as expensive.
+    """
+
+    def item(label: str, figure: tuple[str, str, str], cls: str) -> str:
+        value, qualifier, tip = figure
+        title = f' title="{esc(tip)}"' if tip else ''
+        unknown = ' report-hero-cost-value--unknown' if value == 'unknown' else ''
+        qual = f' <span class="report-hero-cost-qual">{esc(qualifier)}</span>' if qualifier else ''
+        return (
+            f'<span class="report-hero-cost-item {cls}"{title}>{esc(label)} '
+            f'<b class="report-hero-cost-value{unknown}">{esc(value)}</b>{qual}</span>'
+        )
+
+    total_fig = cost_figure(total, unknown_tip='Unknown: this run recorded no cost.')
+    target_fig = cost_figure(
+        target, unknown_tip=TARGET_COST_UNKNOWN_TIP, missing=target_missing, total=items, noun=noun
+    )
+    return (
+        '<p class="report-hero-cost">'
+        f'{item("Total cost", total_fig, "report-hero-cost-total")}'
+        '<span class="report-hero-cost-sep" aria-hidden="true">·</span>'
+        f'{item("Target cost", target_fig, "report-hero-cost-target")}'
+        '</p>'
+    )

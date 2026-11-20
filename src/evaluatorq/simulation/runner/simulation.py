@@ -76,7 +76,9 @@ class RunSinks:
     messages: list[Message] = field(default_factory=list)
     turn_metrics: list[TurnMetrics] = field(default_factory=list)
     token_usage: TokenUsage = field(default_factory=TokenUsage)
-    target_token_usage: TokenUsage = field(default_factory=TokenUsage)
+    # None until the target reports usage on a turn: a target that never reports
+    # any (a plain callable) has unknown spend, not zero.
+    target_token_usage: TokenUsage | None = None
     token_usage_known: bool = True
     criteria_verified: bool | None = None
     criteria_results: dict[str, bool] | None = None
@@ -593,6 +595,7 @@ def _partial_result(
         turn_metrics=sinks.turn_metrics,
         token_usage=sinks.token_usage,
         token_usage_known=sinks.token_usage_known,
+        target_token_usage=sinks.target_token_usage,
         criteria_results=sinks.criteria_results,
         criteria_verified=sinks.criteria_verified,
         metadata=metadata,
@@ -613,6 +616,7 @@ def _max_turns_result(
     *,
     criteria_verified: bool | None = None,
     token_usage_known: bool = True,
+    target_token_usage: TokenUsage | None = None,
     audited_ids: frozenset[str] | None = None,
     evidence: Mapping[str, str] | None = None,
 ) -> SimulationResult:
@@ -632,6 +636,7 @@ def _max_turns_result(
         turn_metrics=turn_metrics,
         token_usage=token_usage,
         token_usage_known=token_usage_known,
+        target_token_usage=target_token_usage,
         criteria_results=criteria_results,
         criteria_verified=criteria_verified,
         metadata=metadata,
@@ -1002,7 +1007,11 @@ class SimulationRunner:
             agent_response_usage = call.response.usage
             agent_response_model = call.response.model
             if agent_response_usage is not None:
-                sinks.target_token_usage = sinks.target_token_usage + agent_response_usage
+                sinks.target_token_usage = (
+                    agent_response_usage
+                    if sinks.target_token_usage is None
+                    else sinks.target_token_usage + agent_response_usage
+                )
                 sinks.token_usage = sinks.token_usage + agent_response_usage
             # Capture the first non-None model the target reports; it
             # should be stable across turns for a given target. Never the
@@ -1118,6 +1127,7 @@ class SimulationRunner:
             turn_metrics=sinks.turn_metrics,
             token_usage=sinks.token_usage,
             token_usage_known=sinks.token_usage_known,
+            target_token_usage=sinks.target_token_usage,
             criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,
             criteria_verified=criteria_tracker.verified,
             metadata=judge_metadata,
@@ -1233,6 +1243,7 @@ class SimulationRunner:
             target_model=sinks.target_model,
             criteria_verified=criteria_tracker.verified,
             token_usage_known=sinks.token_usage_known,
+            target_token_usage=sinks.target_token_usage,
             audited_ids=criteria_tracker.audited_ids,
             evidence=criteria_tracker.evidence,
         )

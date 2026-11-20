@@ -12,7 +12,7 @@ from evaluatorq.dashboard.report_kit import panel
 from evaluatorq.dashboard.report_tabs import sim_entity_dialog
 from evaluatorq.dashboard.sim_compare.fmt import delta_pill, fmt_num, run_key
 from evaluatorq.dashboard.sim_compare.heatmap import where_panel
-from evaluatorq.dashboard.sim_compare.model import FLAT_DELTA, Comparison, MatchedPair, ScoreRow, Side
+from evaluatorq.dashboard.sim_compare.model import FLAT_DELTA, Aggregates, Comparison, MatchedPair, ScoreRow, Side
 from evaluatorq.dashboard.sim_compare.state import TableState, first_page, run_query, swap_link, toggled
 from evaluatorq.dashboard.sim_compare.table import render_conversations, resolve_view
 from evaluatorq.dashboard.view import GOAL_OUTCOME_LABEL, _render_sim_filter_rail, filter_fragment
@@ -342,9 +342,44 @@ def _tiles(cmp: Comparison) -> str:
             ),
             tile('Avg turns', a.avg_turns, b.avg_turns, lambda v: fmt_num(v, 1), lambda d: f'{d:+.1f}', higher=None),
             tile('Errors', a.errors, b.errors, lambda v: f'{v:.0f}', lambda d: f'{d:+.0f}', higher=False),
+            _target_cost_tile(a, b),
         ],
         modifier='cmp',
     )
+
+
+def _target_cost_tile(a: Aggregates, b: Aggregates) -> dict:
+    """Target agent's own cost, A to B. Unknown on either side shows as unknown with no
+    delta (never a $0 baseline); a lower bound on either side says so beside the delta."""
+    from evaluatorq.common.reports import fmt_cost
+    from evaluatorq.dashboard.report_kit import TARGET_COST_UNKNOWN_TIP, cost_figure, pill
+
+    figs = [
+        cost_figure(
+            agg.target_usage, unknown_tip=TARGET_COST_UNKNOWN_TIP, missing=agg.target_missing, total=agg.conversations
+        )
+        for agg in (a, b)
+    ]
+    cost_a, cost_b = (agg.target_usage.total_cost if agg.target_usage is not None else None for agg in (a, b))
+    if cost_a is None or cost_b is None:
+        change = pill('n/a', tone='neutral')
+    elif cost_a == cost_b:
+        change = ''
+    else:
+        # Built here, not with delta_pill: its FLAT_DELTA is a score threshold, and costs
+        # are routinely sub-cent, so it would call most cost changes "no change".
+        d = cost_b - cost_a
+        arrow = '▲' if d > 0 else '▼'
+        change = pill(f'{arrow} {"+" if d > 0 else "-"}{fmt_cost(abs(d))}', tone='danger' if d > 0 else 'good')
+    tips = ' '.join(f'{which}: {tip}' for which, (_, _, tip) in zip('AB', figs, strict=True) if tip)
+    lower = any(qualifier for _, qualifier, _ in figs)
+    note = '<span class="cmp-tile-note">lower bound</span>' if lower else ''
+    title = f' title="{esc(tips)}"' if tips else ''
+    return {
+        'label': 'Target cost',
+        'value': figs[1][0],
+        'sub_html': f'<span class="cmp-tile-ab cmp-tile-ab--wrap"{title}>{esc(figs[0][0])} &rarr; {esc(figs[1][0])}</span>{change}{note}',
+    }
 
 
 def _stack_rows(

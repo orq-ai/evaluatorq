@@ -1325,6 +1325,16 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     font-size: 13px; color: var(--text-muted);
     font-family: var(--font-mono);
 }
+/* Spend line under the sub (or the red-team agent row): run total next to the
+   target agent's own cost. Pulled up into the sub's bottom margin. */
+.report-hero-cost {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+    margin: -8px 0 16px; font-size: 13px; color: var(--text-muted);
+}
+.report-hero-cost-value { font-family: var(--font-mono); font-weight: 600; color: var(--text-strong); }
+.report-hero-cost-value--unknown { font-weight: 400; color: var(--text-faint); }
+.report-hero-cost-qual { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); }
+.report-hero-cost-item[title] { cursor: help; }
 
 /* ==== CSS-only tabs (report bodies) ================================= */
 /* Radios carry the state; labels are the tab bar; panels show on :checked.
@@ -3123,7 +3133,7 @@ _SIM_COMPARE_CSS = """
 
 /* Number tiles: B large, then A -> B and the delta pill. Wrap on the space the tiles get,
    not the viewport: the sidebar and filter rail take ~470px of it. */
-.cmp-report .kpi-band--cmp { margin: 0 0 16px; grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.cmp-report .kpi-band--cmp { margin: 0 0 16px; grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
 @media (max-width: 760px) {
   .cmp-report .filter-swap-container .filter-form { order: -1; }
   .cmp-status { font-size: 12px; }
@@ -3131,6 +3141,8 @@ _SIM_COMPARE_CSS = """
 }
 .kpi-band--cmp .kpi-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .cmp-tile-ab { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
+/* Two dollar figures do not fit one narrow tile line; let the cost pair wrap at the arrow. */
+.cmp-tile-ab--wrap { white-space: normal; }
 .cmp-tile-note { font-size: 12px; color: var(--text-muted); line-height: 1.35; }
 
 .cmp-scores-note { margin: -4px 0 16px; }
