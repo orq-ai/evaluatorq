@@ -17,6 +17,7 @@ from evaluatorq.redteam.adaptive.objective_generator import generate_strategies_
 from evaluatorq.redteam.adaptive.strategy_registry import (
     _filter_by_method,
     default_vulnerabilities,
+    generation_enabled,
     get_strategies_for_vulnerability,
     select_applicable_strategies,
     select_applicable_strategies_for_vulnerability,
@@ -204,7 +205,9 @@ async def plan_strategies_for_vulnerabilities(
                     )
                     return vuln, [], str(e)
 
-            generation_results = await asyncio.gather(*(_generate_for_vulnerability(vuln) for vuln in vulnerabilities))
+            generation_results = await asyncio.gather(
+                *(_generate_for_vulnerability(vuln) for vuln in vulnerabilities if generation_enabled(vuln))
+            )
             for vuln, generated, generation_error in generation_results:
                 # Apply the same strategy-name / delivery-method filter to
                 # generated strategies, otherwise the LLM-side could silently

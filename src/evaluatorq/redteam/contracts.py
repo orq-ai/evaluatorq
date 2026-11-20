@@ -451,6 +451,11 @@ def registered_open_values(enum_cls: type[StrEnum]) -> list[RegisteredValue]:
     return list(_open_set_store(enum_cls).values())
 
 
+def unregister_open_value(enum_cls: type[StrEnum], value: str) -> None:
+    """Remove one registered value; a no-op when it was never registered."""
+    _open_set_store(enum_cls).pop(value, None)
+
+
 def clear_registered_values() -> None:
     """Forget every runtime-registered value in every open set (test isolation)."""
     for store in _REGISTERED_VALUES.values():

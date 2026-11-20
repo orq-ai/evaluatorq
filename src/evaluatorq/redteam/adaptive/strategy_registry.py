@@ -91,9 +91,23 @@ def register_strategy(strategy: AttackStrategy) -> None:
     _rebuild_strategy_registries()
 
 
+_generation_disabled: set[AnyVulnerability] = set()
+
+
+def disable_generation(vuln: AnyVulnerability) -> None:
+    """Run only the registered strategies for *vuln*; the planner generates none for it."""
+    _generation_disabled.add(vuln)
+
+
+def generation_enabled(vuln: AnyVulnerability) -> bool:
+    """False when the vulnerability was registered with ``generate: false``."""
+    return vuln not in _generation_disabled
+
+
 def clear_custom_strategies() -> None:
     """Drop every registered custom strategy (test isolation)."""
     _custom_strategies.clear()
+    _generation_disabled.clear()
     _rebuild_strategy_registries()
 
 

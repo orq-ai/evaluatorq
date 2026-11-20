@@ -65,6 +65,7 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     get_strategies_for_category,
     get_strategies_for_vulnerability,
     list_available_categories,
+    register_strategy,
     select_applicable_strategies,
     select_applicable_strategies_for_vulnerability,
 )
@@ -79,6 +80,7 @@ from evaluatorq.redteam.contracts import (
     AgentContext,
     AnyVulnerability,
     AttackSource,
+    AttackStrategy,
     AttackTechnique,
     DeliveryMethod,
     LLMConfig,
@@ -181,6 +183,22 @@ DEFAULT_MAX_TURNS = 5
 """Turn budget when the caller names none. ``max_turns`` defaults to ``None``
 rather than to this value so a replay can tell "unset" from "explicitly 5" and
 restore the replayed run's budget only in the former case."""
+
+
+def _register_strategy_objects(strategies: list[str | AttackStrategy] | None) -> list[str] | None:
+    """Register the `AttackStrategy` objects in ``strategies`` and return the name filter.
+
+    A list holding nothing but objects filters nothing; mixed with names, the objects join the filter.
+    """
+    if strategies is None:
+        return None
+    names = [s for s in strategies if isinstance(s, str)]
+    objects = [s for s in strategies if isinstance(s, AttackStrategy)]
+    for strategy in objects:
+        register_strategy(strategy)
+    if objects and not names:
+        return None
+    return names + [s.name for s in objects]
 
 
 def _resolve_attack_techniques(
@@ -1376,7 +1394,7 @@ async def red_team(
     mode: Pipeline | str | None = None,
     categories: list[str] | None = None,
     vulnerabilities: list[str] | None = None,
-    strategies: list[str] | None = None,
+    strategies: list[str | AttackStrategy] | None = None,
     datapoints: list[DataPoint] | None = None,
     attack_techniques: list[AttackTechnique | str] | None = None,
     delivery_methods: list[DeliveryMethod | str] | None = None,
@@ -1422,7 +1440,7 @@ async def red_team(
             ``mode="dynamic"`` instead of silently overwriting it.
         categories: OWASP categories to test (e.g., ``["ASI01", "ASI03"]``).
             Defaults to all available categories. Ignored if ``vulnerabilities`` is set.
-        vulnerabilities: AnyVulnerability IDs to test (e.g., ``["goal_hijacking", "prompt_injection"]``).
+        vulnerabilities: Vulnerability IDs to test (e.g., ``["goal_hijacking", "prompt_injection"]``).
             Takes precedence over ``categories``.
         strategies: Restrict the run to attack strategies whose ``name`` matches
             one of the supplied values. Filtering applies to both registry
@@ -1433,6 +1451,8 @@ async def red_team(
             apply to static (dataset) datapoints, which carry no strategy name —
             a warning is emitted if combined with ``static`` mode. ``None``
             disables the filter; an empty list selects nothing (see below).
+            An ``AttackStrategy`` object in the list is registered for its
+            vulnerability and runs like a shipped strategy; it does not filter.
         datapoints: Trace seed rows produced by ``datapoints_from_traces``. They
             require this target and use the dynamic pipeline; they cannot be
             combined with ``dataset`` or ``previous_run``.
@@ -1581,6 +1601,8 @@ async def red_team(
 
     save = _resolve_save_mode(save=save)
 
+    strategy_names = _register_strategy_objects(strategies)
+
     # Called for its raising side effect only, so a typo is rejected here rather than deep inside filter resolution.
     _validate_attack_techniques(attack_techniques)
 
@@ -1613,7 +1635,7 @@ async def red_team(
             dataset=dataset,
             categories=categories,
             vulnerabilities=vulnerabilities,
-            strategies=strategies,
+            strategies=strategy_names,
             datapoints=datapoints,
             attack_techniques=attack_techniques,
             delivery_methods=delivery_methods,
@@ -1667,7 +1689,7 @@ async def red_team(
     )
 
     resolved_filters = _resolve_filter_sets(
-        strategies=strategies,
+        strategies=strategy_names,
         attack_techniques=attack_techniques,
         delivery_methods=delivery_methods,
         vulnerabilities=vulnerabilities,
@@ -4373,6 +4395,11 @@ def _load_static_datapoints(
             msg = 'All datapoints were filtered out — no evaluator registered for any category.'
             raise ValueError(msg)
         data = filtered_data
+
+    if prefetched_data is None:
+        from evaluatorq.redteam.custom import custom_static_datapoints
+
+        data += custom_static_datapoints(categories)
 
     # The delivery-method filter was applied at load time (above). Strategy-name
     # selection cannot apply to static rows (dataset records with no strategy

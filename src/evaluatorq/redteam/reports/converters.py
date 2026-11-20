@@ -29,7 +29,6 @@ from evaluatorq.redteam.contracts import (
     DomainSummary,
     EvaluatedRow,
     ExecutionDetails,
-    Framework,
     FrameworkSummary,
     JobOutputPayload,
     JuryHealth,
