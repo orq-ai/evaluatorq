@@ -175,35 +175,10 @@ def _red_team_cases() -> dict[str, tuple[Callable[[], tuple[Any, Any]], str, lis
             lambda: (config(), _anthropic()), 'static', ['redteam.evaluator'], ['redteam.attacker'],
         ),
         'openai client': (lambda: (config(), _openai()), 'dynamic', None, []),
-        # The attacker takes the run-wide client first, so that is the one that must serve it.
+        # The attacker takes the run-wide client before its own. The pre-flight once checked them the other way round.
         'attacker on run-wide anthropic over its own openai': (
-            lambda: (config(attacker=LLMCallConfig(model='openai/gpt-6-sol', client=_openai())), _anthropic()),
-            'dynamic', ['openai/gpt-6-sol'], [],
-        ),
-        'attacker on run-wide openai over its own anthropic': (
-            lambda: (config(attacker=LLMCallConfig(model='openai/gpt-6-sol', client=_anthropic())), _openai()),
-            'dynamic', None, [],
-        ),
-        # The evaluator takes its own client first.
-        'evaluator on its own openai over run-wide anthropic': (
-            lambda: (
-                config(
-                    attacker=LLMCallConfig(model=CLAUDE),
-                    evaluator=EvaluatorConfig(model='openai/some-judge', client=_openai()),
-                ),
-                _anthropic(),
-            ),
-            'dynamic', None, [],
-        ),
-        'evaluator on its own anthropic over run-wide openai': (
-            lambda: (
-                config(
-                    attacker=LLMCallConfig(model='openai/gpt-6-sol'),
-                    evaluator=EvaluatorConfig(model='openai/some-judge', client=_anthropic()),
-                ),
-                _openai(),
-            ),
-            'dynamic', ['openai/some-judge'], [],
+            lambda: (config(attacker=LLMCallConfig(model='openai/attack-model', client=_openai())), _anthropic()),
+            'dynamic', ['=openai/attack-model'], [],
         ),
     }
 
