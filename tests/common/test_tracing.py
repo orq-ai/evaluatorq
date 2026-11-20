@@ -539,43 +539,48 @@ def test_set_evaluation_attributes_emits_evaluator_span_when_typed() -> None:
         'reason': 'why',
     }
 
+    # Orq reads gen_ai.evaluation.passed with no fallback, so a failing verdict keeps it as False.
+    failing = MagicMock()
+    set_evaluation_attributes(failing, 0.0, pass_=False, evaluator_name='e', evaluator_type='python_eval')
+    failing_attrs = {c.args[0]: c.args[1] for c in failing.set_attribute.call_args_list}
+    assert failing_attrs['gen_ai.evaluation.passed'] is False
+    assert failing_attrs['gen_ai.evaluation.score.label'] == 'fail'
 
-def test_set_evaluation_attributes_keeps_gen_ai_passed() -> None:
-    """Orq reads gen_ai.evaluation.passed with no fallback, so it stays although the conventions lack it."""
+
+def test_set_evaluation_attributes_scorer_error_result_is_an_error_event() -> None:
+    """A scorer that returns an inconclusive result marks it in raw_output; the event reports error.type, not a score."""
     from unittest.mock import MagicMock
-    from evaluatorq.tracing.spans import set_evaluation_attributes
-
-    span = MagicMock()
-    set_evaluation_attributes(span, 0.0, pass_=False, evaluator_name='e', evaluator_type='python_eval')
-    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
-    assert attrs['gen_ai.evaluation.passed'] is False
-    assert attrs['gen_ai.evaluation.score.label'] == 'fail'
-
-
-def test_set_evaluation_attributes_adds_result_event_to_evaluated_span() -> None:
-    from unittest.mock import MagicMock
+    from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
     from evaluatorq.tracing.spans import set_evaluation_attributes
 
     span, job_span = MagicMock(), MagicMock()
     set_evaluation_attributes(
         span,
-        1.0,
-        explanation='why',
-        pass_=True,
-        evaluator_name='goal_achieved',
-        evaluator_type='python_eval',
+        'error',
+        explanation='judge blocked',
+        evaluator_name='e',
+        evaluator_type='llm_eval',
+        raw_output={EVAL_ERROR_RAW_OUTPUT_KEY: {'error_type': 'content_filter', 'message': 'blocked'}},
         evaluated_span=job_span,
     )
-    job_span.add_event.assert_called_once_with(
-        'gen_ai.evaluation.result',
-        attributes={
-            'gen_ai.evaluation.name': 'goal_achieved',
-            'gen_ai.evaluation.score.value': 1.0,
-            'gen_ai.evaluation.score.label': 'pass',
-            'gen_ai.evaluation.explanation': 'why',
-        },
+    assert job_span.add_event.call_args.kwargs['attributes'] == {
+        'gen_ai.evaluation.name': 'e',
+        'error.type': 'content_filter',
+    }
+    # The span attributes are unchanged by the error marker.
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['gen_ai.evaluation.score.label'] == 'error'
+
+    fallback = MagicMock()
+    set_evaluation_attributes(
+        MagicMock(),
+        'error',
+        evaluator_name='e',
+        evaluator_type='llm_eval',
+        raw_output={EVAL_ERROR_RAW_OUTPUT_KEY: {'message': 'no type given'}},
+        evaluated_span=fallback,
     )
-    span.add_event.assert_not_called()
+    assert fallback.add_event.call_args.kwargs['attributes']['error.type'] == 'evaluation_error'
 
 
 def test_set_evaluation_attributes_no_result_event_without_evaluator_type() -> None:

@@ -164,7 +164,7 @@ Span attributes on `orq.job`:
 | `orq.row_index` | Zero-based row number |
 | `orq.job_name` | Job name (if set via `@job("name")`) |
 
-Events on `orq.job`: one `gen_ai.evaluation.result` event per evaluator, the [OpenTelemetry GenAI evaluation event](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/model/gen-ai/events.yaml). Evaluators run while the job span is still open, so the event sits on the span whose output was scored, as the conventions ask. It is emitted for every evaluator that sets `evaluator_type`, which `evaluatorq()` defaults to `python_eval`, and for the red-teaming OWASP scorers, which set `llm_eval`.
+Events on `orq.job`: one `gen_ai.evaluation.result` event per evaluator, the [OpenTelemetry GenAI evaluation event](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/model/gen-ai/events.yaml). Evaluators run while the job span is still open, so the event sits on the span whose output was scored, as the conventions ask. One event is emitted per evaluator run through `evaluatorq()`, including evaluators that raise or return an error result, which then carry `error.type` instead of a score. The label is `pass` or `fail` when the evaluator returns `pass_`, otherwise its string score, so it stays low-cardinality only if the evaluator returns a fixed set of strings; dict scores get neither a value nor a label.
 
 | Event attribute | Value |
 |---|---|
@@ -172,7 +172,7 @@ Events on `orq.job`: one `gen_ai.evaluation.result` event per evaluator, the [Op
 | `gen_ai.evaluation.score.value` | Numeric or boolean score as a float; absent for a string score |
 | `gen_ai.evaluation.score.label` | `pass` or `fail` when the evaluator returns `pass_`, otherwise a string score itself, cut to 64 characters with a logged warning |
 | `gen_ai.evaluation.explanation` | Explanation string, capped at 512 characters (if the evaluator provides one) |
-| `error.type` | Exception class name when the evaluator raised; the event then carries only this and the name |
+| `error.type` | Exception class name when the evaluator raised, or the error type of an error result (`evaluation_error` when none is named); the event then carries only this and the name |
 
 Span attributes on `orq.evaluation`:
 

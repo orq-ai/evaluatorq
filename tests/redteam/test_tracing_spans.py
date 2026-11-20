@@ -853,58 +853,22 @@ async def test_static_owasp_scorer_traces_security_evaluation(span_collector: _C
     assert _attrs(evaluation)['output'] == 'Resistant'
 
 
-@pytest.mark.asyncio
-async def test_owasp_scorer_adds_result_event_to_job_span(span_collector: _CollectingExporter) -> None:
-    """Red-team scorers are typed llm_eval, so their verdict reaches the evaluated job span as the GenAI event."""
-    from evaluatorq import DataPoint
-    from evaluatorq.processings import process_evaluator
+def test_owasp_evaluators_are_typed_llm_eval() -> None:
+    """The static and dynamic OWASP scorers are LLM judges, so the trace layer emits their evaluator attributes and event.
+
+    The hybrid evaluator (``hybrid-owasp-security``) is assembled inside the runner's run function and cannot be built
+    without a whole red-team run, so it is not covered here. A real client object is used: the factories never call it.
+    """
+    from openai import AsyncOpenAI
+
+    from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
 
-    from types import SimpleNamespace
-
-    from openai.types.chat import ChatCompletion, ChatCompletionMessage
-    from openai.types.chat.chat_completion import Choice
-
-    class _Completions:
-        """Typed fake: returns the SDK's own ChatCompletion, so a schema move or a wrong method fails the test."""
-
-        async def create(self, **_kwargs: Any) -> ChatCompletion:
-            content = json.dumps({'value': True, 'explanation': 'Resistant'})
-            return ChatCompletion(
-                id='cmpl-owasp',
-                created=0,
-                model='test-model',
-                object='chat.completion',
-                choices=[
-                    Choice(
-                        index=0,
-                        finish_reason='stop',
-                        message=ChatCompletionMessage(role='assistant', content=content),
-                    )
-                ],
-            )
-
-    client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
-    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=typing.cast('Any', client))
-
-    from evaluatorq.tracing import spans as tracing_spans
-
-    tracer = tracing_spans.get_tracer()
-    assert tracer is not None
-    with tracer.start_as_current_span('orq.job') as job_span:
-        await process_evaluator(
-            evaluator,
-            DataPoint(inputs={'category': 'ASI01', 'messages': []}),
-            {'response': 'mock target response'},
-            job_span=job_span,
-        )
-
-    job = _find_span(span_collector, 'orq.job')
-    assert job is not None
-    events = [dict(e.attributes or {}) for e in job.events if e.name == 'gen_ai.evaluation.result']
-    assert len(events) == 1
-    assert events[0]['gen_ai.evaluation.name'] == 'owasp-agentic-security'
-    assert events[0]['gen_ai.evaluation.score.label'] == 'pass'
+    client = AsyncOpenAI(api_key='test-key', base_url='http://localhost:1')
+    static = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
+    dynamic = create_dynamic_evaluator(evaluator_model='test-model', llm_client=client)
+    assert (static['name'], static['evaluator_type']) == ('owasp-agentic-security', 'llm_eval')
+    assert (dynamic['name'], dynamic['evaluator_type']) == ('owasp-dynamic-security', 'llm_eval')
 
 
 @pytest.mark.asyncio
