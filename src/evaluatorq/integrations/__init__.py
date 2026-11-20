@@ -6,12 +6,14 @@ Available integrations:
 - langgraph_integration: LangGraph agent target
 - openai_agents_integration: OpenAI Agents SDK agent target
 - pydantic_ai_integration: Pydantic AI agent target
+- claude_agent_sdk_integration: Claude Agent SDK agent target
 - crewai_integration: CrewAI crew target
 - vercel_ai_sdk_integration: Vercel AI SDK agent target (HTTP)
 - callable_integration: Custom callable agent target
 
 Every sub-module is imported lazily, so importing this package does not fail when
-an optional library (langchain, langgraph, openai-agents, pydantic-ai, crewai) is
+an optional library (langchain, langgraph, openai-agents, pydantic-ai, claude-agent-sdk,
+crewai) is
 not installed. `langchain_integration` used to be imported eagerly here, which
 made `import evaluatorq.integrations` raise ModuleNotFoundError on a base install
 — `langchain_integration.convert` imports `langchain_core` at module level.
@@ -21,6 +23,7 @@ import importlib
 
 __all__ = [
     'callable_integration',  # noqa: F822
+    'claude_agent_sdk_integration',  # noqa: F822
     'crewai_integration',  # noqa: F822
     'langchain_integration',  # noqa: F822
     'langgraph_integration',  # noqa: F822
