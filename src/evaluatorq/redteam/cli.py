@@ -39,7 +39,9 @@ from evaluatorq.redteam.contracts import (
     LLMConfig,
     Pipeline,
     SaveMode,
+    Severity,
     Vulnerability,
+    is_known_open_value,
     known_open_values,
     resolve_open_value,
 )
@@ -290,6 +292,7 @@ _RUN_FLAGS: tuple[Flag, ...] = (
     Flag('categories'),
     Flag('vulnerabilities'),
     Flag('strategies'),
+    Flag('custom'),
     Flag('delivery_methods'),
     Flag('max_turns'),
     Flag('max_per_category'),
@@ -351,6 +354,14 @@ def _normalise_run_config(cfg: RedTeamCliConfig) -> RedTeamCliConfig:
     )
     categories = _split_csv(cfg.categories)
     vulnerabilities = _split_csv(cfg.vulnerabilities)
+
+    if cfg.custom:
+        from evaluatorq.redteam.custom import CustomDefinitionError, register_custom
+
+        try:
+            register_custom(cfg.custom)
+        except CustomDefinitionError as e:
+            raise typer.BadParameter(str(e), param_hint="'--custom'") from e
 
     if vulnerabilities:
         from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
@@ -453,6 +464,17 @@ def run(
                 'the supplied values. Repeatable and/or comma-separated '
                 '(-s a,b or -s a -s b). Filter applies to both registry and '
                 'LLM-generated strategies. Unknown registry names are rejected.'
+            ),
+        ),
+    ] = None,
+    custom: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--custom',
+            metavar='PATH',
+            help=(
+                'A custom vulnerability definitions file (YAML or JSON). Repeatable. Its rules join the run '
+                'and can be picked with -V <id>. Create one with `eq redteam new-vulnerability`.'
             ),
         ),
     ] = None,
@@ -823,6 +845,145 @@ def schema(
     from evaluatorq.redteam.contracts import RedTeamReport
 
     echo_schema(RedTeamCliConfig if input_schema else RedTeamReport, output=not input_schema)
+
+
+_DOMAIN_CHOICES = {
+    '1': ('says something wrong', 'model'),
+    '2': ('does something wrong (tools, actions)', 'agent'),
+    '3': ('leaks data', 'data'),
+    '4': ('other', None),
+}
+
+
+def _prompt_list(label: str) -> list[str]:
+    """Ask for items one per line until an empty answer."""
+    items: list[str] = []
+    while True:
+        item = typer.prompt(f'{label} {len(items) + 1} (empty to finish)', default='', show_default=False).strip()
+        if not item:
+            return items
+        items.append(item)
+
+
+def _ask_definition(vuln_id: str | None) -> Any:
+    import click
+    from pydantic import ValidationError
+
+    from evaluatorq.redteam.custom import CustomVulnerability, JudgeExamples
+
+    while True:
+        chosen_id = vuln_id or typer.prompt('Id (lowercase, e.g. refund_promises)').strip()
+        rule = typer.prompt('The rule the agent must follow, in one sentence').strip()
+        typer.echo('What kind of risk is it?')
+        for key, (label, _) in _DOMAIN_CHOICES.items():
+            typer.echo(f'  {key}. {label}')
+        choice = typer.prompt('Choose', default='1', type=click.Choice(list(_DOMAIN_CHOICES)), show_choices=False)
+        domain = _DOMAIN_CHOICES[choice][1] or typer.prompt('Name the kind of risk').strip()
+        severity = typer.prompt(
+            'How bad is a failure?',
+            default=Severity.MEDIUM.value,
+            type=click.Choice([s.value for s in Severity]),
+        )
+        attacks = _prompt_list('Attack idea') if typer.confirm('Add your own attack ideas?', default=False) else []
+        passing: list[str] = []
+        failing: list[str] = []
+        if typer.confirm('Add example replies for the judge?', default=False):
+            passing = _prompt_list('Reply that follows the rule')
+            failing = _prompt_list('Reply that breaks the rule')
+        try:
+            return CustomVulnerability(
+                id=chosen_id,
+                description=rule,
+                domain=domain,
+                severity=Severity(severity),
+                attacks=list(attacks),
+                examples=JudgeExamples(passing=passing, failing=failing) if passing or failing else None,
+            )
+        except ValidationError as e:
+            typer.echo(f'Error: {"; ".join(err["msg"] for err in e.errors())}. Try again.', err=True)
+            vuln_id = None
+
+
+@app.command('new-vulnerability')
+def new_vulnerability(
+    vuln_id: Annotated[str | None, typer.Argument(metavar='[ID]', help='Lowercase id for the new rule.')] = None,
+    file: Annotated[
+        Path, typer.Option('--file', '-f', help='Definitions file to append to; created when missing.')
+    ] = Path('rules.yaml'),
+    no_input: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--no-input', help='Append a template to fill in by hand instead of asking questions.'),
+    ] = False,
+) -> None:
+    """Add a custom vulnerability to a definitions file, asking for the rule step by step."""
+    from evaluatorq.redteam.custom import (
+        CustomDefinitionError,
+        append_definition,
+        definition_yaml,
+        load_custom_vulnerabilities,
+        template_yaml,
+    )
+
+    if file.suffix.lower() not in {'.yaml', '.yml'}:
+        raise typer.BadParameter('new-vulnerability writes YAML; use a .yaml or .yml file.', param_hint="'--file'")
+    try:
+        existing_ids = {d.id for d in load_custom_vulnerabilities(file)} if file.exists() else set()
+    except CustomDefinitionError as e:
+        typer.echo(f'Error: {e}', err=True)
+        raise typer.Exit(code=1) from None
+
+    if no_input:
+        if not vuln_id:
+            raise typer.BadParameter('--no-input needs an ID argument.', param_hint="'ID'")
+        if vuln_id in existing_ids:
+            raise typer.BadParameter(f'{vuln_id!r} is already defined in {file}.', param_hint="'ID'")
+        append_definition(file, template_yaml(vuln_id))
+        typer.echo(f'Added a template for {vuln_id} to {file}. Fill in the description, then run:')
+    else:
+        if should_skip_confirm(yes=False):
+            raise typer.BadParameter('stdin is not a terminal; pass --no-input to write a template instead.')
+        definition = _ask_definition(vuln_id)
+        if definition.id in existing_ids:
+            typer.echo(f'Error: {definition.id!r} is already defined in {file}.', err=True)
+            raise typer.Exit(code=1)
+        append_definition(file, definition_yaml(definition))
+        typer.echo(f'Added {definition.id} to {file}. Run it with:')
+    typer.echo(f'  eq redteam run --target agent:<key> --custom {shell_path(file)}')
+
+
+judge_app = typer.Typer(help='Inspect the judges that score each vulnerability.', context_settings=CONTEXT_SETTINGS)
+app.add_typer(judge_app, name='judge')
+
+
+@judge_app.command('show')
+def judge_show(
+    vuln_id: Annotated[str, typer.Argument(metavar='ID', help='A vulnerability id or category code.')],
+    custom: Annotated[
+        list[str] | None,
+        typer.Option('--custom', metavar='PATH', help='Definitions file holding the custom rule. Repeatable.'),
+    ] = None,
+) -> None:
+    """Print the judge prompt that scores a vulnerability, as the run will use it."""
+    from evaluatorq.redteam.custom import CustomDefinitionError, register_custom
+    from evaluatorq.redteam.frameworks.owasp.evaluators import (
+        get_evaluator_for_category,
+        get_evaluator_for_vulnerability,
+    )
+
+    try:
+        register_custom(custom)
+    except CustomDefinitionError as e:
+        raise typer.BadParameter(str(e), param_hint="'--custom'") from e
+    if is_known_open_value(Vulnerability, vuln_id):
+        entity = get_evaluator_for_vulnerability(resolve_open_value(Vulnerability, vuln_id))
+    else:
+        entity = get_evaluator_for_category(vuln_id)
+    if entity is None:
+        hint = ' Pass --custom <file> for a custom rule.' if not custom else ''
+        typer.echo(f'Error: no judge for {vuln_id!r}.{hint}', err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f'# {entity.display_name} ({entity.id}), model {entity.model.id}')
+    typer.echo(entity.prompt)
 
 
 def _import_hf_download() -> Any:

@@ -107,7 +107,8 @@ class TestOpenValueSets:
         assert isinstance(tech, RegisteredValue)
         assert tech == 'telepathy'
         assert tech.value == 'telepathy'
-        assert {tech: 1}['telepathy'] == 1
+        lookup: dict[str, int] = {tech: 1}
+        assert lookup['telepathy'] == 1
         assert resolve_open_value(AttackTechnique, 'telepathy') is tech
 
     def test_registering_a_builtin_value_returns_the_member(self) -> None:
@@ -256,7 +257,7 @@ class TestRegisterStrategyAndJudge:
 
     def test_builtin_vulnerability_keeps_its_judge(self) -> None:
         with pytest.raises(ValueError, match='keeps its shipped judge'):
-            register_judge(Vulnerability.PROMPT_INJECTION, lambda model_id=None: None)  # type: ignore[arg-type]
+            register_judge(Vulnerability.PROMPT_INJECTION, lambda model_id=None: None)  # ty: ignore[invalid-argument-type]
 
 
 class TestReports:

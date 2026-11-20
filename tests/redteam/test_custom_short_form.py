@@ -63,7 +63,7 @@ def test_description_must_be_a_rule(bad: str) -> None:
 
 def test_unknown_field_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        CustomVulnerability(id='refund_promises', description=RULE, severty='high')  # type: ignore[call-arg]
+        CustomVulnerability.model_validate({'id': 'refund_promises', 'description': RULE, 'severty': 'high'})
 
 
 def test_generate_false_without_attacks_fails_and_leaves_nothing() -> None:

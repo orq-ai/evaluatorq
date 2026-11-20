@@ -5,10 +5,12 @@ Everything registered here is process-local and lives until `clear_custom_regist
 
 from __future__ import annotations
 
+import json
 import re
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.redteam.adaptive.strategy_registry import (
@@ -48,12 +50,19 @@ from evaluatorq.redteam.frameworks.owasp.models import (
 from evaluatorq.redteam.vulnerability_registry import clear_custom_vulnerabilities
 from evaluatorq.redteam.vulnerability_registry import register_vulnerability_def as _register_def
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 __all__ = [
+    'CustomDefinitionError',
     'CustomVulnerability',
     'JudgeExamples',
     'build_template_judge',
     'clear_custom_registrations',
+    'custom_static_datapoints',
+    'load_custom_vulnerabilities',
     'register_capability',
+    'register_custom',
     'register_domain',
     'register_framework',
     'register_judge',
@@ -371,3 +380,163 @@ def custom_static_datapoints(categories: list[str] | None) -> list[Any]:
             for i, strategy in enumerate(attacks, start=1)
         ]
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Definitions file: YAML or JSON, read by the CLI and red_team(custom=...)
+# ---------------------------------------------------------------------------
+
+CustomSource = str | Path | CustomVulnerability | dict[str, Any]
+
+
+class CustomDefinitionError(ValueError):
+    """A definitions file or entry is invalid; the message names the file and entry."""
+
+
+def _read_definitions_file(path: Path) -> list[Any]:
+    try:
+        text = path.read_text(encoding='utf-8')
+    except OSError as e:
+        msg = f'Cannot read custom vulnerability file {path}: {e}'
+        raise CustomDefinitionError(msg) from e
+    suffix = path.suffix.lower()
+    if suffix not in {'.yaml', '.yml', '.json'}:
+        msg = f'Custom vulnerability file {path} must end in .yaml, .yml or .json.'
+        raise CustomDefinitionError(msg)
+    if suffix == '.json':
+        try:
+            data = json.loads(text)
+        except ValueError as e:
+            msg = f'Cannot parse {path}: {e}'
+            raise CustomDefinitionError(msg) from e
+    else:
+        try:
+            import yaml
+        except ImportError as e:
+            msg = f'Reading {path} needs PyYAML: pip install "evaluatorq[redteam]", or use a .json file.'
+            raise CustomDefinitionError(msg) from e
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError as e:
+            msg = f'Cannot parse {path}: {e}'
+            raise CustomDefinitionError(msg) from e
+    if data is None:
+        return []
+    if isinstance(data, dict) and 'vulnerabilities' in data:
+        data = data['vulnerabilities']
+    elif isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        msg = f'{path} must hold a list of vulnerabilities, or a mapping with a "vulnerabilities" list.'
+        raise CustomDefinitionError(msg)
+    return data
+
+
+def load_custom_vulnerabilities(path: str | Path) -> list[CustomVulnerability]:
+    """Read and validate a definitions file (YAML or JSON by extension) without registering it."""
+    path = Path(path)
+    loaded: list[CustomVulnerability] = []
+    for index, entry in enumerate(_read_definitions_file(path), start=1):
+        label = entry.get('id') if isinstance(entry, dict) and entry.get('id') else f'entry {index}'
+        try:
+            loaded.append(CustomVulnerability.model_validate(entry))
+        except ValidationError as e:
+            msg = f'{path}, {label}: {_format_validation_error(e)}'
+            raise CustomDefinitionError(msg) from e
+    return loaded
+
+
+def _format_validation_error(error: ValidationError) -> str:
+    return '; '.join(f'{".".join(str(p) for p in err["loc"]) or "entry"}: {err["msg"]}' for err in error.errors())
+
+
+def register_custom(sources: CustomSource | Sequence[CustomSource] | None) -> list[AnyVulnerability]:
+    """Register every definition in *sources*: file paths, `CustomVulnerability` objects or dicts.
+
+    Every entry is validated before the first one is registered.
+    """
+    if sources is None:
+        return []
+    items = [sources] if isinstance(sources, (str, Path, CustomVulnerability, dict)) else list(sources)
+    pending: list[tuple[str, CustomVulnerability]] = []
+    for item in items:
+        if isinstance(item, CustomVulnerability):
+            pending.append(('custom', item))
+        elif isinstance(item, dict):
+            try:
+                pending.append(('custom', CustomVulnerability.model_validate(item)))
+            except ValidationError as e:
+                msg = f'custom entry {item.get("id", "?")!r}: {_format_validation_error(e)}'
+                raise CustomDefinitionError(msg) from e
+        else:
+            pending += [(str(item), d) for d in load_custom_vulnerabilities(item)]
+
+    seen: dict[str, str] = {}
+    for origin, definition in pending:
+        if definition.id in seen:
+            msg = f'{origin}, {definition.id}: id is defined twice (also in {seen[definition.id]}).'
+            raise CustomDefinitionError(msg)
+        seen[definition.id] = origin
+
+    registered: list[AnyVulnerability] = []
+    for origin, definition in pending:
+        try:
+            registered.append(register_vulnerability(definition))
+        except ValueError as e:  # noqa: PERF203
+            msg = f'{origin}, {definition.id}: {e}'
+            raise CustomDefinitionError(msg) from e
+    return registered
+
+
+# ---------------------------------------------------------------------------
+# Text blocks `eq redteam new-vulnerability` appends to a definitions file
+# ---------------------------------------------------------------------------
+
+
+def _yaml_str(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def definition_yaml(definition: CustomVulnerability) -> str:
+    """One YAML list item for *definition*, holding only the fields the user set."""
+    lines = [f'- id: {definition.id}', f'  description: {_yaml_str(definition.description)}']
+    if definition.domain != VulnerabilityDomain.MODEL.value:
+        lines.append(f'  domain: {_yaml_str(definition.domain)}')
+    if definition.severity != Severity.MEDIUM:
+        lines.append(f'  severity: {definition.severity.value}')
+    prompts = [a for a in definition.attacks if isinstance(a, str)]
+    if prompts:
+        lines += ['  attacks:', *(f'    - {_yaml_str(a)}' for a in prompts)]
+    if definition.examples is not None and (definition.examples.passing or definition.examples.failing):
+        lines.append('  examples:')
+        for key, replies in (('pass', definition.examples.passing), ('fail', definition.examples.failing)):
+            if replies:
+                lines += [f'    {key}:', *(f'      - {_yaml_str(r)}' for r in replies)]
+    return '\n'.join(lines) + '\n'
+
+
+def template_yaml(vuln_id: str) -> str:
+    """A definition to fill in by hand: the two required fields as TODO, the rest commented out."""
+    return f"""- id: {vuln_id}
+  description: "TODO: the rule the agent must follow, in one sentence"
+  # domain: model            # agent, model, data, or your own label
+  # severity: medium         # low, medium, high, critical
+  # generate: true           # also generate attacks from the rule and the agent
+  # attacks:
+  #   - "A message that tries to make the agent break the rule"
+  # examples:
+  #   pass:
+  #     - "A reply that follows the rule"
+  #   fail:
+  #     - "A reply that breaks the rule"
+  # judge: "Your own judge prompt, used instead of the template"
+"""
+
+
+def append_definition(path: Path, block: str) -> None:
+    """Append *block* to *path* as text, so the comments already in the file stay as they are."""
+    existing = path.read_text(encoding='utf-8') if path.exists() else ''
+    if existing and not existing.endswith('\n'):
+        existing += '\n'
+    separator = '\n' if existing.strip() else ''
+    path.write_text(existing + separator + block, encoding='utf-8')

@@ -99,6 +99,7 @@ from evaluatorq.redteam.contracts import (
     parse_target,
     resolve_open_value,
 )
+from evaluatorq.redteam.custom import CustomSource, register_custom
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str, resolve_delivery_methods
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import (
@@ -1395,6 +1396,7 @@ async def red_team(
     categories: list[str] | None = None,
     vulnerabilities: list[str] | None = None,
     strategies: list[str | AttackStrategy] | None = None,
+    custom: CustomSource | Sequence[CustomSource] | None = None,
     datapoints: list[DataPoint] | None = None,
     attack_techniques: list[AttackTechnique | str] | None = None,
     delivery_methods: list[DeliveryMethod | str] | None = None,
@@ -1544,6 +1546,10 @@ async def red_team(
             generation (e.g. "this agent handles financial transactions, try to
             get it to approve fraudulent ones"). Appended to adversarial system
             prompts and objective generation prompts.
+        custom: Custom vulnerabilities to register before the run: a definitions file
+            path (YAML or JSON), a `CustomVulnerability`, a dict of its fields, or a list
+            of these. Registered rules join the default selection and can be picked with
+            ``vulnerabilities=[<id>]``. Every entry is validated before any LLM call.
         verbosity: Verbosity level (0=silent, 1=summary progress bar,
             2=per-attack progress bars). Defaults to ``0``.
         save: What to persist to disk. ``'none'`` writes nothing. ``'final'``
@@ -1601,6 +1607,7 @@ async def red_team(
 
     save = _resolve_save_mode(save=save)
 
+    register_custom(custom)
     strategy_names = _register_strategy_objects(strategies)
 
     # Called for its raising side effect only, so a typo is rejected here rather than deep inside filter resolution.
