@@ -294,7 +294,7 @@ def set_evaluation_attributes(
         span.set_attribute('orq.evaluator.score.label', label)
 
     if evaluator_name is not None:
-        scorer_error = _scorer_error_type(raw_output)
+        scorer_error = _scorer_error_type(raw_output, evaluator_name)
         add_evaluation_result_event(
             evaluated_span,
             name=evaluator_name,
@@ -351,19 +351,27 @@ def add_evaluation_result_event(
     evaluated_span.add_event(_EVALUATION_RESULT_EVENT, attributes=event)
 
 
-def _scorer_error_type(raw_output: dict[str, Any] | None) -> str | None:
+def _scorer_error_type(raw_output: dict[str, Any] | None, evaluator_name: str) -> str | None:
     """Return ``error.type`` when a scorer returned an inconclusive result instead of raising.
 
     Scorers mark that by putting ``EVAL_ERROR_RAW_OUTPUT_KEY`` in ``raw_output``. Its value is
-    an error payload whose ``error_type`` names the cause; a short string there, or a short
-    string value, is used as is, anything else becomes ``'evaluation_error'``.
+    an error payload whose ``error_type`` names the cause; a non-empty string of at most
+    ``_ERROR_TYPE_MAX_CHARS`` there, or as the value itself, is used as is. Anything else
+    becomes ``'evaluation_error'`` with a warning.
     """
     if not raw_output or EVAL_ERROR_RAW_OUTPUT_KEY not in raw_output:
         return None
     payload = raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]
     candidate = payload.get('error_type') if isinstance(payload, dict) else payload
-    if isinstance(candidate, str) and candidate.isidentifier() and len(candidate) <= _ERROR_TYPE_MAX_CHARS:
+    if isinstance(candidate, str) and candidate.strip() and len(candidate) <= _ERROR_TYPE_MAX_CHARS:
         return candidate
+    logger.warning(
+        'evaluator {!r} returned an error result without a usable error_type ({!r}); '
+        'the trace event reports error.type={!r}',
+        evaluator_name,
+        candidate,
+        _FALLBACK_ERROR_TYPE,
+    )
     return _FALLBACK_ERROR_TYPE
 
 

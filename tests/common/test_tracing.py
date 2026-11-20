@@ -571,16 +571,35 @@ def test_set_evaluation_attributes_scorer_error_result_is_an_error_event() -> No
     attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
     assert attrs['gen_ai.evaluation.score.label'] == 'error'
 
-    fallback = MagicMock()
+    # Open-vocabulary types survive as long as they are short.
+    dotted = MagicMock()
     set_evaluation_attributes(
         MagicMock(),
         'error',
         evaluator_name='e',
         evaluator_type='llm_eval',
-        raw_output={EVAL_ERROR_RAW_OUTPUT_KEY: {'message': 'no type given'}},
-        evaluated_span=fallback,
+        raw_output={EVAL_ERROR_RAW_OUTPUT_KEY: {'error_type': 'provider.429'}},
+        evaluated_span=dotted,
     )
+    assert dotted.add_event.call_args.kwargs['attributes']['error.type'] == 'provider.429'
+
+    fallback = MagicMock()
+    messages: list[str] = []
+    sink = logger.add(messages.append, level='WARNING', format='{message}')
+    try:
+        set_evaluation_attributes(
+            MagicMock(),
+            'error',
+            evaluator_name='e',
+            evaluator_type='llm_eval',
+            raw_output={EVAL_ERROR_RAW_OUTPUT_KEY: {'message': 'no type given'}},
+            evaluated_span=fallback,
+        )
+    finally:
+        logger.remove(sink)
     assert fallback.add_event.call_args.kwargs['attributes']['error.type'] == 'evaluation_error'
+    assert len(messages) == 1
+    assert 'without a usable error_type' in messages[0]
 
 
 def test_set_evaluation_attributes_no_result_event_without_evaluator_type() -> None:
