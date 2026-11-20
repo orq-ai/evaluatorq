@@ -31,7 +31,11 @@ from evaluatorq.integrations.claude_agent_sdk_integration import (
     ClaudeAgentSDKUnavailableError,
 )
 from evaluatorq.integrations.claude_agent_sdk_integration import target as target_module
-from evaluatorq.integrations.claude_agent_sdk_integration.target import message_to_event, settings_with_file_tool_blocks
+from evaluatorq.integrations.claude_agent_sdk_integration.target import (
+    Isolation,
+    message_to_event,
+    settings_with_file_tool_blocks,
+)
 
 
 def _result(session: str, *, text: str | None = 'done', error: str | None = None, **extra: Any) -> ResultMessage:
@@ -261,6 +265,7 @@ async def test_sandbox_isolation_moves_the_agent_off_the_host_configuration() ->
         assert turn.cwd.is_dir()
         assert turn.env == {
             'CLAUDE_CODE_DISABLE_AUTO_MEMORY': '1',
+            'CLAUDE_CODE_MAX_RETRIES': '0',
             'ENABLE_CLAUDEAI_MCP_SERVERS': 'false',
             'ANTHROPIC_BASE_URL': 'https://gateway.example',
             'CLAUDE_CONFIG_DIR': str(root / 'config'),
@@ -296,13 +301,26 @@ async def test_no_isolation_only_moves_the_two_directories() -> None:
     try:
         turn = target.turn_options()
         root = _workdir(target).parent
-        assert turn.env == {'A': 'b', 'CLAUDE_CONFIG_DIR': str(root / 'config')}
+        assert turn.env == {'CLAUDE_CODE_MAX_RETRIES': '0', 'A': 'b', 'CLAUDE_CONFIG_DIR': str(root / 'config')}
         assert turn.cwd == root / 'workdir'
         assert turn.setting_sources is None
         assert turn.sandbox is None
         assert turn.settings is None
     finally:
         await target.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('isolation', ['sandbox', 'none'])
+async def test_the_runtimes_own_retry_is_off_unless_the_caller_sets_it(isolation: Isolation) -> None:
+    default = ClaudeAgentSDKTarget(ClaudeAgentOptions(), isolation=isolation)
+    chosen = ClaudeAgentSDKTarget(ClaudeAgentOptions(env={'CLAUDE_CODE_MAX_RETRIES': '3'}), isolation=isolation)
+    try:
+        assert default.turn_options().env['CLAUDE_CODE_MAX_RETRIES'] == '0'
+        assert chosen.turn_options().env['CLAUDE_CODE_MAX_RETRIES'] == '3'
+    finally:
+        await default.close()
+        await chosen.close()
 
 
 BLOCKS = {'blockWritesOutsideWorkingDirectories': True, 'blockReadsOutsideWorkingDirectories': True}

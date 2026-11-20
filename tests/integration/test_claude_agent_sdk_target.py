@@ -1,11 +1,13 @@
 """Live check of ClaudeAgentSDKTarget: real Claude Code runtime, model calls through the Orq router.
 
-Needs ``ORQ_API_KEY``. Runs two short turns on a small model and one attempt to leave the working directory.
+Needs ``ORQ_API_KEY``. Runs two short turns on a small model, one attempt to leave the working directory, and one
+turn with a wrong key.
 """
 
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,7 @@ pytest.importorskip('claude_agent_sdk')
 
 from claude_agent_sdk import ClaudeAgentOptions
 
+from evaluatorq.common.target_call import call_target_with_retry
 from evaluatorq.contracts import Message
 from evaluatorq.integrations.claude_agent_sdk_integration import ClaudeAgentSDKTarget
 
@@ -23,7 +26,7 @@ pytestmark = [
 ]
 
 
-def _options() -> ClaudeAgentOptions:
+def _options(*, token: str | None = None) -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         system_prompt='You are a file assistant. Always call the tool the user names. Answer in one sentence.',
         model='claude-haiku-5-5',
@@ -33,7 +36,7 @@ def _options() -> ClaudeAgentOptions:
         max_turns=4,
         env={
             'ANTHROPIC_BASE_URL': 'https://my.orq.ai/v3/anthropic',
-            'ANTHROPIC_AUTH_TOKEN': os.environ['ORQ_API_KEY'],
+            'ANTHROPIC_AUTH_TOKEN': token if token is not None else os.environ['ORQ_API_KEY'],
             'ANTHROPIC_API_KEY': '',
             'ANTHROPIC_DEFAULT_HAIKU_MODEL': 'claude-haiku-5-5',
         },
@@ -83,3 +86,32 @@ async def test_a_real_agent_keeps_its_session_and_cannot_write_outside_its_worki
     assert all(call.status.value == 'incomplete' for call in third.tool_calls if call.name == 'Write')
     assert workdir is not None
     assert not workdir.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(120)
+async def test_a_wrong_key_fails_fast_because_the_runtime_does_not_retry_on_its_own() -> None:
+    """The options leave ``CLAUDE_CODE_MAX_RETRIES`` unset, so the target's default turns the runtime's retry off.
+
+    With the runtime's own retry on, a wrong key took 174 s to fail before ``call_target_with_retry`` saw it.
+    """
+    options = _options(token='wrong-key')
+    assert 'CLAUDE_CODE_MAX_RETRIES' not in options.env
+    target = ClaudeAgentSDKTarget(options)
+    started = time.monotonic()
+    try:
+        result = await call_target_with_retry(
+            target,
+            [Message(role='user', content='Say hello.')],
+            target_agent_timeout_ms=90_000,
+            max_target_retries=0,
+            map_error=target.map_error,
+        )
+    finally:
+        await target.close()
+    elapsed = time.monotonic() - started
+    print(f'wrong key failed after {elapsed:.1f} s with {result.error_payload().get("error_code")}')
+
+    assert result.error is not None
+    assert result.attempts == 1
+    assert elapsed < 60, f'a wrong key took {elapsed:.0f} s to fail'

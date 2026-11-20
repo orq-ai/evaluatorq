@@ -599,7 +599,7 @@ Each instance works in two private temporary directories, removed when the run c
 | `isolation=` | What it sets |
 |---|---|
 | `"sandbox"` (default) | The private directories, plus: the SDK's command sandbox on, unsandboxed commands refused, the file tools refusing any path outside the working directory, and the host user's settings, memory files and account connectors not loaded. A `setting_sources` you set yourself is kept, and so are your other `settings`. |
-| `"none"` | The private directories only. Your options are otherwise used as given. |
+| `"none"` | The private directories only. Your options are otherwise used as given, apart from the runtime retry setting described under [Errors](#errors). |
 
 Four limits to know before you rely on it:
 
@@ -621,6 +621,8 @@ When the agent must not be able to reach the host at all, run the whole evaluati
 | `agent_sdk.<subtype>`, such as `agent_sdk.error_max_turns` | The run ended on an error result; the subtype is the SDK's own. |
 | `agent_sdk.no_result` | The run ended without a final assistant message. |
 | `agent_sdk.sdk_error` | The SDK raised for another reason, such as a lost process. |
+
+The Claude Code runtime would retry a failed model request on its own before the turn fails; with its defaults, a wrong key took 174 seconds to come back in a test run. The target turns that off by setting `CLAUDE_CODE_MAX_RETRIES="0"` in the runtime's environment, in both isolation modes, so the run's `max_target_retries` is the only retry budget. A `CLAUDE_CODE_MAX_RETRIES` you set in `options.env` wins; any other value multiplies with `max_target_retries`.
 
 ## Writing your own target
 

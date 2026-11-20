@@ -8,7 +8,8 @@ The target keeps the conversation: one SDK session per instance, and every turn 
 last successful session as a fork. A turn that fails leaves that session untouched, so a retry starts from the
 same point instead of from a session that already holds half the failed turn.
 
-Retry lives in ``common.target_call.call_target_with_retry`` only. ``respond()`` never retries.
+Retry lives in ``common.target_call.call_target_with_retry`` only. ``respond()`` never retries, and the Claude Code
+runtime's own retry of a failed model request is off (``CLAUDE_CODE_MAX_RETRIES='0'``) unless ``options.env`` sets it.
 """
 
 from __future__ import annotations
@@ -55,6 +56,11 @@ ISOLATION_ENV = {
     'CLAUDE_CODE_DISABLE_AUTO_MEMORY': '1',
     'ENABLE_CLAUDEAI_MCP_SERVERS': 'false',
 }
+
+# The Claude Code runtime retries a failed model request itself before the turn fails: with its defaults a wrong key took
+# 174 s to come back. call_target_with_retry owns retry for target calls, so the runtime's layer is off unless the
+# caller's options.env sets it.
+RUNTIME_RETRY_ENV = {'CLAUDE_CODE_MAX_RETRIES': '0'}
 
 # The command sandbox covers shell commands only. These two make the file tools (Read, Write, Edit) refuse a path
 # outside the working directory; without them a live run wrote and read files elsewhere on the host.
@@ -145,7 +151,8 @@ class ClaudeAgentSDKTarget(AgentTarget):
     ``isolation='sandbox'`` (the default) turns on the SDK's command sandbox, refuses unsandboxed commands, and makes
     the file tools refuse paths outside the working directory. It also stops the runtime loading the host user's
     settings, memory files and account connectors, unless the options already set ``setting_sources``. ``isolation='none'`` leaves the options as given and only moves the two
-    directories. Neither confines Python tools the options define in-process: those run in this process, with its
+    directories. In both modes the runtime's own retry of a failed model request is off (``CLAUDE_CODE_MAX_RETRIES='0'``),
+    so ``call_target_with_retry`` is the only retry layer; a ``CLAUDE_CODE_MAX_RETRIES`` in ``options.env`` wins. Neither confines Python tools the options define in-process: those run in this process, with its
     access. Run the whole evaluation in a container when the agent must not be able to reach the host at all.
 
     The private configuration directory means the runtime does not see a ``claude`` login stored under ``~/.claude``.
@@ -207,7 +214,7 @@ class ClaudeAgentSDKTarget(AgentTarget):
         root = self._ensure_dirs()
         changes: dict[str, Any] = {
             'cwd': root / 'workdir',
-            'env': {**self._options.env, 'CLAUDE_CONFIG_DIR': str(root / 'config')},
+            'env': {**RUNTIME_RETRY_ENV, **self._options.env, 'CLAUDE_CONFIG_DIR': str(root / 'config')},
             'resume': self._session_id,
             'fork_session': self._session_id is not None,
         }
