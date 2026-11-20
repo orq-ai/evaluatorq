@@ -20,11 +20,11 @@ async def retrieve_agent_context(orq_client: Any, agent_key: str) -> AgentContex
     """
     try:
         from evaluatorq.redteam.backends.orq import ORQAgentTarget
-    except ImportError:
+    except ImportError as err:
         raise ImportError(
             'orq_ai_sdk is required for ORQ context retrieval. '
             'Install with: uv add orq-ai-sdk (or: python -m pip install orq-ai-sdk)'
-        )
+        ) from err
     probe = ORQAgentTarget(agent_key=agent_key, orq_client=orq_client)
     return await probe.get_agent_context()
 

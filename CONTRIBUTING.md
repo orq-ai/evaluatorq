@@ -16,7 +16,7 @@ uv sync --all-extras --all-groups
 # Verify the setup
 uv run pytest -m 'not integration' --co  # list tests without running
 uv run ty check                           # check configured source, test, root, and docs files
-uv run ruff check src                     # lint
+uv run ruff check src tests               # lint (tests use the narrow set in tests/ruff.toml)
 ```
 
 ## Development Workflow
@@ -49,8 +49,9 @@ uv run pytest -m integration
 ### Linting and Formatting
 
 ```bash
-# Check for lint issues
+# Check for lint issues (tests are linted with a narrow rule set and are not formatted)
 uv run ruff check src
+uv run ruff check tests
 
 # Auto-fix lint issues
 uv run ruff check src --fix
@@ -119,6 +120,6 @@ Add integration modules under `src/evaluatorq/integrations/`. Add the dependency
 
 - Branch from `main`
 - Run the complete `uv run pytest -m 'not integration'` profile and `uv run ty check` before pushing; the bare local pytest command also excludes deliberately slow tests, while CI runs the complete non-integration profile and runs the configured source, test, root, and docs ty check once on Ubuntu with Python 3.10
-- When changing the exact ty pin, update `scripts/data/ty_migration_audit.json` and the expected classifications in `scripts/audit_ty_migration.py` from that pinned release, then run `uv run python scripts/audit_ty_migration.py --refresh` and `uv run python scripts/audit_ty_migration.py`
+- When changing the exact ty pin, follow the ty upgrade rules in `CLAUDE.md`.
 - Use conventional commit format for commit messages (e.g., `feat(redteam): ...`, `fix(evaluatorq): ...`)
 - Keep PRs focused — one feature or fix per PR when possible

@@ -19,9 +19,12 @@ import sys
 import tokenize
 from functools import cache
 from pathlib import Path
-from typing import TypeGuard
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 SRC = Path(__file__).resolve().parents[1] / 'src' / 'evaluatorq'
 REPO_ROOT = SRC.parents[1]
@@ -1425,3 +1428,253 @@ def test_report_warnings_are_added_through_the_scrubbing_method() -> None:
         if name.endswith(('pipeline_warnings.append', 'pipeline_warnings.extend'))
     ]
     assert not offenders, f'use add_pipeline_warnings: {offenders}'
+
+
+# --- RES-1915: ratchets and bans distilled from past review findings -----------------------------------------------
+# Each budget is the state of the tree when the rule landed. A test fails when a count goes up, and also when it goes
+# down without the budget following, so a freed slot cannot be spent silently later. Lower the number when you fix one.
+
+_NOQA_CODES = re.compile(r'noqa:\s*([A-Z]+[0-9]+(?:\s*,\s*[A-Z]+[0-9]+)*)')
+
+
+def _noqa_codes(source: str) -> list[str]:
+    """Every rule code named by an inline ``# noqa:`` comment in ``source``, once per occurrence."""
+    codes: list[str] = []
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.COMMENT and (match := _NOQA_CODES.search(token.string)):
+            codes.extend(code.strip() for code in match.group(1).split(','))
+    return codes
+
+
+_BROAD_EXCEPTIONS = frozenset({'Exception', 'BaseException'})
+_LOUD_CALLS = frozenset({'warning', 'error', 'exception', 'critical', 'warn'})
+
+
+def _is_broad(node: ast.expr | None) -> bool:
+    if node is None:
+        return True
+    if isinstance(node, ast.Name):
+        return node.id in _BROAD_EXCEPTIONS
+    if isinstance(node, ast.Tuple):
+        return any(_is_broad(element) for element in node.elts)
+    return False
+
+
+def _is_loud(body: list[ast.stmt]) -> bool:
+    """True when a handler body re-raises or reports: a ``raise``, or a warning/error-level log or ``warnings.warn``."""
+    for node in ast.walk(ast.Module(body=body, type_ignores=[])):
+        if isinstance(node, ast.Raise):
+            return True
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _LOUD_CALLS:
+            return True
+    return False
+
+
+def _silent_broad_handlers(source: str) -> list[int]:
+    """Lines of a broad ``except`` or ``suppress(Exception)`` that neither re-raises nor logs at warning level or above."""
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ExceptHandler) and _is_broad(node.type) and not _is_loud(node.body):
+            lines.append(node.lineno)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                call = item.context_expr
+                if (
+                    isinstance(call, ast.Call)
+                    and _dotted(call.func).rsplit('.', 1)[-1] == 'suppress'
+                    and any(_is_broad(arg) for arg in call.args)
+                ):
+                    lines.append(node.lineno)
+    return lines
+
+
+_MOCK_NAMES = frozenset({'Mock', 'MagicMock', 'AsyncMock'})
+_CLIENT_KEYWORDS = frozenset({'client', 'llm_client', 'generation_client', 'judge_client'})
+
+
+def _mock_llm_clients(source: str) -> list[int]:
+    """Lines that pass a bare ``Mock``/``MagicMock``/``AsyncMock`` as an LLM client keyword argument."""
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.keyword)
+        and node.arg in _CLIENT_KEYWORDS
+        and isinstance(node.value, ast.Call)
+        and _dotted(node.value.func).rsplit('.', 1)[-1] in _MOCK_NAMES
+    ]
+
+
+def _content_reprs(source: str) -> list[int]:
+    """Lines that turn ``<x>.content`` into text with ``str()`` or a bare f-string field."""
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == 'str'
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Attribute)
+            and node.args[0].attr == 'content'
+        ):
+            lines.append(node.lineno)
+        elif (
+            isinstance(node, ast.FormattedValue)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == 'content'
+            and node.conversion == -1
+            and node.format_spec is None
+        ):
+            lines.append(node.lineno)
+    return lines
+
+# Inline suppressions of the rules review keeps catching. C901 was burned down to zero and then grew back inline.
+INLINE_NOQA_BUDGET = {'BLE001': 95, 'C901': 14, 'SLF001': 29}
+
+# A broad except or suppress(Exception) that neither re-raises nor logs at warning level: the silent-degradation
+# class, the most frequent review finding in the first 210 PRs. Count per file under src/evaluatorq/.
+SILENT_BROAD_HANDLER_BUDGET = {
+    'backends/coding_agent.py': 1,
+    'common/apply.py': 1,
+    'common/reports/console.py': 1,
+    'common/reports/executive_summary.py': 1,
+    'common/tracing.py': 1,
+    'dashboard/compression_inspector.py': 3,
+    'dashboard/insights_routes.py': 1,
+    'dashboard/insights_trace_source.py': 1,
+    'evaluatorq.py': 1,
+    'integrations/pydantic_ai_integration/target.py': 3,
+    'processings.py': 2,
+    'redteam/adaptive/blackbox_classifier.py': 1,
+    'redteam/adaptive/orchestrator.py': 2,
+    'redteam/reports/converters.py': 1,
+    'redteam/runner.py': 1,
+    'redteam/runtime/jobs.py': 1,
+    'simulation/cli.py': 4,
+    'simulation/utils/run_store.py': 1,
+    'trace_finder/orq_source.py': 4,
+    'trace_finder/planner.py': 1,
+    'trace_finder/run_store.py': 2,
+    'tracing/setup.py': 2,
+}
+
+# A bare Mock passed as an LLM client accepts any attribute, so a provider schema move or a call through the wrong
+# method still passes. New tests build a fake from the SDK's response models. Count per file under tests/.
+MOCK_LLM_CLIENT_BUDGET = {
+    'common/test_apply.py': 2,
+    'common/test_judge_responses_routing.py': 1,
+    'common/test_structured_output_usage.py': 2,
+    'openresponses/test_backend_registry.py': 10,
+    'redteam/test_apply_recommendations.py': 5,
+    'redteam/test_attack_generator.py': 1,
+    'redteam/test_backend_abc.py': 1,
+    'redteam/test_hooks_lifecycle.py': 5,
+    'redteam/test_llm_config.py': 1,
+    'redteam/test_model_roles_redteam.py': 6,
+    'redteam/test_owasp_bridge_error_visibility.py': 7,
+    'redteam/test_panel_of_judges.py': 8,
+    'redteam/test_pii_timeout_regression.py': 4,
+    'redteam/test_prepare_target_backend.py': 1,
+    'redteam/test_retry_wiring.py': 3,
+    'redteam/test_runner.py': 1,
+    'redteam/test_scorer_error_turns.py': 7,
+    'redteam/test_static_target_job.py': 3,
+    'redteam/test_trace_seeds.py': 1,
+    'redteam/test_tracing_spans.py': 5,
+    'simulation/reports/test_apply_suggestions.py': 6,
+    'simulation/test_attach_recommendations.py': 3,
+    'simulation/test_first_message_generator_errors.py': 10,
+    'simulation/test_judge.py': 1,
+    'simulation/test_run_metadata_propagation.py': 1,
+    'simulation/test_run_store.py': 1,
+    'simulation/test_sim_llm_config.py': 15,
+    'simulation/test_traces_input.py': 21,
+    'test_llm_jury_classify.py': 51,
+    'unit/test_llm_jury_cyclic.py': 19,
+    'unit/test_llm_jury_factory.py': 13,
+}
+
+SCRATCH_PREFIXES = ('.context/', '.superpowers/', 'scratchpad/')
+
+
+def _budget_diff(counts: dict[str, int], budget: dict[str, int]) -> list[str]:
+    return [
+        f'{key}: {counts.get(key, 0)} (budget {budget.get(key, 0)})'
+        for key in sorted(set(counts) | set(budget))
+        if counts.get(key, 0) != budget.get(key, 0)
+    ]
+
+
+def test_inline_noqa_budget_matches() -> None:
+    counts = dict.fromkeys(INLINE_NOQA_BUDGET, 0)
+    for _relative, source in _src_sources():
+        for code in _noqa_codes(source):
+            if code in counts:
+                counts[code] += 1
+    assert not (diff := _budget_diff(counts, INLINE_NOQA_BUDGET)), (
+        'Fix the code instead of adding an inline noqa; when you removed one, lower INLINE_NOQA_BUDGET: ' + ', '.join(diff)
+    )
+
+
+def test_silent_broad_handlers_budget_matches() -> None:
+    counts = {relative: n for relative, source in _src_sources() if (n := len(_silent_broad_handlers(source)))}
+    assert not (diff := _budget_diff(counts, SILENT_BROAD_HANDLER_BUDGET)), (
+        'A broad except or suppress(Exception) must re-raise, or log at warning level naming the cause '
+        '(CODING_STANDARDS.md, "A degraded path announces itself"); lower the budget when you fix one: ' + ', '.join(diff)
+    )
+
+
+def test_mock_llm_clients_budget_matches() -> None:
+    tests_root = REPO_ROOT / 'tests'
+    counts = {
+        path.relative_to(tests_root).as_posix(): n
+        for path in sorted(tests_root.rglob('*.py'))
+        if (n := len(_mock_llm_clients(path.read_text(encoding='utf-8'))))
+    }
+    assert not (diff := _budget_diff(counts, MOCK_LLM_CLIENT_BUDGET)), (
+        'Pass a fake built from the provider SDK response models as an LLM client, not a bare Mock; '
+        'lower the budget when you replace one: ' + ', '.join(diff)
+    )
+
+
+def test_message_content_is_never_stringified() -> None:
+    hits = [f'{relative}:{line}' for relative, source in _src_sources() for line in _content_reprs(source)]
+    assert not hits, 'Use contracts.content_to_text: str() on list content renders a Python repr. ' + ', '.join(hits)
+
+
+def test_scratch_directories_are_not_tracked() -> None:
+    import shutil
+    import subprocess
+
+    if shutil.which('git') is None or not (REPO_ROOT / '.git').exists():
+        pytest.skip('not a git checkout')
+    tracked = subprocess.run(
+        ['git', 'ls-files', '--', *SCRATCH_PREFIXES], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
+    assert not tracked, f'agent scratch files are committed; untrack them with git rm --cached: {tracked}'
+
+
+@pytest.mark.parametrize(
+    ('source', 'detector', 'expected'),
+    [
+        ('x = 1  # noqa: BLE001, C901\ny = 2  # noqa: SLF001\n', _noqa_codes, ['BLE001', 'C901', 'SLF001']),
+        ('s = "# noqa: BLE001"\n', _noqa_codes, []),
+        ('try:\n    f()\nexcept Exception:\n    pass\n', _silent_broad_handlers, [3]),
+        ('try:\n    f()\nexcept:\n    g()\n', _silent_broad_handlers, [3]),
+        ('try:\n    f()\nexcept (ValueError, Exception):\n    pass\n', _silent_broad_handlers, [3]),
+        ('try:\n    f()\nexcept Exception:\n    logger.warning("x")\n', _silent_broad_handlers, []),
+        ('try:\n    f()\nexcept Exception:\n    raise\n', _silent_broad_handlers, []),
+        ('try:\n    f()\nexcept KeyError:\n    pass\n', _silent_broad_handlers, []),
+        ('with contextlib.suppress(Exception):\n    f()\n', _silent_broad_handlers, [1]),
+        ('with suppress(KeyError):\n    f()\n', _silent_broad_handlers, []),
+        ('run(client=MagicMock())\n', _mock_llm_clients, [1]),
+        ('run(llm_client=mock.AsyncMock(spec=x))\n', _mock_llm_clients, [1]),
+        ('run(client=FakeClient())\n', _mock_llm_clients, []),
+        ('run(target=MagicMock())\n', _mock_llm_clients, []),
+        ('text = str(message.content)\n', _content_reprs, [1]),
+        ('text = f"{message.content}"\n', _content_reprs, [1]),
+        ('text = f"{message.content!r}"\n', _content_reprs, []),
+        ('text = content_to_text(message.content)\n', _content_reprs, []),
+    ],
+)
+def test_res_1915_detectors_fire(source: str, detector: Callable[[str], list[Any]], expected: list[Any]) -> None:
+    assert detector(source) == expected

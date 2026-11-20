@@ -48,7 +48,6 @@ def _make_report(**kwargs):
 
 def _make_confirm_payload(**kwargs) -> ConfirmPayload:
     """Create a minimal ConfirmPayload for use in tests."""
-    from evaluatorq.redteam.hooks import ConfirmPayload
 
     payload: ConfirmPayload = {
         'agent_context': kwargs.get('agent_context', None),
@@ -130,7 +129,6 @@ class TestDefaultHooks:
         report = _make_report()
         with patch('evaluatorq.redteam.hooks.logger') as mock_logger:
             asyncio.run(hooks.on_complete(report))
-            all_calls = ' '.join(str(c) for c in mock_logger.info.call_args_list)
             # Should log something about the summary
             assert mock_logger.info.called
 
@@ -563,7 +561,7 @@ class TestHooksIntegration:
     @pytest.mark.asyncio
     async def test_confirm_returns_false_raises(self):
         """When on_confirm returns False, the runner should raise RuntimeError."""
-        from evaluatorq.redteam.hooks import DefaultHooks, PipelineHooks
+        from evaluatorq.redteam.hooks import DefaultHooks
         from evaluatorq.redteam.runner import red_team
 
         class FalseConfirmHooks(DefaultHooks):

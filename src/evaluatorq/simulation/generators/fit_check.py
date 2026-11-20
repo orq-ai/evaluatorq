@@ -31,8 +31,8 @@ from evaluatorq.common.judge import EvaluatorResponsePayload, run_judge
 from evaluatorq.common.llm_client import as_llm_client
 from evaluatorq.common.llm_errors import SDK_ERRORS
 from evaluatorq.common.sanitize import delimit
-from evaluatorq.common.structured_output import StructuredGenerationError, usage_from_exception
-from evaluatorq.contracts import LLMCallConfig, TokenUsage
+from evaluatorq.common.structured_output import StructuredGenerationError
+from evaluatorq.contracts import LLMCallConfig, TokenUsage  # noqa: TC001 - pydantic resolves the field type at runtime
 from evaluatorq.simulation._config import resolve_sim_llm_config, sim_llm_config, sim_role_config
 from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.contracts import Persona, Scenario
@@ -509,18 +509,12 @@ async def _generate_checked(
         )
         return batch[0] if batch else None
 
-    # A failed generator call can still be billed; the generator only counts calls that succeeded.
-    failed_usage = TokenUsage()
-
     async def regenerate(index: int, explanation: str) -> Any:
-        nonlocal failed_usage
         try:
             item = await one(seeds[index], _feedback(generation_instructions, explanation))
         except _GENERATION_ERRORS as exc:
+            # The generator has already counted what a failed call billed, so `generator.get_usage()` includes it.
             logger.warning('fit check: regenerating %s %d failed: %s: %s', kind, index, type(exc).__name__, exc)
-            billed = usage_from_exception(exc)
-            if billed is not None:
-                failed_usage = failed_usage + billed
             return None
         if item is None:
             logger.warning('fit check: regenerating %s %d returned nothing; keeping the rejected one', kind, index)
@@ -558,7 +552,7 @@ async def _generate_checked(
         rounds=rounds,
         judge_calls=judge.calls,
         generator_calls=generator_calls,
-        usage=judge.get_usage() + generator.get_usage() + failed_usage,
+        usage=judge.get_usage() + generator.get_usage(),
     )
 
 

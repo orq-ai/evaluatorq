@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install extras + docs
-        run: uv sync --frozen --all-extras --group docs
+        run: uv sync --locked --all-extras --group docs
       # Cairo + imaging libs for the Material `social` plugin (og:/twitter cards).
       # The plugin is gated to CI (CI=true) in mkdocs.yml; these are its system deps.
       - name: Install Cairo (social cards)

@@ -21,9 +21,10 @@ blocking hook stalls every concurrent simulation; offload blocking work with
 from __future__ import annotations
 
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from loguru import logger
+from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.async_utils import combine_confirm, fan_out
 
@@ -77,13 +78,36 @@ class SimulationRunMeta(TypedDict):
     ORQ deployment keys, or ``"callback"`` for plain callables.
     """
 
-    num_datapoints: int
+    num_cases: int
+    """Cases the run will simulate, one per datapoint. Not multiplied by ``repetitions``."""
+    num_conversations: NotRequired[int]
+    """Conversations the run will execute: ``num_cases`` times ``repetitions``.
+    Absent means ``num_cases``, as in payloads built before repetitions existed."""
+    repetitions: NotRequired[int]
+    """Separate conversations per case. Absent means 1."""
     model: str
     max_turns: int
     datapoint_parallelism: int
     evaluation_name: str
     evaluator_names: list[str]
     target: str
+
+
+def _conversation_count(meta: SimulationRunMeta) -> int:
+    """Conversations the run will execute, for a payload with or without ``num_conversations``."""
+    return meta.get('num_conversations', meta['num_cases'] * meta.get('repetitions', 1))
+
+
+_REPEATED_COST_NOTE = 'evaluators and recommendations run once per conversation, so their cost scales with repetitions'
+
+
+def _conversation_plan(meta: SimulationRunMeta) -> str:
+    """The planned workload in words. With repetitions it names both the cases and the conversations."""
+    cases = meta['num_cases']
+    repetitions = meta.get('repetitions', 1)
+    if repetitions == 1:
+        return f'{cases} cases'
+    return f'{cases} cases x {repetitions} repetitions = {_conversation_count(meta)} conversations'
 
 
 @runtime_checkable
@@ -166,15 +190,17 @@ class DefaultHooks:
     async def on_confirm(self, meta: SimulationRunMeta) -> bool:
         logger.info(
             f'[simulation] Run plan: target={meta.get("target", "?")} | '
-            f'{meta["num_datapoints"]} datapoints | model={meta["model"]!r} | '
+            f'{_conversation_plan(meta)} | model={meta["model"]!r} | '
             f'max_turns={meta["max_turns"]} | datapoint_parallelism={meta["datapoint_parallelism"]} | '
             f'evaluators={meta["evaluator_names"]}'
         )
+        if meta.get('repetitions', 1) > 1:
+            logger.info(f'[simulation] Report steps: {_REPEATED_COST_NOTE}.')
         return True
 
     async def on_run_start(self, meta: SimulationRunMeta) -> None:
         logger.info(
-            f'[simulation] Run start: {meta["num_datapoints"]} datapoints | '
+            f'[simulation] Run start: {_conversation_plan(meta)} | '
             f'model={meta["model"]!r} | max_turns={meta["max_turns"]} | '
             f'datapoint_parallelism={meta["datapoint_parallelism"]} | '
             f'evaluators={meta["evaluator_names"]}'
@@ -282,16 +308,18 @@ class RichHooks:
         rows = [
             ('Target', str(meta.get('target', '?'))),
             ('Model', str(meta['model'])),
-            ('Datapoints', str(meta['num_datapoints'])),
+            ('Cases', _conversation_plan(meta)),
             ('Max Turns', str(meta['max_turns'])),
             ('Parallelism', str(meta['datapoint_parallelism'])),
             ('Evaluators', ', '.join(meta['evaluator_names'])),
         ]
+        if meta.get('repetitions', 1) > 1:
+            rows.append(('Report steps', _REPEATED_COST_NOTE.capitalize()))
         return await confirm_run_plan(
             self._console,
             title='Run Plan',
             rows=rows,
-            prompt=f'Simulate {meta["num_datapoints"]} datapoints?',
+            prompt=f'Simulate {_conversation_plan(meta)}?',
             skip_confirm=self._skip_confirm,
         )
 
@@ -334,8 +362,8 @@ class RichHooks:
                 f'{escape(type(error).__name__)}: {escape(str(error))}[/red]'
             )
             return
-        if stage == SimStage.GENERATE and 'num_datapoints' in meta:
-            self._console.print(f'[dim] {meta["num_datapoints"]} datapoints generated[/dim]')
+        if stage == SimStage.GENERATE and 'num_cases' in meta:
+            self._console.print(f'[dim] {meta["num_cases"]} cases generated[/dim]')
 
     def _ensure_started(self) -> None:
         if self._progress is not None:
@@ -370,7 +398,7 @@ class RichHooks:
         self._reset_run_state()
         self._ensure_started()
         self._max_turns = meta['max_turns']
-        self._overall_task_id = self._progress.add_task('[bold cyan]Simulations', total=meta['num_datapoints'])
+        self._overall_task_id = self._progress.add_task('[bold cyan]Simulations', total=_conversation_count(meta))
 
     async def on_datapoint_start(self, datapoint: SimulationDatapoint) -> None:
         from rich.markup import escape

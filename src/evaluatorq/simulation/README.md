@@ -33,6 +33,8 @@ results = await simulate(
 )
 ```
 
+Both functions take `repetitions` (default 1): the number of separate fresh conversations run for each case. The cases are generated or resolved once, and each one then runs that many times. The saved run keeps the base cases and the count, so a replay runs the same number of conversations again unless you pass a different `repetitions`.
+
 `run_name` labels this execution in run records, results, and traces. It is optional, and the existing `evaluation_name` keyword remains supported.
 
 A runnable, narrated walkthrough lives in [`examples/agent_simulation_intro.ipynb`](../../../examples/agent_simulation_intro.ipynb).

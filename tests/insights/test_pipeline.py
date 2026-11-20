@@ -120,7 +120,7 @@ async def test_snapshot_capture_sidecars_are_excluded_from_saved_review_coverage
     snapshot_path = tmp_path / 'snapshot.json'
     snapshot_path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')
 
-    run = await pipeline.insights(
+    await pipeline.insights(
         InsightsPopulation.from_snapshot(snapshot_path),
         dimensions=(),
         labels=(),

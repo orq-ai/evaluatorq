@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -152,7 +152,7 @@ class TestModelSerialization:
                 source='template_dynamic',
             ),
             agent=AgentInfo(key='test_agent', model='azure/gpt-5-mini'),
-            messages=cast(list[Message], [{'role': 'user', 'content': 'test'}]),
+            messages=[Message(role='user', content='test')],
             response='I refuse.',
             evaluation=UnifiedEvaluationResult(passed=True, explanation='OK', evaluator_id='ASI01'),
             vulnerable=False,

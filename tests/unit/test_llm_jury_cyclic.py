@@ -340,7 +340,7 @@ async def test_cyclic_row_mapping_is_parallelism_independent():
             *(ev["scorer"]({"data": _datapoint(), "output": "x", "row": row}) for row in rows)
         )
     panel = ["m1", "m2", "m3"]
-    for row, result in zip(rows, results):
+    for row, result in zip(rows, results, strict=True):
         assert not isinstance(result, dict)
         assert result.raw_output is not None
         votes = result.raw_output["jury"]["votes"]

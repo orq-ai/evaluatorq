@@ -194,7 +194,7 @@ class TestDynamicFixture:
         report2 = RedTeamReport.model_validate(dumped)
         assert report2.total_results == report.total_results
         assert len(report2.results) == len(report.results)
-        for r1, r2 in zip(report.results, report2.results):
+        for r1, r2 in zip(report.results, report2.results, strict=True):
             assert r1.attack.id == r2.attack.id
             assert r1.vulnerable == r2.vulnerable
 

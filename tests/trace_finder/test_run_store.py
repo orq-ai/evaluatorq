@@ -597,7 +597,7 @@ async def test_review_start_returns_working_snapshot_while_changed_population_lo
             self.block_next = False
             self.entered = asyncio.Event()
 
-        async def __call__(self, population: PopulationRequest) -> Snapshot:  # ty: ignore[invalid-method-override]
+        async def __call__(self, population: PopulationRequest) -> Snapshot:  # ty: ignore[lost-keyword-for-regular-parameter]
             if self.block_next:
                 self.calls.append(population)
                 self.entered.set()
@@ -1040,7 +1040,7 @@ async def test_traces_error_after_cancel_preserves_cancelled_state(caplog: pytes
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             await release.wait()
-            raise RuntimeError('hydration failed after cancellation')
+            raise RuntimeError('hydration failed after cancellation') from None
         return ()
 
     store, _, _, _, _ = make_store()

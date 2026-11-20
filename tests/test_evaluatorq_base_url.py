@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import evaluatorq.evaluatorq  # noqa: F401  populate sys.modules; the package attr is shadowed by the function
-from evaluatorq import DataPoint, evaluatorq
+from evaluatorq import DataPoint, evaluatorq  # noqa: F811  the function deliberately shadows the submodule name
 
 # evaluatorq.evaluatorq resolves to the re-exported function, not the submodule,
 # so patch the module object directly (3.10's mock can't resolve the shadowed path).

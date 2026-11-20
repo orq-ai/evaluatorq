@@ -2293,7 +2293,7 @@ def test_trace_route_falls_back_to_explorer_rows(explorer_client) -> None:
 
     async def hydrate(rows: Any) -> dict[str, Any]:
         return {
-            trace_id: TraceRecord(
+            row.trace_id: TraceRecord(
                 schema_version=1,
                 trace_id=trace_id,
                 span_id='s',

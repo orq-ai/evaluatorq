@@ -35,7 +35,7 @@ async def test_span_records_exception():
         from evaluatorq.redteam.tracing import with_redteam_span
 
         with pytest.raises(ValueError, match="test error"):
-            async with with_redteam_span("orq.redteam.test") as span:
+            async with with_redteam_span("orq.redteam.test"):
                 raise ValueError("test error")
 
         # Verify span recorded the exception, error.type, and was set to ERROR status
@@ -265,7 +265,7 @@ async def test_llm_span_name_with_provider_prefix():
     with patch("evaluatorq.common.tracing.get_tracer", return_value=mock_tracer):
         from evaluatorq.redteam.tracing import with_llm_span
 
-        async with with_llm_span(model="azure/gpt-5-mini") as span:
+        async with with_llm_span(model="azure/gpt-5-mini"):
             pass
 
         call_args = mock_tracer.start_as_current_span.call_args
@@ -292,7 +292,7 @@ async def test_llm_span_error_type_on_exception():
         from evaluatorq.redteam.tracing import with_llm_span
 
         with pytest.raises(RuntimeError, match="llm failed"):
-            async with with_llm_span(model="gpt-5-mini") as span:
+            async with with_llm_span(model="gpt-5-mini"):
                 raise RuntimeError("llm failed")
 
         mock_span.set_attribute.assert_any_call("error.type", "RuntimeError")

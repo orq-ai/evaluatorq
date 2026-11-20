@@ -13,6 +13,7 @@ import pytest
     "module",
     [
         "evaluatorq.integrations.callable_integration.target",
+        "evaluatorq.integrations.claude_agent_sdk_integration.target",
         "evaluatorq.integrations.crewai_integration.target",
         "evaluatorq.integrations.langgraph_integration.target",
         "evaluatorq.integrations.openai_agents_integration.target",
@@ -46,6 +47,7 @@ def test_importing_integration_target_does_not_import_redteam(module: str) -> No
     "submodule",
     [
         "callable_integration",
+        "claude_agent_sdk_integration",
         "crewai_integration",
         "langchain_integration",
         "langgraph_integration",
@@ -83,7 +85,7 @@ def test_importing_the_package_pulls_in_no_integration_library() -> None:
         "import sys\n"
         "import evaluatorq.integrations\n"
         "leaked = sorted({m.split('.')[0] for m in sys.modules} & "
-        "{'langchain', 'langchain_core', 'langgraph', 'agents', 'pydantic_ai', 'crewai'})\n"
+        "{'langchain', 'langchain_core', 'langgraph', 'agents', 'pydantic_ai', 'crewai', 'claude_agent_sdk'})\n"
         "assert not leaked, leaked\n"
     )
     proc = subprocess.run(
@@ -101,6 +103,7 @@ def test_importing_the_package_pulls_in_no_integration_library() -> None:
         ("CallableTarget", "evaluatorq.integrations.callable_integration"),
         ("CrewAITarget", "evaluatorq.integrations.crewai_integration"),
         ("PydanticAITarget", "evaluatorq.integrations.pydantic_ai_integration"),
+        ("ClaudeAgentSDKTarget", "evaluatorq.integrations.claude_agent_sdk_integration"),
     ],
 )
 def test_framework_target_exposed_from_simulation(name: str, canonical: str) -> None:

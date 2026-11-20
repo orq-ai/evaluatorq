@@ -39,7 +39,7 @@ def ensure_fasthtml() -> None:
             '(or: python -m pip install "evaluatorq[dashboard]")',
             err=True,
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
 
 class _InterceptHandler(logging.Handler):

@@ -24,6 +24,7 @@ from evaluatorq.simulation._config import (
     DEFAULT_MAX_TARGET_RETRIES,
     DEFAULT_MAX_TOOL_RESULT_CHARS,
     DEFAULT_TARGET_AGENT_TIMEOUT_MS,
+    RepetitionCount,
 )
 from evaluatorq.simulation.contracts import Persona, Scenario, SimulationDatapoint  # noqa: TC001
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
@@ -40,6 +41,7 @@ class _SharedRunConfig(BaseModel):
     target: str | None = None
     memory_entity_id: str | None = None
     max_turns: int | None = Field(default=None, ge=1)
+    repetitions: RepetitionCount | None = None
     llm_config: LLMCallConfig | None = None
     evaluator_names: list[str] | None = None
     scoring: SimulationScoringConfig | None = None

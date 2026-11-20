@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from evaluatorq.common.replay import ReplayError, load_run_payload
 from evaluatorq.simulation.contracts import SimulationDatapoint
 
@@ -32,6 +34,9 @@ class SimulationReplay:
     max_turns: int | None = None
     """Turn cap the original run used, restored unless the caller overrides it.
     A conversation that ran to 12 turns is not the same case re-run at 10."""
+    repetitions: int | None = None
+    """Conversations per case the original run used, restored unless the caller
+    overrides it. ``None`` for runs saved before repetitions existed."""
 
 
 def load_simulation_replay(reference: str, runs_dir: Path | None = None) -> SimulationReplay:
@@ -71,4 +76,16 @@ def load_simulation_replay(reference: str, runs_dir: Path | None = None) -> Simu
         raise ReplayError(f'Previous simulation run {path.name} has unreadable datapoints: {exc}') from exc
 
     stored_turns = payload.get('max_turns')
-    return SimulationReplay(datapoints=datapoints, max_turns=stored_turns if isinstance(stored_turns, int) else None)
+    stored_repetitions = payload.get('repetitions')
+    valid_repetitions = (
+        isinstance(stored_repetitions, int) and not isinstance(stored_repetitions, bool) and stored_repetitions >= 1
+    )
+    if stored_repetitions is not None and not valid_repetitions:
+        logger.warning(
+            f'{path.name} stores repetitions={stored_repetitions!r}, which is not a count; the replay runs each case once.'
+        )
+    return SimulationReplay(
+        datapoints=datapoints,
+        max_turns=stored_turns if isinstance(stored_turns, int) else None,
+        repetitions=stored_repetitions if valid_repetitions else None,
+    )

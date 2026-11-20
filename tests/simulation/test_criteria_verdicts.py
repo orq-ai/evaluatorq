@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import typing
-from types import SimpleNamespace
 
 import pytest
 

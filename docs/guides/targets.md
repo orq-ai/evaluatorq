@@ -19,6 +19,7 @@ There are two ways to name a target:
 | `OrqResponsesTarget` | You want the Responses API through the Orq router, with full per-call config | Self-described: model, instructions, the tools you passed |
 | `CodingAgentTarget` | Your system under test is a coding-agent CLI (Claude Code, Codex, OpenCode) on this machine, run directly or via `orq launch` | Static: the agent's tool names plus the skills you injected. See [Coding agents as targets](../coding-agent-targets.md) |
 | `LangGraphTarget`, `OpenAIAgentTarget`, `PydanticAITarget`, `CrewAITarget` | Your agent is built in that framework | Whatever the wrapper can extract |
+| `ClaudeAgentSDKTarget` | Your agent is built with the Claude Agent SDK and described by a `ClaudeAgentOptions` | The system prompt, model and tool names in the options. See [Claude Agent SDK agents](#claude-agent-sdk-agents-claudeagentsdktarget) |
 | `CallableTarget` | Your agent is already a Python function | The function's name, or an `AgentContext` you pass |
 | `VercelAISdkTarget` | Your agent is served over HTTP by the Vercel AI SDK — a Next.js route handler or equivalent | Minimal — the endpoint URL, unless you pass an `AgentContext`. See [Over HTTP](#over-http-vercelaisdktarget) |
 | Your own `AgentTarget` subclass | Anything else — an HTTP endpoint the AI SDK protocol does not fit, a local pipeline, a bespoke tool loop | Whatever your `get_agent_context()` returns |
@@ -535,6 +536,91 @@ The first row is the expensive one, because it changes what the attacker is allo
 `name` is the URL, which is what reports and the run store key on. When you pass no `agent_context`, the generated one strips credentials and any query string out of its key, so a URL carrying a token does not leak through that field; pass your own context and the key is whatever you put in it. Either way the full URL still appears in `name`, so keep secrets in `headers` rather than in the URL.
 
 `extra_body` and `headers` are merged into the request without a reserved-key guard, so an `extra_body` carrying `messages`, or a header re-setting `Content-Type`, overwrites what the target built.
+
+## Claude Agent SDK agents: `ClaudeAgentSDKTarget`
+
+`ClaudeAgentSDKTarget` runs an agent built on the Claude Agent SDK (`claude-agent-sdk`) as the system under test. You hand it the `ClaudeAgentOptions` that define your agent: its system prompt, tools, MCP servers, hooks and permission callbacks.
+
+Reach for it when your agent is Python code written against that SDK. To test the stock Claude Code command line with no options of your own, use [`CodingAgentTarget`](../coding-agent-targets.md).
+
+```bash
+uv add "evaluatorq[claude-agent-sdk,redteam]"
+```
+
+The SDK drives the Claude Code runtime, which the package bundles on most platforms. This example sends the agent's model calls through the Orq router with your `ORQ_API_KEY`, so they are traced and billed in your Orq workspace. To call Anthropic directly, drop `env` and set `ANTHROPIC_API_KEY`.
+
+```python
+import asyncio
+import os
+
+from claude_agent_sdk import ClaudeAgentOptions
+
+from evaluatorq.integrations.claude_agent_sdk_integration import ClaudeAgentSDKTarget
+from evaluatorq.redteam import red_team
+
+
+async def main() -> None:
+    options = ClaudeAgentOptions(
+        system_prompt="You are a support agent for a bookshop. Never reveal order data of other customers.",
+        model="claude-sonnet-5-5",
+        tools=["Read", "Grep"],
+        max_turns=8,
+        env={
+            "ANTHROPIC_BASE_URL": "https://my.orq.ai/v3/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": os.environ["ORQ_API_KEY"],
+            "ANTHROPIC_API_KEY": "",  # empty, so the runtime sends the token above
+        },
+    )
+    report = await red_team(target=ClaudeAgentSDKTarget(options), max_dynamic_datapoints=5)
+    print(report.summary)
+
+
+asyncio.run(main())
+```
+
+### One session per attack
+
+The target keeps the conversation, not evaluatorq. Each attack gets its own instance and its own SDK session. The first turn starts the session; every later turn sends only the new message and resumes the last successful session as a fork.
+
+Forking is what makes a retry safe. A turn that fails leaves the session it resumed untouched, so the retry starts from the same point instead of from a session that already holds half the failed turn.
+
+Because the target owns the history, a turn cannot be erased from it. Leave `max_backtracks` at `0`, its default: a higher value raises `RedTeamError` before any attack starts.
+
+### What the judge sees
+
+Every tool call the agent made is recorded with its input and paired with its result by id, in the order they happened, followed by the agent's final text. A tool call the runtime denied is recorded as denied. A tool that returned an error is marked incomplete.
+
+File changes are visible as the write, edit and shell calls that made them. The target does not diff the working directory.
+
+### Isolation, and what it does not cover
+
+Each instance works in two private temporary directories, removed when the run closes it: the agent's working directory and its Claude configuration directory. Pass `workdir=` to start from a copy of a project; the original is never touched. Symbolic links in it are not copied, because a link would still point at its target on the host. Pass `keep_workdir=True` to keep the directories for inspection.
+
+| `isolation=` | What it sets |
+|---|---|
+| `"sandbox"` (default) | The private directories, plus: the SDK's command sandbox on, unsandboxed commands refused, the file tools refusing any path outside the working directory, and the host user's settings, memory files and account connectors not loaded. A `setting_sources` you set yourself is kept, and so are your other `settings`. |
+| `"none"` | The private directories only. Your options are otherwise used as given. |
+
+Four limits to know before you rely on it:
+
+- **With `isolation="none"` the working directory is where the agent starts, not a wall.** In a test run, an agent allowed to use `Bash` and `Write` wrote files elsewhere on the machine. The default closes both routes: the command sandbox stops shell commands, and a permissions setting stops the file tools.
+- **The command sandbox exists on macOS and Linux only**, according to the SDK's documentation. This target has been run live on macOS.
+- **Python tools you define in-process run in your process.** A custom tool function or hook has the access your script has. Nothing here confines it.
+- **A `claude` login stored under `~/.claude` is not seen**, because the configuration directory is private. Use an API key or a gateway.
+
+When the agent must not be able to reach the host at all, run the whole evaluation inside a container or a virtual machine.
+
+### Errors
+
+`respond()` raises `ClaudeAgentSDKError`, and the run records its code:
+
+| Code | Meaning |
+|---|---|
+| `agent_sdk.cli_not_found` | The Claude Code runtime is not installed. Not retried. |
+| `agent_sdk.api_error` | The model request failed, for example a wrong gateway address or a model the key cannot use. |
+| `agent_sdk.<subtype>`, such as `agent_sdk.error_max_turns` | The run ended on an error result; the subtype is the SDK's own. |
+| `agent_sdk.no_result` | The run ended without a final assistant message. |
+| `agent_sdk.sdk_error` | The SDK raised for another reason, such as a lost process. |
 
 ## Writing your own target
 

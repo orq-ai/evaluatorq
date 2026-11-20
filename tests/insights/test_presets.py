@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -27,7 +27,7 @@ def test_concerning_preset_uses_classifier_level_indices() -> None:
 
 def test_registry_is_frozen() -> None:
     with pytest.raises(TypeError):
-        cast('dict[str, LabelSpec]', presets.LABEL_PRESETS)['x'] = presets.SENTIMENT
+        cast('Any', presets.LABEL_PRESETS)['x'] = presets.SENTIMENT
 
 
 def test_taxonomies_have_expected_sizes() -> None:

@@ -10,7 +10,6 @@ from typing import Any, Literal
 
 import httpx
 import pytest
-from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from evaluatorq.common.cli_oauth import OAuthSession

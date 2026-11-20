@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
 import sys
 import uuid
 from copy import deepcopy
@@ -30,6 +31,7 @@ from evaluatorq.simulation._config import (
     DEFAULT_MAX_TOOL_RESULT_CHARS,
     DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     SimulationConfig,
+    check_repetitions,
     require_sim_models_served,
     sim_llm_config,
     sim_role_config,
@@ -257,6 +259,7 @@ async def simulate(
     memory_entity_id: str | None = None,
     previous_run: str | None = None,
     max_turns: int | None = None,
+    repetitions: int | None = None,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
@@ -394,6 +397,16 @@ async def simulate(
         max_turns: Cap on conversation turns. Defaults to 10, or — when
             replaying via ``previous_run`` — to the cap the replayed run used.
             An explicit value always wins.
+        repetitions: How many separate conversations to run for each case.
+            Defaults to 1, or — when replaying via ``previous_run`` — to the
+            count the replayed run used. An explicit value always wins. Every
+            repetition is a fresh conversation with the same persona,
+            scenario, opening message and criteria, so the results show how
+            much the outcome varies from run to run. It does not create more
+            cases and it does not repeat the judge call. The run holds
+            ``cases x repetitions`` results; each result's ``metadata``
+            carries ``base_datapoint_id`` and ``repetition_index``. With more than
+            one repetition, a case id must not already end in ``#r<digits>``.
         previous_run: Replay a saved run instead of building new cases. Accepts
             a run's file name, its run id (full or an unambiguous 8+ character
             prefix), a path to a saved run JSON, or ``"latest"``, resolved
@@ -535,6 +548,7 @@ async def simulate(
         memory_entity_id=memory_entity_id,
         previous_run=previous_run,
         max_turns=max_turns,
+        repetitions=repetitions,
         llm_config=llm_config,
         evaluator_names=evaluator_names,
         scoring=scoring,
@@ -574,6 +588,7 @@ async def _simulate_run(
     memory_entity_id: str | None = None,
     previous_run: str | None = None,
     max_turns: int | None = None,
+    repetitions: int | None = None,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
@@ -628,6 +643,8 @@ async def _simulate_run(
         judge=judge,
         generating=datapoints is None or executive_summary or bool(recommendations),
     )
+    if repetitions is not None:
+        check_repetitions(repetitions)
     run_id = uuid.uuid4().hex
 
     try:
@@ -676,6 +693,7 @@ async def _simulate_run(
                         memory_entity_id=memory_entity_id,
                         previous_run=previous_run,
                         max_turns=max_turns,
+                        repetitions=repetitions,
                         llm_config=resolved_llm_config,
                         evaluator_names=evaluator_names,
                         scoring=scoring,
@@ -731,6 +749,7 @@ async def generate_and_simulate(
     scenario_seeds: list[str] | None = None,
     generation_instructions: str = '',
     max_turns: int | None = None,
+    repetitions: int | None = None,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
@@ -925,6 +944,7 @@ async def generate_and_simulate(
         scenario_seeds=scenario_seeds,
         generation_instructions=generation_instructions,
         max_turns=max_turns,
+        repetitions=repetitions,
         llm_config=llm_config,
         evaluator_names=evaluator_names,
         scoring=scoring,
@@ -1039,6 +1059,7 @@ async def _generate_and_simulate_run(
     scenario_seeds: list[str] | None = None,
     generation_instructions: str = '',
     max_turns: int | None = None,
+    repetitions: int | None = None,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
@@ -1090,6 +1111,8 @@ async def _generate_and_simulate_run(
     require_sim_models_served(
         resolved_llm_config, generation_client=generation_client, user_simulator=user_simulator, judge=judge
     )
+    if repetitions is not None:
+        check_repetitions(repetitions)
     run_id = uuid.uuid4().hex
 
     try:
@@ -1161,7 +1184,7 @@ async def _generate_and_simulate_run(
                             # stage-end meta so a failed generate records the stage as
                             # 'error', mirroring SIMULATE (§4.4). None on the success
                             # path → 'completed'.
-                            meta: dict[str, Any] = {'num_datapoints': len(datapoints)} if datapoints else {}
+                            meta: dict[str, Any] = {'num_cases': len(datapoints)} if datapoints else {}
                             meta['error'] = sys.exc_info()[1]
                             await await_maybe(composed_hooks.on_stage_end(SimStage.GENERATE, meta))
 
@@ -1174,6 +1197,7 @@ async def _generate_and_simulate_run(
                             dataset_id=None,
                             memory_entity_id=memory_entity_id,
                             max_turns=max_turns,
+                            repetitions=repetitions,
                             llm_config=resolved_llm_config,
                             evaluator_names=evaluator_names,
                             scoring=scoring,
@@ -1704,6 +1728,15 @@ def _resolve_max_turns(*, config: SimulationConfig, replayed: SimulationReplay |
     )
 
 
+def _resolve_repetitions(*, config: SimulationConfig, replayed: SimulationReplay | None) -> int:
+    """Pick the conversations per case: explicit ``config.repetitions`` wins, then the replay's, then 1."""
+    return (
+        config.repetitions
+        if config.repetitions is not None
+        else ((replayed.repetitions if replayed is not None else None) or 1)
+    )
+
+
 def _resolve_run_settings(
     *,
     config: SimulationConfig,
@@ -1712,12 +1745,13 @@ def _resolve_run_settings(
     target_kind_hint: str | None,
     sim_datapoints: Sequence[SimulationDatapoint],
     max_turns: int,
+    repetitions: int,
 ) -> _RunSettings:
     """Derive the run's identity (evaluators, target label/name/model, hook meta) from ``config``.
 
-    ``config`` is the single source for every scalar but ``max_turns``, which is
-    passed separately only because ``config.max_turns`` is typed optional while
-    the hook payload needs the resolved ``int``.
+    ``config`` is the single source for every scalar but ``max_turns`` and
+    ``repetitions``, which are passed separately only because their config
+    fields are typed optional while the hook payload needs the resolved ``int``.
     """
     # The sync-hook deprecation nudge fires once in SimulationRunner.__init__
     # (the single choke point both this path and direct runner use share).
@@ -1748,7 +1782,9 @@ def _resolve_run_settings(
     raw_target_model = getattr(target_agent, 'model', None) or getattr(target_callable, 'model', None)
     target_model = raw_target_model if isinstance(raw_target_model, str) else None
     run_meta: SimulationRunMeta = {
-        'num_datapoints': len(sim_datapoints),
+        'num_cases': len(sim_datapoints),
+        'num_conversations': len(sim_datapoints) * repetitions,
+        'repetitions': repetitions,
         'model': config.model,
         'max_turns': max_turns,
         'datapoint_parallelism': config.datapoint_parallelism,
@@ -2029,12 +2065,21 @@ async def _simulate_core(
     # ran under, and only then do we fall back to the default. Rebind config so
     # every downstream reader (run meta, the runner, the saved run) agrees.
     max_turns = _resolve_max_turns(config=config, replayed=replayed)
-    if config.max_turns != max_turns:
-        config = config.model_copy(update={'max_turns': max_turns})
+    # Same precedence for the conversations per case, so a replay of a repeated run
+    # repeats it again instead of quietly running each case once.
+    repetitions = _resolve_repetitions(config=config, replayed=replayed)
+    if config.max_turns != max_turns or config.repetitions != repetitions:
+        config = config.model_copy(update={'max_turns': max_turns, 'repetitions': repetitions})
+    _check_repetition_ids(sim_datapoints, repetitions=repetitions)
 
     set_span_attrs(
-        pipeline_span,
-        {'orq.simulation.datapoints_count': len(sim_datapoints), 'orq.simulation.max_turns': max_turns},
+        span=pipeline_span,
+        attrs={
+            'orq.simulation.cases_count': len(sim_datapoints),
+            'orq.simulation.conversations_count': len(sim_datapoints) * repetitions,
+            'orq.simulation.repetitions': repetitions,
+            'orq.simulation.max_turns': max_turns,
+        },
     )
 
     resolved_hooks = config.hooks or DefaultHooks()
@@ -2045,6 +2090,7 @@ async def _simulate_core(
         target_kind_hint=target_kind_hint,
         sim_datapoints=sim_datapoints,
         max_turns=max_turns,
+        repetitions=repetitions,
     )
     resolved_evaluator_names = run_settings.evaluator_names
     target_name = run_settings.target_name
@@ -2101,8 +2147,11 @@ async def _simulate_core(
             results=results,
             run_id=run_id,
             experiment_url=execution.experiment_url,
-            # Persist the cases themselves so this run can be replayed later.
+            # Persist the cases themselves so this run can be replayed later. These are
+            # the base cases, one per persona and scenario pair, never the expanded repetitions;
+            # the count is stored next to them, and a replay restores both.
             datapoints=sim_datapoints,
+            repetitions=repetitions,
         )
 
         # Seeded from the two sources known here; updated again below once the
@@ -2463,10 +2512,48 @@ async def _generate_single_datapoint(
     return generate_datapoint(persona, scenario, first_message)
 
 
+_REPETITION_SUFFIX = re.compile(r'#r\d+$')
+
+
+def _check_repetition_ids(datapoints: Sequence[SimulationDatapoint], *, repetitions: int) -> None:
+    """Reject a case id that already looks like a repetition id when the run repeats cases.
+
+    A repeated case runs under ``<case id>#r<index>``. A case named ``a#r1`` next to a
+    case ``a`` would then share a conversation id with the second repetition of ``a``.
+    """
+    if repetitions == 1:
+        return
+    clashing = [dp.id for dp in datapoints if _REPETITION_SUFFIX.search(dp.id)]
+    if clashing:
+        raise ValueError(
+            f'repetitions={repetitions} gives each conversation the id <case id>#r<repetition index>, so a case id '
+            f'cannot already end in #r<digits>. Rename these cases: {clashing}'
+        )
+
+
+def _repetition_inputs(*, datapoint: SimulationDatapoint, repetition_index: int, repetitions: int) -> dict[str, Any]:
+    """The experiment row inputs for one repetition. A single repetition keeps the row shape it always had."""
+    inputs: dict[str, Any] = {'datapoint': datapoint.model_dump(mode='json')}
+    if repetitions > 1:
+        inputs['base_datapoint_id'] = datapoint.id
+        inputs['repetition_index'] = repetition_index
+    return inputs
+
+
+def _repetition_datapoint(
+    datapoint: SimulationDatapoint, *, repetition_index: int, repetitions: int
+) -> SimulationDatapoint:
+    """The datapoint one repetition runs with: the case itself for a single run, else a copy with a repetition id."""
+    if repetitions == 1:
+        return datapoint
+    return datapoint.model_copy(update={'id': f'{datapoint.id}#r{repetition_index}'})
+
+
 def _build_simulation_job_and_cache(
     *,
     job_name: str,
     sim_dp_by_id: dict[int, SimulationDatapoint],
+    lineage_by_id: dict[int, tuple[str, int]] | None = None,
     target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None,
     target_agent: AgentTarget | None,
     model: str | None = None,
@@ -2499,7 +2586,7 @@ def _build_simulation_job_and_cache(
     from evaluatorq.simulation.convert import to_open_responses
     from evaluatorq.simulation.evaluators.scorers import failure_reason
     from evaluatorq.simulation.hooks import DefaultHooks
-    from evaluatorq.simulation.runner.simulation import SimulationRunner, _error_result
+    from evaluatorq.simulation.runner.simulation import SimulationRunner, _error_result, stamp_repetition_lineage
 
     runner = SimulationRunner(
         target=target,
@@ -2546,7 +2633,7 @@ def _build_simulation_job_and_cache(
             await await_maybe(resolved_hooks.on_datapoint_start(sim_dp))
         except Exception as start_err:
             err = _error_result(str(start_err), sim_dp.persona, sim_dp.scenario)
-            err.metadata['datapoint_id'] = sim_dp.id
+            stamp_repetition_lineage(err, repetition_datapoint=sim_dp, lineage=(lineage_by_id or {}).get(id(data)))
             result_cache[id(data)] = err
             await await_maybe(resolved_hooks.on_datapoint_error(sim_dp, start_err))
             await await_maybe(resolved_hooks.on_datapoint_complete(err))
@@ -2562,7 +2649,7 @@ def _build_simulation_job_and_cache(
         result = await runner._run_with_timeout(  # noqa: SLF001
             sim_dp, max_turns, per_simulation_timeout_s or 0, thread_id=thread_id
         )
-        result.metadata['datapoint_id'] = sim_dp.id
+        stamp_repetition_lineage(result, repetition_datapoint=sim_dp, lineage=(lineage_by_id or {}).get(id(data)))
         result_cache[id(data)] = result
         reason = failure_reason(result)
         if reason is not None:
@@ -2807,7 +2894,6 @@ async def _simulate_via_evaluatorq(
     from evaluatorq.types import DataPoint
 
     run_name = config.run_name
-    model = config.model
     # _simulate_core resolves max_turns before calling here; the fallback only
     # covers a direct call that skipped it.
     max_turns = config.max_turns if config.max_turns is not None else DEFAULT_MAX_TURNS
@@ -2823,15 +2909,32 @@ async def _simulate_via_evaluatorq(
     resolved_evaluator_names = config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     scorers = [(name, get_evaluator(name, config.scoring)) for name in resolved_evaluator_names]
 
-    eq_datapoints = [DataPoint(inputs={'datapoint': dp.model_dump(mode='json')}) for dp in sim_datapoints]
+    # One row per repetition: every case runs `repetitions` separate conversations. The
+    # datapoint the conversation runs with is a copy with its own id when there is
+    # more than one repetition, because hooks and reports key their per-conversation
+    # state on that id. The row's inputs carry the base case plus, when repeated,
+    # the case id and repetition index, so repetitions stay apart in the uploaded experiment.
+    # _simulate_core resolves repetitions before calling here; the fallback only
+    # covers a direct call that skipped it.
+    repetitions = config.repetitions if config.repetitions is not None else 1
+    conversations = [(dp, index) for dp in sim_datapoints for index in range(repetitions)]
+    repetition_datapoints = [
+        _repetition_datapoint(dp, repetition_index=index, repetitions=repetitions) for dp, index in conversations
+    ]
+    eq_datapoints = [
+        DataPoint(inputs=_repetition_inputs(datapoint=dp, repetition_index=index, repetitions=repetitions))
+        for dp, index in conversations
+    ]
     # Map the evaluatorq DataPoint instance back to its source simulation
     # SimulationDatapoint by identity, so the job can run the source directly without
     # re-parsing inputs["datapoint"] on every run.
-    sim_dp_by_id = {id(eq): sim for eq, sim in zip(eq_datapoints, sim_datapoints, strict=True)}
+    sim_dp_by_id = {id(eq): sim for eq, sim in zip(eq_datapoints, repetition_datapoints, strict=True)}
+    lineage_by_id = {id(eq): (dp.id, index) for eq, (dp, index) in zip(eq_datapoints, conversations, strict=True)}
 
     job_fn, result_cache, runner = _build_simulation_job_and_cache(
         job_name='simulation',
         sim_dp_by_id=sim_dp_by_id,
+        lineage_by_id=lineage_by_id,
         target=target,
         target_agent=target_agent,
         llm_config=config.llm_config,

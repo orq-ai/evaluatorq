@@ -530,7 +530,6 @@ class TestORQExtractToolCallItems:
 
     @pytest.mark.asyncio
     async def test_extracts_tool_call_with_json_string_arguments(self) -> None:
-        import asyncio
         from unittest.mock import patch
 
         target = self._make_target()
@@ -558,7 +557,6 @@ class TestORQExtractToolCallItems:
 
     @pytest.mark.asyncio
     async def test_json_parse_fallback_for_invalid_string_arguments(self) -> None:
-        import asyncio
         from unittest.mock import patch
 
         target = self._make_target()

@@ -15,7 +15,6 @@ avoid duplicating the fixture factories.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path

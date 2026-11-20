@@ -8,7 +8,16 @@ from __future__ import annotations
 from datetime import datetime  # noqa: TC003
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, computed_field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictStr,
+    ValidationError,
+    computed_field,
+    field_validator,
+)
 from typing_extensions import TypedDict
 
 from evaluatorq.common.responses import scrub_wire_schema
@@ -339,7 +348,7 @@ class MustHappenCriterion(Criterion):
     ```
     """
 
-    type: Literal['must_happen'] = 'must_happen'  # ty: ignore[invalid-mutable-override] -- pins the parent's type
+    type: Literal['must_happen'] = 'must_happen'  # ty: ignore[incompatible-mutable-override] -- pins the parent's type
 
     def __init__(self, description: str, **data: Any) -> None:
         super().__init__(description=description, **data)
@@ -357,7 +366,7 @@ class MustNotHappenCriterion(Criterion):
     ```
     """
 
-    type: Literal['must_not_happen'] = 'must_not_happen'  # ty: ignore[invalid-mutable-override] -- pins the parent's type
+    type: Literal['must_not_happen'] = 'must_not_happen'  # ty: ignore[incompatible-mutable-override] -- pins the parent's type
 
     def __init__(self, description: str, **data: Any) -> None:
         super().__init__(description=description, **data)
@@ -622,6 +631,19 @@ class SimulationResult(BaseModel):
         'runs saved before this field existed.',
     )
 
+    @field_validator('metadata', mode='after')
+    @classmethod
+    def _read_legacy_trial_index(cls, metadata: dict[str, Any]) -> dict[str, Any]:
+        """Runs saved by 1.97.0 call the repetition position ``trial_index``; read it as ``repetition_index``.
+
+        The saved ``datapoint_id`` keeps its ``#t<index>`` suffix: nothing parses the
+        suffix, and ``base_datapoint_id`` already groups a case's conversations.
+        """
+        if 'trial_index' in metadata and 'repetition_index' not in metadata:
+            metadata = {**metadata, 'repetition_index': metadata['trial_index']}
+            del metadata['trial_index']
+        return metadata
+
     @property
     def last_trace_id(self) -> str | None:
         """Trace id of the last successful target response, for the table deep-link."""
@@ -696,6 +718,9 @@ class SimulationRun(BaseModel):
     # Configured turn cap for the run. Optional for back-compat with runs saved
     # before this field existed (older reports simply omit the Config row).
     max_turns: int | None = None
+    # Separate conversations run per case. `datapoints` holds the cases once each;
+    # `results` holds every conversation. 1 for runs saved before this field existed.
+    repetitions: int = 1
     # Snapshot of the ORQ agent's configuration at run time (orq_agent targets
     # only; None for other target kinds, fetch failures, and pre-existing runs).
     # Deliberately excludes the system prompt / instructions.

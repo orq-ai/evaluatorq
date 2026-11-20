@@ -93,7 +93,11 @@ src = [ "src" ]
   "FURB",
   "RUF",
   "TRY",
-  "BLE001"
+  "BLE001",
+  "PLE",
+  "PGH",
+  "T10",
+  "EXE"
 ]
   ignore = [
   "G001",
@@ -105,7 +109,6 @@ src = [ "src" ]
   "TRY002",
   "ANN401",
   "N815",
-  "B904",
   "PYI063",
   "PT011",
   "B017",
@@ -120,8 +123,6 @@ src = [ "src" ]
   "G201",
   "TRY300",
   "E402",
-  "ARG002",
-  "F841",
   "SIM102",
   "S603",
   "S607",
@@ -131,7 +132,6 @@ src = [ "src" ]
   "DOC201",
   "DOC501",
   "DOC502",
-  "ARG001",
   "E501",
   "S311",
   "RUF027"
@@ -148,35 +148,62 @@ src = [ "src" ]
     # documented silent-failure source (PR #96 — a TypeError made every evaluation
     # return passed=None). The rule is on repo-wide; these files predate it. Shrink
     # this list, never grow it. Tracked for burn-down in RES-1298.
+    #
+    # ARG001/ARG002 debt register: an unused argument is a knob that accepts a value
+    # and does nothing (PR #230's `datapoint_parallelism`). The rule is on repo-wide;
+    # these files held unused arguments when it landed (RES-1915). Shrink, never grow.
+    # An override of an interface method is exempt without an entry: mark it @override.
     [tool.ruff.lint.per-file-ignores]
+    "src/evaluatorq/cli.py" = ["ARG001"]
     "src/evaluatorq/common/apply.py" = ["BLE001"]
     "src/evaluatorq/common/async_utils.py" = ["BLE001"]
     "src/evaluatorq/common/judge.py" = ["BLE001"]
     "src/evaluatorq/common/llm_errors.py" = ["TID251"]
     "src/evaluatorq/common/output_adapters.py" = ["BLE001"]
     "src/evaluatorq/common/reports/executive_summary.py" = ["BLE001"]
+    "src/evaluatorq/common/reports/html_helpers.py" = ["ARG001"]
+    "src/evaluatorq/common/reports/standalone.py" = ["ARG002"]
     "src/evaluatorq/common/reports/vega.py" = ["BLE001"]
     "src/evaluatorq/common/target_call.py" = ["BLE001"]
     "src/evaluatorq/common/tracing.py" = ["BLE001"]
-    "src/evaluatorq/dashboard/app.py" = ["BLE001"]
+    "src/evaluatorq/contracts.py" = ["ARG002"]
+    "src/evaluatorq/dashboard/app.py" = ["BLE001", "ARG001"]
     "src/evaluatorq/dashboard/apply_ui.py" = ["BLE001"]
-    "src/evaluatorq/dashboard/library.py" = ["BLE001"]
+    "src/evaluatorq/dashboard/insights_routes.py" = ["ARG001"]
+    "src/evaluatorq/dashboard/library.py" = ["BLE001", "ARG001"]
+    "src/evaluatorq/dashboard/metrics.py" = ["ARG001"]
+    "src/evaluatorq/dashboard/pairwise_tabs.py" = ["ARG001"]
     "src/evaluatorq/dashboard/redteam_views.py" = ["BLE001"]
-    "src/evaluatorq/dashboard/report_tabs.py" = ["BLE001"]
+    "src/evaluatorq/dashboard/report_tabs.py" = ["BLE001", "ARG001"]
     "src/evaluatorq/dashboard/sim_views.py" = ["BLE001"]
+    "src/evaluatorq/dashboard/surfaces.py" = ["ARG001"]
+    "src/evaluatorq/dashboard/trace_finder/views.py" = ["ARG001"]
+    "src/evaluatorq/dashboard/view.py" = ["ARG001"]
     "src/evaluatorq/fetch_data.py" = ["BLE001"]
+    "src/evaluatorq/insights/usage.py" = ["ARG002"]
     "src/evaluatorq/integrations/callable_integration/target.py" = ["BLE001"]
-    "src/evaluatorq/integrations/langgraph_integration/target.py" = ["BLE001"]
+    "src/evaluatorq/integrations/langgraph_integration/target.py" = ["BLE001", "ARG002"]
     "src/evaluatorq/integrations/pydantic_ai_integration/target.py" = ["BLE001"]
+    "src/evaluatorq/local_sessions/codex.py" = ["ARG001"]
     "src/evaluatorq/openresponses/tracing.py" = ["BLE001"]
     "src/evaluatorq/processings.py" = ["BLE001"]
+    "src/evaluatorq/redteam/adaptive/attack_generator.py" = ["ARG001"]
+    "src/evaluatorq/redteam/adaptive/capability_classifier.py" = ["ARG001"]
+    "src/evaluatorq/redteam/adaptive/objective_generator.py" = ["ARG001"]
+    "src/evaluatorq/redteam/backends/base.py" = ["ARG002"]
+    "src/evaluatorq/redteam/backends/openai.py" = ["ARG002"]
+    "src/evaluatorq/redteam/backends/openresponses.py" = ["ARG002"]
+    "src/evaluatorq/redteam/backends/registry.py" = ["ARG001"]
     "src/evaluatorq/redteam/cli.py" = ["BLE001"]
+    "src/evaluatorq/redteam/hooks.py" = ["ARG002"]
     "src/evaluatorq/redteam/reports/recommendations.py" = ["BLE001"]
-    "src/evaluatorq/redteam/runner.py" = ["BLE001"]
+    "src/evaluatorq/redteam/runner.py" = ["BLE001", "ARG001"]
     "src/evaluatorq/redteam/runtime/jobs.py" = ["BLE001"]
     "src/evaluatorq/simulation/cli.py" = ["BLE001"]
+    "src/evaluatorq/simulation/evaluators/scorers.py" = ["ARG002"]
     "src/evaluatorq/simulation/generators/persona_generator.py" = ["BLE001"]
     "src/evaluatorq/simulation/generators/scenario_generator.py" = ["BLE001"]
+    "src/evaluatorq/simulation/hooks.py" = ["ARG002"]
     "src/evaluatorq/simulation/reports/recommendations.py" = ["BLE001"]
     "src/evaluatorq/simulation/runner/simulation.py" = ["BLE001"]
     "src/evaluatorq/simulation/traces.py" = ["BLE001"]
@@ -241,11 +268,18 @@ exclude = [ "examples", "scripts", ".venv" ]
 python-version = "3.10"
 python-platform = "all"
 
+[tool.ty.terminal]
+# A warning-level rule (deprecated, redundant-cast, pydantic-discarded-extra-argument, ...)
+# fails CI like an error, so a rule with zero hits cannot regress unnoticed.
+error-on-warning = true
+
 [tool.ty.rules]
 blanket-ignore-comment = "error"
+disjoint-cast = "error"
 ignore-comment-unknown-rule = "error"
 missing-type-argument = "error"
 possibly-unresolved-reference = "error"
+renamed-rule-in-ignore-comment = "error"
 unused-ignore-comment = "error"
 unused-type-ignore-comment = "error"
 unused-awaitable = "error"
@@ -258,7 +292,7 @@ include = [ "src/evaluatorq/dashboard" ]
   invalid-return-type = "ignore"
   invalid-type-form = "ignore"
   missing-type-argument = "ignore"
-  unresolved-attribute = "ignore"
+  missing-attribute = "ignore"
 
 [[tool.ty.overrides]]
 include = [ "tests/dashboard" ]
@@ -268,7 +302,8 @@ include = [ "tests/dashboard" ]
   invalid-return-type = "ignore"
   missing-type-argument = "ignore"
   not-iterable = "ignore"
-  unresolved-attribute = "ignore"
+  missing-attribute = "ignore"
+  missing-union-attribute = "ignore"
 
 [project]
 name = "evaluatorq"
@@ -310,6 +345,7 @@ dependencies = [
   langgraph = [ "langgraph>=0.2.0" ]
   openai-agents = [ "openai-agents>=0.1.0" ]
   pydantic-ai = [ "pydantic-ai-slim[openai]>=1.0.0" ]
+  claude-agent-sdk = [ "claude-agent-sdk>=0.2.140" ]
   crewai = [ "crewai>=0.70.0; python_version >= '3.11'" ]
   redteam = [
   "huggingface-hub>=0.20.0",
@@ -333,7 +369,7 @@ dependencies = [
   "umap-learn>=0.5.6"
 ]
   all = [
-  "evaluatorq[orq,anthropic,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,dashboard,insights]"
+  "evaluatorq[orq,anthropic,otel,langchain,langgraph,openai-agents,pydantic-ai,claude-agent-sdk,crewai,redteam,simulation,dashboard,insights]"
 ]
 
   [project.scripts]
@@ -396,7 +432,7 @@ dev = [
   "pytest-timeout>=2.3.0",
   "pytest-xdist>=3.6.0",
   "tomli>=2.0.0; python_version < '3.11'",
-  "ty==0.0.90",
+  "ty==0.0.100",
   "ruff>=0.14.3",
   "orq-ai-sdk>=4.14",
   "anthropic>=0.75.0",

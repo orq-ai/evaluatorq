@@ -48,7 +48,7 @@ def _vote(
 def _comparison(values: list[str | None], winner: str, **kw: bool) -> PairwiseComparison:
     return PairwiseComparison(
         winner=winner,
-        votes=[_vote(m, v, **kw) for m, v in zip(JUDGES, values)],
+        votes=[_vote(m, v, **kw) for m, v in zip(JUDGES, values, strict=True)],
     )
 
 

@@ -52,8 +52,9 @@ uv run pytest -m 'not integration' path/to/test.py::test_name
 # Run integration tests (requires ORQ_API_KEY in .env)
 uv run pytest -m integration
 
-# Lint
+# Lint (tests use the narrow set in tests/ruff.toml)
 uv run ruff check src
+uv run ruff check tests
 
 # Format
 uv run ruff format src
@@ -97,6 +98,8 @@ Reviewers need no flag: `.github/CODEOWNERS` requests them on every PR and skips
 
 **Show visible changes in the PR.** If a change affects anything in the browser, attach screenshots of the changed pages or states and embed them in the PR description. If a change affects the CLI, include fenced before and after snippets in the PR description showing the same command and its output on each version. Cover every user-visible change so a reviewer can see what was done. When the change is an interaction rather than a state (a click, a filter, a flow across pages), also attach a short video recorded with the `dashboard-demo-video` skill.
 
+**Update the dashboard when results change.** A change that alters what a run computes or saves (scores, pass/fail, errored classification, metrics, saved-report fields) updates the dashboard views that read it in the same PR, with before and after screenshots. The review rule is **A change to result semantics updates the dashboard in the same PR** in `CODING_STANDARDS.md`.
+
 **The ticket is named by its id in the PR title, and by nothing else anywhere.** Put it in trailing parentheses after a conventional-commit subject — `docs: unwrap every hard-wrapped markdown file (RES-1495)`. No Linear URL in the title, the body, a comment or a commit message: the id is what a reader greps, quotes in Slack and types into search, and a pasted URL rots the moment a workspace or slug changes while the id never does. Linear links the two directions on its own from the id plus the PR attachment. The cost to know: dropping the `Closes <id>` line means **merging will not close the ticket** — move it yourself, or say so in the PR.
 
 ## Before pushing to a PR
@@ -105,6 +108,7 @@ Run the same checks CI runs, **verbatim**, before every push:
 
 ```bash
 uv run ruff check src
+uv run ruff check tests
 uv run ruff format --check src
 uv run ty check                     # configured repo surface — NOT a path
 uv run pytest -m 'not integration'
@@ -114,7 +118,7 @@ uv run pytest -m 'not integration'
 
 **Never run pytest with xdist locally: no `-n auto`, no `-n <N>`.** Each xdist worker collects the whole suite, so on a laptop running several worktrees at once it multiplies CPU and memory and slows every other session. CI adds `-n auto` on its own runners; that is the only place it belongs. This applies to every subagent you dispatch, so say it in the dispatch prompt. To go faster, scope the run to the test files your change touches first, then run the full serial suite once before pushing.
 
-Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **ty** is not scoped. Match CI, not intuition.
+Note the asymmetry: **ruff format** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **ruff check** runs on both, but `tests/ruff.toml` narrows the test tree to `F`, `B` and `ASYNC`. **ty** is not scoped. Match CI, not intuition.
 
 CI does not run integration tests. Real-API coverage runs weekly via `.github/workflows/examples-weekly.yml`, which opens an issue on failure rather than blocking a PR.
 
@@ -228,7 +232,11 @@ Every variable evaluatorq owns is an `EnvVar` row in `ENV_VARS` (`src/evaluatorq
 - Python 3.10+ compatible (use `from __future__ import annotations` for newer typing syntax)
 - `StrEnum` polyfill for Python 3.10 (native in 3.11+)
 - Linting: ruff
-- Type checking: ty
+- Type checking: ty. When bumping its pin:
+  - Run `uv lock` in the same change. CI installs with `uv sync --locked`, so a pin without a relock fails.
+  - Rename every rule ty reports as renamed, in `pyproject.toml` and in `ty: ignore` comments. `renamed-rule-in-ignore-comment` is an error and `test_ty_config_names_only_current_rules` fails on any old name in config.
+  - When a rule splits, carry an ignore or override over to every rule it split into, so the policy does not change. When `unresolved-attribute` split, the dashboard overrides kept ignoring `missing-attribute`; `missing-union-attribute` is checked in `src/evaluatorq/dashboard` and ignored only in `tests/dashboard`.
+  - Delete `ty: ignore` comments ty now reports as unused instead of keeping them.
 - Logging: `loguru` everywhere (core runtime dependency since 1.3)
 - **Keyword arguments by default.** Call `f(model=model, max_tokens=512)`, not `f(model, 512)`: a positional call silently binds the wrong value when a signature gains or reorders a parameter. A new function or method with more than one parameter puts everything after the first obvious subject behind `*`, so callers cannot pass them positionally. Exempt: single-argument calls, builtins and positional-only parameters (`len(x)`, `isinstance(x, T)`), and the logger's format arguments. Existing positional calls are not a finding unless the change touches them. The review rule is **Pass arguments by keyword in new code** in `CODING_STANDARDS.md`.
 

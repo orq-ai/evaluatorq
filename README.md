@@ -302,7 +302,7 @@ delete hook; test them in a disposable worktree before relying on that lifecycle
 uv sync --all-extras --all-groups   # every extra plus the dev tooling
 uv run pytest                       # quick local profile; excludes integration and slow tests
 uv run pytest -m 'not integration'  # complete non-integration profile; run before pushing
-uv run ruff check src && uv run ruff format src
+uv run ruff check src tests && uv run ruff format src
 uv run ty check                     # configured source, test, root, and docs files
 ```
 

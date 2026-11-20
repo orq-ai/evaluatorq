@@ -26,7 +26,7 @@ J = ['j1', 'j2', 'j3']
 def _cmp(values, winner, *, flipped=(), failures=0, usage=None):
     votes = [
         PairwiseVote(model=m, vote=None if m in flipped else v, flipped=m in flipped, repetition_failures=failures)
-        for m, v in zip(J, values)
+        for m, v in zip(J, values, strict=True)
     ]
     return PairwiseComparison(winner=winner, votes=votes, token_usage=usage)
 

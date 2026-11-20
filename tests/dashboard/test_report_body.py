@@ -228,15 +228,13 @@ class TestRedteamRenderReportBody:
 
     def test_export_html_contains_body_fragment_content(self) -> None:
         """The expanded dashboard report retains the underlying report facts."""
-        from evaluatorq.redteam.reports.export_html import export_html, render_report_body
+        from evaluatorq.redteam.reports.export_html import export_html
 
         report = _make_redteam_report()
-        fragment = render_report_body(report)
         doc = export_html(report)
-        # Pick a stable substring from the fragment that should appear in the full doc.
-        # Strip leading/trailing whitespace and check a meaningful chunk.
-        # We just verify the section content surfaces in the full doc.
-        assert 'Executive summary' in doc or 'Overview' in doc
+        # Fixture-specific facts, so a template-only document cannot pass.
+        assert 'test-agent' in doc
+        assert 'ASI01-body-test-001' in doc
 
 
 # ---------------------------------------------------------------------------

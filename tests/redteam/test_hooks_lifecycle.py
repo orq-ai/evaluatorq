@@ -189,7 +189,6 @@ class TestStaticPipelineHooks:
         the full lifecycle in one spy.
         """
         spy = SpyHooks()
-        datapoints = self._make_datapoints(2)
         mock_report = _make_report(pipeline=Pipeline.STATIC)
 
         # Capture the hooks argument _run_static receives and replay the

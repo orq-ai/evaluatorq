@@ -44,6 +44,7 @@ class SimulationRun:
     agent_info: AgentInfoSnapshot | None
     orq_base_url: str | None
     max_turns: int | None
+    repetitions: int
     evaluator_names: list[str]
     total_results: int
     scorer_averages: dict[str, float]
@@ -105,7 +106,9 @@ Check `criteria_verified` before trusting `criteria_results`. When it is `false`
 | `persona_traits` | the persona's patience, assertiveness, politeness, technical level, style and background |
 | `scenario_goal`, `scenario_context` | the scenario's goal and context |
 | `criteria_meta` | one entry per criterion: `id`, `description`, `type`, `passed`, `audited`, `evidence` |
-| `datapoint_id` | the datapoint this conversation ran |
+| `datapoint_id` | the datapoint this conversation ran. With `repetitions` above 1 it is unique per conversation: the case id plus `#r<repetition_index>` |
+| `base_datapoint_id` | the case this conversation belongs to. Equal to `datapoint_id` unless the run used `repetitions` above 1 |
+| `repetition_index` | position of this conversation among the repetitions of its case, counting from 0. Runs saved by 1.97.0 call it `trial_index`; it is read as `repetition_index` when they load |
 | `evaluator_scores` | evaluator name to numeric score, for this conversation |
 | `evaluator_errors` | evaluator name to the reason its score was unusable, when one failed |
 | `target_model` | the model the target used, when the client knows it |

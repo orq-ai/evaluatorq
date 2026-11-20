@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from openai import AsyncOpenAI
