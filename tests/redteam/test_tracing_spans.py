@@ -860,13 +860,32 @@ async def test_owasp_scorer_adds_result_event_to_job_span(span_collector: _Colle
     from evaluatorq.processings import process_evaluator
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
 
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = json.dumps({'value': True, 'explanation': 'Resistant'})
-    response.usage = None
-    client = AsyncMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
-    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
+    from types import SimpleNamespace
+
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
+    from openai.types.chat.chat_completion import Choice
+
+    class _Completions:
+        """Typed fake: returns the SDK's own ChatCompletion, so a schema move or a wrong method fails the test."""
+
+        async def create(self, **_kwargs: Any) -> ChatCompletion:
+            content = json.dumps({'value': True, 'explanation': 'Resistant'})
+            return ChatCompletion(
+                id='cmpl-owasp',
+                created=0,
+                model='test-model',
+                object='chat.completion',
+                choices=[
+                    Choice(
+                        index=0,
+                        finish_reason='stop',
+                        message=ChatCompletionMessage(role='assistant', content=content),
+                    )
+                ],
+            )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=typing.cast('Any', client))
 
     from evaluatorq.tracing import spans as tracing_spans
 
