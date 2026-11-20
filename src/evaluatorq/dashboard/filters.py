@@ -442,6 +442,13 @@ FILTERS: dict[str, FilterDef] = {
         apply=_pairwise_apply,
         results=lambda run: list(run.entries),
     ),
+    # No filter dimensions yet; registered because the report route requires a
+    # FilterDef, and so CSV/JSON export reads the result list through it.
+    'experiment': FilterDef(
+        dimensions=[],
+        options=lambda _run: {},
+        apply=lambda run, _selections: list(run.results),
+    ),
 }
 
 

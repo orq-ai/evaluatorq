@@ -881,7 +881,7 @@ class TestSaveDeprecation:
     async def test_bool_save_warns_and_blames_the_callers_frame(self, legacy_value: bool) -> None:
         """The warning must name this test's frame, not a frame inside `red_team`.
 
-        `warnings.warn` lives in `_resolve_save_mode`, one frame deeper than the
+        `warnings.warn` lives in `common.save_mode.resolve_save_mode`, one frame deeper than the
         `red_team` body it was raised from before the phase extraction, so it
         carries `stacklevel=3`. Asserting only that a `DeprecationWarning` fires
         would pass with the old `stacklevel=2` and point every user at runner.py.

@@ -15,6 +15,7 @@ from click.testing import Result
 from typer import Typer
 from typer.testing import CliRunner
 
+from evaluatorq.contracts import SaveMode
 from evaluatorq.common.cli_tty import shell_path
 from evaluatorq.common.run_manifest import start_manifest
 from evaluatorq.simulation.cli import (
@@ -900,7 +901,7 @@ def test_run_report_is_written_and_the_run_is_left_for_the_sdk_to_save(
 
     assert result.exit_code == 0, result.output
     assert json.loads(report.read_text())["mode"] == "run"
-    assert mock_impl.call_args.args[0].save is True
+    assert mock_impl.call_args.args[0].save == SaveMode.FINAL
     assert not (tmp_path / ".evaluatorq" / "sim-runs").exists()
 
 

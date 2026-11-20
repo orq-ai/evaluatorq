@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from evaluatorq.common.reports import esc, load_css, load_logo_svg
 
 if TYPE_CHECKING:
+    from evaluatorq.experiment_run import ExperimentRun
     from evaluatorq.redteam.contracts import RedTeamReport
     from evaluatorq.simulation.contracts import SimulationRun
 
@@ -165,3 +166,10 @@ def redteam_html(report: RedTeamReport) -> str:
     from evaluatorq.dashboard.report_tabs import redteam_report_tabs
 
     return _document('Red Team Security Report', redteam_report_tabs('', report, standalone=True))
+
+
+def experiment_html(run: ExperimentRun) -> str:
+    """Render a saved ``evaluatorq()`` experiment run as the same body the dashboard shows."""
+    from evaluatorq.dashboard.experiment_views import experiment_report_body
+
+    return _document('Experiment Report', experiment_report_body(run))

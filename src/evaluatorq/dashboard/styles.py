@@ -627,6 +627,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .type-cell.redteam svg { color: var(--red-600); }
 .type-cell.sim svg { color: var(--teal-600); }
 .type-cell.pairwise svg { color: var(--orange-500); }
+.type-cell.experiment svg { color: var(--chart-1); }
 
 /* Landing 'Recent runs' — airy aligned columns, no table chrome */
 .recent-runs { display: flex; flex-direction: column; }
@@ -4201,6 +4202,26 @@ _PAIRWISE_COMPARISONS_CSS = """
 .pw-report .pw-filtered > .pw-filtered-text, .pw-report .pw-filtered > span { flex: 1 1 240px; min-width: 0; max-width: 72ch; text-wrap: pretty; }
 """
 
+_EXPERIMENT_REPORT_CSS = """
+.exp-report .exp-table-wrap{overflow-x:auto}
+.exp-report table.exp-rows td,.exp-report table.exp-evaluators td{vertical-align:top}
+/* .report-aligned right-aligns every column after the first; the row table is text. */
+.exp-report table.exp-rows thead th:not(:first-child),.exp-report table.exp-rows tbody td:not(:first-child){text-align:left}
+.exp-report table.exp-rows td{max-width:420px;overflow-wrap:anywhere}
+.exp-report .exp-row--error td{background:var(--red-50)}
+.exp-report .exp-clip summary{cursor:pointer;list-style:none;color:inherit;font-weight:inherit}
+.exp-report .exp-job{white-space:nowrap}
+.exp-report .rk-meta-value{overflow-wrap:anywhere}
+.exp-report .exp-clip summary::-webkit-details-marker{display:none}
+.exp-report .exp-full{white-space:pre-wrap;word-break:break-word;background:var(--surface-sunken);padding:8px;border-radius:6px;margin:6px 0 0;font-size:12px}
+.exp-report .exp-error{color:var(--red-700)}
+.exp-report .exp-output-after-error{margin-top:4px;color:var(--text-muted)}
+.exp-report .exp-score{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.exp-report .exp-score-value{font-variant-numeric:tabular-nums;font-weight:600}
+.exp-report .exp-none,.exp-report .exp-empty{color:var(--text-faint)}
+.exp-report .exp-chart{margin-top:16px;overflow-x:auto}
+"""
+
 _PAIRWISE_COMPARE_CSS = """
 .pw-compare .pw-cmp-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0;align-items:start}
 .pw-compare .pw-cmp-cols>.rk-panel{margin:0}
@@ -4237,6 +4258,7 @@ DASHBOARD_CSS = (
     + _PAIRWISE_REPORT_CSS
     + _PAIRWISE_COMPARISONS_CSS
     + _PAIRWISE_COMPARE_CSS
+    + _EXPERIMENT_REPORT_CSS
 )
 
 # Report foundations and component rules, shared by offline HTML documents.
@@ -4248,4 +4270,5 @@ REPORT_CSS = (
     + _SIM_REPORT_OVERRIDES_CSS
     + _SIM_TRANSCRIPT_OVERRIDES_CSS
     + _RT_REPORT_CSS
+    + _EXPERIMENT_REPORT_CSS
 )

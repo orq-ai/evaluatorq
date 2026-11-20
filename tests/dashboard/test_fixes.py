@@ -175,9 +175,11 @@ class TestFix1CliDirectUrl:
             repo / 'runs',
             repo / 'sim-runs',
             repo / 'pairwise-runs',
+            repo / 'experiment-runs',
             repo / '.evaluatorq' / 'runs',
             repo / '.evaluatorq' / 'sim-runs',
             repo / '.evaluatorq' / 'pairwise-runs',
+            repo / '.evaluatorq' / 'experiment-runs',
         ]
 
 

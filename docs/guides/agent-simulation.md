@@ -96,6 +96,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
         ```python
         import asyncio
 
+        from evaluatorq import SaveMode
         from evaluatorq.simulation import generate_and_simulate
 
 
@@ -114,7 +115,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
                 experiment_description="September support regression",
                 orq_folder_path="Support/September",
                 report_path="support-simulation.json",
-                save=True,
+                save=SaveMode.FINAL,
                 raise_on_execution_failure=True,
             )
 
@@ -187,7 +188,7 @@ Pass `generation_instructions="..."` to steer the whole generated set. It is a f
 |---|---|
 | `experiment_description` | Description of the experiment uploaded to Orq; has no effect when `upload_results=False`. |
 | `orq_folder_path` | Folder for uploaded results in Orq. |
-| `report_path` | Local JSON report file, written when `save=True`. Without a path, `save=True` writes to the run store. |
+| `report_path` | Local JSON report file, written when `save=SaveMode.FINAL`. Without a path, `save=SaveMode.FINAL` writes to the run store. `True` and `False` still work for `save` but raise a `DeprecationWarning`. |
 | `raise_on_execution_failure` | Raises `SimulationDroppedError` for a dropped, errored, or timed-out conversation. Defaults to `True`; goal scores do not trigger it. |
 
 The earlier names `evaluation_description`, `orq_results_path`, `report`, and `exit_on_failure` still work. If you supply both names for one option, their values must match.
@@ -794,7 +795,7 @@ if __name__ == "__main__":
 
 ### Replay a previous run
 
-A saved run already holds the personas, scenarios, and first messages it used, so you can re-run it against a new target or new evaluators without exporting anything. The CLI saves each run to `.evaluatorq/sim-runs/` by default (`--no-save` skips it). From Python, pass `save=True` to `simulate()` to get the same file. List what is there with `eq sim runs`; its `File` column is the file name to pass below.
+A saved run already holds the personas, scenarios, and first messages it used, so you can re-run it against a new target or new evaluators without exporting anything. The CLI saves each run to `.evaluatorq/sim-runs/` by default (`--no-save` skips it). From Python, pass `save=SaveMode.FINAL` to `simulate()` to get the same file. List what is there with `eq sim runs`; its `File` column is the file name to pass below.
 
 Replay the most recent run, or pick a specific one:
 
@@ -1103,7 +1104,7 @@ text, kind = apply_random_perturbation("Where is my order?")
 
 ## Reading a run in the dashboard
 
-Runs are saved to `.evaluatorq/sim-runs/<name>_<timestamp>.json` — automatically by `eq sim run` (unless you pass `--no-save`), and by `simulate()` when called with `save=True`. `eq dashboard` browses those files locally, no external service:
+Runs are saved to `.evaluatorq/sim-runs/<name>_<timestamp>.json` — automatically by `eq sim run` (unless you pass `--no-save`), and by `simulate()` when called with `save=SaveMode.FINAL`. `eq dashboard` browses those files locally, no external service:
 
 ```bash
 uv add "evaluatorq[dashboard]"
@@ -1113,7 +1114,7 @@ eq dashboard .evaluatorq/sim-runs  # scope to simulation runs
 ```
 
 !!! warning "The Python examples above don't save by default"
-    `simulate()` and `generate_and_simulate()` default to `save=False`, so a script copy-pasted from earlier on this page leaves the dashboard empty. Pass `save=True`, or drive the run from the CLI (`eq sim run`), which saves unless you pass `--no-save`.
+    `simulate()` and `generate_and_simulate()` default to `save=SaveMode.NONE`, so a script copy-pasted from earlier on this page leaves the dashboard empty. Pass `save=SaveMode.FINAL`, or drive the run from the CLI (`eq sim run`), which saves unless you pass `--no-save`.
 
 Land on the cross-surface overview, pick the run from **Agent Sim**, then work down the report tabs from headline to transcript:
 

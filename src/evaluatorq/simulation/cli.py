@@ -65,7 +65,7 @@ from evaluatorq.common.llm_limit import DEFAULT_LLM_PARALLELISM, check_llm_paral
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
 from evaluatorq.common.run_manifest import read_manifest
-from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.contracts import LLMCallConfig, SaveMode
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
 from evaluatorq.simulation.contracts import DEFAULT_MAX_TURNS, DEFAULT_RUN_NAME
 from evaluatorq.simulation.run_config import (
@@ -698,8 +698,14 @@ _CLI_OWNED_FIELDS = frozenset({
 
 
 def _forwarded_kwargs(cfg: BaseModel) -> dict[str, Any]:
-    """The keyword arguments of the internal run function that ``cfg`` supplies: every field the CLI does not own."""
-    return {name: value for name, value in model_kwargs(cfg).items() if name not in _CLI_OWNED_FIELDS}
+    """The keyword arguments of the internal run function that ``cfg`` supplies: every field the CLI does not own.
+
+    ``save`` goes in as the bool the internal run functions take.
+    """
+    kwargs = {name: value for name, value in model_kwargs(cfg).items() if name not in _CLI_OWNED_FIELDS}
+    if 'save' in kwargs:
+        kwargs['save'] = kwargs['save'] == SaveMode.FINAL
+    return kwargs
 
 
 def _require_sim_models_served(cfg: SimulateCliConfig | GenerateAndSimulateCliConfig, openai_model: str | None) -> None:
@@ -843,7 +849,7 @@ def _finish_run(
     if emit_json is not None:
         emit_json(run)
 
-    if cfg.save:
+    if cfg.save == SaveMode.FINAL:
         run_path = _saved_run_path(run)
         if run_path is None:
             logger.warning(

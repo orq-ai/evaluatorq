@@ -33,7 +33,7 @@ except importlib.metadata.PackageNotFoundError:  # ponytail: source checkout, no
 from .common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, run_classify
 from .common.llm_limit import llm_concurrency_limit, llm_slot
 from .common.trace_input import fetch_traces
-from .contracts import AgentResponse
+from .contracts import AgentResponse, SaveMode
 from .deployment import (
     DeploymentResponse,
     MessageDict,
@@ -47,6 +47,7 @@ from .evaluators import (
     orq_evaluator,
     string_contains_evaluator,
 )
+from .experiment_run import EvaluatorStats, ExperimentRun, load_experiment_run
 from .job_helper import job
 from .jury_presets import PRESETS, JuryPreset, get_preset
 from .llm_jury import PairwiseComparator, llm_jury, llm_jury_pairwise
@@ -113,8 +114,10 @@ __all__ = [
     'Evaluator',
     'EvaluatorParams',
     'EvaluatorScore',
+    'EvaluatorStats',
     'EvaluatorqResult',
     'ExperimentInput',
+    'ExperimentRun',
     'Job',
     'JobResult',
     'JobReturn',
@@ -130,6 +133,7 @@ __all__ = [
     'PairwiseVote',
     'RepetitionObservation',
     'ResponseResourceDict',
+    'SaveMode',
     'Scorer',
     'ScorerParameter',
     'ThreadConfig',
@@ -155,6 +159,7 @@ __all__ = [
     'llm_jury',
     'llm_jury_pairwise',
     'llm_slot',
+    'load_experiment_run',
     'orq_evaluator',
     'repetition_consistency',
     'repetition_consistency_raw',

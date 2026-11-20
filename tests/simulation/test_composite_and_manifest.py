@@ -9,6 +9,7 @@ import typing
 
 import pytest
 
+from evaluatorq.contracts import SaveMode
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.hooks import (
     CompositeSimulationHooks,
@@ -272,7 +273,7 @@ async def test_generate_and_simulate_records_both_stages(datapoint_factory, monk
         user_simulator=typing.cast(typing.Any, _StubUserSim()),
         judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         upload_results=False,
-        save=True,
+        save=SaveMode.FINAL,
     )
 
     manifests = list_manifests(get_sim_runs_dir())
@@ -299,7 +300,7 @@ async def test_bare_simulate_records_only_simulate_stage(datapoint_factory):
         user_simulator=typing.cast(typing.Any, _StubUserSim()),
         judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         upload_results=False,
-        save=True,
+        save=SaveMode.FINAL,
     )
 
     manifests = list_manifests(get_sim_runs_dir())
@@ -334,7 +335,7 @@ async def test_decline_after_generate_cancels_and_keeps_generate_completed(datap
             judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             hooks=Decline(),
             upload_results=False,
-            save=True,
+            save=SaveMode.FINAL,
         )
 
     manifests = list_manifests(get_sim_runs_dir())
@@ -369,7 +370,7 @@ async def test_simulate_phase_failure_marks_simulate_stage_error(datapoint_facto
             judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             hooks=ScoringBoom(),
             upload_results=False,
-            save=True,
+            save=SaveMode.FINAL,
         )
 
     manifests = list_manifests(get_sim_runs_dir())
@@ -406,7 +407,7 @@ async def test_post_stage_failure_leaves_simulate_stage_completed(datapoint_fact
             user_simulator=typing.cast(typing.Any, _StubUserSim()),
             judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             upload_results=False,
-            save=True,
+            save=SaveMode.FINAL,
         )
 
     manifests = list_manifests(get_sim_runs_dir())
@@ -490,7 +491,7 @@ async def test_generate_and_simulate_tracks_description_resolution_failure(monke
     monkeypatch.setattr(api, '_resolve_generation_agent_description', _boom)
 
     with pytest.raises(RuntimeError, match='description lookup exploded'):
-        await generate_and_simulate(save=True)
+        await generate_and_simulate(save=SaveMode.FINAL)
 
     [manifest] = list_manifests(get_sim_runs_dir())
     assert manifest.status == 'error'
@@ -530,7 +531,7 @@ async def test_generate_phase_failure_marks_manifest_error_not_running(datapoint
             user_simulator=typing.cast(typing.Any, _StubUserSim()),
             judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             upload_results=False,
-            save=True,
+            save=SaveMode.FINAL,
         )
 
     manifests = list_manifests(get_sim_runs_dir())

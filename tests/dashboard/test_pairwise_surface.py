@@ -614,7 +614,7 @@ def test_pairwise_type_cell_has_a_glyph(client: tuple[TestClient, str]) -> None:
 def test_empty_landing_names_pairwise(tmp_path: Path) -> None:
     c = TestClient(build_app(roots=[tmp_path]), raise_server_exceptions=True)
     r = c.get('/')
-    assert 'Run a red team, simulation, or pairwise job to generate reports.' in r.text
+    assert 'Run a red team, simulation, pairwise or saved evaluatorq() job to generate reports.' in r.text
 
 
 def test_export_routes_all_succeed(client: tuple[TestClient, str]) -> None:

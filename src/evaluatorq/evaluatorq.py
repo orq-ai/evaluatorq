@@ -1,9 +1,15 @@
 import asyncio
+import contextlib
 import inspect
-from collections.abc import Awaitable, Callable, Sequence
+import os
+import stat
+import tempfile
+import uuid
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from loguru import logger
@@ -14,7 +20,11 @@ from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
 from .common.output_adapters import has_meaningful_output
 from .common.parallelism import resolve_datapoint_parallelism
+from .common.private_files import write_private_atomic
+from .common.save_mode import resolve_save_mode
 from .common.trace_input import load_traces
+from .contracts import ManifestSurface, SaveMode
+from .experiment_run import ExperimentRun, get_experiment_runs_dir, save_experiment_run
 from .fetch_data import (
     fetch_dataset_batches,
     fetch_experiment_datapoints,
@@ -42,6 +52,7 @@ from .types import (
 if TYPE_CHECKING:
     from orq_ai_sdk import Orq
 
+    from .common.run_manifest import ManifestWriter
     from .tracing.context import TracingContext
 
 
@@ -504,18 +515,17 @@ class _EvaluationFinishInputs:
     start_time: datetime
     path: str | None
     base_url: str | None
-    experiment_url_out: list[str] | None
 
 
-async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
+async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> str | None:
     """Display and upload a finished run's results, the last phase of ``evaluatorq``.
 
     Prints the table when asked, then uploads to Orq only when both an API key and
-    ``send_results`` are present. Callers that opted in by passing a sink list get
-    the created experiment's URL appended to ``inputs.experiment_url_out`` — that
-    list is the only value this writes back, since simulation persists the URL on
-    its ``SimulationRun`` report. A run with no sink, no key or no URL writes
-    nothing and is not an error.
+    ``send_results`` are present.
+
+    Returns:
+        The created Orq experiment's URL, or ``None`` when nothing was uploaded or
+        the upload returned no URL, which is not an error.
     """
     print_results = inputs.print_results
     orq_api_key = inputs.orq_api_key
@@ -527,7 +537,6 @@ async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
     start_time = inputs.start_time
     path = inputs.path
     base_url = inputs.base_url
-    experiment_url_out = inputs.experiment_url_out
 
     # Display results table
     if print_results:
@@ -546,10 +555,9 @@ async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
             path=path,
             base_url=base_url,
         )
-        # Hand the created experiment's URL back to callers that opted in with a
-        # sink list (e.g. simulation persists it on the SimulationRun report).
-        if experiment_url_out is not None and upload_response is not None and upload_response.experiment_url:
-            experiment_url_out.append(upload_response.experiment_url)
+        if upload_response is not None and upload_response.experiment_url:
+            return upload_response.experiment_url
+    return None
 
 
 def _log_errors_a_configuration_error_hides(errors: Sequence[BaseException | None], stopping: BaseException) -> None:
@@ -800,6 +808,164 @@ async def _run_in_memory_evaluation(
     return results
 
 
+def _require_writable_dir(runs_dir: Path) -> None:
+    """Create *runs_dir* and its manifest folder if missing and prove both are writable.
+
+    A real write, not ``os.access``: permission bits miss read-only mounts, ACLs and full disks.
+    The manifest folder is probed too, because ``start_manifest`` only logs a failed write.
+
+    Raises:
+        ValueError: A folder could not be created or written to.
+    """
+    from .common.run_manifest import MANIFESTS_DIR_NAME
+
+    folder = runs_dir
+    try:
+        for folder in (runs_dir, runs_dir / MANIFESTS_DIR_NAME):
+            folder.mkdir(parents=True, exist_ok=True)
+            descriptor, probe = tempfile.mkstemp(prefix='.evaluatorq-write-check-', suffix='.tmp', dir=folder)
+            os.close(descriptor)
+            Path(probe).unlink()
+    except OSError as exc:
+        raise ValueError(
+            f'Cannot save the experiment run: the folder {folder} is not writable ({exc}). '
+            'Pass a writable output_dir, or save=SaveMode.NONE to skip saving.'
+        ) from exc
+
+
+def _resolve_experiment_save(*, mode: SaveMode, output_dir: Path | str | None) -> Path | None:
+    """The folder to save the run in, or None to save nothing; checked before any work is spent.
+
+    With ``SaveMode.FINAL`` the folder is created and probed with a real write here, so a
+    folder that cannot be written fails the call before any datapoint runs or any API spend.
+
+    Raises:
+        ValueError: The save folder is not writable.
+    """
+    if mode == SaveMode.NONE and output_dir is not None:
+        logger.warning(
+            'output_dir={} is ignored because save is SaveMode.NONE; pass save=SaveMode.FINAL to write the run there.',
+            output_dir,
+        )
+    if mode != SaveMode.FINAL:
+        return None
+    runs_dir = Path(output_dir) if output_dir is not None else get_experiment_runs_dir()
+    _require_writable_dir(runs_dir)
+    return runs_dir
+
+
+@contextlib.contextmanager
+def _finish_manifest_on_error(writer: 'ManifestWriter') -> Generator[None]:
+    """Mark the run's manifest cancelled or errored when the run raises, then re-raise."""
+    try:
+        yield
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        writer.cancel()
+        raise
+    except BaseException as exc:
+        writer.fail(f'{type(exc).__name__}: {exc}')
+        raise
+
+
+class _ExperimentSave:
+    """Everything ``evaluatorq(save=SaveMode.FINAL)`` writes: the run manifest and the run file.
+
+    `start` opens the manifest and marks it cancelled or errored if the run raises.
+    `write` saves the run as soon as its results exist, before they are printed or
+    uploaded, so a failing upload cannot lose results that were already paid for.
+    `record_experiment_url` then adds the upload's URL to the saved file.
+    """
+
+    def __init__(self, writer: 'ManifestWriter', *, runs_dir: Path) -> None:
+        self._writer = writer
+        self._runs_dir = runs_dir
+        self._saved: tuple[ExperimentRun, Path] | None = None
+
+    @classmethod
+    def start(cls, stack: AsyncExitStack, *, name: str, runs_dir: Path) -> '_ExperimentSave':
+        """Open the run's manifest in *runs_dir*; *stack* closes it as cancelled or errored when the run raises.
+
+        *runs_dir* was already probed by `_resolve_experiment_save`, so the manifest's first
+        write lands; `start_manifest` itself only logs a failed write.
+        """
+        from .common.run_manifest import start_manifest
+
+        writer = start_manifest(
+            run_id=uuid.uuid4().hex,
+            surface=ManifestSurface.EXPERIMENT,
+            run_name=name,
+            runs_dir=runs_dir,
+        )
+        _ = stack.enter_context(_finish_manifest_on_error(writer))
+        return cls(writer, runs_dir=runs_dir)
+
+    def write(
+        self,
+        *,
+        name: str,
+        description: str | None,
+        dataset_id: str | None,
+        started_at: datetime,
+        ended_at: datetime,
+        evaluator_names: list[str],
+        results: EvaluatorqResult,
+    ) -> None:
+        """Write the finished run and complete its manifest.
+
+        A write failure is logged at ERROR and marks the manifest errored. It does not raise,
+        because the run has already been paid for: its results are still returned and uploaded.
+        """
+        from . import __version__
+
+        run = ExperimentRun(
+            run_id=self._writer.manifest.run_id,
+            run_name=name,
+            description=description,
+            dataset_id=dataset_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_seconds=(ended_at - started_at).total_seconds(),
+            evaluatorq_version=__version__,
+            evaluator_names=evaluator_names,
+            results=results,
+        )
+        try:
+            path = save_experiment_run(run, output_dir=self._runs_dir)
+        except (OSError, RuntimeError) as exc:
+            logger.error(
+                'Could not save experiment run {!r} to {}: {}. The run itself is unaffected: its results '
+                'are still returned and uploaded, but are not on disk.',
+                name,
+                self._runs_dir,
+                exc,
+            )
+            self._writer.fail(f'save failed: {type(exc).__name__}: {exc}')
+            return
+        logger.info('Saved experiment run to {}', path)
+        self._writer.complete(report_path=path.resolve(), summary=run.manifest_summary())
+        self._saved = (run, path)
+
+    def record_experiment_url(self, url: str | None) -> None:
+        """Rewrite the saved run with the uploaded experiment's *url*; a no-op when either is missing.
+
+        The rewrite is atomic and keeps the file's mode, so a run with a URL has the same
+        permissions as one without. A failed rewrite is logged and leaves the saved run
+        without the link.
+        """
+        if url is None or self._saved is None:
+            return
+        run, path = self._saved
+        run = run.model_copy(update={'experiment_url': url})
+        try:
+            mode = stat.S_IMODE(path.stat().st_mode)
+            write_private_atomic(path, run.to_json(), private_directory=False)
+            path.chmod(mode)
+        except OSError as exc:
+            logger.warning('Could not add the Orq experiment URL to the saved run {}: {}', path, exc)
+            return
+        self._saved = (run, path)
+
+
 async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
@@ -816,6 +982,8 @@ async def evaluatorq(
     inference: bool | None = None,
     single_trace: bool = False,
     on_datapoint_complete: DataPointComplete | None = None,
+    save: SaveMode = SaveMode.NONE,
+    output_dir: Path | str | None = None,
     _send_results: bool = True,
     _base_url: str | None = None,
     _orq_api_key: str | None = None,
@@ -877,13 +1045,25 @@ async def evaluatorq(
         on_datapoint_complete: Optional sync or async callback invoked exactly once after each
               DataPointResult reaches a terminal state. An exception it raises is logged at ERROR
               and the run continues.
+        save: ``SaveMode.FINAL`` writes the run, with every result and evaluator token usage, to
+              ``.evaluatorq/experiment-runs/<name>_<timestamp>.json`` and records it in a run
+              manifest, so ``eq dashboard`` lists it. Defaults to ``SaveMode.NONE``, which writes
+              nothing. ``True`` and ``False`` still work as ``SaveMode.FINAL`` and ``SaveMode.NONE``
+              but are deprecated and warn. Applies whether the run is configured by ``params`` or by keyword arguments.
+              ``SaveMode.DETAIL`` raises ``ValueError``. The save folder is created and checked
+              with a test write before the run starts, so a folder that cannot be written raises
+              ``ValueError`` before any datapoint runs. If the write still fails when the run ends,
+              it is logged at ERROR and the run's results are still returned and uploaded.
+        output_dir: Folder to save the run in instead of ``.evaluatorq/experiment-runs``. Ignored,
+              with a warning, unless ``save`` is ``SaveMode.FINAL``.
 
     Returns:
         List of DataPointResult objects
 
     Raises:
         ValidationError: If parameters fail validation.
-        ValueError: If neither params nor required kwargs are provided.
+        ValueError: If neither params nor required kwargs are provided, ``save`` is invalid, or
+            the save folder is not writable.
 
     Example:
         ```python
@@ -905,6 +1085,7 @@ async def evaluatorq(
         ```
     """
     datapoint_parallelism = resolve_datapoint_parallelism(datapoint_parallelism, parallelism, caller='evaluatorq')
+    runs_dir = _resolve_experiment_save(mode=resolve_save_mode(save=save, allow_detail=False), output_dir=output_dir)
     resolved = _normalise_params(
         _EvaluationInputs(
             params=params,
@@ -947,6 +1128,8 @@ async def evaluatorq(
         orq_api_key = _orq_api_key or env_raw('ORQ_API_KEY')
 
         start_time = datetime.now(timezone.utc)
+
+        saver = _ExperimentSave.start(span_stack, name=name, runs_dir=runs_dir) if runs_dir is not None else None
 
         dataset_id: str | None = None
 
@@ -996,7 +1179,17 @@ async def evaluatorq(
                 show_progress=print_results,
             )
 
-        await _finish_evaluation(
+        if saver is not None:
+            saver.write(
+                name=name,
+                description=description,
+                dataset_id=dataset_id,
+                started_at=start_time,
+                ended_at=datetime.now(timezone.utc),
+                evaluator_names=[evaluator['name'] for evaluator in evaluators_list],
+                results=results,
+            )
+        experiment_url = await _finish_evaluation(
             _EvaluationFinishInputs(
                 print_results=print_results,
                 orq_api_key=orq_api_key,
@@ -1008,8 +1201,11 @@ async def evaluatorq(
                 start_time=start_time,
                 path=path,
                 base_url=_base_url,
-                experiment_url_out=_experiment_url_out,
             )
         )
+        if experiment_url is not None and _experiment_url_out is not None:
+            _experiment_url_out.append(experiment_url)
+        if saver is not None:
+            saver.record_experiment_url(experiment_url)
 
         return results
