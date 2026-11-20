@@ -277,6 +277,26 @@ class TestPareto:
         dearer_junk = model('z/dear', 2.0, 9.0, 9.0)
         assert dominated_by(dearer_junk, [junk, STRONG]) == junk
 
+    def test_dominated_by_applies_no_floor_to_a_negative_score(self) -> None:
+        negative = model('n/neg', -1.0, 9.0, 9.0)
+        assert dominated_by(negative, [MID]) == MID
+
+    def test_floor_none_keeps_a_negative_score(self) -> None:
+        negative = model('n/neg', -1.0, 0.01, 0.01)
+        result = pareto([MID, negative], min_score=None)
+        assert result.min_score is None
+        assert [p.model.router_id for p in result.points] == ['b/mid', 'n/neg']
+
+    @pytest.mark.parametrize('floor', [float('nan'), float('inf'), float('-inf')])
+    def test_non_finite_floor_is_refused(self, floor: float) -> None:
+        with pytest.raises(ValueError, match='min_score must be a finite number'):
+            pareto([MID], min_score=floor)
+
+    def test_a_repeated_model_is_placed_once(self) -> None:
+        result = pareto([MID, MID, BAD, model('b/mid', 1.0, 9.0, 9.0)])
+        assert [(p.model.router_id, p.on_frontier) for p in result.points] == [('b/mid', True), ('d/bad', False)]
+        assert result.points[0].model is MID
+
 
 class TestVendor:
     def test_one_key_for_host_and_developer_spellings(self) -> None:
@@ -325,10 +345,10 @@ class TestOnePerModel:
 class TestFindModel:
     def test_exact_then_unique_bare_id(self) -> None:
         pool = [MID, model('x/mid', 1.0, 1.0, 1.0), CHEAP]
-        assert find_model(pool, 'b/mid') == MID
-        assert find_model(pool, 'cheap') == CHEAP
-        assert find_model(pool, 'mid') is None  # two hosts share the bare id
-        assert find_model(pool, 'nope') is None
+        assert find_model(pool, model_id='b/mid') == MID
+        assert find_model(pool, model_id='cheap') == CHEAP
+        assert find_model(pool, model_id='mid') is None  # two hosts share the bare id
+        assert find_model(pool, model_id='nope') is None
 
 
 @pytest.fixture
@@ -403,9 +423,14 @@ class TestCli:
         assert self._run('--index', 'vibes').exit_code == 2
 
     def test_index_no_loaded_model_has_is_a_usage_error(self, fake_catalogue: list[ScoredModel]) -> None:
-        result = self._run('--index', 'coding')
+        result = self._run('--index', 'economics')
         assert result.exit_code == 2
-        assert 'no model in the catalogue has a coding score' in _flat(result.output)
+        assert 'no model in the catalogue has a economics score' in _flat(result.output)
+
+    def test_coding_and_agentic_are_not_indices(self, fake_catalogue: list[ScoredModel]) -> None:
+        assert 'coding' not in model_frontier.INDICES
+        assert 'agentic' not in model_frontier.INDICES
+        assert 'choose one of' in _flat(self._run('--index', 'coding').output)
 
     def test_effort_no_loaded_model_has_is_a_usage_error(self, fake_catalogue: list[ScoredModel]) -> None:
         result = self._run('--effort', 'turbo')
@@ -434,6 +459,24 @@ class TestCli:
         monkeypatch.setattr(models_mod, 'load_models', fake_load)
         payload = json.loads(self._run('--provider', 'openai', '--provider', 'google', '--json').stdout)
         assert sorted(p['router_id'] for p in payload['points']) == ['azure/gpt-x', 'google-ai/gemini']
+
+    def test_model_is_found_and_compared_outside_the_provider_filter(self, fake_catalogue: list[ScoredModel]) -> None:
+        result = self._run('--provider', 'b', '--model', 'd/bad', '--json')
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)
+        assert [(p['router_id'], p['dominated_by']) for p in payload['points']] == [('d/bad', 'b/mid')]
+        assert payload['left_out_by_provider'] == 3  # a/strong, c/cheap and e/free
+
+    def test_table_counts_the_models_the_provider_filter_left_out(self, fake_catalogue: list[ScoredModel]) -> None:
+        result = self._run('--provider', 'b')
+        assert result.exit_code == 0, result.output
+        assert '4 model(s) from other providers left out by --provider.' in _flat(result.stdout)
+
+    @pytest.mark.parametrize('floor', ['nan', 'inf'])
+    def test_non_finite_min_score_is_a_usage_error(self, fake_catalogue: list[ScoredModel], floor: str) -> None:
+        result = self._run('--min-score', floor)
+        assert result.exit_code == 2
+        assert 'must be a finite number' in _flat(result.output)
 
     def test_table_goes_to_stdout_with_the_axis_label(self, monkeypatch: pytest.MonkeyPatch) -> None:
         timed = model('a/t', 30.0, 1.0, 1.0, time_to_first_token_seconds=0.75)
@@ -490,6 +533,65 @@ class TestDashboardPage:
         assert '3 on the frontier, 1 dominated, 1 not plotted.' in text
         assert '<td>b/mid</td>' in text  # d/bad's nearest dominator
         assert 'e/free' in text  # listed under "not plotted"
+
+    def test_tooltip_names_the_estimate_flag(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        from evaluatorq.dashboard import models_views
+
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
+            del client, include_disabled
+            return fake_catalogue
+
+        monkeypatch.setattr(models_views, 'load_models', fake_load)
+        text = client.get('/models').text
+        assert 'Measured or estimated' in text
+
+    def test_a_catalogue_failure_asks_for_a_retry_not_a_login(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from evaluatorq.dashboard import models_views
+        from evaluatorq.models import ModelCatalogueError
+
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+        async def failing_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
+            del client, include_disabled
+            raise ModelCatalogueError('catalogue returned 503')
+
+        monkeypatch.setattr(models_views, 'load_models', failing_load)
+        response = client.get('/models')
+        assert response.status_code == 200
+        assert 'The Orq model catalogue could not be loaded: catalogue returned 503' in response.text
+        assert 'Reload the page to try again.' in response.text
+        assert 'to connect an Orq account' not in response.text
+
+    def test_an_unexpected_failure_is_logged_and_shown_not_a_500(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from loguru import logger
+
+        from evaluatorq.dashboard import models_views
+
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+        async def broken_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
+            del client, include_disabled
+            raise RuntimeError('client refused to start')
+
+        monkeypatch.setattr(models_views, 'load_models', broken_load)
+        logged: list[str] = []
+        sink = logger.add(lambda message: logged.append(str(message)), level='ERROR')
+        try:
+            response = client.get('/models')
+        finally:
+            logger.remove(sink)
+        assert response.status_code == 200
+        assert 'The Models page failed with an unexpected RuntimeError.' in response.text
+        assert 'The dashboard log has the details.' in response.text
+        assert any('The /models page failed to load the catalogue' in line and 'client refused to start' in line for line in logged)
 
     def test_domain_index_disables_the_effort_select(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]

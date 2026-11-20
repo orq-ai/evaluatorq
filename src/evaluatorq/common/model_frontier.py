@@ -155,7 +155,9 @@ class ScoredModel(BaseModel):
 
     def dominates(self, other: ScoredModel) -> bool:
         """At least as good on both axes, strictly better on one: intelligence at the default effort against price."""
-        return dominates(self, other)
+        # The default axes are valid by construction, so this skips the `check_axes` call `dominates()` makes per pair.
+        mine, theirs = placement(self), placement(other)
+        return not isinstance(mine, str) and not isinstance(theirs, str) and point_dominates(mine, theirs, x='price')
 
 
 Index = Literal[
@@ -166,14 +168,8 @@ Index = Literal[
     'healthcare_and_medical',
     'legal',
     'strategy_and_ops',
-    'coding',
-    'agentic',
 ]
-"""The score on the y axis: the AA intelligence index, or one AA domain index.
-
-`coding` and `agentic` are accepted but empty in the live catalogue at the time
-of writing, so every model is excluded under them.
-"""
+"""The score on the y axis: the AA intelligence index, or one AA domain index."""
 
 XAxis = Literal['price', 'output_speed', 'time_to_first_token']
 """The second axis: blended list price (lower is better), median output tokens
@@ -183,7 +179,7 @@ INDICES: tuple[str, ...] = get_args(Index)
 X_AXES: tuple[str, ...] = get_args(XAxis)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class AxisSpec:
     """How one Pareto axis is named, compared and printed. Every surface reads its labels from here."""
 
@@ -213,37 +209,42 @@ class AxisSpec:
 INDEX_AXES: dict[str, AxisSpec] = {
     spec.key: spec
     for spec in (
-        AxisSpec('intelligence', 'Intelligence', 'Intelligence'),
-        AxisSpec('economics', 'Economics', 'Economics'),
-        AxisSpec('engineering', 'Engineering', 'Engineering'),
-        AxisSpec('finance_and_accounting', 'Finance and accounting', 'Finance and accounting'),
-        AxisSpec('healthcare_and_medical', 'Healthcare and medical', 'Healthcare and medical'),
-        AxisSpec('legal', 'Legal', 'Legal'),
-        AxisSpec('strategy_and_ops', 'Strategy and ops', 'Strategy and ops'),
-        AxisSpec('coding', 'Coding', 'Coding'),
-        AxisSpec('agentic', 'Agentic', 'Agentic'),
+        AxisSpec(key='intelligence', label='Intelligence', short_label='Intelligence'),
+        AxisSpec(key='economics', label='Economics', short_label='Economics'),
+        AxisSpec(key='engineering', label='Engineering', short_label='Engineering'),
+        AxisSpec(key='finance_and_accounting', label='Finance and accounting', short_label='Finance and accounting'),
+        AxisSpec(key='healthcare_and_medical', label='Healthcare and medical', short_label='Healthcare and medical'),
+        AxisSpec(key='legal', label='Legal', short_label='Legal'),
+        AxisSpec(key='strategy_and_ops', label='Strategy and ops', short_label='Strategy and ops'),
     )
 }
 X_AXIS_SPECS: dict[str, AxisSpec] = {
     spec.key: spec
     for spec in (
         AxisSpec(
-            'price',
-            'List price, USD per 1M tokens (3:1 input/output)',
-            'Price $/1M (3:1)',
+            key='price',
+            label='List price, USD per 1M tokens (3:1 input/output)',
+            short_label='Price $/1M (3:1)',
             lower_is_better=True,
             digits=3,
         ),
-        AxisSpec('output_speed', 'Output speed, tokens per second', 'Output tok/s', digits=1),
-        AxisSpec('time_to_first_token', 'Time to first token, seconds', 'TTFT s', lower_is_better=True, digits=2),
+        AxisSpec(key='output_speed', label='Output speed, tokens per second', short_label='Output tok/s', digits=1),
+        AxisSpec(
+            key='time_to_first_token',
+            label='Time to first token, seconds',
+            short_label='TTFT s',
+            lower_is_better=True,
+            digits=2,
+        ),
     )
 }
 
-# Reasoning efforts from least to most; an effort the catalogue invents later sorts after these.
+# Reasoning efforts from least to most, for display order only: the catalogue sends no ranking of its own. An
+# effort it adds later still shows, sorted after these.
 _EFFORT_ORDER = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'reasoning')
 
 
-def check_axes(index: str, effort: str | None, x: str) -> None:
+def check_axes(*, index: str, effort: str | None, x: str) -> None:
     """Refuse an unknown index or x axis, and an effort on a domain index.
 
     Raises:
@@ -308,7 +309,7 @@ def placement(
     return score, xv
 
 
-def point_dominates(a: tuple[float, float], b: tuple[float, float], x: XAxis) -> bool:
+def point_dominates(a: tuple[float, float], b: tuple[float, float], *, x: XAxis) -> bool:
     """Whether point `a` is at least as good as `b` on score and `x`, and strictly better on one."""
     (sa, xa), (sb, xb) = a, b
     spec = X_AXIS_SPECS[x]
@@ -328,10 +329,10 @@ def dominates(
     False when either model has no value on an axis. The defaults are the
     seating axes: intelligence at the default effort against blended price.
     """
-    check_axes(index, effort, x)
+    check_axes(index=index, effort=effort, x=x)
     pa = placement(a, index=index, effort=effort, x=x)
     pb = placement(b, index=index, effort=effort, x=x)
-    return not isinstance(pa, str) and not isinstance(pb, str) and point_dominates(pa, pb, x)
+    return not isinstance(pa, str) and not isinstance(pb, str) and point_dominates(pa, pb, x=x)
 
 
 def available_indices(models: Iterable[ScoredModel]) -> list[str]:
@@ -640,8 +641,8 @@ def _category_indices(v2: Mapping[str, Any]) -> dict[str, float]:
     """The card's Artificial Analysis domain indices, without the headline intelligence index.
 
     External data: a non-mapping `aa_evaluations`, or a null or non-numeric
-    entry, reads as absent. Coding and agentic indices are carried when the
-    catalogue fills them, which it does not at the time of writing.
+    entry, reads as absent. An index `Index` does not list (the catalogue
+    defines coding and agentic but fills neither) is carried but never plotted.
     """
     evaluations = v2.get('aa_evaluations')
     if not isinstance(evaluations, Mapping):
@@ -990,13 +991,13 @@ def pareto_frontier(
     garden, which is why a preset containing one is dead weight. A model with
     no value on an axis is left out: on the default price axis, every free card.
     """
-    check_axes(index, effort, x)
+    check_axes(index=index, effort=effort, x=x)
     placed = [
         (m, p)
         for m in models
         if not isinstance(p := placement(m, index=index, effort=effort, x=x, measured_only=measured_only), str)
     ]
-    frontier = [(m, p) for m, p in placed if not any(point_dominates(q, p, x) for _, q in placed)]
+    frontier = [(m, p) for m, p in placed if not any(point_dominates(q, p, x=x) for _, q in placed)]
     return [m for m, _ in sorted(frontier, key=lambda item: -item[1][0])]
 
 

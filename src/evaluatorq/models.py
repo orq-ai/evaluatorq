@@ -28,6 +28,7 @@ many tokens a model spends per task.
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -111,7 +112,9 @@ class ParetoResult(BaseModel):
     index: str
     effort: str | None
     x: str
-    min_score: float = Field(default=0.0, description='The score floor: models below it are in `excluded`.')
+    min_score: float | None = Field(
+        default=None, description='The score floor: models below it are in `excluded`. None when there is no floor.'
+    )
     points: list[ParetoPoint] = Field(description='Every plotted model, frontier first, then by score descending.')
     excluded: list[ExcludedModel] = Field(default_factory=list)
 
@@ -138,7 +141,7 @@ def pareto(
     effort: str | None = None,
     x: XAxis = 'price',
     measured_only: bool = False,
-    min_score: float = MIN_SEAT_INDEX,
+    min_score: float | None = MIN_SEAT_INDEX,
 ) -> ParetoResult:
     """Place each model on (`x`, `index`), mark the frontier and name what beats each dominated model.
 
@@ -147,22 +150,32 @@ def pareto(
     index are listed in `excluded` with the reason. The floor defaults to
     `MIN_SEAT_INDEX`, the same floor preset seating uses, because without it the
     cheap end of the frontier holds models nothing is cheaper than but that no
-    one would ship. `min_score=0` keeps every model. The floor never changes
+    one would ship. `min_score=None` keeps every model. The floor never changes
     which of the remaining models are on the frontier: anything that beats a
     model scores at least as high, so it clears the floor too.
 
+    A router id that appears more than once is placed once, from its first
+    occurrence, so a repeated model never sits on the frontier twice.
+
     Raises:
-        ValueError: An unknown index or x axis, or an effort with a domain index.
+        ValueError: An unknown index or x axis, an effort with a domain index,
+            or a `min_score` that is not a finite number.
     """
-    check_axes(index, effort, x)
+    check_axes(index=index, effort=effort, x=x)
+    if min_score is not None and not math.isfinite(min_score):
+        raise ValueError(f'min_score must be a finite number or None, got {min_score!r}')
     spec = X_AXIS_SPECS[x]
     plotted: list[tuple[ScoredModel, tuple[float, float]]] = []
     excluded: list[ExcludedModel] = []
+    seen: set[str] = set()
     for model in models:
+        if model.router_id in seen:
+            continue
+        seen.add(model.router_id)
         placed = placement(model, index=index, effort=effort, x=x, measured_only=measured_only)
         if isinstance(placed, str):
             excluded.append(ExcludedModel(router_id=model.router_id, reason=placed))
-        elif placed[0] < min_score:
+        elif min_score is not None and placed[0] < min_score:
             excluded.append(
                 ExcludedModel(
                     router_id=model.router_id,
@@ -175,7 +188,7 @@ def pareto(
 
     beaten_by = [
         sorted(
-            (other for other in plotted if other[0] is not model and point_dominates(other[1], point, x)),
+            (other for other in plotted if other[0] is not model and point_dominates(other[1], point, x=x)),
             key=lambda item: (spec.best_first(item[1][1]), -item[1][0]),
         )
         for model, point in plotted
@@ -217,7 +230,7 @@ def dominated_by(
     """
     pool = {m.router_id: m for m in models}
     pool[model.router_id] = model
-    result = pareto(pool.values(), index=index, effort=effort, x=x, measured_only=measured_only, min_score=0.0)
+    result = pareto(pool.values(), index=index, effort=effort, x=x, measured_only=measured_only, min_score=None)
     point = next((p for p in result.points if p.model.router_id == model.router_id), None)
     return pool[point.dominated_by] if point is not None and point.dominated_by else None
 
@@ -258,7 +271,7 @@ def load_models_sync(*, include_disabled: bool = False, all_hosts: bool = False)
     raise RuntimeError('load_models_sync() inside a running event loop: await load_models() instead')
 
 
-def find_model(models: Sequence[ScoredModel], model_id: str) -> ScoredModel | None:
+def find_model(models: Sequence[ScoredModel], *, model_id: str) -> ScoredModel | None:
     """The model matching `model_id`: an exact `provider/model` id, else a bare id held by exactly one model."""
     exact = next((m for m in models if m.router_id == model_id), None)
     if exact is not None or '/' in model_id:

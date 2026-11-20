@@ -75,11 +75,19 @@ def _min_score(value: str | None) -> float:
     return floor if math.isfinite(floor) and floor >= 0 else MIN_SEAT_INDEX
 
 
-def _alert(message: str) -> str:
-    return (
-        '<div class="models-alert" role="alert">'
-        f'<p>{esc(message)}</p><p><a href="/settings">Open Settings</a> to connect an Orq account.</p></div>'
-    )
+_CONNECT_HINT = '<a href="/settings">Open Settings</a> to connect an Orq account.'
+_RETRY_HINT = (
+    'Reload the page to try again. If it keeps failing, check the Orq account in <a href="/settings">Settings</a>.'
+)
+_LOG_HINT = 'The dashboard log has the details.'
+# Failures outside the catalogue's own error types: a missing optional dependency, a client that refuses to
+# start, or a card shape the parser did not expect. Named rather than a blind `except Exception`.
+_UNEXPECTED_LOAD_ERRORS = (ImportError, RuntimeError, ValueError, LookupError, TypeError, AttributeError)
+
+
+def _alert(message: str, *, hint: str) -> str:
+    """An alert box: the escaped `message`, then `hint`, which is trusted markup."""
+    return f'<div class="models-alert" role="alert"><p>{esc(message)}</p><p>{hint}</p></div>'
 
 
 def _filters_html(
@@ -169,7 +177,7 @@ def _chart(result: ParetoResult) -> str:
         {'field': 'score', 'title': 'Score'},
         {'field': 'x', 'title': spec.short_label, 'format': f'.{spec.digits}~f'},
         {'field': 'pareto_score', 'title': 'Score per $'},
-        {'field': 'estimated', 'title': 'Score'},
+        {'field': 'estimated', 'title': 'Measured or estimated'},
         {'field': 'dominated_by', 'title': 'Dominated by'},
         {'field': 'efforts', 'title': 'Score per level'},
     ]
@@ -284,28 +292,38 @@ def _excluded(result: ParetoResult) -> str:
     )
 
 
-async def _load(req: Request, *, include_disabled: bool) -> tuple[list[ScoredModel] | None, str | None]:
-    """The catalogue models, or None and the reason the page shows instead."""
+async def _load(req: Request, *, include_disabled: bool) -> tuple[list[ScoredModel] | None, str]:
+    """The catalogue models and an empty string, or None and the alert the page shows instead.
+
+    Each failure kind gets its own next step: missing credentials point at
+    Settings, a catalogue or network failure asks for a retry, and anything
+    else is logged with its traceback and named on the page instead of
+    surfacing as a 500.
+    """
     from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
 
     auth, reason = auth_or_reason(lambda: selected_dashboard_auth(req.app))
     if auth is None:
-        return None, reason
+        return None, _alert(reason or 'No Orq account is connected.', hint=_CONNECT_HINT)
     try:
         async with model_choices.catalogue_client(auth) as client:
-            return await load_models(client, include_disabled=include_disabled), None
+            return await load_models(client, include_disabled=include_disabled), ''
     except MissingLLMCredentialsError as exc:
-        return None, str(exc)
+        logger.warning('No Orq credentials for /models: {}', exc)
+        return None, _alert(str(exc), hint=_CONNECT_HINT)
     except (ModelCatalogueError, httpx.HTTPError, OSError) as exc:
         logger.warning('Orq model catalogue unavailable for /models ({}): {}', type(exc).__name__, exc)
-        return None, f'The Orq model catalogue could not be loaded: {exc}'
+        return None, _alert(f'The Orq model catalogue could not be loaded: {exc}', hint=_RETRY_HINT)
+    except _UNEXPECTED_LOAD_ERRORS as exc:
+        logger.exception('The /models page failed to load the catalogue')
+        return None, _alert(f'The Models page failed with an unexpected {type(exc).__name__}.', hint=_LOG_HINT)
 
 
 async def models_page(req: Request) -> HTMLResponse:
     """Render the Pareto view over the live catalogue."""
     q = _query(req)
     x = _choice(q.get('x'), X_AXES, 'price')
-    models, problem = await _load(req, include_disabled=bool(q.get('disabled')))
+    models, alert = await _load(req, include_disabled=bool(q.get('disabled')))
     intro = (
         '<p class="models-intro">Each dot is one model, at its developer\'s own listing. A model is '
         '<b>dominated</b> when another is at least as good on both axes and strictly better on one; the orange '
@@ -313,7 +331,7 @@ async def models_page(req: Request) -> HTMLResponse:
         'model that writes more tokens per task costs more than it shows here.</p>'
     )
     if models is None:
-        body = f'<div class="models-page">{intro}{_alert(problem or "The model catalogue is unavailable.")}</div>'
+        body = f'<div class="models-page">{intro}{alert}</div>'
         return HTMLResponse(page('Models', body, active_nav='models'))
     indices = available_indices(models)
     index = _choice(q.get('index'), tuple(indices), 'intelligence')
