@@ -35,6 +35,47 @@ The CLI run on 2026-11-20 printed:
 
 ```console
 $ eq models pareto
+                 Pareto frontier: intelligence index (default effort) vs price
+╭───────────────────────────────────┬───────┬──────────────────┬─────────────┬──────┬──────────╮
+│ Model                             │ Score │ Price $/1M (3:1) │ Score per $ │ Est. │ Frontier │
+├───────────────────────────────────┼───────┼──────────────────┼─────────────┼──────┼──────────┤
+│ anthropic/claude-opus-5-5         │  48.2 │            8.000 │         6.0 │      │ yes      │
+│ wafer/Kimi-K3.1-Pro               │  46.5 │            4.000 │        11.6 │      │ yes      │
+│ particle/deepseek-v4.1-flash-1017 │  32.6 │            0.438 │        74.5 │      │ yes      │
+│ deepseek/deepseek-flash           │  28.6 │            0.175 │       163.4 │      │ yes      │
+│ zai/glm-5.3-flash                 │  27.8 │            0.119 │       234.1 │      │ yes      │
+╰───────────────────────────────────┴───────┴──────────────────┴─────────────┴──────┴──────────╯
+34 model(s) hidden for scoring below --min-score 15. Pass --min-score 0 to show every model.
+4 model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.
+```
+
+Read the table from the top down: each row is cheaper than the one above it and scores lower. `Score per $` is the score divided by the price. `Est.` marks a score that Orq estimated from an older benchmark version instead of measuring.
+
+## The quality floor
+
+Models scoring below 15 are left out before the frontier is drawn. Without the floor, the cheap end of the frontier holds models that are there only because nothing is cheaper: with the floor off, the run above adds `tensorix/qwen/qwen3-coder-30b-a3b-instruct` at a score of 2.7 and $0.107 per 1M tokens. 15 is the same floor evaluatorq uses when it picks default models for its own roles, `MIN_SEAT_INDEX`.
+
+Set the floor with `--min-score` or `min_score=`. `0` shows every model:
+
+=== "CLI"
+
+    ```bash
+    eq models pareto --min-score 0
+    ```
+
+=== "Python"
+
+    ```python
+    import asyncio
+
+    from evaluatorq.models import load_models, pareto
+
+    result = pareto(asyncio.run(load_models()), min_score=0)
+    print(len(result.frontier), "on the frontier")
+    ```
+
+```console
+$ eq models pareto --min-score 0
                       Pareto frontier: intelligence index (default effort) vs price
 ╭────────────────────────────────────────────┬───────┬──────────────────┬─────────────┬──────┬──────────╮
 │ Model                                      │ Score │ Price $/1M (3:1) │ Score per $ │ Est. │ Frontier │
@@ -49,9 +90,7 @@ $ eq models pareto
 4 model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.
 ```
 
-Read the table from the top down: each row is cheaper than the one above it and scores lower. `Score per $` is the score divided by the price. `Est.` marks a score that Orq estimated from an older benchmark version instead of measuring.
-
-The 2.7 row is on the frontier only because nothing is cheaper. The cheap end of the frontier can hold a model you would never ship, so set a quality floor before you read it, or add `--measured-only` to drop estimated scores.
+The floor applies to whichever score you put on the y axis, so with `--index legal` it compares legal scores against 15. The domain indices use the same 0 to 100 scale, but AA scores fewer and mostly stronger models on them, so the floor removes fewer: on 2026-11-20 it left out 2 of the 22 models compared on legal, against 34 of the 69 compared on intelligence. The floor does not change which of the remaining models are on the frontier, because a model that beats another one scores at least as high and so clears the floor too.
 
 ## Is my model dominated?
 
@@ -86,6 +125,8 @@ $ eq models pareto --model gpt-6.1-sol
 ├────────────────────┼───────┼──────────────────┼─────────────┼──────┼─────────────────────┤
 │ openai/gpt-6.1-sol │  46.3 │            4.000 │        11.6 │      │ wafer/Kimi-K3.1-Pro │
 ╰────────────────────┴───────┴──────────────────┴─────────────┴──────┴─────────────────────╯
+34 model(s) hidden for scoring below --min-score 15. Pass --min-score 0 to show every model.
+4 model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.
 ```
 
 The model named under `Dominated by` is the frontier model that beats yours at the lowest price. Here it wins by 0.2 points at the same price. Dominance has no margin: any difference counts, so a model can be dominated by a score gap smaller than the benchmark's own noise. Check the gap before you switch.
@@ -102,6 +143,7 @@ $ eq models pareto --model gpt-6.1-sol --index legal --json 2>/dev/null
   "index": "legal",
   "effort": null,
   "x": "price",
+  "min_score": 15.0,
   "points": [
     {
       "router_id": "openai/gpt-6.1-sol",
@@ -113,11 +155,16 @@ $ eq models pareto --model gpt-6.1-sol --index legal --json 2>/dev/null
       "dominators": ["wafer/Kimi-K3.1-Pro"]
     }
   ],
-  "excluded": [{"router_id": "alibaba/qwen3.5-27b", "reason": "no legal score"}]
+  "excluded": [
+    {"router_id": "alibaba/qwen3.5-27b", "reason": "no legal score", "below_min_score": false},
+    {"router_id": "cerebras/gpt-oss-120b", "reason": "score 8.1 is below min_score 15", "below_min_score": true}
+  ]
 }
 ```
 
-The output above is trimmed: each point also carries every `ScoredModel` field (prices, developer, effort ladder, domain scores, speed and latency) and the blended `price`, and `excluded` lists every model left out. The JSON lists only the models you asked for; `dominators` names the winners but does not carry their scores. Run without `--model` to see the winner's row. Log lines go to stderr, so `2>/dev/null` leaves clean JSON on stdout.
+The output above is trimmed: each point also carries every `ScoredModel` field (prices, developer, effort ladder, domain scores, speed and latency) and the blended `price`, and `excluded` lists every model left out, with `below_min_score` set on the ones the quality floor removed. The JSON lists only the models you asked for; `dominators` names the winners but does not carry their scores. Run without `--model` to see the winner's row. Log lines go to stderr, so `2>/dev/null` leaves clean JSON on stdout.
+
+A model below the floor is not compared, so `--model` with it prints `<id> is not plotted: score <n> is below min_score 15.` on stderr; add `--min-score 0` to compare it. `dominated_by()` in Python applies no floor.
 
 A bare id such as `gpt-6.1-sol` must match exactly one model; otherwise the CLI exits `2` and `find_model` returns `None`. `--model` only sees the one listing kept per model (see [One dot per model](#one-dot-per-model)), so the full id of a host that was not kept also exits `2`. Comparing a specific host is Python-only, through `load_models(all_hosts=True)`.
 
@@ -138,7 +185,7 @@ eq models pareto --effort high --x output_speed --measured-only
 
 `price` is Orq's 3:1 blend of input and output list price per million tokens. `output_speed` is AA's median output tokens per second, and `time_to_first_token` is AA's median seconds to the first token.
 
-A domain index covers only the models AA has scored on it (22 of 73 for `legal` on 2026-11-20), and only at each model's default effort, so `--index legal --effort high` is refused. Fewer scored models also means fewer competitors: a model dominated on `legal` was compared against 21 others, not 72. Under `--effort`, models that list no score at that effort drop out of the comparison.
+A domain index covers only the models AA has scored on it (25 of 73 for `legal` on 2026-11-20), and only at each model's default effort, so `--index legal --effort high` is refused. Fewer scored models also means fewer competitors: on 2026-11-20 at the default floor, a model on `legal` was compared against 19 others, against 34 on `intelligence`. Under `--effort`, models that list no score at that effort drop out of the comparison.
 
 `coding` and `agentic` are defined but currently empty: Orq's catalogue carries no value for them on any model. The CLI refuses an index or an effort that no loaded model has a score on and exits `2`, and the dashboard lists only the indices and efforts some model has. `pareto()` in Python accepts them and lists every model under `excluded`.
 
@@ -150,7 +197,7 @@ Models switched off in your workspace are left out. Pass `--include-disabled` or
 
 ## What gets left out
 
-A model is left out of the comparison, and listed under `excluded` in `--json` and in `ParetoResult.excluded`, when it has no value on one of the two axes. The reason strings are:
+A model is left out of the comparison, and listed under `excluded` in `--json` and in `ParetoResult.excluded`, when it has no value on one of the two axes or scores below the quality floor. The reason strings are:
 
 | Reason | Why |
 |---|---|
@@ -159,6 +206,7 @@ A model is left out of the comparison, and listed under `excluded` in `--json` a
 | `free (no list price)` | a free model would beat everything on price |
 | `no output speed data`, `no time to first token data` | AA has no speed or latency measurement for the model |
 | `estimated score` | only with `--measured-only` |
+| `score 2.7 is below min_score 15` | the score is under `--min-score` / `min_score=` (see [The quality floor](#the-quality-floor)) |
 
 A left-out model is not dominated. It simply was not compared.
 

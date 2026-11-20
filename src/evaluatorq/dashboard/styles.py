@@ -4231,6 +4231,7 @@ _MODELS_CSS = """
 .models-filters label { display: inline-flex; gap: 6px; align-items: center; }
 .models-filters select { font: inherit; padding: 4px 6px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface); color: var(--text-strong); }
 .models-filters select:disabled { opacity: .5; }
+.models-filters .models-min-score { font: inherit; width: 5em; padding: 4px 6px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface); color: var(--text-strong); }
 .models-chart { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px; background: var(--surface); }
 .models-chart .vega-embed { width: 100%; }
 .models-table-wrap { overflow-x: auto; }

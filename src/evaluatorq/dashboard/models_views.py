@@ -8,6 +8,7 @@ chart names, for each dominated model, the nearest frontier model that beats it.
 
 from __future__ import annotations
 
+import math
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlencode
@@ -20,6 +21,7 @@ from starlette.routing import Route
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.common.model_frontier import (
     INDEX_AXES,
+    MIN_SEAT_INDEX,
     X_AXIS_SPECS,
     available_efforts,
     available_indices,
@@ -64,6 +66,15 @@ def _choice(value: str | None, allowed: tuple[str, ...], default: str) -> str:
     return value if value in allowed else default
 
 
+def _min_score(value: str | None) -> float:
+    """The score floor from the query string; anything that is not a non-negative number falls back to the default."""
+    try:
+        floor = float(value) if value is not None else MIN_SEAT_INDEX
+    except ValueError:
+        return MIN_SEAT_INDEX
+    return floor if math.isfinite(floor) and floor >= 0 else MIN_SEAT_INDEX
+
+
 def _alert(message: str) -> str:
     return (
         '<div class="models-alert" role="alert">'
@@ -72,7 +83,15 @@ def _alert(message: str) -> str:
 
 
 def _filters_html(
-    q: dict[str, str], *, indices: list[str], efforts: list[str], vendors: list[str], index: str, effort: str, x: str
+    q: dict[str, str],
+    *,
+    indices: list[str],
+    efforts: list[str],
+    vendors: list[str],
+    index: str,
+    effort: str,
+    x: str,
+    min_score: float,
 ) -> str:
     def options(values: list[tuple[str, str]], current: str) -> str:
         return ''.join(
@@ -100,6 +119,9 @@ def _filters_html(
         f'{options([(v, X_AXIS_SPECS[v].short_label) for v in X_AXES], x)}</select></label>'
         f'<label>Developer <select name="developer" onchange="this.form.submit()">'
         f'{options([("", "All developers"), *((v, v) for v in vendors)], q.get("developer", ""))}</select></label>'
+        f'<label title="Models scoring below this on the chosen index are not plotted. 0 shows every model.">'
+        f'Minimum score <input type="number" name="min_score" min="0" step="any" value="{min_score:g}" '
+        'class="models-min-score" onchange="this.form.submit()"></label>'
         f'{checkbox("disabled", "Include disabled models")}'
         f'{checkbox("measured", "Hide estimated scores")}'
         '<noscript><button type="submit">Apply</button></noscript>'
@@ -300,20 +322,24 @@ async def models_page(req: Request) -> HTMLResponse:
     vendors = sorted({model_vendor(m) for m in models} - {''})
     developer = q.get('developer', '')
     pool = [m for m in models if not developer or matches_vendor(m, [developer])]
+    min_score = _min_score(q.get('min_score'))
     result = pareto(
         pool,
         index=cast('Index', index),
         effort=effort or None,
         x=cast('XAxis', x),
         measured_only=bool(q.get('measured')),
+        min_score=min_score,
     )
+    hidden = len(result.below_min_score)
+    below = f' ({hidden} below the minimum score of {min_score:g})' if hidden else ''
     summary = (
         f'<p class="models-summary">{len(result.frontier)} on the frontier, {len(result.dominated)} dominated, '
-        f'{len(result.excluded)} not plotted.</p>'
+        f'{len(result.excluded)} not plotted{below}.</p>'
     )
     body = (
         '<div class="models-page">'
-        f'{intro}{_filters_html(q, indices=indices, efforts=efforts, vendors=vendors, index=index, effort=effort, x=x)}{summary}'
+        f'{intro}{_filters_html(q, indices=indices, efforts=efforts, vendors=vendors, index=index, effort=effort, x=x, min_score=min_score)}{summary}'
         f'<div class="models-chart">{_chart(result)}</div>{_table(result, q)}{_excluded(result)}'
         '</div>'
     )

@@ -243,6 +243,40 @@ class TestPareto:
         assert result.excluded[0].reason == 'estimated score'
         assert pareto_frontier([MID, guess]) == [guess]
 
+    def test_default_floor_excludes_low_scorers_with_the_reason(self) -> None:
+        junk = model('z/junk', 2.7, 0.05, 0.05)
+        result = pareto([STRONG, MID, CHEAP, junk])
+        assert result.min_score == model_frontier.MIN_SEAT_INDEX == 15.0
+        assert [p.model.router_id for p in result.frontier] == ['a/strong', 'b/mid', 'c/cheap']
+        [gone] = result.excluded
+        assert gone.router_id == 'z/junk'
+        assert gone.reason == 'score 2.7 is below min_score 15'
+        assert gone.below_min_score is True
+        assert result.below_min_score == [gone]
+
+    def test_floor_zero_keeps_every_model(self) -> None:
+        junk = model('z/junk', 2.7, 0.05, 0.05)
+        result = pareto([STRONG, MID, CHEAP, junk], min_score=0)
+        assert [p.model.router_id for p in result.frontier] == ['a/strong', 'b/mid', 'c/cheap', 'z/junk']
+        assert result.excluded == []
+
+    def test_floor_applies_to_the_chosen_domain_index(self) -> None:
+        weak_legal = model('a/wl', 50.0, 1.0, 1.0, category_indices={'legal': 9.0})
+        strong_legal = model('b/sl', 10.0, 1.0, 1.0, category_indices={'legal': 30.0})
+        result = pareto([weak_legal, strong_legal], index='legal')
+        assert [p.model.router_id for p in result.points] == ['b/sl']
+        assert result.excluded[0].reason == 'score 9 is below min_score 15'
+
+    def test_missing_axis_reason_wins_over_the_floor(self) -> None:
+        free_junk = model('z/free', 2.0, 0.0, 0.0)
+        [gone] = pareto([free_junk]).excluded
+        assert (gone.reason, gone.below_min_score) == ('free (no list price)', False)
+
+    def test_dominated_by_ignores_the_floor(self) -> None:
+        junk = model('z/junk', 2.7, 0.5, 0.5)
+        dearer_junk = model('z/dear', 2.0, 9.0, 9.0)
+        assert dominated_by(dearer_junk, [junk, STRONG]) == junk
+
 
 class TestVendor:
     def test_one_key_for_host_and_developer_spellings(self) -> None:
@@ -326,7 +360,30 @@ class TestCli:
         assert result.exit_code == 0, result.output
         payload = json.loads(result.stdout)
         assert [p['router_id'] for p in payload['points']] == ['a/strong', 'b/mid', 'c/cheap']
-        assert payload['excluded'] == [{'router_id': 'e/free', 'reason': 'free (no list price)'}]
+        assert payload['min_score'] == 15.0
+        assert payload['excluded'] == [{'router_id': 'e/free', 'reason': 'free (no list price)', 'below_min_score': False}]
+
+    def test_min_score_hides_and_zero_shows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        junk = model('z/junk', 2.7, 0.05, 0.05)
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False, all_hosts: bool = False) -> list[ScoredModel]:
+            del client, include_disabled, all_hosts
+            return [STRONG, MID, junk]
+
+        monkeypatch.setattr(models_mod, 'load_models', fake_load)
+        table = self._run()
+        assert table.exit_code == 0, table.output
+        assert 'z/junk' not in table.stdout
+        assert '1 model(s) hidden for scoring below --min-score 15. Pass --min-score 0 to show every model.' in _flat(table.stdout)
+        assert 'not compared' not in table.stdout
+        shown = json.loads(self._run('--min-score', '0', '--json').stdout)
+        assert 'z/junk' in [p['router_id'] for p in shown['points']]
+        assert shown['excluded'] == []
+        named = self._run('--model', 'junk')
+        assert 'z/junk is not plotted: score 2.7 is below min_score 15.' in _flat(named.output)
+
+    def test_negative_min_score_is_a_usage_error(self, fake_catalogue: list[ScoredModel]) -> None:
+        assert self._run('--min-score', '-1').exit_code == 2
 
     def test_dominated_table_names_the_winner(self, fake_catalogue: list[ScoredModel]) -> None:
         result = self._run('--dominated')
@@ -450,6 +507,28 @@ class TestDashboardPage:
         text = client.get('/models?index=legal&effort=high').text
         assert 'name="effort" onchange="this.form.submit()" disabled' in text
         assert '1 on the frontier, 0 dominated, 5 not plotted.' in text
+
+    def test_min_score_control_hides_and_zero_shows(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        from evaluatorq.dashboard import models_views
+
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
+            del client, include_disabled
+            return fake_catalogue
+
+        fake_catalogue.append(model('z/junk', 2.7, 0.05, 0.05))
+        monkeypatch.setattr(models_views, 'load_models', fake_load)
+        text = client.get('/models').text
+        assert 'name="min_score" min="0" step="any" value="15"' in text
+        assert '3 on the frontier, 1 dominated, 2 not plotted (1 below the minimum score of 15).' in text
+        assert 'score 2.7 is below min_score 15' in text
+        text = client.get('/models?min_score=0').text
+        assert 'value="0"' in text
+        assert '4 on the frontier, 1 dominated, 1 not plotted.' in text
+        assert 'value="15"' in client.get('/models?min_score=nope').text
 
     def test_index_dropdown_lists_only_indices_a_model_has(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]

@@ -18,7 +18,8 @@ eq models pareto [OPTIONS]
 | `--x` | `str` / `price` | The x axis: `price` (3:1 blended list price per million tokens), `output_speed` or `time_to_first_token`. |
 | `--include-disabled` | `bool` / `false` | Include models switched off in the workspace. |
 | `--measured-only` | `bool` / `false` | Leave out models whose score Orq estimated rather than measured. |
-| `--json` | `bool` / `false` | Print `{index, effort, x, points, excluded}` as JSON on stdout. |
+| `--min-score` | `float` / `15` | Hide models scoring below this on the chosen index; they are listed under `excluded` with the reason `score <n> is below min_score <floor>`. `0` shows every model. Must be `0` or more. |
+| `--json` | `bool` / `false` | Print `{index, effort, x, min_score, points, excluded}` as JSON on stdout. |
 
 `--provider` narrows the comparison itself: a model is then only checked against models from the same providers, so a model dominated in the full catalogue can be on the frontier of a filtered one. `--model` does the opposite: it narrows only what is printed.
 
@@ -30,6 +31,9 @@ eq models pareto
 
 # every dominated model and what beats it
 eq models pareto --dominated
+
+# turn the quality floor off and show every model
+eq models pareto --min-score 0
 
 # OpenAI against Anthropic on the legal index
 eq models pareto --index legal --provider openai --provider anthropic
@@ -47,4 +51,4 @@ eq models pareto --effort high --x output_speed --measured-only
 |---|---|
 | `0` | The analysis ran. An empty result is still `0`: a `--model` match left out of the comparison prints `<id> is not plotted: <reason>.` on stderr and an empty table. |
 | `1` | The catalogue could not be read: no Orq credentials, or the request failed. |
-| `2` | A usage error: an unknown `--index` or `--x`, an `--index` no catalogue model has a score on, an `--effort` no catalogue model has a score at, `--effort` with a domain index, or a `--model` that matches no model or more than one. |
+| `2` | A usage error: an unknown `--index` or `--x`, an `--index` no catalogue model has a score on, an `--effort` no catalogue model has a score at, `--effort` with a domain index, or a `--model` that matches no model or more than one, or a negative `--min-score`. |

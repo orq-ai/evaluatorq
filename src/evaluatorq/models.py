@@ -46,6 +46,7 @@ from evaluatorq.common.model_catalogue import (
 )
 from evaluatorq.common.model_frontier import (
     INDICES,
+    MIN_SEAT_INDEX,
     X_AXES,
     X_AXIS_SPECS,
     Index,
@@ -98,6 +99,10 @@ class ExcludedModel(BaseModel):
 
     router_id: str
     reason: str
+    below_min_score: bool = Field(
+        default=False,
+        description='True when the model has a value on both axes and was left out only for scoring below `min_score`.',
+    )
 
 
 class ParetoResult(BaseModel):
@@ -106,6 +111,7 @@ class ParetoResult(BaseModel):
     index: str
     effort: str | None
     x: str
+    min_score: float = Field(default=0.0, description='The score floor: models below it are in `excluded`.')
     points: list[ParetoPoint] = Field(description='Every plotted model, frontier first, then by score descending.')
     excluded: list[ExcludedModel] = Field(default_factory=list)
 
@@ -119,6 +125,11 @@ class ParetoResult(BaseModel):
         """Dominated points, strongest first."""
         return [p for p in self.points if not p.on_frontier]
 
+    @property
+    def below_min_score(self) -> list[ExcludedModel]:
+        """Excluded models that were left out only for scoring below `min_score`."""
+        return [e for e in self.excluded if e.below_min_score]
+
 
 def pareto(
     models: Iterable[ScoredModel],
@@ -127,11 +138,18 @@ def pareto(
     effort: str | None = None,
     x: XAxis = 'price',
     measured_only: bool = False,
+    min_score: float = MIN_SEAT_INDEX,
 ) -> ParetoResult:
     """Place each model on (`x`, `index`), mark the frontier and name what beats each dominated model.
 
-    Models without a value on either axis, and estimated scores when
-    `measured_only` is set, are listed in `excluded` with the reason.
+    Models without a value on either axis, estimated scores when
+    `measured_only` is set, and models scoring below `min_score` on the chosen
+    index are listed in `excluded` with the reason. The floor defaults to
+    `MIN_SEAT_INDEX`, the same floor preset seating uses, because without it the
+    cheap end of the frontier holds models nothing is cheaper than but that no
+    one would ship. `min_score=0` keeps every model. The floor never changes
+    which of the remaining models are on the frontier: anything that beats a
+    model scores at least as high, so it clears the floor too.
 
     Raises:
         ValueError: An unknown index or x axis, or an effort with a domain index.
@@ -144,6 +162,14 @@ def pareto(
         placed = placement(model, index=index, effort=effort, x=x, measured_only=measured_only)
         if isinstance(placed, str):
             excluded.append(ExcludedModel(router_id=model.router_id, reason=placed))
+        elif placed[0] < min_score:
+            excluded.append(
+                ExcludedModel(
+                    router_id=model.router_id,
+                    reason=f'score {placed[0]:g} is below min_score {min_score:g}',
+                    below_min_score=True,
+                )
+            )
         else:
             plotted.append((model, placed))
 
@@ -171,7 +197,7 @@ def pareto(
             )
         )
     points.sort(key=lambda p: (not p.on_frontier, -p.score, p.model.router_id))
-    return ParetoResult(index=index, effort=effort, x=x, points=points, excluded=excluded)
+    return ParetoResult(index=index, effort=effort, x=x, min_score=min_score, points=points, excluded=excluded)
 
 
 def dominated_by(
@@ -187,10 +213,11 @@ def dominated_by(
 
     "Nearest" is the frontier model with the best x among those at least as
     good on score: on price, the cheapest model that is at least as smart.
+    No score floor applies: this answers what beats `model` whatever it scores.
     """
     pool = {m.router_id: m for m in models}
     pool[model.router_id] = model
-    result = pareto(pool.values(), index=index, effort=effort, x=x, measured_only=measured_only)
+    result = pareto(pool.values(), index=index, effort=effort, x=x, measured_only=measured_only, min_score=0.0)
     point = next((p for p in result.points if p.model.router_id == model.router_id), None)
     return pool[point.dominated_by] if point is not None and point.dominated_by else None
 
@@ -242,6 +269,7 @@ def find_model(models: Sequence[ScoredModel], model_id: str) -> ScoredModel | No
 
 __all__ = [
     'INDICES',
+    'MIN_SEAT_INDEX',
     'X_AXES',
     'CallCost',
     'ExcludedModel',

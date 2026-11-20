@@ -12,6 +12,7 @@ from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 from evaluatorq.common.cli_json import echo_json
+from evaluatorq.common.model_frontier import MIN_SEAT_INDEX
 
 if TYPE_CHECKING:
     from evaluatorq.models import Index, ParetoPoint, ParetoResult, XAxis
@@ -21,6 +22,7 @@ app = typer.Typer(help='Compare catalogue models.', no_args_is_help=True, contex
 _PARETO_EPILOG = examples(
     'eq models pareto',
     'eq models pareto --dominated',
+    'eq models pareto --min-score 0',
     'eq models pareto --index legal --provider openai --provider anthropic',
     'eq models pareto --model gpt-5.6-terra --dominated --json',
     'eq models pareto --effort high --x output_speed --measured-only',
@@ -61,9 +63,14 @@ def _print_table(result: ParetoResult, points: list[ParetoPoint], *, dominated: 
         table.add_row(*row)
     console = Console(file=sys.stdout)
     console.print(table)
-    if result.excluded:
+    hidden = len(result.below_min_score)
+    if hidden:
         console.print(
-            f'[dim]{len(result.excluded)} model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.[/dim]'
+            f'[dim]{hidden} model(s) hidden for scoring below --min-score {result.min_score:g}. Pass --min-score 0 to show every model.[/dim]'
+        )
+    if missing := len(result.excluded) - hidden:
+        console.print(
+            f'[dim]{missing} model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.[/dim]'
         )
 
 
@@ -101,6 +108,14 @@ def pareto_cmd(
     measured_only: Annotated[  # noqa: FBT002
         bool, typer.Option('--measured-only', help='Leave out models whose score is estimated rather than measured.')
     ] = False,
+    min_score: Annotated[
+        float,
+        typer.Option(
+            '--min-score',
+            min=0.0,
+            help='Hide models scoring below this on the chosen index. 0 shows every model.',
+        ),
+    ] = MIN_SEAT_INDEX,
     json_output: Annotated[  # noqa: FBT002
         bool, typer.Option('--json', help='Emit the analysis as JSON on stdout (machine-readable).')
     ] = False,
@@ -142,7 +157,14 @@ def pareto_cmd(
                 )
             shown.add(match.router_id)
 
-    result = pareto(pool, index=cast('Index', index), effort=effort, x=cast('XAxis', x), measured_only=measured_only)
+    result = pareto(
+        pool,
+        index=cast('Index', index),
+        effort=effort,
+        x=cast('XAxis', x),
+        measured_only=measured_only,
+        min_score=min_score,
+    )
     # A named model is shown whichever side of the frontier it is on; --dominated then only picks the table style.
     points = result.dominated if dominated else result.frontier
     if shown is not None:
@@ -156,6 +178,7 @@ def pareto_cmd(
             'index': result.index,
             'effort': result.effort,
             'x': result.x,
+            'min_score': result.min_score,
             'points': [p.summary() for p in points],
             'excluded': [e.model_dump() for e in result.excluded],
         })
