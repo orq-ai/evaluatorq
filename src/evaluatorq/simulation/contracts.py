@@ -6,7 +6,7 @@ Uses Pydantic models for maximum compatibility with generators/runner/agents.
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -21,6 +21,7 @@ from pydantic import (
 from typing_extensions import TypedDict
 
 from evaluatorq.common.responses import scrub_wire_schema
+from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.contracts import (
     DEFAULT_PIPELINE_MODEL,
     Message,
@@ -29,6 +30,9 @@ from evaluatorq.contracts import (
     StrEnum,
     TokenUsage,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 DEFAULT_MODEL = DEFAULT_PIPELINE_MODEL
 """The built-in fast model, kept for imports. Simulation call sites resolve their model
@@ -590,6 +594,12 @@ class SimulationResult(BaseModel):
         description='Whether token usage was fully collected. False means the result contains partial usage and '
         'must be treated as unknown rather than as a zero-cost run.',
     )
+    target_token_usage: TokenUsage | None = Field(
+        default=None,
+        description="The target agent's own share of token_usage: only the calls to the agent under test, "
+        'without the user simulator and judge. None when the target reported no usage (a plain callable, '
+        'an error before the first target call) and for runs saved before this field existed: unknown, not zero.',
+    )
     turn_metrics: list[TurnMetrics] = Field(description='Per-turn judge scores and token usage.')
     metadata: dict[str, Any] = Field(
         default_factory=dict,
@@ -757,6 +767,12 @@ class SimulationRun(BaseModel):
     reports no usage (no LLM creds, an error, or nothing billed) leaves this
     field unchanged rather than folding in a zero. ``None`` only for runs
     saved before this field existed."""
+    target_token_usage: TokenUsage | None = None
+    """The sum of the conversations' ``SimulationResult.target_token_usage``
+    (see `run_target_token_usage`), skipping conversations without one: the
+    agent under test alone, with no user simulator, judge, generation or
+    summary spend. A part of ``token_usage_total``, never added to it. ``None``
+    when no conversation has one."""
     run_id: str | None = None
     """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
     conversation's ``thread_id`` (``{run_id}:{index}``). Powers the dashboard's
@@ -787,6 +803,11 @@ class SimulationRun(BaseModel):
             'total_results': self.total_results,
             'scorer_averages': dict(self.scorer_averages),
         }
+
+
+def run_target_token_usage(results: Sequence[SimulationResult]) -> TokenUsage | None:
+    """``SimulationRun.target_token_usage`` for *results*: the one place a run's target usage is summed."""
+    return sum_structured_usage([r.target_token_usage for r in results])
 
 
 # ---------------------------------------------------------------------------
