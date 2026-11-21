@@ -26,7 +26,7 @@ _PARETO_EPILOG = examples(
     'eq models pareto --min-score 0',
     'eq models pareto --index legal --provider openai --provider anthropic',
     'eq models pareto --model gpt-5.6-terra --dominated --json',
-    'eq models pareto --effort high --x output_speed --measured-only',
+    'eq models pareto --effort high --x output_speed --no-estimate',
 )
 
 
@@ -110,8 +110,8 @@ def pareto_cmd(
     include_disabled: Annotated[  # noqa: FBT002
         bool, typer.Option('--include-disabled', help='Include models switched off in the workspace.')
     ] = False,
-    measured_only: Annotated[  # noqa: FBT002
-        bool, typer.Option('--measured-only', help='Leave out models whose score is estimated rather than measured.')
+    exclude_estimated: Annotated[  # noqa: FBT002
+        bool, typer.Option('--no-estimate', help='Leave out models whose score is estimated rather than measured.')
     ] = False,
     min_score: Annotated[
         float,
@@ -177,7 +177,7 @@ def pareto_cmd(
         index=cast('Index', index),
         effort=effort,
         x=cast('XAxis', x),
-        measured_only=measured_only,
+        exclude_estimated=exclude_estimated,
         min_score=min_score,
     )
     # A named model is shown whichever side of the frontier it is on; --dominated then only picks the table style.

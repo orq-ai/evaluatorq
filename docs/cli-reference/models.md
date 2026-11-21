@@ -17,7 +17,7 @@ eq models pareto [OPTIONS]
 | `--index` | `str` / `intelligence` | The y axis: `intelligence`, `economics`, `engineering`, `finance_and_accounting`, `healthcare_and_medical`, `legal` or `strategy_and_ops`. An index no catalogue model has a score on is refused. |
 | `--x` | `str` / `price` | The x axis: `price` (3:1 blended list price per million tokens), `output_speed` or `time_to_first_token`. |
 | `--include-disabled` | `bool` / `false` | Include models switched off in the workspace. |
-| `--measured-only` | `bool` / `false` | Leave out models whose score Orq estimated rather than measured. |
+| `--no-estimate` | `bool` / `false` | Leave out models whose score Orq estimated rather than measured. |
 | `--min-score` | `float` / `15` | Hide models scoring below this on the chosen index; they are listed under `excluded` with the reason `score <n> is below min_score <floor>`. `0` shows every model. Must be `0` or more. |
 | `--json` | `bool` / `false` | Print `{index, effort, x, min_score, points, excluded, left_out_by_provider}` as JSON on stdout. |
 
@@ -41,8 +41,8 @@ eq models pareto --index legal --provider openai --provider anthropic
 # one model, as JSON, for a script
 eq models pareto --model gpt-6.1-sol --json
 
-# high reasoning effort against output speed, measured scores only
-eq models pareto --effort high --x output_speed --measured-only
+# high reasoning effort against output speed, without estimated scores
+eq models pareto --effort high --x output_speed --no-estimate
 ```
 
 ## Exit codes

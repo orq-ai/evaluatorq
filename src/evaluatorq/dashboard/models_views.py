@@ -131,7 +131,7 @@ def _filters_html(
         f'Minimum score <input type="number" name="min_score" min="0" step="any" value="{min_score:g}" '
         'class="models-min-score" onchange="this.form.submit()"></label>'
         f'{checkbox("disabled", "Include disabled models")}'
-        f'{checkbox("measured", "Hide estimated scores")}'
+        f'{checkbox("no_estimate", "Hide estimated scores")}'
         '<noscript><button type="submit">Apply</button></noscript>'
         '</form>'
     )
@@ -346,7 +346,7 @@ async def models_page(req: Request) -> HTMLResponse:
         index=cast('Index', index),
         effort=effort or None,
         x=cast('XAxis', x),
-        measured_only=bool(q.get('measured')),
+        exclude_estimated=bool(q.get('no_estimate')),
         min_score=min_score,
     )
     hidden = len(result.below_min_score)

@@ -236,9 +236,9 @@ class TestPareto:
         with pytest.raises(ValueError, match='unknown x axis'):
             pareto([MID], x='vibes')  # ty: ignore[invalid-argument-type]
 
-    def test_measured_only_drops_estimates(self) -> None:
+    def test_exclude_estimated_drops_estimates(self) -> None:
         guess = model('z/guess', 99.0, 0.1, 0.1, is_estimated=True)
-        result = pareto([MID, guess], measured_only=True)
+        result = pareto([MID, guess], exclude_estimated=True)
         assert [p.model.router_id for p in result.points] == ['b/mid']
         assert result.excluded[0].reason == 'estimated score'
         assert pareto_frontier([MID, guess]) == [guess]

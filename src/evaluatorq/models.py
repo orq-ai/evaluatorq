@@ -140,13 +140,13 @@ def pareto(
     index: Index = 'intelligence',
     effort: str | None = None,
     x: XAxis = 'price',
-    measured_only: bool = False,
+    exclude_estimated: bool = False,
     min_score: float | None = MIN_SEAT_INDEX,
 ) -> ParetoResult:
     """Place each model on (`x`, `index`), mark the frontier and name what beats each dominated model.
 
     Models without a value on either axis, estimated scores when
-    `measured_only` is set, and models scoring below `min_score` on the chosen
+    `exclude_estimated` is set, and models scoring below `min_score` on the chosen
     index are listed in `excluded` with the reason. The floor defaults to
     `MIN_SEAT_INDEX`, the same floor preset seating uses, because without it the
     cheap end of the frontier holds models nothing is cheaper than but that no
@@ -172,7 +172,7 @@ def pareto(
         if model.router_id in seen:
             continue
         seen.add(model.router_id)
-        placed = placement(model, index=index, effort=effort, x=x, measured_only=measured_only)
+        placed = placement(model, index=index, effort=effort, x=x, exclude_estimated=exclude_estimated)
         if isinstance(placed, str):
             excluded.append(ExcludedModel(router_id=model.router_id, reason=placed))
         elif min_score is not None and placed[0] < min_score:
@@ -220,7 +220,7 @@ def dominated_by(
     index: Index = 'intelligence',
     effort: str | None = None,
     x: XAxis = 'price',
-    measured_only: bool = False,
+    exclude_estimated: bool = False,
 ) -> ScoredModel | None:
     """The nearest frontier model that dominates `model`, or None when nothing does.
 
@@ -230,7 +230,7 @@ def dominated_by(
     """
     pool = {m.router_id: m for m in models}
     pool[model.router_id] = model
-    result = pareto(pool.values(), index=index, effort=effort, x=x, measured_only=measured_only, min_score=None)
+    result = pareto(pool.values(), index=index, effort=effort, x=x, exclude_estimated=exclude_estimated, min_score=None)
     point = next((p for p in result.points if p.model.router_id == model.router_id), None)
     return pool[point.dominated_by] if point is not None and point.dominated_by else None
 

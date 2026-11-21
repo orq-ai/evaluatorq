@@ -181,7 +181,7 @@ The y axis is a score and the x axis is a cost. Both have a default and both can
 
 ```bash
 eq models pareto --index legal --provider openai --provider anthropic
-eq models pareto --effort high --x output_speed --measured-only
+eq models pareto --effort high --x output_speed --no-estimate
 ```
 
 `price` is Orq's 3:1 blend of input and output list price per million tokens. `output_speed` is AA's median output tokens per second, and `time_to_first_token` is AA's median seconds to the first token.
@@ -206,7 +206,7 @@ A model is left out of the comparison, and listed under `excluded` in `--json` a
 | `no intelligence score at effort high` | the model has no score at the `--effort` you asked for |
 | `free (no list price)` | a free model would beat everything on price |
 | `no output speed data`, `no time to first token data` | AA has no speed or latency measurement for the model |
-| `estimated score` | only with `--measured-only` |
+| `estimated score` | only with `--no-estimate` / `exclude_estimated=True`; estimated scores are compared by default |
 | `score 2.7 is below min_score 15` | the score is under `--min-score` / `min_score=` (see [The quality floor](#the-quality-floor)) |
 
 A left-out model is not dominated. It simply was not compared.

@@ -292,13 +292,13 @@ def placement(
     index: Index = 'intelligence',
     effort: str | None = None,
     x: XAxis = 'price',
-    measured_only: bool = False,
+    exclude_estimated: bool = False,
 ) -> tuple[float, float] | str:
     """The model's `(score, x)` point, or the reason it has no place on these axes.
 
     Expects axes `check_axes` accepted.
     """
-    if measured_only and model.is_estimated:
+    if exclude_estimated and model.is_estimated:
         return 'estimated score'
     score = score_of(model, index=index, effort=effort)
     if score is None:
@@ -983,7 +983,7 @@ def pareto_frontier(
     index: Index = 'intelligence',
     effort: str | None = None,
     x: XAxis = 'price',
-    measured_only: bool = False,
+    exclude_estimated: bool = False,
 ) -> list[ScoredModel]:
     """Comparable models nothing else beats on both axes, strongest first.
 
@@ -995,7 +995,7 @@ def pareto_frontier(
     placed = [
         (m, p)
         for m in models
-        if not isinstance(p := placement(m, index=index, effort=effort, x=x, measured_only=measured_only), str)
+        if not isinstance(p := placement(m, index=index, effort=effort, x=x, exclude_estimated=exclude_estimated), str)
     ]
     frontier = [(m, p) for m, p in placed if not any(point_dominates(q, p, x=x) for _, q in placed)]
     return [m for m, _ in sorted(frontier, key=lambda item: -item[1][0])]
