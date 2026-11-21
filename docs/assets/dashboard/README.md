@@ -37,6 +37,15 @@ Older screenshots use `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 
 | `sim-08-config.png` | Report → Config — run metadata and the persona dials |
 | `sim-09-compare.png` | Run comparison — two runs of the same agent, what changed, tiles, outcome bars and scorer means |
 
+## Models — `models-*.png`
+
+Captured on 2026-11-20 against the live Orq catalogue (73 models after keeping one listing per model), 1440×1250, light theme, headless Chromium.
+
+| File | Page |
+|---|---|
+| `models-01-frontier.png` | Models — intelligence index against list price, frontier line, table sorted by score |
+| `models-02-legal.png` | Models — the legal index, where most models have no score and are not plotted |
+
 ## Pending re-shoot
 
 Four shots do not show the thing their caption teaches. The decision is to re-shoot the set in one purpose-built capture session rather than keep documenting around it. Until then the three that exist are **unreferenced** — their `![...]` lines were removed from [`docs/dashboard.md`](../../dashboard.md); the prose stayed. Re-add each one in the same commit that replaces the file, not before. The prose caveats standing in for them are the only thing keeping the pages honest, so **do not delete them either**.
@@ -51,3 +60,4 @@ Four shots do not show the thing their caption teaches. The decision is to re-sh
 The screenshots that do show a report tab strip (`sim-03` … `sim-08`) are one tab short of the current dashboard, since Recommendations sits between Breakdown and Transcripts now. `sim-01`, `sim-02` and `sim-09` are outside a report and unaffected.
 
 To re-shoot: run `eq dashboard` in a checkout with runs under `.evaluatorq/runs/` and `.evaluatorq/sim-runs/`, 1440×900, light theme, to match the existing set.
+

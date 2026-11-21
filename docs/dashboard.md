@@ -471,8 +471,21 @@ The pairwise CSV writes one row per comparison: the question, the consensus winn
 
 Download links respect the currently active filter state — the CSV/JSON exports contain only the rows visible in the filtered report body.
 
+## Models { #models }
+
+The **Models** page plots every model in the Orq catalogue as one dot, score against a blended price, and joins the models nothing beats with an orange line: the Pareto frontier. It reads the live catalogue, so it needs the same Orq account as trace search. Without one, the sidebar item is greyed out and the page says how to connect.
+
+![Models page: intelligence index against list price, frontier in orange](assets/dashboard/models-01-frontier.png)
+
+The selects above the chart change the score (intelligence or a domain index such as legal), the reasoning effort, the x axis (price, output speed or time to first token), the price mix and the developer. **Price mix** picks how price blends a card's rates: **Agentic: 7:2:1 cached** (the default; 7 parts cache read, 2 parts fresh input, 1 part output, the Artificial Analysis blend) or **List: 3:1 input/output**. It is greyed out on the other x axes. For your own ratio, add `?mix=7:1:1:1` (cache read : cache write : fresh input : output) to the page address; it appears in the select as **Custom**. The axis title and the table header name the blend in use. On a blend with a cache-read share, the table adds a **Cache read $/1M** column; an **AA** tag marks a rate taken from the Artificial Analysis price because the host lists none, an **input** tag marks a card with no cache price, billed at the input rate, and the summary line counts both. The score and effort selects list only the indices and efforts at least one loaded model has a score on. **Minimum score** hides models scoring below it on the chosen score, 15 by default, and the summary line counts how many it hid; set it to `0` to plot every model. **Include disabled models** adds models switched off in the workspace. Hollow dots are scores Orq estimated rather than measured; **Hide estimated scores** drops them. The table below lists every plotted model with its prices, score per dollar and, for a dominated model, the frontier model that beats it. Click a column header to sort.
+
+![Models page on the legal index: fewer models carry a score, so most are not plotted](assets/dashboard/models-02-legal.png)
+
+The screenshots above predate the price mix: they show the 3:1 list blend, without the **Price mix** select or the cache-read column. The page and `eq models pareto` compute the same thing. What the frontier means, how the blend works and where it misleads is in [Model Pareto frontier](model-pareto.md#the-price-axis).
+
 ## Where to next
 
 - **[Red Teaming](guides/red-teaming.md)** — generate the red-team reports the dashboard browses.
 - **[Agent Simulation](guides/agent-simulation.md)** — generate simulation reports.
 - **[CLI Reference](cli-reference/overview.md)** — the `eq dashboard` command and options.
+- **[Model Pareto frontier](model-pareto.md)** — the frontier behind the Models page, from the CLI and Python.

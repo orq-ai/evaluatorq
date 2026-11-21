@@ -27,7 +27,7 @@ from evaluatorq.common.orq_client import (
 )
 from evaluatorq.common.private_files import ensure_private_directory, write_private_atomic
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.dashboard.auth import DashboardAuth, build_auth_clients, resolve_dashboard_auth
+from evaluatorq.dashboard.auth import DashboardAuth, auth_or_reason, build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.insights_launch import (
     FINDER_EXPORT_REFERENCE_DIR,
     get_finder_exports_dir,
@@ -313,12 +313,9 @@ def _api_available(app: Any) -> bool:
 
 
 def _unavailable_reason(app: Any) -> str:
-    try:
-        auth = selected_dashboard_auth(app)
-    except ValueError as exc:
-        return str(exc)
-    if auth.method == 'environment' and not auth.api_key:
-        return 'ORQ_API_KEY is not set. Choose an authentication method in Settings.'
+    _, reason = auth_or_reason(lambda: selected_dashboard_auth(app))
+    if reason is not None:
+        return reason
     failure = getattr(app.state, 'finder_unavailable_reason', None)
     if failure:
         return str(failure)

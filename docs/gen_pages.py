@@ -49,6 +49,7 @@ API_PACKAGES = [
     "evaluatorq.integrations",
     "evaluatorq.formats",
     "evaluatorq.signals",
+    "evaluatorq.models",
 ]
 
 
@@ -102,12 +103,20 @@ def ingest_markdown() -> None:
         mkdocs_gen_files.set_edit_path(dest, source.relative_to(REPO).as_posix())
 
 
+# Modules implemented in ``evaluatorq.common`` whose names a public package
+# re-exports. The root package does not export or render them, so without this
+# they would be credited to ``evaluatorq`` and documented nowhere.
+COMMON_OWNERS = {
+    "evaluatorq.common.trace_document": "evaluatorq.insights",
+    "evaluatorq.common.model_catalogue": "evaluatorq.models",
+    "evaluatorq.common.model_frontier": "evaluatorq.models",
+}
+
+
 def _canonical_owner(module_name: str) -> str | None:
     """Return the longest API package that owns where a symbol is defined."""
-    # Shared trace models are implemented in common but publicly exported by
-    # Insights; the root package does not export or render them.
-    if module_name == "evaluatorq.common.trace_document":
-        return "evaluatorq.insights"
+    if owner := COMMON_OWNERS.get(module_name):
+        return owner
     cands = [p for p in API_PACKAGES if module_name == p or module_name.startswith(p + ".")]
     return max(cands, key=len) if cands else None
 

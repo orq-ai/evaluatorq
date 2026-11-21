@@ -6,7 +6,7 @@
 
 Reach for it when you want typed labels over state you already have — a trace, a transcript, a row of a dataset — and you do not want a judge panel around them. If you want a verdict aggregated over several models, with repetitions and abstentions, you want a [jury](llm-as-a-jury.md), and [classify judges](classify-judges.md) is how a classify model takes a seat on one.
 
-`run_classify`, `ClassifyQuestion`, `ClassifyRequest`, `ClassifyOutcome` and `llm_concurrency_limit` import from top-level `evaluatorq` and are the supported surface. Five names on this page do not: `with_retry`, `models_by_provider`, `classify_request_body`, `ClassifyResponse` and `JudgeError` are reachable only under `evaluatorq.common.*`, which carries no stability promise. `ClassifyAnswer` is in the same position — you receive one, so you rarely need to import it.
+`run_classify`, `ClassifyQuestion`, `ClassifyRequest`, `ClassifyOutcome` and `llm_concurrency_limit` import from top-level `evaluatorq` and are the supported surface. `models_by_provider` imports from `evaluatorq.models`. Four names on this page do not have a public home: `with_retry`, `classify_request_body`, `ClassifyResponse` and `JudgeError` are reachable only under `evaluatorq.common.*`, which carries no stability promise. `ClassifyAnswer` is in the same position — you receive one, so you rarely need to import it.
 
 ## Three question kinds
 
@@ -148,7 +148,7 @@ To see the current list, which reads the live catalogue and so needs `ORQ_API_KE
 ```python
 import asyncio
 
-from evaluatorq.common.model_catalogue import models_by_provider
+from evaluatorq.models import models_by_provider
 
 by_provider = asyncio.run(models_by_provider(kind="classify"))
 ids = sorted(model_id for ids in by_provider.values() for model_id in ids)
