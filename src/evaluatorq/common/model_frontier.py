@@ -11,7 +11,8 @@ is enough to decide seating arithmetically rather than by taste.
 Both axes are read where a judge actually runs. Judges are called with no
 reasoning effort, so the provider applies the catalogue default
 (`/v2/models` `parameters[reasoningEffort].config.default`), and each card is
-ranked on its score at that rung. Price is a 3:1 input/output blend.
+ranked on its score at that rung. Seating prices on the 3:1 input/output
+blend (`LIST_MIX`); the Pareto view defaults to a cache-aware one (`PriceMix`).
 
 Dominance is the whole rule: B dominates A when B is at least as intelligent and
 no more expensive, and strictly better on one of them. A dominated seat is dead
@@ -32,6 +33,7 @@ NEVER_SEAT) are reviewed judgements about that live data, each with its source.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import math
 import re
 from collections.abc import Mapping
@@ -41,12 +43,14 @@ from typing import TYPE_CHECKING, Any, Literal, get_args
 
 import httpx
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from evaluatorq.common.llm_client import orq_base_url
 from evaluatorq.common.model_catalogue import (
     _entry_metadata,
+    _finite_nonneg,
     _parse_default_reasoning_effort,
+    _parse_pricing,
     _parse_reasoning_efforts,
     _reasoning_effort_config,
     _usd_price,
@@ -57,6 +61,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
     from openai import AsyncOpenAI
+
+
+CacheSource = Literal['host', 'artificial_analysis', 'input']
+"""Where a cache rate on the price axis came from: this host's card, the
+Artificial Analysis price on the same card, or the input rate (no cache price
+anywhere on the card)."""
 
 
 class ScoredModel(BaseModel):
@@ -75,6 +85,19 @@ class ScoredModel(BaseModel):
     )
     input_price: float = Field(description='USD per 1M input tokens.')
     output_price: float = Field(description='USD per 1M output tokens.')
+    cache_read_price: float | None = Field(
+        default=None, description="USD per 1M cache-read tokens on this host's card. None when the card lists none."
+    )
+    cache_write_price: float | None = Field(
+        default=None,
+        description="USD per 1M cache-write tokens on this host's card. None when the card lists none. On Gemini "
+        'cards this field holds the hourly cache storage price, not a per-token write premium.',
+    )
+    aa_cache_read_price: float | None = Field(
+        default=None,
+        description="Artificial Analysis' cache-hit price on the same card (the developer's own or the median "
+        "across hosts, not this host's), USD per 1M. The cache-read fallback when the host lists none.",
+    )
     region: str | None = None
     provider: str | None = None
     # The rung the headline was measured at, resolved through the benchmark
@@ -159,6 +182,148 @@ class ScoredModel(BaseModel):
         mine, theirs = placement(self), placement(other)
         return not isinstance(mine, str) and not isinstance(theirs, str) and point_dominates(mine, theirs, x='price')
 
+    def cache_read_rate(self) -> tuple[float, CacheSource]:
+        """USD per 1M cache-read tokens for the price axis, and where it came from.
+
+        The host's own rate when its card lists one. Otherwise the Artificial
+        Analysis cache-hit price on the same card, capped at this host's input
+        rate (a cache hit never costs more than sending the tokens fresh).
+        Otherwise the input rate, the same rule `cost_of` bills a real call by.
+        """
+        if self.cache_read_price is not None:
+            return self.cache_read_price, 'host'
+        if self.aa_cache_read_price is not None:
+            return min(self.aa_cache_read_price, self.input_price), 'artificial_analysis'
+        return self.input_price, 'input'
+
+    def cache_write_rate(self) -> tuple[float, CacheSource]:
+        """USD per 1M cache-write tokens for the price axis: the host's rate, else the input rate (as `cost_of` bills)."""
+        if self.cache_write_price is not None:
+            return self.cache_write_price, 'host'
+        return self.input_price, 'input'
+
+
+class PriceMix(BaseModel):
+    """How the price axis blends a card's rates: token shares as READ:WRITE:FRESH:OUTPUT.
+
+    `read` is cache-read input, `write` is cache-write input, `fresh` is input
+    that neither reads nor writes a cache, `output` is output. Only the ratio
+    matters: `7:0:2:1` and `70:0:20:10` price the same.
+    """
+
+    model_config = {'frozen': True, 'extra': 'forbid'}
+
+    read: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    write: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    fresh: float = Field(ge=0, allow_inf_nan=False)
+    output: float = Field(ge=0, allow_inf_nan=False)
+    name: str | None = Field(
+        default=None, description="The named blend ('agentic', 'list'), None for an explicit ratio."
+    )
+    tag: str | None = Field(default=None, description="How labels name a named blend, e.g. '7:2:1 cached'.")
+
+    @model_validator(mode='after')
+    def _has_a_share(self) -> PriceMix:
+        if self.total <= 0:
+            raise ValueError('a price mix needs at least one non-zero share')
+        return self
+
+    @property
+    def total(self) -> float:
+        """The sum of the four shares."""
+        return self.read + self.write + self.fresh + self.output
+
+    @property
+    def ratio(self) -> str:
+        """The mix as READ:WRITE:FRESH:OUTPUT, e.g. `7:0:2:1`."""
+        return ':'.join(f'{v:g}' for v in (self.read, self.write, self.fresh, self.output))
+
+    @property
+    def title(self) -> str:
+        """What a long axis label calls this blend: the tag of a named one, else the ratio with its field names."""
+        return self.tag or f'{self.ratio} read:write:fresh:output'
+
+    @property
+    def short_title(self) -> str:
+        """What a short axis label calls this blend: the tag of a named one, else the ratio."""
+        return self.tag or self.ratio
+
+    def same_shares(self, other: PriceMix) -> bool:
+        """Whether both mixes put the same fraction of tokens in each bucket."""
+        mine = (self.read, self.write, self.fresh, self.output)
+        theirs = (other.read, other.write, other.fresh, other.output)
+        return all(
+            math.isclose(a / self.total, b / other.total, abs_tol=1e-12) for a, b in zip(mine, theirs, strict=True)
+        )
+
+    def price(self, model: ScoredModel) -> float:
+        """`model`'s USD per 1M tokens under this blend.
+
+        A bucket with no share is skipped, so the `list` mix is exactly
+        `ScoredModel.price`, float for float.
+        """
+        terms: list[float] = []
+        if self.read:
+            terms.append(self.read * model.cache_read_rate()[0])
+        if self.write:
+            terms.append(self.write * model.cache_write_rate()[0])
+        if self.fresh:
+            terms.append(self.fresh * model.input_price)
+        if self.output:
+            terms.append(self.output * model.output_price)
+        return sum(terms) / self.total
+
+    def sources(self, model: ScoredModel) -> tuple[CacheSource | None, CacheSource | None]:
+        """Where the cache-read and cache-write rates `price` used came from; None for a bucket with no share."""
+        return (
+            model.cache_read_rate()[1] if self.read else None,
+            model.cache_write_rate()[1] if self.write else None,
+        )
+
+
+# The two named blends. `agentic` is Artificial Analysis' published blend: "we
+# calculate a blended price assuming a 7:2:1 ratio of cache hit, input, and
+# output tokens" (artificialanalysis.ai/methodology, read 2026-11-20). `list`
+# is the 3:1 input/output blend the smart router and preset seating rank on.
+PRICE_MIXES: dict[str, PriceMix] = {
+    'agentic': PriceMix(read=7, write=0, fresh=2, output=1, name='agentic', tag='7:2:1 cached'),
+    'list': PriceMix(read=0, write=0, fresh=3, output=1, name='list', tag='3:1 list'),
+}
+AGENTIC_MIX = PRICE_MIXES['agentic']
+LIST_MIX = PRICE_MIXES['list']
+
+
+def parse_mix(mix: str | PriceMix) -> PriceMix:
+    """A `PriceMix` from a name (`agentic`, `list`) or a `READ:WRITE:FRESH:OUTPUT` ratio such as `7:1:1:1`.
+
+    A ratio with the same shares as a named blend returns that blend, so
+    `7:0:2:1` is labelled as the `agentic` one.
+
+    Raises:
+        ValueError: Not a known name, not four numbers, a negative or
+            non-finite share, or every share zero.
+    """
+    if isinstance(mix, PriceMix):
+        return mix
+    text = mix.strip().lower()
+    if text in PRICE_MIXES:
+        return PRICE_MIXES[text]
+    usage = f'choose {", ".join(PRICE_MIXES)}, or a READ:WRITE:FRESH:OUTPUT ratio such as 7:0:2:1'
+    parts = text.split(':')
+    if len(parts) != 4:
+        raise ValueError(f'unknown price mix {mix!r}; {usage}')
+    try:
+        shares = [float(part) for part in parts]
+    except ValueError:
+        raise ValueError(f'price mix {mix!r} has a share that is not a number; {usage}') from None
+    if any(not math.isfinite(v) or v < 0 for v in shares):
+        raise ValueError(f'price mix {mix!r} has a negative or non-finite share; {usage}')
+    if sum(shares) <= 0:
+        raise ValueError(f'price mix {mix!r} has no non-zero share; {usage}')
+    read, write, fresh, output = shares
+    custom = PriceMix(read=read, write=write, fresh=fresh, output=output)
+    return next((named for named in PRICE_MIXES.values() if named.same_shares(custom)), custom)
+
 
 Index = Literal[
     'intelligence',
@@ -172,8 +337,9 @@ Index = Literal[
 """The score on the y axis: the AA intelligence index, or one AA domain index."""
 
 XAxis = Literal['price', 'output_speed', 'time_to_first_token']
-"""The second axis: blended list price (lower is better), median output tokens
-per second (higher is better), or median time to first token (lower is better)."""
+"""The second axis: blended price under a `PriceMix` (lower is better), median
+output tokens per second (higher is better), or median time to first token
+(lower is better)."""
 
 INDICES: tuple[str, ...] = get_args(Index)
 X_AXES: tuple[str, ...] = get_args(XAxis)
@@ -221,12 +387,9 @@ INDEX_AXES: dict[str, AxisSpec] = {
 X_AXIS_SPECS: dict[str, AxisSpec] = {
     spec.key: spec
     for spec in (
+        # Labels name no blend: `x_axis_spec` adds the mix, so no surface can show a price without one.
         AxisSpec(
-            key='price',
-            label='List price, USD per 1M tokens (3:1 input/output)',
-            short_label='Price $/1M (3:1)',
-            lower_is_better=True,
-            digits=3,
+            key='price', label='Price, USD per 1M tokens', short_label='Price $/1M', lower_is_better=True, digits=3
         ),
         AxisSpec(key='output_speed', label='Output speed, tokens per second', short_label='Output tok/s', digits=1),
         AxisSpec(
@@ -238,6 +401,17 @@ X_AXIS_SPECS: dict[str, AxisSpec] = {
         ),
     )
 }
+
+
+def x_axis_spec(x: str, mix: PriceMix | None = None) -> AxisSpec:
+    """The `X_AXIS_SPECS` row for `x`, with the price blend named in both labels when `x` is price."""
+    spec = X_AXIS_SPECS[x]
+    if x != 'price' or mix is None:
+        return spec
+    return dataclasses.replace(
+        spec, label=f'{spec.label} ({mix.title})', short_label=f'{spec.short_label} ({mix.short_title})'
+    )
+
 
 # Reasoning efforts from least to most, for display order only: the catalogue sends no ranking of its own. An
 # effort it adds later still shows, sorted after these.
@@ -278,10 +452,14 @@ def score_of(model: ScoredModel, *, index: Index = 'intelligence', effort: str |
     return None
 
 
-def x_of(model: ScoredModel, x: XAxis = 'price') -> float | None:
-    """A model's value on the x axis, or None when it has none (a free model has no place on price)."""
+def x_of(model: ScoredModel, x: XAxis = 'price', *, mix: str | PriceMix = LIST_MIX) -> float | None:
+    """A model's value on the x axis, or None when it has none (a free model has no place on price).
+
+    Price is blended under `mix`. The default is the 3:1 `list` blend preset
+    seating ranks on; `evaluatorq.models.pareto` defaults to `agentic`.
+    """
     if x == 'price':
-        return None if model.free else model.price
+        return None if model.free else parse_mix(mix).price(model)
     value = model.output_tokens_per_second if x == 'output_speed' else model.time_to_first_token_seconds
     return value if value is not None and value > 0 else None
 
@@ -293,17 +471,18 @@ def placement(
     effort: str | None = None,
     x: XAxis = 'price',
     exclude_estimated: bool = False,
+    mix: str | PriceMix = LIST_MIX,
 ) -> tuple[float, float] | str:
     """The model's `(score, x)` point, or the reason it has no place on these axes.
 
-    Expects axes `check_axes` accepted.
+    Expects axes `check_axes` accepted. `mix` is the price blend (see `x_of`).
     """
     if exclude_estimated and model.is_estimated:
         return 'estimated score'
     score = score_of(model, index=index, effort=effort)
     if score is None:
         return f'no {index} score at effort {effort}' if effort else f'no {index} score'
-    xv = x_of(model, x)
+    xv = x_of(model, x, mix=mix)
     if xv is None:
         return 'free (no list price)' if x == 'price' else f'no {x.replace("_", " ")} data'
     return score, xv
@@ -323,15 +502,16 @@ def dominates(
     index: Index = 'intelligence',
     effort: str | None = None,
     x: XAxis = 'price',
+    mix: str | PriceMix = LIST_MIX,
 ) -> bool:
     """Whether `a` is at least as good as `b` on both axes and strictly better on one.
 
     False when either model has no value on an axis. The defaults are the
-    seating axes: intelligence at the default effort against blended price.
+    seating axes: intelligence at the default effort against the 3:1 list price.
     """
     check_axes(index=index, effort=effort, x=x)
-    pa = placement(a, index=index, effort=effort, x=x)
-    pb = placement(b, index=index, effort=effort, x=x)
+    pa = placement(a, index=index, effort=effort, x=x, mix=mix)
+    pb = placement(b, index=index, effort=effort, x=x, mix=mix)
     return not isinstance(pa, str) and not isinstance(pb, str) and point_dominates(pa, pb, x=x)
 
 
@@ -684,6 +864,12 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
     headline = _score(index)
     if headline is None or input_cost is None or output_cost is None:
         return None
+    # Read through the same parser `cost_of` bills with, so the chart and a run's cost use one rate.
+    pricing = _parse_pricing(str(card['provider']), str(card['model_id']), metadata)
+    aa_pricing = v2.get('aa_pricing') if isinstance(v2, dict) else None
+    aa_cache_read = (
+        _finite_nonneg(aa_pricing.get('price_1m_cache_hit_tokens')) if isinstance(aa_pricing, dict) else None
+    )
     effort_parameter, default_effort = _catalogue_effort(card)
     region = metadata.get('region')
     enabled = card.get('enabled')
@@ -693,6 +879,9 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
         intelligence_index=headline,
         input_price=round(input_cost * 1000, 6),
         output_price=round(output_cost * 1000, 6),
+        cache_read_price=None if pricing.cache_read is None else round(pricing.cache_read * 1000, 6),
+        cache_write_price=None if pricing.cache_write is None else round(pricing.cache_write * 1000, 6),
+        aa_cache_read_price=aa_cache_read,
         region=region if isinstance(region, str) else None,
         provider=str(card.get('provider')),
         headline_effort=_scored_effort(v2),
@@ -984,18 +1173,22 @@ def pareto_frontier(
     effort: str | None = None,
     x: XAxis = 'price',
     exclude_estimated: bool = False,
+    mix: str | PriceMix = LIST_MIX,
 ) -> list[ScoredModel]:
     """Comparable models nothing else beats on both axes, strongest first.
 
     Everything off the frontier is a worse deal than something else in the same
     garden, which is why a preset containing one is dead weight. A model with
     no value on an axis is left out: on the default price axis, every free card.
+    Seating calls this with the default 3:1 `list` mix.
     """
     check_axes(index=index, effort=effort, x=x)
     placed = [
         (m, p)
         for m in models
-        if not isinstance(p := placement(m, index=index, effort=effort, x=x, exclude_estimated=exclude_estimated), str)
+        if not isinstance(
+            p := placement(m, index=index, effort=effort, x=x, exclude_estimated=exclude_estimated, mix=mix), str
+        )
     ]
     frontier = [(m, p) for m, p in placed if not any(point_dominates(q, p, x=x) for _, q in placed)]
     return [m for m, _ in sorted(frontier, key=lambda item: -item[1][0])]

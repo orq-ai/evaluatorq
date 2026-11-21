@@ -1,7 +1,8 @@
 """``/models``: the Pareto view over the Orq model catalogue.
 
-One dot per model: Artificial Analysis score (y) against blended list price,
-output speed or time to first token (x). Frontier models are joined by a step
+One dot per model: Artificial Analysis score (y) against blended price (a
+cache-aware blend by default, the 3:1 list blend on request), output speed or
+time to first token (x). Frontier models are joined by a step
 line, dominated ones fade, estimated scores draw hollow. The table under the
 chart names, for each dominated model, the nearest frontier model that beats it.
 """
@@ -22,6 +23,7 @@ from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.common.model_frontier import (
     INDEX_AXES,
     MIN_SEAT_INDEX,
+    PRICE_MIXES,
     X_AXIS_SPECS,
     available_efforts,
     available_indices,
@@ -34,7 +36,7 @@ from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.dashboard import model_choices
 from evaluatorq.dashboard.auth import auth_or_reason
 from evaluatorq.dashboard.shell import page
-from evaluatorq.models import X_AXES, ModelCatalogueError, load_models, pareto
+from evaluatorq.models import X_AXES, ModelCatalogueError, PriceMix, load_models, pareto, parse_mix
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,6 +55,7 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ('output', 'Output $/1M'),
     ('x', 'X'),
     ('pareto', 'Score per $'),
+    ('cache', 'Cache read $/1M'),
     ('estimated', 'Estimated'),
     ('dominated_by', 'Dominated by'),
 )
@@ -74,6 +77,21 @@ def _min_score(value: str | None) -> float:
         return MIN_SEAT_INDEX
     return floor if math.isfinite(floor) and floor >= 0 else MIN_SEAT_INDEX
 
+
+def _mix(value: str | None) -> PriceMix:
+    """The price mix from the query string: a name or a READ:WRITE:FRESH:OUTPUT ratio; anything else is the default."""
+    try:
+        return parse_mix(value or 'agentic')
+    except ValueError:
+        return PRICE_MIXES['agentic']
+
+
+_MIX_OPTION_LABELS = {'agentic': 'Agentic: 7:2:1 cached', 'list': 'List: 3:1 input/output'}
+# What the table and tooltip append to a cache rate that is not the host's own.
+_SOURCE_NOTE = {
+    'artificial_analysis': ('AA', 'Not listed by this host: the Artificial Analysis cache price on the same card.'),
+    'input': ('input', 'No cache price on this card: cached tokens are billed at the input rate.'),
+}
 
 _CONNECT_HINT = '<a href="/settings">Open Settings</a> to connect an Orq account.'
 _RETRY_HINT = (
@@ -99,6 +117,7 @@ def _filters_html(
     index: str,
     effort: str,
     x: str,
+    mix: PriceMix,
     min_score: float,
 ) -> str:
     def options(values: list[tuple[str, str]], current: str) -> str:
@@ -110,6 +129,10 @@ def _filters_html(
     effort_disabled = (
         ' disabled title="Domain indices exist only at the default effort"' if index != 'intelligence' else ''
     )
+    mix_disabled = ' disabled title="The mix applies only to the price axis"' if x != 'price' else ''
+    mix_options = [(name, _MIX_OPTION_LABELS[name]) for name in PRICE_MIXES]
+    if mix.name is None:
+        mix_options.append((mix.ratio, f'Custom: {mix.ratio}'))
 
     def checkbox(name: str, label: str) -> str:
         return (
@@ -125,6 +148,10 @@ def _filters_html(
         f'{options([("", "Default level"), *((e, e) for e in efforts)], effort)}</select></label>'
         f'<label>X axis <select name="x" onchange="this.form.submit()">'
         f'{options([(v, X_AXIS_SPECS[v].short_label) for v in X_AXES], x)}</select></label>'
+        '<label title="How the price axis blends token prices, as cache read : fresh input : output. Add '
+        '?mix=READ:WRITE:FRESH:OUTPUT to the address for your own ratio.">'
+        f'Price mix <select name="mix" onchange="this.form.submit()"{mix_disabled}>'
+        f'{options(mix_options, mix.name or mix.ratio)}</select></label>'
         f'<label>Developer <select name="developer" onchange="this.form.submit()">'
         f'{options([("", "All developers"), *((v, v) for v in vendors)], q.get("developer", ""))}</select></label>'
         f'<label title="Models scoring below this on the chosen index are not plotted. 0 shows every model.">'
@@ -135,6 +162,15 @@ def _filters_html(
         '<noscript><button type="submit">Apply</button></noscript>'
         '</form>'
     )
+
+
+def _cache_read(point: ParetoPoint) -> tuple[float, str, str] | None:
+    """The cache-read rate the point's price uses, its short source mark and the mark's explanation; None if unused."""
+    if point.cache_read_source is None:
+        return None
+    rate, source = point.model.cache_read_rate()
+    mark, why = _SOURCE_NOTE.get(source, ('', ''))
+    return rate, mark, why
 
 
 def _chart(result: ParetoResult) -> str:
@@ -149,12 +185,13 @@ def _chart(result: ParetoResult) -> str:
             'dominated_by': p.dominated_by or '',
             'pareto_score': round(p.pareto_score, 2) if p.pareto_score is not None else None,
             'efforts': ', '.join(f'{k} {v:g}' for k, v in sorted(p.model.effort_indices.items())) or '—',
+            'cache_read': _cache_read_text(p),
         }
         for p in result.points
     ]
     if not rows:
         return ''
-    spec = X_AXIS_SPECS[result.x]
+    spec = result.x_spec
     frontier = sorted((r for r in rows if r['status'] == 'Frontier'), key=itemgetter('x'))
     x_enc: dict[str, Any] = {'field': 'x', 'type': 'quantitative', 'title': spec.label}
     if result.x == 'price':
@@ -177,6 +214,7 @@ def _chart(result: ParetoResult) -> str:
         {'field': 'score', 'title': 'Score'},
         {'field': 'x', 'title': spec.short_label, 'format': f'.{spec.digits}~f'},
         {'field': 'pareto_score', 'title': 'Score per $'},
+        {'field': 'cache_read', 'title': 'Cache read $/1M'},
         {'field': 'estimated', 'title': 'Measured or estimated'},
         {'field': 'dominated_by', 'title': 'Dominated by'},
         {'field': 'efforts', 'title': 'Score per level'},
@@ -219,6 +257,14 @@ def _chart(result: ParetoResult) -> str:
     return render_embed(spec, 'models-pareto')
 
 
+def _cache_read_text(point: ParetoPoint) -> str:
+    cache = _cache_read(point)
+    if cache is None:
+        return '—'
+    rate, mark, _ = cache
+    return f'{rate:.3f}' + (f' ({mark})' if mark else '')
+
+
 def _sort_key(column: str, x: str) -> Callable[[ParetoPoint], Any]:
     spec = X_AXIS_SPECS[x]
     keys: dict[str, Callable[[ParetoPoint], Any]] = {
@@ -229,6 +275,7 @@ def _sort_key(column: str, x: str) -> Callable[[ParetoPoint], Any]:
         'output': lambda p: p.model.output_price,
         'x': lambda p: spec.best_first(p.x),
         'pareto': lambda p: -(p.pareto_score or 0.0),
+        'cache': lambda p: p.model.cache_read_rate()[0],
         'estimated': lambda p: (not p.model.is_estimated, -p.score),
         'dominated_by': lambda p: (p.dominated_by or '', -p.score),
     }
@@ -238,11 +285,12 @@ def _sort_key(column: str, x: str) -> Callable[[ParetoPoint], Any]:
 def _table(result: ParetoResult, q: dict[str, str]) -> str:
     sort = q.get('sort', 'score')
     reverse = q.get('dir') == 'rev'
-    spec, price = X_AXIS_SPECS[result.x], X_AXIS_SPECS['price']
+    spec, price = result.x_spec, X_AXIS_SPECS['price']
+    show_cache = bool(result.mix and result.mix.read)
     points: list[ParetoPoint] = sorted(result.points, key=_sort_key(sort, result.x), reverse=reverse)
     head: list[str] = []
     for key, label in _COLUMNS:
-        if key == 'pareto' and result.x != 'price':
+        if (key == 'pareto' and result.x != 'price') or (key == 'cache' and not show_cache):
             continue
         label = spec.short_label if key == 'x' else label
         active = key == sort
@@ -270,6 +318,12 @@ def _table(result: ParetoResult, q: dict[str, str]) -> str:
         if result.x == 'price':
             pareto_cell = '—' if p.pareto_score is None else f'{p.pareto_score:.1f}'
             cells.append(f'<td class="num">{pareto_cell}</td>')
+        if show_cache and (cache := _cache_read(p)) is not None:
+            rate, mark, why = cache
+            note = f' <span class="models-fallback" title="{esc(why)}">{esc(mark)}</span>' if mark else ''
+            cells.append(f'<td class="num">{price.format(rate)}{note}</td>')
+        elif show_cache:
+            cells.append('<td class="num">—</td>')
         cells.extend((
             f'<td>{"estimated" if m.is_estimated else ""}</td>',
             f'<td>{esc(p.dominated_by) if p.dominated_by else "<span class=models-frontier>frontier</span>"}</td>',
@@ -323,11 +377,15 @@ async def models_page(req: Request) -> HTMLResponse:
     """Render the Pareto view over the live catalogue."""
     q = _query(req)
     x = _choice(q.get('x'), X_AXES, 'price')
+    mix = _mix(q.get('mix'))
     models, alert = await _load(req, include_disabled=bool(q.get('disabled')))
     intro = (
         '<p class="models-intro">Each dot is one model, at its developer\'s own listing. A model is '
         '<b>dominated</b> when another is at least as good on both axes and strictly better on one; the orange '
-        'line joins the models nothing dominates. Hollow dots are estimated scores. Price is the list price, so a '
+        "line joins the models nothing dominates. Hollow dots are estimated scores. Price blends the card's rates "
+        'per 1M tokens: by default 7 parts cache read, 2 parts fresh input and 1 part output (the Artificial Analysis '
+        'blend, close to an agent loop that re-sends its history); the Price mix control switches to the 3:1 '
+        "input/output list blend. A cache rate marked <b>AA</b> or <b>input</b> is not the host's own. Either way a "
         'model that writes more tokens per task costs more than it shows here.</p>'
     )
     if models is None:
@@ -346,18 +404,21 @@ async def models_page(req: Request) -> HTMLResponse:
         index=cast('Index', index),
         effort=effort or None,
         x=cast('XAxis', x),
+        mix=mix,
         exclude_estimated=bool(q.get('no_estimate')),
         min_score=min_score,
     )
     hidden = len(result.below_min_score)
     below = f' ({hidden} below the minimum score of {min_score:g})' if hidden else ''
+    fallbacks = len(result.price_fallbacks)
+    fallback_note = f' {fallbacks} priced with a cache rate their host does not list.' if fallbacks else ''
     summary = (
         f'<p class="models-summary">{len(result.frontier)} on the frontier, {len(result.dominated)} dominated, '
-        f'{len(result.excluded)} not plotted{below}.</p>'
+        f'{len(result.excluded)} not plotted{below}.{fallback_note}</p>'
     )
     body = (
         '<div class="models-page">'
-        f'{intro}{_filters_html(q, indices=indices, efforts=efforts, vendors=vendors, index=index, effort=effort, x=x, min_score=min_score)}{summary}'
+        f'{intro}{_filters_html(q, indices=indices, efforts=efforts, vendors=vendors, index=index, effort=effort, x=x, mix=mix, min_score=min_score)}{summary}'
         f'<div class="models-chart">{_chart(result)}</div>{_table(result, q)}{_excluded(result)}'
         '</div>'
     )

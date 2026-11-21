@@ -16,13 +16,15 @@ from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.model_frontier import MIN_SEAT_INDEX
 
 if TYPE_CHECKING:
-    from evaluatorq.models import Index, ParetoPoint, ParetoResult, ScoredModel, XAxis
+    from evaluatorq.models import Index, ParetoPoint, ParetoResult, PriceMix, ScoredModel, XAxis
 
 app = typer.Typer(help='Compare catalogue models.', no_args_is_help=True, context_settings=CONTEXT_SETTINGS)
 
 _PARETO_EPILOG = examples(
     'eq models pareto',
     'eq models pareto --dominated',
+    'eq models pareto --mix list',
+    'eq models pareto --mix 7:1:1:1',
     'eq models pareto --min-score 0',
     'eq models pareto --index legal --provider openai --provider anthropic',
     'eq models pareto --model gpt-5.6-terra --dominated --json',
@@ -35,6 +37,10 @@ def models() -> None:
     """Compare the models in the Orq catalogue."""
 
 
+# How the table marks a cache rate that is not the host's own.
+_SOURCE_MARK = {'host': '', 'artificial_analysis': ' (AA)', 'input': ' (input)'}
+
+
 def _print_table(
     result: ParetoResult, points: list[ParetoPoint], *, dominated: bool, left_out_by_provider: int
 ) -> None:
@@ -42,9 +48,9 @@ def _print_table(
     from rich.console import Console
     from rich.table import Table
 
-    from evaluatorq.common.model_frontier import X_AXIS_SPECS
-
-    spec = X_AXIS_SPECS[result.x]
+    spec = result.x_spec
+    mix = result.mix
+    show_read, show_write = bool(mix and mix.read), bool(mix and mix.write)
     effort = result.effort or 'default effort'
     kind = 'Dominated models' if dominated else 'Pareto frontier'
     table = Table(title=f'{kind}: {result.index} index ({effort}) vs {result.x}', box=box.ROUNDED)
@@ -53,12 +59,22 @@ def _print_table(
     table.add_column(spec.short_label, justify='right')
     if result.x == 'price':
         table.add_column('Score per $', justify='right')
+    if show_read:
+        table.add_column('Cache read $/1M', justify='right')
+    if show_write:
+        table.add_column('Cache write $/1M', justify='right')
     table.add_column('Est.', justify='center')
     table.add_column('Dominated by' if dominated else 'Frontier', style='white')
     for point in points:
         row = [point.model.router_id, f'{point.score:.1f}', spec.format(point.x)]
         if result.x == 'price':
             row.append(f'{point.pareto_score:.1f}' if point.pareto_score is not None else '—')
+        if show_read:
+            rate, source = point.model.cache_read_rate()
+            row.append(f'{rate:.3f}{_SOURCE_MARK[source]}')
+        if show_write:
+            rate, source = point.model.cache_write_rate()
+            row.append(f'{rate:.3f}{_SOURCE_MARK[source]}')
         row.extend((
             'yes' if point.model.is_estimated else '',
             point.dominated_by or ('— (on the frontier)' if dominated else 'yes'),
@@ -66,6 +82,17 @@ def _print_table(
         table.add_row(*row)
     console = Console(file=sys.stdout)
     console.print(table)
+    if mix is not None and mix.name != 'list':
+        console.print(
+            f'[dim]Price blends the rates per 1M tokens as {mix.ratio} (cache read : cache write : fresh input : '
+            'output). '
+            'Pass --mix list for the 3:1 input/output list blend.[/dim]'
+        )
+    if fallbacks := [p for p in points if p.price_fallback]:
+        console.print(
+            f'[dim]{len(fallbacks)} shown model(s) price a cache rate their host does not list: (AA) is the Artificial '
+            'Analysis price on the same card, (input) bills those tokens at the input rate.[/dim]'
+        )
     hidden = len(result.below_min_score)
     if hidden:
         console.print(
@@ -77,6 +104,24 @@ def _print_table(
         )
     if left_out_by_provider:
         console.print(f'[dim]{left_out_by_provider} model(s) from other providers left out by --provider.[/dim]')
+
+
+def _checked_options(*, index: str, x: str, effort: str | None, mix: str | None) -> PriceMix:
+    """Refuse an unknown index, x axis or mix, and an option the chosen axes do not take; return the price mix."""
+    from evaluatorq.models import INDICES, X_AXES, parse_mix
+
+    if index not in INDICES:
+        raise typer.BadParameter(f'choose one of {", ".join(INDICES)}', param_hint='--index')
+    if x not in X_AXES:
+        raise typer.BadParameter(f'choose one of {", ".join(X_AXES)}', param_hint='--x')
+    if effort is not None and index != 'intelligence':
+        raise typer.BadParameter('domain indices exist only at the default effort', param_hint='--effort')
+    if mix is not None and x != 'price':
+        raise typer.BadParameter('a price mix applies only to --x price', param_hint='--mix')
+    try:
+        return parse_mix(mix or 'agentic')
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint='--mix') from None
 
 
 @app.command('pareto', epilog=_PARETO_EPILOG)
@@ -107,6 +152,14 @@ def pareto_cmd(
         typer.Option('--index', help='The y axis: intelligence, or a domain index such as legal or economics.'),
     ] = 'intelligence',
     x: Annotated[str, typer.Option('--x', help='The x axis: price, output_speed or time_to_first_token.')] = 'price',
+    mix: Annotated[
+        str | None,
+        typer.Option(
+            '--mix',
+            help='How --x price blends token prices: agentic (default; 7 cache read : 2 fresh input : 1 output, the '
+            'Artificial Analysis blend), list (3 input : 1 output), or a READ:WRITE:FRESH:OUTPUT ratio such as 7:1:1:1.',
+        ),
+    ] = None,
     include_disabled: Annotated[  # noqa: FBT002
         bool, typer.Option('--include-disabled', help='Include models switched off in the workspace.')
     ] = False,
@@ -127,14 +180,9 @@ def pareto_cmd(
 ) -> None:
     """Show which models nothing beats on score and x axis, or which are beaten and by what."""
     from evaluatorq.common.model_frontier import available_efforts, available_indices, matches_vendor
-    from evaluatorq.models import INDICES, X_AXES, find_model, load_models, pareto
+    from evaluatorq.models import find_model, load_models, pareto
 
-    if index not in INDICES:
-        raise typer.BadParameter(f'choose one of {", ".join(INDICES)}', param_hint='--index')
-    if x not in X_AXES:
-        raise typer.BadParameter(f'choose one of {", ".join(X_AXES)}', param_hint='--x')
-    if effort is not None and index != 'intelligence':
-        raise typer.BadParameter('domain indices exist only at the default effort', param_hint='--effort')
+    price_mix = _checked_options(index=index, x=x, effort=effort, mix=mix)
 
     pool = asyncio.run(load_models(include_disabled=include_disabled))
     indices = available_indices(pool)
@@ -177,6 +225,7 @@ def pareto_cmd(
         index=cast('Index', index),
         effort=effort,
         x=cast('XAxis', x),
+        mix=price_mix,
         exclude_estimated=exclude_estimated,
         min_score=min_score,
     )
@@ -193,6 +242,8 @@ def pareto_cmd(
             'index': result.index,
             'effort': result.effort,
             'x': result.x,
+            'x_label': result.x_spec.label,
+            'mix': result.mix.model_dump() if result.mix else None,
             'min_score': result.min_score,
             'points': [p.summary() for p in points],
             'excluded': [e.model_dump() for e in result.excluded],

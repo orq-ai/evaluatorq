@@ -19,10 +19,22 @@ for point in result.dominated:
     print(point.model.router_id, 'switch to', point.dominated_by)
 ```
 
-Price is the 3:1 input/output blend per 1M tokens, the same blend the Orq
-smart router uses. It is a list price: a model that writes more tokens per task
-costs more than its list price suggests, and the catalogue does not say how
-many tokens a model spends per task.
+Price is a blend of the card's rates per 1M tokens, chosen with `mix`. The
+default, `agentic`, is Artificial Analysis' cache-aware blend: 7 parts cache
+read, 2 parts fresh input, 1 part output, which is what an agent loop that
+re-sends its history looks like. `list` is the 3:1 input/output blend the Orq
+smart router and preset seating rank on, and a `READ:WRITE:FRESH:OUTPUT` ratio
+such as `7:1:1:1` sets the shares yourself. A card with no cache-read rate
+prices reads at the Artificial Analysis cache price on the same card, else at
+its input rate, and each point says which (`cache_read_source`).
+
+`pareto` and `dominated_by` default to `agentic`. The re-exported seating
+helpers `dominates`, `pareto_frontier` and `x_of` default to `list`, as preset
+seating does; pass `mix=` to change either.
+
+Every blend is a list price: a model that writes more tokens per task costs
+more than its blend suggests, and the catalogue does not say how many tokens a
+model spends per task.
 """
 
 from __future__ import annotations
@@ -48,9 +60,12 @@ from evaluatorq.common.model_catalogue import (
 from evaluatorq.common.model_frontier import (
     INDICES,
     MIN_SEAT_INDEX,
+    PRICE_MIXES,
     X_AXES,
-    X_AXIS_SPECS,
+    AxisSpec,
+    CacheSource,
     Index,
+    PriceMix,
     ScoredModel,
     XAxis,
     check_axes,
@@ -58,9 +73,11 @@ from evaluatorq.common.model_frontier import (
     garden_from_cards,
     one_per_model,
     pareto_frontier,
+    parse_mix,
     placement,
     point_dominates,
     score_of,
+    x_axis_spec,
     x_of,
 )
 
@@ -78,7 +95,18 @@ class ParetoPoint(BaseModel):
     x: float = Field(description='The x value in its own unit (USD per 1M tokens, tokens/s or seconds).')
     pareto_score: float | None = Field(
         default=None,
-        description='Score per blended USD per 1M tokens, higher is better. Set only when x is price.',
+        description="Score per blended USD per 1M tokens (under the result's mix), higher is better. Set only when x is price.",
+    )
+    cache_read_source: CacheSource | None = Field(
+        default=None,
+        description="Where the cache-read rate in `x` came from: 'host' (this host's card), 'artificial_analysis' (the "
+        "Artificial Analysis price on the same card, because the host lists none) or 'input' (no cache price on the "
+        'card, so reads bill at the input rate). None when x is not price or the mix has no cache-read share.',
+    )
+    cache_write_source: CacheSource | None = Field(
+        default=None,
+        description="'host' or 'input' (no cache-write price on the card). None when x is not price or the mix has no "
+        'cache-write share.',
     )
     on_frontier: bool
     dominated_by: str | None = Field(
@@ -89,6 +117,11 @@ class ParetoPoint(BaseModel):
     dominators: list[str] = Field(
         default_factory=list, description='Router ids of every plotted model that dominates this one, best x first.'
     )
+
+    @property
+    def price_fallback(self) -> bool:
+        """Whether `x` uses a cache rate that is not this host's own."""
+        return self.cache_read_source not in {None, 'host'} or self.cache_write_source not in {None, 'host'}
 
     def summary(self) -> dict[str, object]:
         """A flat, JSON-ready row: every model field and its blended `price`, then the point's own fields."""
@@ -112,6 +145,7 @@ class ParetoResult(BaseModel):
     index: str
     effort: str | None
     x: str
+    mix: PriceMix | None = Field(default=None, description='The price blend on the x axis. None when x is not price.')
     min_score: float | None = Field(
         default=None, description='The score floor: models below it are in `excluded`. None when there is no floor.'
     )
@@ -129,6 +163,16 @@ class ParetoResult(BaseModel):
         return [p for p in self.points if not p.on_frontier]
 
     @property
+    def x_spec(self) -> AxisSpec:
+        """The x axis's labels and direction, with the price blend named in the labels."""
+        return x_axis_spec(self.x, self.mix)
+
+    @property
+    def price_fallbacks(self) -> list[ParetoPoint]:
+        """Plotted points whose price uses a cache rate that is not their host's own."""
+        return [p for p in self.points if p.price_fallback]
+
+    @property
     def below_min_score(self) -> list[ExcludedModel]:
         """Excluded models that were left out only for scoring below `min_score`."""
         return [e for e in self.excluded if e.below_min_score]
@@ -140,10 +184,16 @@ def pareto(
     index: Index = 'intelligence',
     effort: str | None = None,
     x: XAxis = 'price',
+    mix: str | PriceMix = 'agentic',
     exclude_estimated: bool = False,
     min_score: float | None = MIN_SEAT_INDEX,
 ) -> ParetoResult:
     """Place each model on (`x`, `index`), mark the frontier and name what beats each dominated model.
+
+    On the price axis, `mix` sets the blend: `agentic` (the default, 7 cache
+    read : 2 fresh input : 1 output), `list` (3 input : 1 output, what preset
+    seating uses), a `READ:WRITE:FRESH:OUTPUT` ratio string, or a `PriceMix`.
+    It is ignored on the other axes.
 
     Models without a value on either axis, estimated scores when
     `exclude_estimated` is set, and models scoring below `min_score` on the chosen
@@ -158,13 +208,14 @@ def pareto(
     occurrence, so a repeated model never sits on the frontier twice.
 
     Raises:
-        ValueError: An unknown index or x axis, an effort with a domain index,
+        ValueError: An unknown index, x axis or mix, an effort with a domain index,
             or a `min_score` that is not a finite number.
     """
     check_axes(index=index, effort=effort, x=x)
     if min_score is not None and not math.isfinite(min_score):
         raise ValueError(f'min_score must be a finite number or None, got {min_score!r}')
-    spec = X_AXIS_SPECS[x]
+    price_mix = parse_mix(mix)
+    spec = x_axis_spec(x)
     plotted: list[tuple[ScoredModel, tuple[float, float]]] = []
     excluded: list[ExcludedModel] = []
     seen: set[str] = set()
@@ -172,7 +223,7 @@ def pareto(
         if model.router_id in seen:
             continue
         seen.add(model.router_id)
-        placed = placement(model, index=index, effort=effort, x=x, exclude_estimated=exclude_estimated)
+        placed = placement(model, index=index, effort=effort, x=x, exclude_estimated=exclude_estimated, mix=price_mix)
         if isinstance(placed, str):
             excluded.append(ExcludedModel(router_id=model.router_id, reason=placed))
         elif min_score is not None and placed[0] < min_score:
@@ -198,19 +249,30 @@ def pareto(
     for (model, (score, xv)), beaters in zip(plotted, beaten_by, strict=True):
         # Every dominated model is dominated by a frontier one (dominance is transitive), so this is set whenever beaters is.
         nearest = next((b for b, _ in beaters if id(b) in frontier_ids), None)
+        read_source, write_source = price_mix.sources(model) if x == 'price' else (None, None)
         points.append(
             ParetoPoint(
                 model=model,
                 score=score,
                 x=xv,
                 pareto_score=score / xv if x == 'price' and xv > 0 else None,
+                cache_read_source=read_source,
+                cache_write_source=write_source,
                 on_frontier=not beaters,
                 dominated_by=nearest.router_id if nearest else None,
                 dominators=[b.router_id for b, _ in beaters],
             )
         )
     points.sort(key=lambda p: (not p.on_frontier, -p.score, p.model.router_id))
-    return ParetoResult(index=index, effort=effort, x=x, min_score=min_score, points=points, excluded=excluded)
+    return ParetoResult(
+        index=index,
+        effort=effort,
+        x=x,
+        mix=price_mix if x == 'price' else None,
+        min_score=min_score,
+        points=points,
+        excluded=excluded,
+    )
 
 
 def dominated_by(
@@ -220,6 +282,7 @@ def dominated_by(
     index: Index = 'intelligence',
     effort: str | None = None,
     x: XAxis = 'price',
+    mix: str | PriceMix = 'agentic',
     exclude_estimated: bool = False,
 ) -> ScoredModel | None:
     """The nearest frontier model that dominates `model`, or None when nothing does.
@@ -230,7 +293,9 @@ def dominated_by(
     """
     pool = {m.router_id: m for m in models}
     pool[model.router_id] = model
-    result = pareto(pool.values(), index=index, effort=effort, x=x, exclude_estimated=exclude_estimated, min_score=None)
+    result = pareto(
+        pool.values(), index=index, effort=effort, x=x, mix=mix, exclude_estimated=exclude_estimated, min_score=None
+    )
     point = next((p for p in result.points if p.model.router_id == model.router_id), None)
     return pool[point.dominated_by] if point is not None and point.dominated_by else None
 
@@ -283,6 +348,7 @@ def find_model(models: Sequence[ScoredModel], *, model_id: str) -> ScoredModel |
 __all__ = [
     'INDICES',
     'MIN_SEAT_INDEX',
+    'PRICE_MIXES',
     'X_AXES',
     'CallCost',
     'ExcludedModel',
@@ -291,6 +357,7 @@ __all__ = [
     'ModelInfo',
     'ParetoPoint',
     'ParetoResult',
+    'PriceMix',
     'Pricing',
     'ScoredModel',
     'XAxis',
@@ -305,6 +372,7 @@ __all__ = [
     'one_per_model',
     'pareto',
     'pareto_frontier',
+    'parse_mix',
     'price_usage',
     'register_model',
     'score_of',
