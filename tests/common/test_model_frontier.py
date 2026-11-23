@@ -414,12 +414,22 @@ class TestSuperseded:
 class TestAaFills:
     def test_fills_only_the_missing_default_rung_and_never_overrides_live(self):
         router_id = next(iter(AA_FILLS))
-        effort = AA_FILLS[router_id]['effort']
-        empty = graded(router_id, effort, {})
-        measured = graded(router_id, effort, {effort: 10.0})
+        effort, version = AA_FILLS[router_id]['effort'], AA_FILLS[router_id]['index_version']
+        empty = graded(router_id, effort, {}).model_copy(update={'index_version': version})
+        measured = graded(router_id, effort, {effort: 10.0}).model_copy(update={'index_version': version})
 
         assert with_aa_fills({router_id: empty})[router_id].default_index == AA_FILLS[router_id]['index']
         assert with_aa_fills({router_id: measured})[router_id].default_index == 10.0
+
+    def test_a_fill_never_lands_on_a_card_of_another_index_version(self):
+        """A v4.3 fill on a v5 card would rank that model on the wrong scale."""
+        router_id = next(iter(AA_FILLS))
+        effort = AA_FILLS[router_id]['effort']
+        rescaled = graded(router_id, effort, {}).model_copy(update={'index_version': 'some-other-version'})
+
+        filled = with_aa_fills({router_id: rescaled})[router_id]
+        assert filled.effort_indices == {}
+        assert filled.default_index == rescaled.intelligence_index
 
     def test_a_fill_never_lands_on_a_rung_other_than_the_default(self):
         router_id = next(iter(AA_FILLS))
@@ -438,6 +448,15 @@ def _v2_card(v2: dict[str, Any]) -> dict[str, object]:
         'output_cost': 0.004,
         'metadata': {'autorouter': {'v2': v2}},
     }
+
+
+@pytest.mark.parametrize(('version', 'expected'), [('v5', 'v5'), (None, None), (5, None)])
+def test_a_card_carries_its_index_version(version, expected):
+    """The version is what keeps an AA_FILLS value off a card scored on another scale."""
+    model = scored_model_from_card(_v2_card({'intelligence_index': 40.0, 'aa_index_version': version}))
+
+    assert model is not None
+    assert model.index_version == expected
 
 
 class TestEffortCapture:

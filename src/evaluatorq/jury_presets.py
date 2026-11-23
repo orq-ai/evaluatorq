@@ -277,9 +277,10 @@ BALANCED_TRIO = JuryPreset(
     # Same lineage as the seat it backs, on purpose: a retirement is usually a
     # version bump, and flash keeps the panel at three families where a
     # fourth-vendor reserve would quietly reshape it.
-    # Same weights on another host since 2026-11-23, so an outage at DeepSeek
-    # itself still leaves a route.
-    reserve_judges=('wafer/DeepSeek-V4.1-Flash-1017',),
+    # V4 Flash 0731 on GreenPT since 2026-11-23, so an outage at DeepSeek itself
+    # still leaves a route in the lineage: 22.8 on v5 (34.3 on v4.3) at
+    # $0.14/$0.35. Wafer's V4.1 Flash 1017 has no card in the CI workspace.
+    reserve_judges=('greenpt/deepseek-v4-flash-0731',),
     use_when='Default subjective eval. Three families, three error surfaces.',
     estimated_cost_per_1k=3.75,
 )
@@ -309,13 +310,15 @@ CHEAP_AGGREGATE = JuryPreset(
     # superseded by a newer version of itself (model_frontier.rank_cheapest_top).
     # test_cheap_aggregate_matches_the_live_derivation fails with a readable
     # diff when the live ranking moves; a change here is a deliberate edit.
-    # Ranked 2026-11-23 from the live catalogue: glm-5.3-flash 41.8,
-    # deepseek-v4.1-flash-1017 32.6 (on Particle, which NEVER_SEAT now refuses,
-    # so the DeepSeek seat is DeepSeek's own route), gemini-3.8-flash 30.1;
+    # Ranked 2026-11-23 on the v5 index (staging garden, ahead of its release):
+    # gemini-3.8-flash 30.1, deepseek-v4.1-flash-1017 28.6 (DeepSeek's own
+    # route; Particle's is refused by NEVER_SEAT), glm-5.3-flash 27.8;
     # mistral-large-4 26.1 is next.
     judges=(
-        # Default effort max; the live card has no ladder, so 41.8 is the AA
-        # API value for the same slug (AA_FILLS). PRICE HOLD: the card says
+        'google-ai/gemini-3.8-flash',
+        'deepseek/deepseek-flash',
+        # Default effort max with no ladder on the card, so it ranks on the
+        # headline (the v4.3 AA_FILLS value lands only on v4.3 cards). PRICE HOLD: the card says
         # $0.075/$0.25 per 1M ($0.119 blend), while judge-endpoint usage was
         # billed at $0.15/$0.50 ($0.2375 blend), twice the card. The live card
         # leads here and the estimate uses it; at the billed rate this seat
@@ -323,8 +326,6 @@ CHEAP_AGGREGATE = JuryPreset(
         # $3.83 instead of $3.59. Replace the registry rate the day Zai billing
         # is confirmed.
         'zai/glm-5.3-flash',
-        'deepseek/deepseek-flash',
-        'google-ai/gemini-3.8-flash',
     ),
     # Next-ranked family under the ceiling.
     reserve_judges=('mistral/mistral-large-4',),
@@ -345,11 +346,15 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
         # https://www.kimi.ai/blog/kimi-k3-1-pro)
         'wafer/Kimi-K3.1-Pro',
         # Reseated 2026-11-10 from glm-5.2 (33.7, $2.15 blend), which
-        # SUPERSEDED already retired: 41.8 at max on the card rate. Same
+        # SUPERSEDED already retired: 41.8 on v4.3, 27.8 on v5. Same
         # billing hold as cheap-aggregate's seat.
         'zai/glm-5.3-flash',
     ),
-    reserve_judges=('greenpt/qwen3.6-35b-a3b',),
+    # Reseated 2026-11-23 from greenpt/qwen3.6-35b-a3b, which scores 7.6 on v5,
+    # under the floor: qwen-3.8-27b is 20.1 on v5 (33.7 on v4.3) at $0.99/$1.49.
+    # The cheapest Alibaba route over the floor is qwen3.5-27b at an estimated
+    # 11.2, a generation older and one rescale away from failing again.
+    reserve_judges=('cerebras/qwen-3.8-27b',),
     use_when='No dependence on a closed frontier vendor; migration path to self-hosting.',
     estimated_cost_per_1k=8.59,
 )
@@ -467,9 +472,9 @@ _UNSCORED = (
     '(2026-11-10), so there is nothing to rank it on. Review again once scored.'
 )
 _ALIBABA_RESERVE = (
-    "Alibaba only holds Portable's reserve, chosen for cost (greenpt/qwen3.6-35b-a3b, "
-    '$0.30/$1.80). This one is pricier per 1M or europe-pinned, so it is not a '
-    'cheaper reserve. Public catalogue 2026-11-10.'
+    "Alibaba only holds Portable's reserve (cerebras/qwen-3.8-27b, $0.99/$1.49 since "
+    '2026-11-23). This one is pricier per 1M, europe-pinned or older, so it is not a '
+    'better reserve. Public catalogue 2026-11-10.'
 )
 
 DOMINANCE_EXEMPTIONS: dict[str, str] = {}
@@ -500,16 +505,6 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'qwen3.8-flash': (
         'alibaba/qwen3.8-flash is europe-pinned and unscored in the live catalogue (2026-10-26), so it has no index to rank on and no non-EU route.'
     ),
-    'qwen-3.8-27b': (
-        "cerebras/qwen-3.8-27b scores 33.7 live but at $0.99/$1.49 per 1M; a reserve held for price, not strength, so it stays out. Revisit if Portable's reserve is ever chosen by pareto rather than by cost."
-    ),
-    'qwen3.8-flash-next': (
-        'tensorix/qwen/qwen3.8-flash-next is europe-pinned and unscored in the live catalogue (2026-10-26).'
-    ),
-    'qwen-mt-flash': _NOT_A_JUDGE,
-    'qwen-mt-lite': _NOT_A_JUDGE,
-    'qwen3-vl-flash-2025-10-15': _NOT_A_JUDGE,
-    'qwen3-vl-235b-a22b-instruct': _NOT_A_JUDGE,
     'qwen3.8-omni-flash': _NOT_A_JUDGE,
     'qwen3.5-2b': _NOT_A_JUDGE,
     'decision-model-preview': _NOT_A_JUDGE,
@@ -521,37 +516,18 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'voxtral-mini-tts-3-0': _NOT_A_JUDGE,
     'voxtral-small-transcribe-3': _NOT_A_JUDGE,
     'voxtral-small-transcribe-3-0': _NOT_A_JUDGE,
-    'qwen-plus-2025-12-01': _OLDER_GENERATION,
-    'qwen3.5-flash-2026-02-23': _OLDER_GENERATION,
-    'qwen3-30b-a3b-instruct-2507': _OLDER_GENERATION,
-    'qwen3.6-flash': _UNSCORED,
-    'qwen3.6-flash-2026-04-16': _UNSCORED,
     'qwen3.7-flash-2026-07-15': _UNSCORED,
-    'qwen3.6-27b': _ALIBABA_RESERVE,
-    'qwen3.6-plus-2026-04-02': _ALIBABA_RESERVE,
-    'qwen3.7-plus': _ALIBABA_RESERVE,
-    'qwen3.7-plus-2026-05-26': _ALIBABA_RESERVE,
-    'qwen3.7-max': _ALIBABA_RESERVE,
-    'qwen3.7-max-2026-05-20': _ALIBABA_RESERVE,
-    'qwen3.7-max-2026-06-08': _ALIBABA_RESERVE,
-    'qwen3.8-27b': _ALIBABA_RESERVE,
     'qwen3.8-27b-fp8': _ALIBABA_RESERVE,
-    'qwen3.8-2.4t-a95b': _ALIBABA_RESERVE,
-    'qwen3.8-max': _ALIBABA_RESERVE,
     'glm-4-32b-0414-128k': _OLDER_GENERATION,
     'glm-4.5-airx': _OLDER_GENERATION,
     'glm-4.5-x': _OLDER_GENERATION,
     'claude-fable-5-2': '$8/$40 per 1M on every host, no AA index on the public card and no card in /v2/models (2026-11-10). Five times the Opus 5.5 rate it would compete with; review for strong-jury once scored.',
     'claude-mythos-5-2': 'Same as claude-fable-5-2: $8/$40 per 1M, unscored (2026-11-10). Review for strong-jury once scored.',
-    'kimi-k2.8-preview': _UNSCORED,
-    'kimi-k3.1-pro-highspeed': 'A faster K3.1 Pro at $4/$20 per 1M, unscored (2026-11-10). If K3.1 Pro is seated, this is its premium variant, not a separate decision.',
     'gemini-nano-banana-2.1': _NOT_A_JUDGE,
     'gemma-4-12b': 'munito EU host only, public AA index 9.4, under the 15.0 floor of the time and the 10.0 one since 2026-11-23. 2026-11-10.',
     'qwen3.8-max-0902': "Public AA index 45.4 at $1.65/$4.95 per 1M, europe/us/apac. Alibaba holds only Portable's cost-chosen reserve ($0.30/$1.80), so a stronger, pricier Qwen is not a reserve upgrade; it would be a fourth-family judge, which no panel has a seat for. 2026-11-10.",
     'glm-5.3-fast': 'Public AA index 44.8 at $2.10/$6.60 per 1M against the seated glm-5.3-flash at $0.075/$0.25 per 1M on the card: stronger, far pricier. 2026-11-10.',
     'glm-5.3-flashx': 'Same 41.8 public index as the seated glm-5.3-flash at $0.37/$1.25 against $0.075/$0.25: same score, five times the price. 2026-11-10.',
-    'deepseek-v4.1-flash-fast': 'Baseten fast variant at $0.60/$2.40 per 1M, public AA index 39.5; twice deepseek-v4.1-flash and six times the deepseek-flash reserve ($0.14/$0.28) at a 3:1 blend. 2026-11-10.',
-    'kimi-k3-fast': 'The same K3 weights on Fireworks at $4.50/$22.50 per 1M against Baseten $3/$15: same score, pricier. 2026-11-10.',
     'gemini-4-argon': "Public AA index 52.6 at $2/$10 per 1M, against strong-jury's gemini-3.8-flash at a $1.50 3:1 blend. No card in the project-scoped /v2/models, so no default-effort rung to rank on (2026-11-10). The strongest unreviewed candidate in the catalogue: rank it for strong-jury once the drift suite has a workspace key.",
     'gemini-4-carbon': 'Google lists Gemini 4 Carbon as a stable Gemini 4 reasoning model, but the live catalogue has no scored card, so it cannot be ranked against the seated Gemini 3.8 judge. Re-review when the card has an Artificial Analysis score (verified 2026-11-16: https://ai.google.dev/gemini-api/docs/models/gemini-4-carbon).',
     'gemini-4-hydrogen': 'Google lists Gemini 4 Hydrogen as a stable Gemini 4 model, but the live catalogue has no scored card, so it cannot be ranked against the seated Gemini 3.8 judge. Re-review when the card has an Artificial Analysis score (verified 2026-11-16: https://ai.google.dev/gemini-api/docs/models/gemini-4-hydrogen).',

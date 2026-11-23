@@ -91,6 +91,9 @@ class ScoredModel(BaseModel):
     # False means the workspace has the model switched off: listed, scored,
     # not servable.
     enabled: bool | None = None
+    # The card's `aa_index_version` (v4.3, v5). Scores from different versions
+    # are on different scales, so an AA_FILLS value lands only on its own one.
+    index_version: str | None = None
 
     @property
     def price(self) -> float:
@@ -428,6 +431,7 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
     effort_parameter, default_effort = _catalogue_effort(card)
     region = metadata.get('region')
     enabled = card.get('enabled')
+    version = v2.get('aa_index_version') if isinstance(v2, dict) else None
     return ScoredModel(
         router_id=f'{card["provider"]}/{card["model_id"]}',
         intelligence_index=headline,
@@ -440,6 +444,7 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
         effort_parameter=effort_parameter,
         default_effort=default_effort,
         enabled=enabled if isinstance(enabled, bool) else None,
+        index_version=version if isinstance(version, str) else None,
     )
 
 
@@ -622,10 +627,14 @@ MANUAL_MODEL_CARDS: dict[str, dict[str, Any]] = {
 # catalogue default; the live ladder wins whenever it has the rung. Fill
 # nothing from another rung: DeepSeek flash and pro default to high or medium
 # and AA measures only max and none, so they rank on their headline index.
+# Fill nothing across index versions either: a v4.3 value on a v5 card ranks
+# that model about ten points above its peers (glm-5.3-flash is 41.8 on v4.3
+# and 27.8 on v5).
 AA_FILLS: dict[str, dict[str, Any]] = {
     'zai/glm-5.3-flash': {
         'effort': 'max',
         'index': 41.8,
+        'index_version': 'v4.3',
         'source': (
             'AA API data/llms/models slug glm-5-3-flash, 2026-10-26, index v4.3 (the card names the same slug). '
             'The AA entry carries no rung label; the max rung was confirmed on the AA page by the user.'
@@ -634,17 +643,23 @@ AA_FILLS: dict[str, dict[str, Any]] = {
     'tencent/glm-5.3-flash': {
         'effort': 'max',
         'index': 41.8,
+        'index_version': 'v4.3',
         'source': 'same AA entry as zai/glm-5.3-flash (host differs, weights are the same), 2026-10-26.',
     },
 }
 
 
 def with_aa_fills(garden: dict[str, ScoredModel]) -> dict[str, ScoredModel]:
-    """The garden with AA_FILLS applied where the live ladder lacks the filled rung."""
+    """The garden with AA_FILLS applied where the live ladder lacks the filled rung, on the fill's index version."""
     filled = {}
     for router_id, fill in AA_FILLS.items():
         model = garden.get(router_id)
-        if model is not None and model.default_effort == fill['effort'] and fill['effort'] not in model.effort_indices:
+        if (
+            model is not None
+            and model.default_effort == fill['effort']
+            and fill['effort'] not in model.effort_indices
+            and model.index_version == fill['index_version']
+        ):
             filled[router_id] = model.model_copy(
                 update={'effort_indices': {**model.effort_indices, fill['effort']: fill['index']}}
             )
