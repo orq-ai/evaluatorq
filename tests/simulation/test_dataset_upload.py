@@ -81,7 +81,7 @@ class _FakeDatasets:
         self.appended: tuple[str, list[Any]] | None = None
 
     def create(self, *, display_name: str, path: str) -> Any:
-        # Mirrors the orq-ai-sdk >= 4.16 signature; 4.14 and 4.15 take one `request=` dict.
+        # Mirrors the orq-ai-sdk >= 4.16 signature; 4.15 takes one `request=` dict.
         self.created = {'display_name': display_name, 'path': path}
         return type('DS', (), {'id': 'ds_new'})()
 
@@ -147,7 +147,7 @@ def test_simulate_requires_exactly_one_source(args: list[str]) -> None:
 
 class _LegacyDatasets(_FakeDatasets):
     def create(self, *, request: dict[str, Any]) -> Any:  # ty: ignore[incompatible-method-override]
-        # The orq-ai-sdk 4.14 and 4.15 signature.
+        # The orq-ai-sdk 4.15 signature.
         self.created = request
         return type('DS', (), {'id': 'ds_legacy'})()
 
@@ -182,5 +182,4 @@ def test_installed_sdk_exposes_the_signature_the_upload_reads() -> None:
     orq_ai_sdk = pytest.importorskip('orq_ai_sdk')
     datasets = orq_ai_sdk.Orq(api_key='k').datasets
     parameters = inspect.signature(datasets.create).parameters
-    assert 'display_name' in parameters
-    assert 'request' not in parameters
+    assert ('display_name' in parameters) != ('request' in parameters)

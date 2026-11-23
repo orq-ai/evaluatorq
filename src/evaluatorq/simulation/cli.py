@@ -2102,7 +2102,7 @@ def validate_dataset(
 def _create_orq_dataset(datasets: Any, *, display_name: str, path: str) -> Any:
     """Create an Orq dataset on any supported orq-ai-sdk.
 
-    4.16 and later take ``display_name`` and ``path`` keywords; 4.14 and 4.15 take
+    4.16 and later take ``display_name`` and ``path`` keywords; 4.15 takes
     one ``request`` dict. Read off the signature rather than catching the
     ``TypeError``, which would also swallow a real error from the call. Only a
     visible ``request`` parameter selects the old form, so a signature hidden
