@@ -9,8 +9,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
-from evaluatorq.common.llm_client import as_llm_client
+from evaluatorq.common.llm_client import LLMConfigurationError, as_llm_client
 from evaluatorq.common.messages import pair_tool_rows, tool_call_text
+from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
@@ -76,7 +77,8 @@ class RunSinks:
     messages: list[Message] = field(default_factory=list)
     turn_metrics: list[TurnMetrics] = field(default_factory=list)
     token_usage: TokenUsage = field(default_factory=TokenUsage)
-    target_token_usage: TokenUsage = field(default_factory=TokenUsage)
+    # None until the target reports usage on a turn.
+    target_token_usage: TokenUsage | None = None
     token_usage_known: bool = True
     criteria_verified: bool | None = None
     criteria_results: dict[str, bool] | None = None
@@ -90,6 +92,18 @@ class RunSinks:
     # NEVER set this from the runner's own ``model`` — that is the
     # user-simulator/judge model, not the target's.
     target_model: str | None = None
+    # Target calls that returned no usage at all.
+    target_unreported_calls: int = 0
+
+    def recorded_target_usage(self) -> TokenUsage | None:
+        """The target's usage with each unreported call counted as a call with no price.
+
+        That makes a total over some turns read as a lower bound, ``(N of M calls)``.
+        ``None`` while no call has reported usage: unknown, not zero.
+        """
+        if self.target_token_usage is None or not self.target_unreported_calls:
+            return self.target_token_usage
+        return self.target_token_usage + TokenUsage(calls=self.target_unreported_calls)
 
 
 def _refresh_token_usage(sinks: RunSinks, user_simulator: UserSimulatorAgent, judge: JudgeAgent) -> None:
@@ -607,6 +621,7 @@ def _partial_result(
         turn_metrics=sinks.turn_metrics,
         token_usage=sinks.token_usage,
         token_usage_known=sinks.token_usage_known,
+        target_token_usage=sinks.recorded_target_usage(),
         criteria_results=sinks.criteria_results,
         criteria_verified=sinks.criteria_verified,
         metadata=metadata,
@@ -627,6 +642,7 @@ def _max_turns_result(
     *,
     criteria_verified: bool | None = None,
     token_usage_known: bool = True,
+    target_token_usage: TokenUsage | None = None,
     audited_ids: frozenset[str] | None = None,
     evidence: Mapping[str, str] | None = None,
 ) -> SimulationResult:
@@ -646,6 +662,7 @@ def _max_turns_result(
         turn_metrics=turn_metrics,
         token_usage=token_usage,
         token_usage_known=token_usage_known,
+        target_token_usage=target_token_usage,
         criteria_results=criteria_results,
         criteria_verified=criteria_verified,
         metadata=metadata,
@@ -878,6 +895,8 @@ class SimulationRunner:
                             },
                         )
                         raise
+        except LLMConfigurationError:
+            raise
         except Exception as e:
             logger.error('SimulationRunner.run() failed: %s', e, exc_info=True)
             error_msg = str(e)
@@ -1015,8 +1034,14 @@ class SimulationRunner:
             # response. Its usage belongs in the run just like a success.
             agent_response_usage = call.response.usage
             agent_response_model = call.response.model
-            if agent_response_usage is not None:
-                sinks.target_token_usage = sinks.target_token_usage + agent_response_usage
+            if agent_response_usage is None:
+                sinks.target_unreported_calls += 1
+            else:
+                # One respond() is one target call; a target that leaves `calls` at 0
+                # would otherwise hide its turns from the coverage count.
+                if agent_response_usage.calls == 0:
+                    agent_response_usage = agent_response_usage.with_calls(1)
+                sinks.target_token_usage = sum_structured_usage([sinks.target_token_usage, agent_response_usage])
                 sinks.token_usage = sinks.token_usage + agent_response_usage
             # Capture the first non-None model the target reports; it
             # should be stable across turns for a given target. Never the
@@ -1132,6 +1157,7 @@ class SimulationRunner:
             turn_metrics=sinks.turn_metrics,
             token_usage=sinks.token_usage,
             token_usage_known=sinks.token_usage_known,
+            target_token_usage=sinks.recorded_target_usage(),
             criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,
             criteria_verified=criteria_tracker.verified,
             metadata=judge_metadata,
@@ -1247,6 +1273,7 @@ class SimulationRunner:
             target_model=sinks.target_model,
             criteria_verified=criteria_tracker.verified,
             token_usage_known=sinks.token_usage_known,
+            target_token_usage=sinks.recorded_target_usage(),
             audited_ids=criteria_tracker.audited_ids,
             evidence=criteria_tracker.evidence,
         )
@@ -1264,13 +1291,28 @@ class SimulationRunner:
             raise ValueError(f'max_concurrency must be >= 1, got {max_concurrency}')
         semaphore = asyncio.Semaphore(max_concurrency)
 
+        # A configuration error is the same for every datapoint. The first one stops the batch: rows still running
+        # are cancelled and rows waiting for a slot never start, so no further conversation is paid for.
+        configuration_errors: list[LLMConfigurationError] = []
+        tasks: list[asyncio.Task[SimulationResult]] = []
+
         async def run_single(dp: SimulationDatapoint) -> SimulationResult:
             async with semaphore:
                 await await_maybe(self._hooks.on_datapoint_start(dp))
-                return await self._run_with_timeout(dp, max_turns, timeout_per_simulation)
+                try:
+                    return await self._run_with_timeout(dp, max_turns, timeout_per_simulation)
+                except LLMConfigurationError as error:
+                    configuration_errors.append(error)
+                    current = asyncio.current_task()
+                    for task in tasks:
+                        if task is not current and not task.done():
+                            task.cancel()
+                    raise
 
-        tasks = [run_single(dp) for dp in datapoints]
+        tasks.extend(asyncio.create_task(run_single(dp)) for dp in datapoints)
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        if configuration_errors:
+            raise configuration_errors[0]
 
         final_results: list[SimulationResult] = []
         for i, result in enumerate(results):

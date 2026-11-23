@@ -362,12 +362,22 @@ def load_models_sync(*, include_disabled: bool = False, all_hosts: bool = False)
 
 
 def find_model(models: Sequence[ScoredModel], *, model_id: str) -> ScoredModel | None:
-    """The model matching `model_id`: an exact `provider/model` id, else a bare id held by exactly one model."""
+    """The model matching `model_id`, or None when nothing or more than one model matches.
+
+    Tried in order, the first step with any match deciding: the exact router id;
+    the id after the provider (`qwen/qwen3-coder` for
+    `tensorix/qwen/qwen3-coder`); for an id without a `/`, the last path
+    segment (`qwen3-coder`). A step that matches more than one model is
+    ambiguous and returns None rather than falling through.
+    """
     exact = next((m for m in models if m.router_id == model_id), None)
-    if exact is not None or '/' in model_id:
+    if exact is not None:
         return exact
-    bare = [m for m in models if m.router_id.split('/', 1)[-1] == model_id]
-    return bare[0] if len(bare) == 1 else None
+    after_provider = [m for m in models if m.router_id.split('/', 1)[-1] == model_id]
+    if after_provider or '/' in model_id:
+        return after_provider[0] if len(after_provider) == 1 else None
+    last_segment = [m for m in models if m.router_id.rsplit('/', 1)[-1] == model_id]
+    return last_segment[0] if len(last_segment) == 1 else None
 
 
 __all__ = [

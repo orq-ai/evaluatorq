@@ -11,14 +11,17 @@ from __future__ import annotations
 
 import itertools
 import math
+from dataclasses import dataclass
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.common.reports import esc
+from evaluatorq.common.reports import coverage_qualifier, esc, fmt_cost
 from evaluatorq.common.reports.html_helpers import pct
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    from evaluatorq.contracts import Usage
 
 
 def short_model(model: str) -> str:
@@ -588,3 +591,87 @@ def meta_grid(items: list[tuple[str, str | None]]) -> str:
         for k, v in rows
     )
     return f'<div class="rk-meta-grid">{cells}</div>'
+
+
+TARGET_COST_UNKNOWN_TIP = (
+    "Unknown: this run did not record the target agent's own usage. Runs saved before target usage was "
+    'tracked, and targets that report no usage, show unknown rather than $0.'
+)
+
+
+@dataclass(frozen=True)
+class CostFigure:
+    """A cost total ready to display."""
+
+    value: str
+    """``fmt_cost`` of the total, or ``'unknown'``."""
+    qualifier: str = ''
+    """The coverage label of a lower bound, e.g. ``'(1 of 2 calls)'``; empty for a full total."""
+    tip: str = ''
+    """Tooltip explaining an unknown value or a lower bound; empty when there is nothing to explain."""
+
+    @property
+    def unknown(self) -> bool:
+        return self.value == 'unknown'
+
+
+def cost_figure(
+    usage: Usage | None, *, unknown_tip: str, missing: int = 0, total: int = 0, noun: str = 'conversations'
+) -> CostFigure:
+    """Display a cost total. It is unknown when *usage* is ``None`` or carries no cost.
+
+    A known total is a lower bound when some calls had no price (``cost_is_partial``)
+    or *missing* of the *total* items reported no usage at all; the qualifier names
+    the coverage in the same ``(N of M calls)`` words the reports use.
+    """
+    if usage is None:
+        return CostFigure(value='unknown', tip=unknown_tip)
+    if usage.total_cost is None:
+        return CostFigure(value='unknown', tip='Unknown: the provider reported tokens but no cost for these calls.')
+    qualifier = coverage_qualifier(
+        priced_calls=usage.priced_calls, calls=usage.calls, reported=total - missing, items=total, noun=noun
+    )
+    if not qualifier:
+        return CostFigure(value=fmt_cost(usage.total_cost))
+    return CostFigure(
+        value=fmt_cost(usage.total_cost),
+        qualifier=qualifier,
+        tip=f'Lower bound: the cost covers only {qualifier[1:-1]}.',
+    )
+
+
+def hero_cost_line(
+    total: Usage | None,
+    *,
+    target: Usage | None,
+    target_missing: int = 0,
+    items: int = 0,
+    noun: str = 'conversations',
+) -> str:
+    """The report header's spend line: the run's total cost next to the target agent's own cost.
+
+    The total covers every call the run made (simulated user or attacker, judges,
+    generation, summaries); the target cost is the agent under test alone, so a
+    cheap target judged by an expensive model no longer reads as expensive.
+    """
+
+    def item(label: str, *, figure: CostFigure, cls: str) -> str:
+        title = f' title="{esc(figure.tip)}"' if figure.tip else ''
+        unknown = ' report-hero-cost-value--unknown' if figure.unknown else ''
+        qual = f' <span class="report-hero-cost-qual">{esc(figure.qualifier)}</span>' if figure.qualifier else ''
+        return (
+            f'<span class="report-hero-cost-item {cls}"{title}>{esc(label)} '
+            f'<b class="report-hero-cost-value{unknown}">{esc(figure.value)}</b>{qual}</span>'
+        )
+
+    total_fig = cost_figure(total, unknown_tip='Unknown: this run recorded no cost.')
+    target_fig = cost_figure(
+        target, unknown_tip=TARGET_COST_UNKNOWN_TIP, missing=target_missing, total=items, noun=noun
+    )
+    return (
+        '<p class="report-hero-cost">'
+        f'{item("Total cost", figure=total_fig, cls="report-hero-cost-total")}'
+        '<span class="report-hero-cost-sep" aria-hidden="true">·</span>'
+        f'{item("Target cost", figure=target_fig, cls="report-hero-cost-target")}'
+        '</p>'
+    )

@@ -47,13 +47,12 @@ from pydantic import BaseModel, Field, model_validator
 
 from evaluatorq.common.llm_client import orq_base_url
 from evaluatorq.common.model_catalogue import (
+    _card_rates,
     _entry_metadata,
     _finite_nonneg,
     _parse_default_reasoning_effort,
-    _parse_pricing,
     _parse_reasoning_efforts,
     _reasoning_effort_config,
-    _usd_price,
     model_cards,
 )
 
@@ -434,7 +433,9 @@ def check_axes(*, index: str, effort: str | None, x: str) -> None:
     if x not in X_AXIS_SPECS:
         raise ValueError(f'unknown x axis {x!r}; choose one of {", ".join(X_AXES)}')
     if effort is not None and index != 'intelligence':
-        raise ValueError('domain indices exist only at the default reasoning effort: pass effort=None')
+        raise ValueError(
+            'domain indices exist only at the one effort Artificial Analysis benchmarked: pass effort=None'
+        )
 
 
 def score_of(model: ScoredModel, *, index: Index = 'intelligence', effort: str | None = None) -> float | None:
@@ -539,11 +540,14 @@ def available_efforts(models: Iterable[ScoredModel]) -> list[str]:
 
 # Below this index nothing is recommended anywhere: the tier is noise, and a
 # cheap seat filled from it makes a pool look complete while lowering what the
-# user gets. The value sits under every seat a reviewer has accepted (Claude
-# Haiku 4.5 at 23.7 is the platform's single-judge baseline) and above the band
-# it exists to exclude, which on the 2026-08-25 garden is Llama-3.3-70B at 9.4,
-# the 4o generation at 6.9 to 11.2, qwen3-coder at 13.6 and gpt-oss-20b at 14.9.
-MIN_SEAT_INDEX = 15.0
+# user gets. Set at 15.0 on the 2026-08-25 garden, where it sat under every
+# accepted seat (Claude Haiku 4.5 at 23.7) and above the band it excluded
+# (Llama-3.3-70B 9.4, the 4o generation 6.9 to 11.2, gpt-oss-20b 14.9).
+# Lowered to 10.0 on 2026-11-23 when the garden's scores were rescaled
+# downwards (Gemini 3.8 Flash 39.8 to 30.1, Mistral Large 4 38.4 to 26.1), so
+# accepted seats such as azure/eu.gpt-5.6-luna (13.0) stay above it. User
+# decision 2026-11-23.
+MIN_SEAT_INDEX = 10.0
 
 # A contributor listing (Meta's Muse Spark Contributor) is the same model as its
 # standard listing at a fraction of the price, paid for by letting the vendor
@@ -565,6 +569,16 @@ NEVER_SEAT: dict[str, str] = {
         'Benchmark-inflated relative to observed quality: scores beside Claude '
         'Haiku 4.5 on the index and does not deliver beside it. Not to be '
         'recommended at any price tier.'
+    ),
+    'particle/': (
+        'Particle (particle.ai) hosts DeepSeek V4.1 Flash 1017 beside its own '
+        'Particle-1 LoRA fine-tune of it, and does not say whether the hosted '
+        'weights are stock or quantized. The workspace route bills $0.15/$1.30 '
+        'per 1M, which matches none of the rates Particle publishes ($0.25/$1.00 '
+        'peak, $0.125/$0.50 off-peak). DeepSeek serves the same model itself. '
+        'User decision 2026-11-23; revisit if Particle documents its weights. '
+        '(checked 2026-11-23: https://docs.particle.ai/models.md, '
+        'https://docs.particle.ai/usage-billing.md)'
     ),
 }
 
@@ -875,12 +889,11 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
     autorouter = metadata.get('autorouter')
     v2 = (autorouter.get('v2') if isinstance(autorouter, dict) else None) or {}
     index = v2.get('intelligence_index') if isinstance(v2, dict) else None
-    input_cost, output_cost = _usd_price(card, 'input'), _usd_price(card, 'output')
+    # The same rates `cost_of` bills with, time-of-day averaging included, so the chart and a run's cost agree.
+    input_cost, output_cost, pricing = _card_rates(card)
     headline = _score(index)
     if headline is None or input_cost is None or output_cost is None:
         return None
-    # Read through the same parser `cost_of` bills with, so the chart and a run's cost use one rate.
-    pricing = _parse_pricing(str(card['provider']), str(card['model_id']), metadata)
     aa_pricing = v2.get('aa_pricing') if isinstance(v2, dict) else None
     aa_cache_read = (
         _finite_nonneg(aa_pricing.get('price_1m_cache_hit_tokens')) if isinstance(aa_pricing, dict) else None
@@ -1076,6 +1089,14 @@ MANUAL_MODEL_CARDS: dict[str, dict[str, Any]] = {
         # index version from the v4.3 garden.
         'headline_effort': 'max',
         'intelligence_index': 51.0,
+    },
+    'wafer/Kimi-K3.1-Pro': {
+        # Live card absent from the unit fixture; retained as a dated fallback
+        # for the reviewed Kimi K3.1 Pro route and rates, 2026-11-23.
+        'input_price': 1.00,  # live catalogue card, 2026-11-23
+        'output_price': 13.00,  # live catalogue card, 2026-11-23
+        'region': 'us',
+        'intelligence_index': 46.5,
     },
 }
 

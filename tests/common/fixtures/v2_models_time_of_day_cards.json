@@ -1,0 +1,56 @@
+[
+  {
+    "model_id": "deepseek-v4-pro",
+    "provider": "deepseek",
+    "model_developer": "deepseek",
+    "input_cost": 0.000435,
+    "output_cost": 0.00087,
+    "input_currency": "",
+    "output_currency": "",
+    "metadata": {
+      "pricing": {
+        "variants": [
+          {
+            "when": "request_unix >= 1786896000"
+          },
+          {
+            "when": "request_unix >= 1786896000 && ((request_unix / 86400 + 3) % 7 < 5) && ((request_unix % 86400 >= 3600 && request_unix % 86400 < 14400) || (request_unix % 86400 >= 21600 && request_unix % 86400 < 36000))"
+          }
+        ]
+      },
+      "million_tokens_input_cost": 0.435,
+      "million_tokens_output_cost": 0.87,
+      "million_tokens_cache_read_cost": 0.003625
+    }
+  },
+  {
+    "model_id": "deepseek-flash",
+    "provider": "deepseek",
+    "model_developer": "deepseek",
+    "input_cost": 0.00014,
+    "output_cost": 0.00028,
+    "input_currency": "",
+    "output_currency": "",
+    "metadata": {
+      "pricing": {
+        "variants": [
+          {
+            "when": "request_unix >= 1786896000"
+          },
+          {
+            "when": "request_unix >= 1786896000 && ((request_unix % 86400 >= 3600 && request_unix % 86400 < 14400) || (request_unix % 86400 >= 21600 && request_unix % 86400 < 36000))"
+          },
+          {
+            "when": "request_unix >= 1789012800"
+          },
+          {
+            "when": "request_unix >= 1789012800 && ((request_unix / 86400 + 3) % 7 < 5) && ((request_unix % 86400 >= 3600 && request_unix % 86400 < 14400) || (request_unix % 86400 >= 21600 && request_unix % 86400 < 36000))"
+          }
+        ]
+      },
+      "million_tokens_input_cost": 0.14,
+      "million_tokens_output_cost": 0.28,
+      "million_tokens_cache_read_cost": 0.0028
+    }
+  }
+]

@@ -150,7 +150,9 @@ def _filters_html(q: dict[str, str], st: _State) -> str:
             'Reasoning level',
             [('', 'Default level'), *((e, e) for e in st.efforts)],
             st.effort,
-            disabled='' if st.effort_allowed else 'Domain indices exist only at the default effort',
+            disabled=''
+            if st.effort_allowed
+            else 'Domain indices exist only at the one effort Artificial Analysis benchmarked',
         )
         + _select('x', 'X axis', [(v, X_AXIS_SPECS[v].short_label) for v in X_AXES], st.x)
         + _select(
@@ -159,7 +161,7 @@ def _filters_html(q: dict[str, str], st: _State) -> str:
             mix_options,
             st.mix.name or st.mix.ratio,
             disabled='The mix applies only to the price axis' if st.x != 'price' else '',
-            title='How the price axis blends token prices, as cache read : fresh input : output. Add '
+            title='How the price axis blends token prices, as cache read : cache write : fresh input : output. Add '
             '?mix=READ:WRITE:FRESH:OUTPUT to the address for your own ratio.',
         )
         + _select('developer', 'Developer', [('', 'All developers'), *((v, v) for v in st.vendors)], st.developer)
@@ -597,7 +599,8 @@ async def _load(req: Request, *, include_disabled: bool) -> list[ScoredModel] | 
 
 def _intro(x_label: str) -> str:
     return (
-        '<p class="models-intro">Each dot is one model, at its developer\'s listing or else the cheapest host. The '
+        '<p class="models-intro">Each dot is one model, at its developer\'s own listing when there is one, else at the cheapest '
+        'listing, preferring one without a region. The '
         f'orange line joins the models no other model beats on both score and {esc(x_label)}; every other row names '
         'the model that does, and by how much.</p>'
     )

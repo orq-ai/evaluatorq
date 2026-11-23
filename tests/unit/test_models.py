@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from typing import Any, get_args
 
 import pytest
@@ -239,7 +240,7 @@ class TestPareto:
         assert result.excluded[0].router_id == 'b/mid'
 
     def test_domain_index_refuses_an_effort(self) -> None:
-        with pytest.raises(ValueError, match='default reasoning effort'):
+        with pytest.raises(ValueError, match='one effort Artificial Analysis benchmarked'):
             pareto([MID], index='legal', effort='high')
 
     def test_unknown_axis_is_refused(self) -> None:
@@ -256,11 +257,11 @@ class TestPareto:
     def test_default_floor_excludes_low_scorers_with_the_reason(self) -> None:
         junk = model('z/junk', 2.7, 0.05, 0.05)
         result = pareto([STRONG, MID, CHEAP, junk])
-        assert result.min_score == model_frontier.MIN_SEAT_INDEX == 15.0
+        assert result.min_score == model_frontier.MIN_SEAT_INDEX == 10.0
         assert [p.model.router_id for p in result.frontier] == ['a/strong', 'b/mid', 'c/cheap']
         [gone] = result.excluded
         assert gone.router_id == 'z/junk'
-        assert gone.reason == 'score 2.7 is below min_score 15'
+        assert gone.reason == 'score 2.7 is below min_score 10'
         assert gone.below_min_score is True
         assert result.below_min_score == [gone]
 
@@ -275,7 +276,7 @@ class TestPareto:
         strong_legal = model('b/sl', 10.0, 1.0, 1.0, category_indices={'legal': 30.0})
         result = pareto([weak_legal, strong_legal], index='legal')
         assert [p.model.router_id for p in result.points] == ['b/sl']
-        assert result.excluded[0].reason == 'score 9 is below min_score 15'
+        assert result.excluded[0].reason == 'score 9 is below min_score 10'
 
     def test_missing_axis_reason_wins_over_the_floor(self) -> None:
         free_junk = model('z/free', 2.0, 0.0, 0.0)
@@ -537,6 +538,23 @@ class TestFindModel:
         assert find_model(pool, model_id='mid') is None  # two hosts share the bare id
         assert find_model(pool, model_id='nope') is None
 
+    def test_three_part_router_id(self) -> None:
+        coder = model('tensorix/qwen/qwen3-coder-30b-a3b-instruct', 9.6, 0.05, 0.2)
+        pool = [MID, coder, CHEAP]
+        assert find_model(pool, model_id='tensorix/qwen/qwen3-coder-30b-a3b-instruct') == coder
+        assert find_model(pool, model_id='qwen/qwen3-coder-30b-a3b-instruct') == coder
+        assert find_model(pool, model_id='qwen3-coder-30b-a3b-instruct') == coder
+
+    def test_ambiguous_short_ids_are_refused(self) -> None:
+        a = model('tensorix/qwen/qwen3-coder', 9.6, 0.05, 0.2)
+        b = model('other/qwen/qwen3-coder', 9.6, 0.06, 0.2)
+        c = model('deepinfra/qwen3-coder', 9.6, 0.07, 0.2)
+        assert find_model([a, b], model_id='qwen/qwen3-coder') is None
+        assert find_model([a, b], model_id='qwen3-coder') is None
+        # The id after the provider decides before the last segment is tried.
+        assert find_model([a, c], model_id='qwen3-coder') == c
+        assert find_model([a, c], model_id='qwen/qwen3-coder') == a
+
 
 @pytest.fixture
 def fake_catalogue(monkeypatch: pytest.MonkeyPatch) -> list[ScoredModel]:
@@ -550,9 +568,12 @@ def fake_catalogue(monkeypatch: pytest.MonkeyPatch) -> list[ScoredModel]:
     return pool
 
 
+_ANSI = re.compile(r'\x1b\[[0-9;]*m')
+
+
 def _flat(output: str) -> str:
-    """Rich wraps a usage error inside a box; read it as one line."""
-    return ' '.join(output.replace('│', ' ').split())
+    """Rich wraps a usage error inside a box and colours it on CI; read it as one plain line."""
+    return ' '.join(_ANSI.sub('', output).replace('│', ' ').split())
 
 
 class TestCli:
@@ -568,7 +589,7 @@ class TestCli:
         assert result.exit_code == 0, result.output
         payload = json.loads(result.stdout)
         assert [p['router_id'] for p in payload['points']] == ['a/strong', 'b/mid', 'c/cheap']
-        assert payload['min_score'] == 15.0
+        assert payload['min_score'] == 10.0
         assert payload['excluded'] == [{'router_id': 'e/free', 'reason': 'free (no list price)', 'below_min_score': False, 'contributor': False}]
 
     def test_min_score_hides_and_zero_shows(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -582,13 +603,13 @@ class TestCli:
         table = self._run()
         assert table.exit_code == 0, table.output
         assert 'z/junk' not in table.stdout
-        assert '1 model(s) hidden for scoring below --min-score 15. Pass --min-score 0 to show every model.' in _flat(table.stdout)
+        assert '1 model(s) hidden for scoring below --min-score 10. Pass --min-score 0 to show every model.' in _flat(table.stdout)
         assert 'not compared' not in table.stdout
         shown = json.loads(self._run('--min-score', '0', '--json').stdout)
         assert 'z/junk' in [p['router_id'] for p in shown['points']]
         assert shown['excluded'] == []
         named = self._run('--model', 'junk')
-        assert 'z/junk is not plotted: score 2.7 is below min_score 15.' in _flat(named.output)
+        assert 'z/junk is not plotted: score 2.7 is below min_score 10.' in _flat(named.output)
 
     def test_negative_min_score_is_a_usage_error(self, fake_catalogue: list[ScoredModel]) -> None:
         assert self._run('--min-score', '-1').exit_code == 2
@@ -860,15 +881,15 @@ class TestDashboardPage:
         fake_catalogue.append(model('z/junk', 2.7, 0.05, 0.05))
         monkeypatch.setattr(models_views, 'load_models', fake_load)
         text = client.get('/models').text
-        assert 'name="min_score" min="0" step="any" value="15"' in text
+        assert 'name="min_score" min="0" step="any" value="10"' in text
         assert '<span>3 on the frontier</span><span>1 dominated</span>' in text
         assert '2 not plotted' in text
-        assert '1 below score 15</b><br>z/junk' in text
+        assert '1 below score 10</b><br>z/junk' in text
         text = client.get('/models?min_score=0').text
         assert 'value="0"' in text
         assert '<span>4 on the frontier</span><span>1 dominated</span>' in text
         assert '1 not plotted' in text
-        assert 'value="15"' in client.get('/models?min_score=nope').text
+        assert 'value="10"' in client.get('/models?min_score=nope').text
 
     def test_index_dropdown_lists_only_indices_a_model_has(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]

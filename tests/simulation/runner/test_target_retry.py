@@ -395,7 +395,9 @@ async def test_outer_timeout_keeps_total_usage_beyond_completed_turns() -> None:
     result = await runner._run_with_timeout(datapoint, max_turns=5, timeout_s=0.3)
 
     assert result.terminated_by == TerminatedBy.timeout
-    assert result.token_usage == TokenUsage(input_tokens=11, output_tokens=10, total_tokens=21)
+    # calls=1: the runner counts the target's one completed reply as a call even
+    # though the target reported its usage without a call count.
+    assert result.token_usage == TokenUsage(input_tokens=11, output_tokens=10, total_tokens=21, calls=1)
     assert result.token_usage != sum((tm.token_usage for tm in result.turn_metrics), start=TokenUsage())
 
 

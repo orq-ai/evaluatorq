@@ -1325,6 +1325,20 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     font-size: 13px; color: var(--text-muted);
     font-family: var(--font-mono);
 }
+/* The lines under the run name: what was tested (the sub, or the red-team agent
+   row), then the spend line. The group owns the outer margins; its lines sit 8px apart. */
+.report-hero-meta { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 16px; }
+.report-hero-meta > .report-hero-sub,
+.report-hero-meta > .rt-hero-agent-row { margin: 0; }
+/* Spend line: run total next to the target agent's own cost. */
+.report-hero-cost {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+    margin: 0; font-size: 13px; color: var(--text-muted);
+}
+.report-hero-cost-value { font-family: var(--font-mono); font-weight: 600; color: var(--text-strong); }
+.report-hero-cost-value--unknown { font-weight: 400; color: var(--text-faint); }
+.report-hero-cost-qual { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); }
+.report-hero-cost-item[title] { cursor: help; }
 
 /* ==== CSS-only tabs (report bodies) ================================= */
 /* Radios carry the state; labels are the tab bar; panels show on :checked.
