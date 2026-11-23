@@ -648,9 +648,9 @@ def test_set_evaluation_attributes_bool_score_without_pass_is_a_verdict(score: b
         'gen_ai.evaluation.score.value': float(score),
         'gen_ai.evaluation.score.label': label,
     }
-    # The legacy verdict mirrors stay what the scorer returned.
+    # orq.pass mirrors only an explicit pass_; the Output panel shows the same verdict as the span.
     assert 'orq.pass' not in attrs
-    assert json.loads(attrs['orq.evaluation.output'])['passed'] is None
+    assert json.loads(attrs['orq.evaluation.output'])['passed'] is score
 
 
 @pytest.mark.parametrize('pass_', [True, False])

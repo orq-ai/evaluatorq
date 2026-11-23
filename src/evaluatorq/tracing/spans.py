@@ -310,7 +310,7 @@ def set_evaluation_attributes(
     # Ingestion routes this key to blob storage rather than the 512-char-capped
     # typed attribute maps, so the untruncated explanation belongs here.
     verdict: dict[str, Any] = {
-        'passed': pass_,
+        'passed': passed,
         'value': score.model_dump() if isinstance(score, EvaluationResultCell) else score,
         'type': evaluator_type,
     }
