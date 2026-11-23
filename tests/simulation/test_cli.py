@@ -7,13 +7,12 @@ import typing
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, Any
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from click.testing import Result
 from typer import Typer
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from evaluatorq.common.cli_tty import shell_path
 from evaluatorq.common.run_manifest import start_manifest
@@ -50,7 +49,7 @@ class _OfflineCliRunner(CliRunner):
         self,
         app: Typer,
         args: str | Sequence[str] | None = None,
-        input: bytes | str | IO[Any] | None = None,  # noqa: A002 — shadowing is typer's name
+        input: bytes | str | None = None,  # noqa: A002 — shadowing is typer's name
         env: Mapping[str, str | None] | None = None,
         catch_exceptions: bool = True,
         color: bool = False,
@@ -64,7 +63,9 @@ class _OfflineCliRunner(CliRunner):
             and '--executive-summary' not in args
         ):
             args = [*args, self._OFFLINE_FLAG]
-        return super().invoke(app, args, input, env, catch_exceptions, color, **extra)
+        return super().invoke(
+            app, args=args, input=input, env=env, catch_exceptions=catch_exceptions, color=color, **extra
+        )
 
 
 runner = _OfflineCliRunner()

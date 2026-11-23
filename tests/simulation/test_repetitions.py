@@ -477,15 +477,15 @@ def test_the_dashboard_heatmap_shows_n_only_where_a_cell_averages_several_conver
 
 
 def test_the_cli_offers_the_option_on_both_commands() -> None:
-    import click
     import typer
+    import typer.core
     from typer.testing import CliRunner
 
     from evaluatorq.simulation.cli import app as sim_app
 
     # Read the option from the command definition: help text is styled differently per terminal.
     group = typer.main.get_command(sim_app)
-    assert isinstance(group, click.Group)
+    assert isinstance(group, typer.core.TyperGroup)  # not click.Group: Typer 0.29+ vendors its own click
     for command in ('run', 'simulate'):
         options = {opt for param in group.commands[command].params for opt in param.opts}
         assert '--repetitions' in options
