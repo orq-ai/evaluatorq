@@ -98,7 +98,11 @@ def _print_table(
         console.print(
             f'[dim]{hidden} model(s) hidden for scoring below --min-score {result.min_score:g}. Pass --min-score 0 to show every model.[/dim]'
         )
-    if missing := len(result.excluded) - hidden:
+    if contributors := len(result.contributors):
+        console.print(
+            f'[dim]{contributors} contributor listing(s) not compared: the vendor trains on your prompts in exchange for the discount.[/dim]'
+        )
+    if missing := len(result.excluded) - hidden - contributors:
         console.print(
             f'[dim]{missing} model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.[/dim]'
         )

@@ -193,7 +193,7 @@ _NAV: list[tuple[str, str, str, str]] = [
     ('insights', 'Insights', '/insights', '<path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 6-7"/>'),
     (
         'models',
-        'Models',
+        'Pareto Frontier',
         '/models',
         (
             '<circle cx="6" cy="17" r="2"/><circle cx="11" cy="10" r="2"/><circle cx="18" cy="6" r="2"/>'

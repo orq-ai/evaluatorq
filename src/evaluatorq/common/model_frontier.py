@@ -176,6 +176,11 @@ class ScoredModel(BaseModel):
             return None
         return self.default_index / self.price
 
+    @property
+    def is_contributor(self) -> bool:
+        """A contributor listing: discounted because the vendor may train on your prompts and responses."""
+        return self.router_id.endswith(CONTRIBUTOR_SUFFIX)
+
     def dominates(self, other: ScoredModel) -> bool:
         """At least as good on both axes, strictly better on one: intelligence at the default effort against price."""
         # The default axes are valid by construction, so this skips the `check_axes` call `dominates()` makes per pair.
@@ -539,6 +544,16 @@ def available_efforts(models: Iterable[ScoredModel]) -> list[str]:
 # it exists to exclude, which on the 2026-08-25 garden is Llama-3.3-70B at 9.4,
 # the 4o generation at 6.9 to 11.2, qwen3-coder at 13.6 and gpt-oss-20b at 14.9.
 MIN_SEAT_INDEX = 15.0
+
+# A contributor listing (Meta's Muse Spark Contributor) is the same model as its
+# standard listing at a fraction of the price, paid for by letting the vendor
+# train on your prompts and responses. That price would win every comparison, so
+# `evaluatorq.models.pareto` never places one. Preset seating does not check this.
+CONTRIBUTOR_SUFFIX = '-contributor'
+CONTRIBUTOR_REASON = (
+    'contributor listing: the discount is paid for by letting the vendor train on your prompts and responses, '
+    'so its price is not comparable'
+)
 
 # The index is a benchmark aggregate, and a floor cannot catch a model whose
 # benchmarks say more than its behaviour: gpt-oss-120b scores 23.8, a hair

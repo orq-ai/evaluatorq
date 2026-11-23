@@ -295,6 +295,8 @@ Each of these makes the `agentic` price wrong for some workloads, and none of th
 
 The catalogue lists the same model several times, once per host and region. `load_models()` keeps one listing per model: the developer's own listing when there is one, otherwise the cheapest host, preferring non-regional ones. `load_models(all_hosts=True)` keeps every listing, which is how you compare hosts of one model against each other.
 
+Contributor listings, whose id ends in `-contributor` (Meta's Muse Spark 1.2 and 1.3 Contributor), are never compared. They cost a fraction of the standard listing of the same model because the vendor may train on your prompts and responses, so their price would put them on the frontier for a reason that has nothing to do with the model. `load_models()` keeps them beside the standard listing, `pareto()` lists them in `excluded` with `contributor: true` (`ParetoResult.contributors`), and the CLI counts them in a footer line. Preset and jury seating does not check for them. The catalogue marks them only by the id suffix and the display name; no field says that the vendor trains on the traffic.
+
 Models switched off in your workspace are left out. Pass `--include-disabled` or `include_disabled=True` to compare them as well.
 
 ## What gets left out
@@ -318,7 +320,7 @@ A blended price is not what a task costs you. A reasoning model that writes four
 
 ## In the dashboard
 
-`eq dashboard` has a **Models** page that draws this frontier as a chart. See [Dashboard](dashboard.md#models).
+`eq dashboard` has a **Pareto Frontier** page that draws this frontier as a chart. See [Dashboard](dashboard.md#models).
 
 ## In code
 

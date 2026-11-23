@@ -1474,11 +1474,12 @@ _SIM_REPORT_CSS = """
 .report-aligned .rk-panel-body { margin-top: 12px; }
 
 /* ---- Tag (report_kit.tag) ---- */
-.report-aligned .rk-tag {
+.rk-tag {
     display: inline-block; font-size: 11px; font-weight: 500;
     border: 1px solid var(--border-default); border-radius: 999px;
     padding: 1px 8px; margin-left: 8px; color: var(--text-muted);
 }
+.rk-tag-sm { font-size: 10px; padding: 0 6px; margin-left: 4px; color: var(--text-faint); cursor: help; }
 
 .report-aligned .rk-pill {
     display: inline-flex; align-items: center; gap: 5px;
@@ -1701,18 +1702,18 @@ _SIM_TRANSCRIPT_CSS = """
     text-align: left; padding: 0; background: var(--surface-sunken);
     border-bottom: 1px solid var(--border-subtle); white-space: nowrap;
 }
-.sim-report .sim-th-sort {
+thead .th-sort {
     display: inline-flex; align-items: center; gap: 4px; width: 100%;
     padding: 10px 12px; background: none; border: 0; cursor: pointer;
     font: inherit; font-weight: 600; color: var(--text-strong); text-align: left;
 }
-.sim-report th.num .sim-th-sort { justify-content: flex-end; }
-.sim-report .sim-th-sort:hover { color: var(--teal-600); }
+th.num .th-sort { justify-content: flex-end; }
+thead .th-sort:hover { color: var(--teal-600); }
 /* Inactive sortable columns show a faint ⇅; it strengthens on hover so the
    header reads as clickable. The active column's ▲/▼ is always full-strength. */
-.sim-report .sim-th-caret { font-size: 9px; color: var(--text-faint); }
-.sim-report .sim-th-sort:hover .sim-th-caret { color: var(--teal-600); }
-.sim-report .sim-th-caret-active { color: var(--teal-600); }
+thead .th-caret { font-size: 9px; color: var(--text-faint); }
+thead .th-sort:hover .th-caret { color: var(--teal-600); }
+thead .th-caret-active { color: var(--teal-600); }
 .sim-report .sim-conv-table tbody td { padding: 10px 12px; }
 .sim-report .sim-conv-row {
     border-top: 1px solid var(--border-subtle);
@@ -3199,7 +3200,7 @@ _SIM_COMPARE_CSS = """
 .sim-report.cmp-report table.cmp-conv-table tbody td:not(:first-child) { text-align: left; vertical-align: middle; }
 .sim-report.cmp-report table.cmp-conv-table tbody td { padding: 10px; }
 .sim-report.cmp-report .cmp-conv-row { box-shadow: none; }
-.sim-report.cmp-report table.cmp-conv-table .sim-th-sort { padding: 10px; }
+.sim-report.cmp-report table.cmp-conv-table .th-sort { padding: 10px; }
 .cmp-conv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .cmp-seg { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--surface-sunken); }
 .cmp-seg-btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 7px;
@@ -3213,7 +3214,7 @@ _SIM_COMPARE_CSS = """
 .cmp-num-d--good { color: var(--teal-600); }
 .cmp-num-d--bad { color: var(--red-700); }
 .cmp-num-d--flat { color: var(--text-faint); }
-.sim-report .sim-th-caret-word { font: 500 10.5px var(--font-sans); text-transform: none; letter-spacing: 0; margin-left: 6px; color: var(--text-muted); }
+thead .th-caret-word { font: 500 10.5px var(--font-sans); text-transform: none; letter-spacing: 0; margin-left: 6px; color: var(--text-muted); }
 .cmp-outcome { white-space: nowrap; }
 .cmp-arrow { color: var(--text-faint); margin: 0 6px; }
 .cmp-unmatched { margin-top: 12px; font-size: 12px; color: var(--text-muted); }
@@ -4223,32 +4224,50 @@ _MODELS_CSS = """
 /* ---- /models: Pareto view over the model catalogue ---- */
 .nav-item.nav-item-needs-auth { opacity: .45; }
 .models-page { display: flex; flex-direction: column; gap: 14px; }
-.models-intro, .models-summary { margin: 0; color: var(--text-body); font-size: 13px; line-height: 1.5; max-width: 900px; }
-.models-summary { color: var(--text-faint); font-size: 12px; }
+.models-intro, .models-summary { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; max-width: 900px; }
+.models-summary { display: flex; flex-wrap: wrap; align-items: baseline; color: var(--text-muted); font-size: 12px; }
+.models-summary > span + span::before { content: '·'; margin: 0 8px; color: var(--text-faint); }
+.models-caption { margin: -6px 0 0; color: var(--text-muted); font-size: 12px; }
+.models-pop-btn { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.models-pop-btn:hover { color: var(--text-strong); }
+.models-pop { width: min(460px, calc(100vw - 32px)); max-height: 320px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface); color: var(--text-body); font-size: 12px; line-height: 1.5; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+.models-pop p { margin: 0 0 8px; }
+.models-pop p:last-child { margin: 0; }
+/* Anchored under its button where supported; elsewhere the popover keeps the browser's centred default. */
+@supports (position-area: bottom) { .models-pop { inset: auto; margin: 6px 0 0; position-area: bottom span-right; position-try-fallbacks: flip-block, flip-inline; } }
+.models-headline { margin: 0; color: var(--text-strong); font-family: var(--font-display); font-size: 18px; font-weight: 600; line-height: 1.4; max-width: 900px; }
+.models-group th { padding: 14px 10px 6px; font-size: 12px; font-weight: 600; color: var(--text-strong); background: none; text-align: left; border-bottom: 1px solid var(--border-subtle); text-transform: none; letter-spacing: 0; }
+.models-row.is-excluded td { color: var(--text-faint); }
 .models-alert { padding: 12px 14px; border: 1px solid var(--red-100); border-radius: 8px; background: var(--red-50); color: var(--red-700); font-size: 13px; }
 .models-alert p { margin: 0 0 4px; }
 .models-filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; font-size: 12px; color: var(--text-body); }
-.models-filters label { display: inline-flex; gap: 6px; align-items: center; }
-.models-filters select { font: inherit; padding: 4px 6px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface); color: var(--text-strong); }
+.models-filters label { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; max-width: 100%; min-width: 0; }
+.models-filters :is(select, input[type=number]) { font: inherit; padding: 4px 10px 4px 6px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface); color: var(--text-strong); }
+.models-filters select { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
 .models-filters select:disabled { opacity: .5; }
-.models-filters .models-min-score { font: inherit; width: 5em; padding: 4px 6px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface); color: var(--text-strong); }
-.models-chart { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px; background: var(--surface); }
-.models-chart .vega-embed { width: 100%; }
+.models-filters input[type=number] { width: 5em; }
+.models-chart { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px; background: var(--surface); overflow-x: auto; }
+.models-chart .vega-embed { width: 100%; min-width: 480px; }
+@media (max-width: 640px) { .models-chart .vega-embed { min-width: 360px; } }
 .models-table-wrap { overflow-x: auto; }
-.models-table { width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid var(--border-subtle); }
-.models-table th { text-align: left; background: var(--surface-sunken); border-bottom: 1px solid var(--border-subtle); white-space: nowrap; padding: 0; }
-.models-table th a { display: block; padding: 8px 10px; color: var(--text-strong); text-decoration: none; font-weight: 600; }
-.models-table th a:hover { color: var(--teal-600); }
-.models-caret { font-size: 9px; color: var(--text-faint); }
+.models-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.models-table thead th { text-align: left; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; padding: 0; font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em; }
+.models-table thead .th-sort { padding: 8px 10px; text-decoration: none; font-weight: 600; color: var(--text-faint); }
+.models-table .th-caret { visibility: hidden; }
+.models-table .th-caret-active, .models-table .th-sort:hover .th-caret, .models-table .th-sort:focus-visible .th-caret { visibility: visible; }
 .models-table td { padding: 8px 10px; border-top: 1px solid var(--border-subtle); vertical-align: top; }
 .models-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.models-row:not(.is-frontier) { color: var(--text-faint); }
+.models-table td.num-secondary { color: var(--text-muted); }
+.models-row.is-frontier td:first-child { box-shadow: inset 3px 0 0 var(--orange-500); }
 .models-name { display: block; font-weight: 600; color: var(--text-strong); }
-.models-id { display: block; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.models-id { display: block; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.models-gap { display: block; font-size: 11px; color: var(--text-muted); }
 .models-frontier { color: var(--orange-700); font-weight: 600; }
-.models-fallback { font-size: 10px; padding: 0 4px; border: 1px solid var(--border-subtle); border-radius: 4px; color: var(--text-faint); cursor: help; }
-.models-excluded { font-size: 12px; color: var(--text-faint); }
-.models-excluded ul { margin: 6px 0 0; padding-left: 18px; }
+/* no-stack keeps report.css from turning the rows into cards: the grid scrolls inside its wrapper instead. */
+@media (max-width: 760px) {
+  .models-table { min-width: 640px; }
+  .models-table .models-id { display: none; }
+}
 """
 
 DASHBOARD_CSS = (

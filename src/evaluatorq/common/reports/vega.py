@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 import html as _html
 import json
+from operator import itemgetter
 from typing import Any
 
 from loguru import logger
@@ -368,6 +369,80 @@ def vl_line(
         },
         'width': 420,
         'height': 200,
+    }
+
+
+def vl_frontier_scatter(
+    *,
+    rows: list[dict[str, Any]],
+    x_title: str,
+    y_title: str,
+    lower_is_better: bool,
+    tooltip: list[dict[str, Any]],
+    x_format: str = '~g',
+) -> dict[str, Any]:
+    """Score against a ratio quantity, with the Pareto frontier joined by a step line and labelled.
+
+    Each row carries ``x``, ``score``, ``status`` (``Frontier`` or ``Dominated``), ``estimated``
+    (``estimated`` draws hollow) and ``label``, the text beside a frontier point, empty to leave it to the
+    tooltip. The x axis is logarithmic: price, speed
+    and latency all span orders of magnitude, and a linear axis spends most of the plot on one outlier. Its
+    tick labels are formatted with the d3 `x_format` and thinned to 1-2-5 steps at any range.
+    """
+    if not rows:
+        return {}
+    frontier = sorted((r for r in rows if r['status'] == 'Frontier'), key=itemgetter('x'))
+    x_enc: dict[str, Any] = {
+        'field': 'x',
+        'type': 'quantitative',
+        'title': x_title,
+        'scale': {'type': 'log', 'nice': False, 'padding': 12},
+        'axis': {
+            'format': x_format,
+            'tickCount': 12,
+            'labelExpr': "indexof(['1','2','5'], substring(format(datum.value, '.0e'), 0, 1)) >= 0 ? datum.label : ''",
+        },
+    }
+    y_enc = {'field': 'score', 'type': 'quantitative', 'title': y_title, 'scale': {'zero': False, 'padding': 8}}
+    color = {
+        'field': 'status',
+        'type': 'nominal',
+        'scale': {'domain': ['Frontier', 'Dominated'], 'range': [COLORS['orange_300'], COLORS['ink_300']]},
+        'legend': {'title': None, 'orient': 'top'},
+    }
+
+    def points(*, estimated: bool) -> dict[str, Any]:
+        return {
+            'transform': [{'filter': f"datum.estimated === '{'estimated' if estimated else 'measured'}'"}],
+            'mark': {'type': 'point', 'filled': not estimated, 'size': 90, 'strokeWidth': 2, 'opacity': 0.9},
+            'encoding': {'x': x_enc, 'y': y_enc, 'color': color, 'tooltip': tooltip},
+        }
+
+    return {
+        'data': {'values': rows},
+        'layer': [
+            {
+                'data': {'values': frontier},
+                'mark': {
+                    'type': 'line',
+                    # Lower-is-better x: the frontier holds its score until the next, dearer step up.
+                    'interpolate': 'step-after' if lower_is_better else 'step-before',
+                    'color': COLORS['orange_300'],
+                    'strokeWidth': 1.5,
+                    'opacity': 0.7,
+                },
+                'encoding': {'x': x_enc, 'y': y_enc, 'order': {'field': 'x', 'type': 'quantitative'}},
+            },
+            points(estimated=False),
+            points(estimated=True),
+            {
+                'data': {'values': [r for r in rows if r.get('label')]},
+                'mark': {'type': 'text', 'align': 'left', 'dx': 8, 'dy': -6, 'fontSize': 11, 'limit': 160},
+                'encoding': {'x': x_enc, 'y': y_enc, 'text': {'field': 'label'}},
+            },
+        ],
+        'width': 'container',
+        'height': 420,
     }
 
 

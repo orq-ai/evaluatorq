@@ -27,6 +27,7 @@ COLORS: dict[str, str] = {
     'orange_400': '#df5325',  # Darker Orange
     'teal_400': '#025558',  # Deep Teal (Primary Brand)
     'teal_500': '#01483d',  # Dark Teal
+    'ink_300': '#a3a1ab',  # Muted marks (de-emphasised chart points)
     'ink_700': '#25232e',  # Primary Text
     'ink_800': '#1a1921',  # Dark Background
     'sand_100': '#f9f8f6',  # Light Backgrounds

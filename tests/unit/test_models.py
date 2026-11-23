@@ -505,6 +505,30 @@ class TestOnePerModel:
         assert one_per_model([other, own]) == [own]
 
 
+class TestLoadModels:
+    @pytest.mark.asyncio
+    async def test_keeps_contributor_listings_beside_the_standard_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def fake_cards(client: object = None) -> list[dict[str, Any]]:
+            v2 = {'intelligence_index': 48.0, 'aa_slug': 'muse'}
+            meta = {'region': 'us', 'autorouter': {'v2': v2}}
+            return [
+                card('meta', 'muse-spark-1.3', model_developer='meta', metadata=meta),
+                card('meta', 'muse-spark-1.3-contributor', model_developer='meta', input_cost=0.0001, metadata=meta),
+            ]
+
+        monkeypatch.setattr(models_mod, 'model_cards', fake_cards)
+        loaded = await models_mod.load_models()
+        assert [m.router_id for m in loaded] == ['meta/muse-spark-1.3', 'meta/muse-spark-1.3-contributor']
+
+    def test_pareto_excludes_contributor_listings_with_the_reason(self) -> None:
+        contributor = model('meta/muse-contributor', 48.0, 0.1, 0.2)
+        result = pareto([MID, contributor], min_score=None)
+        assert [p.model.router_id for p in result.points] == [MID.router_id]
+        [gone] = result.contributors
+        assert gone.router_id == 'meta/muse-contributor'
+        assert 'train on your prompts' in gone.reason
+
+
 class TestFindModel:
     def test_exact_then_unique_bare_id(self) -> None:
         pool = [MID, model('x/mid', 1.0, 1.0, 1.0), CHEAP]
@@ -545,7 +569,7 @@ class TestCli:
         payload = json.loads(result.stdout)
         assert [p['router_id'] for p in payload['points']] == ['a/strong', 'b/mid', 'c/cheap']
         assert payload['min_score'] == 15.0
-        assert payload['excluded'] == [{'router_id': 'e/free', 'reason': 'free (no list price)', 'below_min_score': False}]
+        assert payload['excluded'] == [{'router_id': 'e/free', 'reason': 'free (no list price)', 'below_min_score': False, 'contributor': False}]
 
     def test_min_score_hides_and_zero_shows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         junk = model('z/junk', 2.7, 0.05, 0.05)
@@ -705,6 +729,25 @@ class TestDashboardPage:
         assert 'ORQ_API_KEY is not set' in response.text
         assert 'data-needs-orq="1"' in response.text
 
+    def test_contributor_listing_shows_as_excluded_with_the_reason(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        from evaluatorq.dashboard import models_views
+
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+        contributor = model('meta/muse-contributor', 48.0, 0.1, 0.2, display_name='Muse Contributor')
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
+            del client, include_disabled
+            return [*fake_catalogue, contributor]
+
+        monkeypatch.setattr(models_views, 'load_models', fake_load)
+        text = client.get('/models').text
+        assert 'Excluded · 1' in text
+        assert 'is-excluded' in text and 'Muse Contributor' in text
+        assert 'title="contributor listing: the discount is paid for' in text
+        assert 'Excluded ·' not in client.get('/models?frontier=1').text
+
     def test_renders_chart_table_and_dominator(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
@@ -717,12 +760,13 @@ class TestDashboardPage:
             return fake_catalogue
 
         monkeypatch.setattr(models_views, 'load_models', fake_load)
-        response = client.get('/models?sort=pareto')
+        response = client.get('/models?sort=score')
         assert response.status_code == 200
         text = response.text
         assert 'data-vega-for="models-pareto"' in text
-        assert '3 on the frontier, 1 dominated, 1 not plotted.' in text
-        assert '<td>b/mid</td>' in text  # d/bad's nearest dominator
+        assert '<span>3 on the frontier</span><span>1 dominated</span>' in text
+        assert '1 not plotted' in text
+        assert 'title="b/mid"' in text  # d/bad's nearest dominator, named with its gap
         assert 'e/free' in text  # listed under "not plotted"
 
     def test_tooltip_names_the_estimate_flag(
@@ -780,7 +824,7 @@ class TestDashboardPage:
         finally:
             logger.remove(sink)
         assert response.status_code == 200
-        assert 'The Models page failed with an unexpected RuntimeError.' in response.text
+        assert 'The Pareto Frontier page failed with an unexpected RuntimeError.' in response.text
         assert 'The dashboard log has the details.' in response.text
         assert any('The /models page failed to load the catalogue' in line and 'client refused to start' in line for line in logged)
 
@@ -798,8 +842,9 @@ class TestDashboardPage:
         fake_catalogue.append(model('f/legal', 30.0, 1.0, 1.0, category_indices={'legal': 50.0}))
         monkeypatch.setattr(models_views, 'load_models', fake_load)
         text = client.get('/models?index=legal&effort=high').text
-        assert 'name="effort" onchange="this.form.submit()" disabled' in text
-        assert '1 on the frontier, 0 dominated, 5 not plotted.' in text
+        assert 'name="effort" disabled title=' in text
+        assert '<span>1 on the frontier</span><span>0 dominated</span>' in text
+        assert '5 not plotted' in text
 
     def test_min_score_control_hides_and_zero_shows(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
@@ -816,11 +861,13 @@ class TestDashboardPage:
         monkeypatch.setattr(models_views, 'load_models', fake_load)
         text = client.get('/models').text
         assert 'name="min_score" min="0" step="any" value="15"' in text
-        assert '3 on the frontier, 1 dominated, 2 not plotted (1 below the minimum score of 15).' in text
-        assert 'score 2.7 is below min_score 15' in text
+        assert '<span>3 on the frontier</span><span>1 dominated</span>' in text
+        assert '2 not plotted' in text
+        assert '1 below score 15</b><br>z/junk' in text
         text = client.get('/models?min_score=0').text
         assert 'value="0"' in text
-        assert '4 on the frontier, 1 dominated, 1 not plotted.' in text
+        assert '<span>4 on the frontier</span><span>1 dominated</span>' in text
+        assert '1 not plotted' in text
         assert 'value="15"' in client.get('/models?min_score=nope').text
 
     def test_index_dropdown_lists_only_indices_a_model_has(
@@ -859,13 +906,13 @@ class TestDashboardPage:
         assert '<option value="agentic" selected>Agentic: 7:2:1 cached</option>' in text
         assert 'Price $/1M (7:2:1 cached)' in text
         assert 'Cache read $/1M' in text
-        assert 'class="models-fallback"' in text
-        assert '4 priced with a cache rate their host does not list.' in text
+        assert 'No cache price on this card' in text
+        assert '4 priced with a cache rate their host does not list' in text
         listed = client.get('/models?mix=list').text
         assert '<option value="list" selected>' in listed
         assert 'Price $/1M (3:1 list)' in listed
-        assert 'class="models-fallback"' not in listed
+        assert 'No cache price on this card' not in listed
         custom = client.get('/models?mix=7:1:1:1').text
         assert '<option value="7:1:1:1" selected>Custom: 7:1:1:1</option>' in custom
         assert '<option value="agentic" selected>' in client.get('/models?mix=nope').text
-        assert 'name="mix" onchange="this.form.submit()" disabled' in client.get('/models?x=output_speed').text
+        assert 'name="mix" disabled title=' in client.get('/models?x=output_speed').text

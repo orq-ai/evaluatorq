@@ -58,6 +58,7 @@ from evaluatorq.common.model_catalogue import (
     register_model,
 )
 from evaluatorq.common.model_frontier import (
+    CONTRIBUTOR_REASON,
     INDICES,
     MIN_SEAT_INDEX,
     PRICE_MIXES,
@@ -103,6 +104,10 @@ class ParetoPoint(BaseModel):
         "Artificial Analysis price on the same card, because the host lists none) or 'input' (no cache price on the "
         'card, so reads bill at the input rate). None when x is not price or the mix has no cache-read share.',
     )
+    cache_read_rate: float | None = Field(
+        default=None,
+        description='The cache-read rate (USD per 1M tokens) behind `cache_read_source`. None when that is None.',
+    )
     cache_write_source: CacheSource | None = Field(
         default=None,
         description="'host' or 'input' (no cache-write price on the card). None when x is not price or the mix has no "
@@ -136,6 +141,10 @@ class ExcludedModel(BaseModel):
     below_min_score: bool = Field(
         default=False,
         description='True when the model has a value on both axes and was left out only for scoring below `min_score`.',
+    )
+    contributor: bool = Field(
+        default=False,
+        description='True for a contributor listing, left out because its discount is paid for with training rights.',
     )
 
 
@@ -173,6 +182,11 @@ class ParetoResult(BaseModel):
         return [p for p in self.points if p.price_fallback]
 
     @property
+    def contributors(self) -> list[ExcludedModel]:
+        """Excluded contributor listings."""
+        return [e for e in self.excluded if e.contributor]
+
+    @property
     def below_min_score(self) -> list[ExcludedModel]:
         """Excluded models that were left out only for scoring below `min_score`."""
         return [e for e in self.excluded if e.below_min_score]
@@ -195,7 +209,8 @@ def pareto(
     seating uses), a `READ:WRITE:FRESH:OUTPUT` ratio string, or a `PriceMix`.
     It is ignored on the other axes.
 
-    Models without a value on either axis, estimated scores when
+    Contributor listings (`ScoredModel.is_contributor`), models without a value
+    on either axis, estimated scores when
     `exclude_estimated` is set, and models scoring below `min_score` on the chosen
     index are listed in `excluded` with the reason. The floor defaults to
     `MIN_SEAT_INDEX`, the same floor preset seating uses, because without it the
@@ -223,6 +238,9 @@ def pareto(
         if model.router_id in seen:
             continue
         seen.add(model.router_id)
+        if model.is_contributor:
+            excluded.append(ExcludedModel(router_id=model.router_id, reason=CONTRIBUTOR_REASON, contributor=True))
+            continue
         placed = placement(model, index=index, effort=effort, x=x, exclude_estimated=exclude_estimated, mix=price_mix)
         if isinstance(placed, str):
             excluded.append(ExcludedModel(router_id=model.router_id, reason=placed))
@@ -257,6 +275,7 @@ def pareto(
                 x=xv,
                 pareto_score=score / xv if x == 'price' and xv > 0 else None,
                 cache_read_source=read_source,
+                cache_read_rate=model.cache_read_rate()[0] if read_source else None,
                 cache_write_source=write_source,
                 on_frontier=not beaters,
                 dominated_by=nearest.router_id if nearest else None,
@@ -312,7 +331,9 @@ async def load_models(
     credential. Free models are kept (with `free` set); models the workspace
     switched off are dropped unless `include_disabled` is set. By default one
     card per underlying model is kept (`one_per_model`); `all_hosts=True` keeps
-    every host.
+    every host. Contributor listings (`ScoredModel.is_contributor`) are always
+    kept beside the one listing per model, never in place of it; `pareto()` lists
+    them in `excluded`.
 
     Raises:
         ValueError: No Orq key or OAuth session is available (``MissingLLMCredentialsError``).
@@ -320,7 +341,11 @@ async def load_models(
     """
     garden = garden_from_cards(await model_cards(client))
     models = [m for m in garden.values() if include_disabled or m.enabled is not False]
-    return sorted(models, key=lambda m: m.router_id) if all_hosts else one_per_model(models)
+    if all_hosts:
+        return sorted(models, key=lambda m: m.router_id)
+    # A contributor listing is cheaper than its standard one, so grouping it in would make it the kept listing.
+    contributors = sorted((m for m in models if m.is_contributor), key=lambda m: m.router_id)
+    return one_per_model(m for m in models if not m.is_contributor) + contributors
 
 
 def load_models_sync(*, include_disabled: bool = False, all_hosts: bool = False) -> list[ScoredModel]:
