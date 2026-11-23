@@ -1758,6 +1758,8 @@ async def test_insights_wraps_a_raw_anthropic_llm_client_and_keeps_the_embedding
         dimensions=('intent',),
         labels=(),
         runs_dir=tmp_path / 'runs',
+        # An Anthropic client needs a Claude id: the default summary model is an openai/ id it refuses before any work.
+        summary_model='claude-sonnet-5-5',
         llm_client=cast('Any', anthropic.AsyncAnthropic(api_key='test')),
         embedding_client=cast('Any', embed),
     )
