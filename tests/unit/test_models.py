@@ -920,7 +920,8 @@ class TestDashboardPage:
         fake_catalogue.append(model('f/legal', 30.0, 1.0, 1.0, category_indices={'legal': 50.0}))
         monkeypatch.setattr(models_views, 'load_models', fake_load)
         text = client.get('/models?index=legal&effort=high').text
-        assert 'name="effort" disabled title=' in text
+        assert 'title="Domain indices exist only at the one effort Artificial Analysis benchmarked"' in text
+        assert '<span class="models-field-off" inert>' in text
         assert '<span>1 on the frontier</span><span>0 dominated</span>' in text
         assert '5 not plotted' in text
 
@@ -938,7 +939,7 @@ class TestDashboardPage:
         fake_catalogue.append(model('z/junk', 2.7, 0.05, 0.05))
         monkeypatch.setattr(models_views, 'load_models', fake_load)
         text = client.get('/models').text
-        assert 'name="min_score" min="0" step="any" value="10"' in text
+        assert 'name="min_score" min="0" max="100" step="1" value="10"' in text
         assert '<span>3 on the frontier</span><span>1 dominated</span>' in text
         assert '2 not plotted' in text
         assert '1 below score 10</b><br>z/junk' in text
@@ -962,10 +963,10 @@ class TestDashboardPage:
         fake_catalogue.append(model('f/legal', 30.0, 1.0, 1.0, category_indices={'legal': 50.0}))
         monkeypatch.setattr(models_views, 'load_models', fake_load)
         text = client.get('/models?index=coding').text
-        assert '<option value="legal">Legal</option>' in text
-        assert 'value="coding"' not in text
-        assert 'value="economics"' not in text
-        assert '<option value="intelligence" selected>' in text  # an empty index falls back to the default
+        assert 'data-model="legal"' in text
+        assert 'data-model="coding"' not in text
+        assert 'data-model="economics"' not in text
+        assert 'name="index" value="intelligence"' in text  # an empty index falls back to the default
 
     def test_mix_control_switches_the_blend_and_marks_fallbacks(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
@@ -981,16 +982,58 @@ class TestDashboardPage:
         fake_catalogue.append(OPUS)
         monkeypatch.setattr(models_views, 'load_models', fake_load)
         text = client.get('/models').text
-        assert '<option value="agentic" selected>Agentic: 7:2:1 cached</option>' in text
+        assert 'name="mix" value="agentic"' in text
+        assert 'Agentic: 7:2:1 cached' in text
         assert 'Price $/1M (7:2:1 cached)' in text
         assert 'Cache read $/1M' in text
         assert 'No cache price on this card' in text
         assert '4 priced with a cache rate their host does not list' in text
         listed = client.get('/models?mix=list').text
-        assert '<option value="list" selected>' in listed
+        assert 'name="mix" value="list"' in listed
         assert 'Price $/1M (3:1 list)' in listed
         assert 'No cache price on this card' not in listed
         custom = client.get('/models?mix=7:1:1:1').text
-        assert '<option value="7:1:1:1" selected>Custom: 7:1:1:1</option>' in custom
-        assert '<option value="agentic" selected>' in client.get('/models?mix=nope').text
-        assert 'name="mix" disabled title=' in client.get('/models?x=output_speed').text
+        assert 'name="mix" value="7:1:1:1"' in custom
+        assert 'Custom: 7:1:1:1' in custom
+        assert 'name="mix" value="agentic"' in client.get('/models?mix=nope').text
+        off_price = client.get('/models?x=output_speed').text
+        assert 'title="The mix applies only to the price axis"' in off_price
+        assert '<span class="models-field-off" inert>' in off_price
+        assert '<span class="models-field-off" inert>' not in text
+
+    def test_several_developers_narrow_to_their_union(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        text = self._models_text(client, monkeypatch, fake_catalogue, '/models?developer=a&developer=b')
+        assert '<span>2 on the frontier</span><span>0 dominated</span>' in text
+        assert 'c/cheap' not in text and 'd/bad' not in text
+        assert '<span class="filter-dd-value is-engaged">2 selected</span>' in text
+        # The sort links keep every chosen developer, not only the last one.
+        assert 'developer=a&amp;developer=b' in text
+        one = self._models_text(client, monkeypatch, fake_catalogue, '/models?developer=a')
+        assert '<span>1 on the frontier</span><span>0 dominated</span>' in one
+        every = self._models_text(client, monkeypatch, fake_catalogue, '/models')
+        assert '<span class="filter-dd-value">All</span>' in every
+        # Every box ticked is the same as no developer filter, so the sort links do not carry the whole list.
+        ticked = '&'.join(f'developer={v}' for v in 'abcde')
+        all_ticked = self._models_text(client, monkeypatch, fake_catalogue, f'/models?{ticked}')
+        assert '<span class="filter-dd-value">All</span>' in all_ticked
+        assert 'developer=a' not in all_ticked
+        assert 'class="facet-search"' in every  # the developer list is searchable
+
+    def test_more_filters_badge_counts_active_filters(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        text = self._models_text(client, monkeypatch, fake_catalogue, '/models?frontier=1&min_score=20')
+        assert '<details id="filter-dd-more" class="filter-dd filter-dd-more">' in text
+        assert '<span class="filter-dd-more-badge">2</span>' in text
+        assert 'class="filter-chip is-active"' in text
+        default = self._models_text(client, monkeypatch, fake_catalogue, '/models')
+        assert 'filter-dd-more-badge' not in default  # the default score floor is not a filter the reader set
+
+    def test_typing_in_a_search_box_does_not_submit_the_filters(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        # A search box fires a bubbling `change` on blur; submitting then would swap the page and lose the text.
+        text = self._models_text(client, monkeypatch, fake_catalogue, '/models')
+        assert 'onchange="if (!event.target.matches(\'.facet-search\')) this.requestSubmit()"' in text

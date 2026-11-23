@@ -37,7 +37,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.vega import render_embed, vl_frontier_scatter
 from evaluatorq.dashboard import model_choices
 from evaluatorq.dashboard.auth import auth_or_reason
-from evaluatorq.dashboard.controls import stat_tile
+from evaluatorq.dashboard.controls import FILTER_CHEVRON, chip, dropdown, pick_row, range_control, rich_pick, stat_tile
 from evaluatorq.dashboard.report_kit import tag
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.tables import flipped, sortable_th
@@ -110,7 +110,7 @@ class _State:
     x: str
     mix: PriceMix
     min_score: float
-    developer: str
+    developers: list[str]
     unknown_x: str
     indices: list[str]
     efforts: list[str]
@@ -122,55 +122,83 @@ class _State:
         return self.index == 'intelligence'
 
 
-def _select(
-    name: str, label: str, options: list[tuple[str, str]], current: str, *, disabled: str = '', title: str = ''
-) -> str:
-    """A labelled `<select>`; a non-empty `disabled` is the reason shown on the greyed-out control."""
-    items = ''.join(
-        f'<option value="{esc(v)}"{" selected" if v == current else ""}>{esc(text)}</option>' for v, text in options
+def _field(label: str, name: str, control: str, *, off: str = '', title: str = '') -> str:
+    """A labelled toolbar control; a non-empty `off` is the reason the control is greyed out and inert.
+
+    An inert control still submits its hidden input, so a choice survives while it does not apply.
+    """
+    tip = off or title
+    tip_attr = f' title="{esc(tip)}"' if tip else ''
+    if off:
+        control = f'<span class="models-field-off" inert>{control}</span>'
+    return (
+        f'<span class="models-field{" is-off" if off else ""}"{tip_attr}>'
+        f'<label class="models-field-label" for="{esc(name)}">{esc(label)}</label>{control}</span>'
     )
-    dis = f' disabled title="{esc(disabled)}"' if disabled else ''
-    tip = f' title="{esc(title)}"' if title else ''
-    return f'<label{tip}>{esc(label)} <select name="{name}"{dis}>{items}</select></label>'
 
 
-def _checkbox(name: str, label: str, q: dict[str, str]) -> str:
-    return f'<label><input type="checkbox" name="{name}" value="1"{" checked" if q.get(name) else ""}> {esc(label)}</label>'
+# The More filters toggles: query name and chip label. Each submits `1` when on.
+_TOGGLES = {'frontier': 'Frontier only', 'disabled': 'Include disabled models', 'no_estimate': 'Hide estimated scores'}
+
+
+def _more_active(q: dict[str, str], st: _State) -> int:
+    """How many filters inside More filters differ from the page's defaults, for the badge on its closed trigger."""
+    return sum((bool(st.effort), st.min_score != MIN_SEAT_INDEX, *(bool(q.get(k)) for k in _TOGGLES)))
 
 
 def _filters_html(q: dict[str, str], st: _State) -> str:
-    mix_options = [(name, _MIX_OPTION_LABELS[name]) for name in PRICE_MIXES]
+    mix_options = [(name, pick_row(_MIX_OPTION_LABELS[name])) for name in PRICE_MIXES]
     if st.mix.name is None:
-        mix_options.append((st.mix.ratio, f'Custom: {st.mix.ratio}'))
-    # `change` bubbles, so one handler on the form submits for every control.
-    return (
-        f'<form class="models-filters" method="get" action="{ROUTE}" onchange="this.requestSubmit()">'
-        + _select('index', 'Score', [(i, INDEX_AXES[i].label) for i in st.indices], st.index)
-        + _select(
-            'effort',
+        mix_options.append((st.mix.ratio, pick_row(f'Custom: {st.mix.ratio}')))
+    effort_options = [('', pick_row('Default level')), *((e, pick_row(e)) for e in st.efforts)]
+    more_rows = (
+        _field(
             'Reasoning level',
-            [('', 'Default level'), *((e, e) for e in st.efforts)],
-            st.effort,
-            disabled=''
+            'effort',
+            rich_pick('effort', st.effort, effort_options, current=effort_options[0][1]),
+            off=''
             if st.effort_allowed
             else 'Domain indices exist only at the one effort Artificial Analysis benchmarked',
         )
-        + _select('x', 'X axis', [(v, X_AXIS_SPECS[v].short_label) for v in X_AXES], st.x)
-        + _select(
-            'mix',
+        + '<div title="Models scoring below this on the chosen index are not plotted. 0 shows every model.">'
+        + range_control(
+            'min_score', 'Minimum score', min_val=0, max_val=100, step='1', sel=[f'{st.min_score:g}'], floor=True
+        )
+        + '</div><div class="filter-chip-row">'
+        + ''.join(
+            chip(name, '1', checked=bool(q.get(name)), dot_cls='chip-dot-jade', label=label)
+            for name, label in _TOGGLES.items()
+        )
+        + '</div>'
+    )
+    active = _more_active(q, st)
+    badge = f'<span class="filter-dd-more-badge">{active}</span>' if active else ''
+    more = (
+        '<details id="filter-dd-more" class="filter-dd filter-dd-more">'
+        f'<summary class="filter-dd-trigger"><span class="filter-dd-name">More filters</span>{badge}{FILTER_CHEVRON}'
+        f'</summary><div class="filter-dd-more-body">{more_rows}</div></details>'
+    )
+    # `change` bubbles, so one handler on the form submits for every control. A search box also fires `change`
+    # when it loses focus; submitting then would swap the page and drop the typed text.
+    return (
+        f'<form class="models-filters" method="get" action="{ROUTE}"'
+        """ onchange="if (!event.target.matches('.facet-search')) this.requestSubmit()">"""
+        + _field(
+            'Score',
+            'index',
+            rich_pick('index', st.index, [(i, pick_row(INDEX_AXES[i].label)) for i in st.indices], filterable=True),
+        )
+        + _field('X axis', 'x', rich_pick('x', st.x, [(v, pick_row(X_AXIS_SPECS[v].short_label)) for v in X_AXES]))
+        + _field(
             'Price mix',
-            mix_options,
-            st.mix.name or st.mix.ratio,
-            disabled='The mix applies only to the price axis' if st.x != 'price' else '',
+            'mix',
+            rich_pick('mix', st.mix.name or st.mix.ratio, mix_options),
+            off='The mix applies only to the price axis' if st.x != 'price' else '',
             title='How the price axis blends token prices, as cache read : cache write : fresh input : output. Add '
             '?mix=READ:WRITE:FRESH:OUTPUT to the address for your own ratio.',
         )
-        + _select('developer', 'Developer', [('', 'All developers'), *((v, v) for v in st.vendors)], st.developer)
-        + '<label title="Models scoring below this on the chosen index are not plotted. 0 shows every model.">'
-        f'Score at least <input type="number" name="min_score" min="0" step="any" value="{st.min_score:g}"></label>'
-        + _checkbox('frontier', 'Frontier only', q)
-        + _checkbox('disabled', 'Include disabled models', q)
-        + _checkbox('no_estimate', 'Hide estimated scores', q)
+        + dropdown('developer', 'Developer', st.vendors, st.developers, searchable=True)
+        + more
         + '<noscript><button type="submit">Apply</button></noscript></form>'
     )
 
@@ -418,7 +446,12 @@ _COLUMNS = (
 )
 
 
-def _head(columns: list[_Col], q: dict[str, str], result: ParetoResult, mix: PriceMix) -> str:
+def _link_params(params: dict[str, str], developers: list[str]) -> list[tuple[str, str]]:
+    """A link's query pairs: the non-empty single values, then one `developer` pair per chosen developer."""
+    return [(k, v) for k, v in params.items() if v and k != 'developer'] + [('developer', d) for d in developers]
+
+
+def _head(columns: list[_Col], q: dict[str, str], result: ParetoResult, mix: PriceMix, developers: list[str]) -> str:
     """The sortable header row: each link sorts by its column, and clicking the active one reverses the order."""
     spec = result.x_spec
     sort = q.get('sort', 'score')
@@ -436,7 +469,7 @@ def _head(columns: list[_Col], q: dict[str, str], result: ParetoResult, mix: Pri
         cells.append(
             sortable_th(
                 labels.get(col.key, col.label),
-                control=f'href="{ROUTE}?{esc(urlencode({k: v for k, v in params.items() if v}))}"',
+                control=f'href="{ROUTE}?{esc(urlencode(_link_params(params, developers)))}"',
                 active=active,
                 direction=flipped(natural) if reverse else natural,
                 numeric=col.numeric,
@@ -516,6 +549,7 @@ def _table(
     by_id: dict[str, ParetoPoint],
     mix: PriceMix,
     pool: dict[str, ScoredModel],
+    developers: list[str],
 ) -> str:
     # `result.frontier` is strongest first, so the model one score step up sits just before each point.
     frontier = result.frontier
@@ -546,7 +580,7 @@ def _table(
     body += _group('Excluded', excluded, len(columns))
     return (
         '<div class="models-table-wrap"><table class="models-table no-stack">'
-        f'{_head(columns, q, result, mix)}{body}</table></div>'
+        f'{_head(columns, q, result, mix, developers)}{body}</table></div>'
     )
 
 
@@ -699,19 +733,24 @@ async def models_page(req: Request) -> HTMLResponse:
     indices = available_indices(models)
     index = _choice(q.get('index'), tuple(indices), 'intelligence')
     efforts = available_efforts(models)
+    vendors = sorted({model_vendor(m) for m in models} - {''})
+    # The developer list submits every ticked box, so all of them ticked is the same as no developer filter.
+    developers = [d for d in req.query_params.getlist('developer') if d]
+    if set(vendors) <= set(developers):
+        developers = []
     state = _State(
         index=index,
         effort=_choice(q.get('effort'), tuple(efforts), '') if index == 'intelligence' else '',
         x=x,
         mix=mix,
         min_score=_min_score(q.get('min_score')),
-        developer=q.get('developer', ''),
+        developers=developers,
         unknown_x=q['x'] if q.get('x') and q['x'] not in X_AXES else '',
         indices=indices,
         efforts=efforts,
-        vendors=sorted({model_vendor(m) for m in models} - {''}),
+        vendors=vendors,
     )
-    pool = [m for m in models if not state.developer or matches_vendor(m, [state.developer])]
+    pool = [m for m in models if not state.developers or matches_vendor(m, state.developers)]
     result = pareto(
         pool,
         index=cast('Index', index),
@@ -727,7 +766,7 @@ async def models_page(req: Request) -> HTMLResponse:
         f'{_filters_html(q, state)}{_summary(result, state)}'
         f'<div class="models-chart">{_chart(result, by_id)}</div>'
         f'{_price_caption(mix) if x == "price" else ""}'
-        f'{_table(result, q, by_id, mix, {m.router_id: m for m in pool})}'
+        f'{_table(result, q, by_id, mix, {m.router_id: m for m in pool}, state.developers)}'
     )
 
 

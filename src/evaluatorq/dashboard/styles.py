@@ -4254,12 +4254,22 @@ _MODELS_CSS = """
 .models-row.is-excluded td { color: var(--text-faint); }
 .models-alert { padding: 12px 14px; border: 1px solid var(--red-100); border-radius: 8px; background: var(--red-50); color: var(--red-700); font-size: 13px; }
 .models-alert p { margin: 0 0 4px; }
-.models-filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; font-size: 12px; color: var(--text-body); }
-.models-filters label { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; max-width: 100%; min-width: 0; }
-.models-filters :is(select, input[type=number]) { font: inherit; padding: 4px 10px 4px 6px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface); color: var(--text-strong); }
-.models-filters select { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
-.models-filters select:disabled { opacity: .5; }
-.models-filters input[type=number] { width: 5em; }
+/* One toolbar line built from the shared filter controls; More filters opens a panel under its trigger. */
+.models-filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 12px; color: var(--text-body); }
+.models-field { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.models-field-label { color: var(--text-faint); font-size: 12px; }
+.models-field.is-off { cursor: not-allowed; }
+.models-field-off { display: contents; }
+.models-field.is-off .model-pick { opacity: .5; }
+.models-filters .model-pick-btn { padding: 5px 9px; }
+.models-filters .rich-pick .finder-facets { right: auto; min-width: 100%; }
+.models-filters .rich-pick .finder-facets .facet-list { width: max-content; min-width: 180px; max-width: 340px; }
+.models-filters .filter-dd-menu { left: 0; right: auto; }
+.models-filters .filter-dd-trigger { padding: 5px 9px; }
+.models-filters .filter-dd-more .filter-dd-trigger { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
+.models-filters .filter-dd-more-body { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: 300px; margin: 0; padding: 12px; gap: 12px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); }
+.models-filters .filter-dd-more-body .models-field { justify-content: space-between; }
+.models-filters .filter-dd-more-body .filter-label { display: block; margin-bottom: 4px; color: var(--text-faint); }
 .models-chart { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px; background: var(--surface); overflow-x: auto; }
 .models-chart .vega-embed { width: 100%; min-width: 480px; }
 @media (max-width: 640px) { .models-chart .vega-embed { min-width: 360px; } }

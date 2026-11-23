@@ -41,6 +41,7 @@ from evaluatorq.dashboard.controls import (
     FILTER_CHEVRON,
     chip,
     dropdown,
+    pick_row,
     range_control,
     range_engaged,
     rich_pick,
@@ -940,15 +941,6 @@ _OAUTH_BADGES = {
 }
 
 
-def _pick_row(title: str, note: str = '', badge: tuple[str, str] | None = None) -> str:
-    """One rich picker row: a bold title, a muted note, and an optional ``status-badge`` (class, text)."""
-    note_html = f'<span class="config-note">{esc(note)}</span>' if note else ''
-    badge_html = (
-        f'<span class="status-badge {badge[0]}"><span class="dot"></span>{esc(badge[1])}</span>' if badge else ''
-    )
-    return f'<span class="rich-pick-id"><strong>{esc(title)}</strong>{note_html}</span>{badge_html}'
-
-
 def oauth_session_field(value: str, sessions: Sequence[OAuthSession]) -> str:
     """The CLI OAuth server field: each saved CLI login with its checked token status.
 
@@ -961,17 +953,17 @@ def oauth_session_field(value: str, sessions: Sequence[OAuthSession]) -> str:
         )
     options: list[tuple[str, str]] = []
     if all(session.server.rstrip('/') != value.rstrip('/') for session in sessions):
-        options.append((value, _pick_row(value, 'No saved login on this server', ('failed', 'No login'))))
+        options.append((value, pick_row(value, 'No saved login on this server', ('failed', 'No login'))))
     # An unreadable login has no server to submit, so it is listed but not selectable.
     disabled = [
-        _pick_row(session.host, f'Run orq auth login for {session.host}', _OAUTH_BADGES['unreadable'])
+        pick_row(session.host, f'Run orq auth login for {session.host}', _OAUTH_BADGES['unreadable'])
         for session in sessions
         if session.status == 'unreadable'
     ]
     for session in sessions:
         if session.status != 'unreadable':
             account = ' · '.join(part for part in (session.user, session.workspace) if part)
-            options.append((session.server, _pick_row(session.host, account, _OAUTH_BADGES[session.status])))
+            options.append((session.server, pick_row(session.host, account, _OAUTH_BADGES[session.status])))
     return '<label class="settings-auth-detail-label" for="orq_oauth_server">CLI session</label>' + rich_pick(
         'orq_oauth_server', value, options, disabled=disabled
     )
@@ -991,14 +983,14 @@ def oauth_scope_field(scope: OAuthScopes, workspace: str, project_id: str) -> st
     if workspace not in workspace_ids:
         workspace = ''
     selected_id = workspace_ids.get(workspace)
-    workspaces = [(item.key, _pick_row(item.key)) for item in scope.workspaces]
-    projects = [('', _pick_row('All projects'))]
+    workspaces = [(item.key, pick_row(item.key)) for item in scope.workspaces]
+    projects = [('', pick_row('All projects'))]
     projects.extend(
-        (item.id, _pick_row(item.name, item.id)) for item in scope.projects if item.workspace_id == selected_id
+        (item.id, pick_row(item.name, item.id)) for item in scope.projects if item.workspace_id == selected_id
     )
     if not scope.error and not any(option == project_id for option, _ in projects):
         project_id = ''
-    project_current = _pick_row(project_id) if scope.error and project_id else projects[0][1]
+    project_current = pick_row(project_id) if scope.error and project_id else projects[0][1]
     error_html = f'<span class="settings-error" role="alert">{esc(scope.error)}</span>' if scope.error else ''
     placeholder = '<span class="rich-pick-placeholder">Choose a workspace</span>'
     return (
@@ -1020,17 +1012,17 @@ def profile_field(chosen: str, profiles: Sequence[Any], *, describedby: str = ''
     disabled: list[str] = []
     current = '<span class="rich-pick-placeholder">Choose a profile</span>'
     if chosen and all(profile.name != chosen for profile in profiles):
-        current = _pick_row(chosen, 'Not in the Orq CLI any more', ('failed', 'Unavailable'))
+        current = pick_row(chosen, 'Not in the Orq CLI any more', ('failed', 'Unavailable'))
         disabled.append(current)
     for profile in profiles:
         server = profile.server or 'Default Orq server'
         if '*' in profile.api_key:
-            row = _pick_row(profile.name, server, ('failed', 'Key hidden'))
+            row = pick_row(profile.name, server, ('failed', 'Key hidden'))
             disabled.append(row)
             if profile.name == chosen:
                 current = row
         else:
-            options.append((profile.name, _pick_row(profile.name, server)))
+            options.append((profile.name, pick_row(profile.name, server)))
     return rich_pick(
         'orq_profile', chosen, options, disabled=disabled, current=current, describedby=describedby, compact=True
     )

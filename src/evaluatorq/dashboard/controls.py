@@ -25,6 +25,15 @@ def stat_tile(label: str, value: str, unit: str = '', sub: str = '') -> str:
     )
 
 
+def pick_row(title: str, note: str = '', badge: tuple[str, str] | None = None) -> str:
+    """One rich picker row: a bold title, a muted note, and an optional ``status-badge`` (class, text)."""
+    note_html = f'<span class="config-note">{esc(note)}</span>' if note else ''
+    badge_html = (
+        f'<span class="status-badge {badge[0]}"><span class="dot"></span>{esc(badge[1])}</span>' if badge else ''
+    )
+    return f'<span class="rich-pick-id"><strong>{esc(title)}</strong>{note_html}</span>{badge_html}'
+
+
 def rich_pick(
     name: str,
     value: str,
