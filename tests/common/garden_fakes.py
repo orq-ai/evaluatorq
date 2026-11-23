@@ -49,6 +49,7 @@ PRICES: dict[str, tuple[float, float]] = {
     'wafer/GLM-5.3-Flash': (0.05, 0.20),
     'openai/eu.gpt-6-luna': (0.11, 0.55),
     'alibaba/qwen3.6-35b-a3b': (0.248, 1.485),
+    'google-ai/gemini-4-carbon': (2.0, 10.0),  # public /v2/model-catalog card, 2026-11-23
 }
 
 
@@ -113,4 +114,7 @@ def card(provider: str, model_id: str, index: object = 40.0, **overrides: Any) -
         'artificial_intelligence': {'artificial_analysis_intelligence_index': index},
         'deprecated': False,
     }
+    if isinstance(index, (int, float)) and not isinstance(index, bool):
+        # A ladder rung on the headline, so the card ranks on a v5 score like a live one.
+        base['reasoning_efforts'] = {'high': {'intelligence_index': index, 'index_version': 'v5'}}
     return base | overrides

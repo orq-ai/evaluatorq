@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import weakref
 from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -45,6 +46,7 @@ from pydantic import BaseModel, Field
 from evaluatorq.common.env_config import env_float
 from evaluatorq.common.llm_client import orq_base_url
 from evaluatorq.common.model_catalogue import ModelCatalogueError, _finite_nonneg
+from evaluatorq.common.retry import with_retry
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -452,7 +454,10 @@ def scored_model_from_card(card: Mapping[str, Any]) -> ScoredModel | None:
 
     A card whose default effort rung names another AA index version is None
     too, with a warning: its headline carries no version, so it cannot stand
-    in for the off-version rung the card would be ranked on.
+    in for the off-version rung the card would be ranked on. For the same
+    reason a card with a ladder is None when neither its default effort nor
+    its headline lands on a REQUIRED_INDEX_VERSION rung. A card with no ladder
+    ranks on its headline; load_garden names those cards.
 
     The headline is `artificial_intelligence.artificial_analysis_intelligence_index`;
     `_headline_rung` says which rung it was measured at, when that is known. A
@@ -482,6 +487,13 @@ def scored_model_from_card(card: Mapping[str, Any]) -> ScoredModel | None:
             REQUIRED_INDEX_VERSION,
         )
         return None
+    headline_effort = _headline_rung(card=card, headline=headline, rungs=rungs, default=default_effort)
+    has_ladder = bool(_effort_ladder(card))
+    if has_ladder and (default_effort is None or default_effort not in rungs) and headline_effort not in rungs:
+        # A ladder shows the card's scores can sit on more than one version, and
+        # the headline names none, so it ranks only when it equals a
+        # REQUIRED_INDEX_VERSION rung; load_garden names these cards in one warning.
+        return None
     location = card.get('location')
     provider = card.get('provider')
     return ScoredModel(
@@ -491,7 +503,7 @@ def scored_model_from_card(card: Mapping[str, Any]) -> ScoredModel | None:
         output_price=output_price,
         region='europe' if location == ['eu'] else None,
         provider=provider.get('id') if isinstance(provider, Mapping) else router_id.split('/')[0],
-        headline_effort=_headline_rung(card, headline, rungs, default_effort),
+        headline_effort=headline_effort,
         effort_indices=rungs,
         effort_parameter=effort_parameter,
         default_effort=default_effort,
@@ -506,27 +518,41 @@ def garden_from_cards(cards: Iterable[Mapping[str, Any]]) -> dict[str, ScoredMod
 
 # Base URL -> the non-deprecated public cards, fetched once per process.
 _public_cards: dict[str, tuple[dict[str, Any], ...]] = {}
+# One lock per event loop: an asyncio.Lock binds to the first loop that awaits it.
+_public_cards_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
 
 
 async def public_cards(*, timeout_s: float | None = None) -> tuple[dict[str, Any], ...]:
     """Every non-deprecated card in the keyless public `GET /v2/model-catalog`, all pages.
 
-    Cached per host for the process. A failed fetch is not cached, so the next
-    call retries. `timeout_s` defaults to EVALUATORQ_CATALOGUE_TIMEOUT_S.
+    Cached per host for the process; concurrent cold callers share one fetch.
+    A 429, 5xx or transport error is retried by `with_retry`. A failed fetch is
+    not cached, so the next call fetches again. `timeout_s` defaults to
+    EVALUATORQ_CATALOGUE_TIMEOUT_S.
 
     Raises:
         ModelCatalogueError: The fetch failed, a page was unreadable, or the
             catalogue reported more pages but returned none or repeated a cursor.
     """
     base = orq_base_url()
-    cached = _public_cards.get(base)
-    if cached is not None:
-        return cached
+    lock = _public_cards_locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
+    async with lock:
+        cached = _public_cards.get(base)
+        if cached is None:
+            cached = _public_cards[base] = await with_retry(
+                lambda: _fetch_public_cards(base=base, timeout_s=timeout_s), label='public model catalogue fetch'
+            )
+    return cached
+
+
+async def _fetch_public_cards(*, base: str, timeout_s: float | None) -> tuple[dict[str, Any], ...]:
     url = f'{base}/v2/model-catalog'
     cards: list[dict[str, Any]] = []
     cursor: str | None = None
     try:
-        async with httpx.AsyncClient(timeout=timeout_s or env_float('EVALUATORQ_CATALOGUE_TIMEOUT_S')) as http:
+        async with httpx.AsyncClient(
+            timeout=timeout_s if timeout_s is not None else env_float('EVALUATORQ_CATALOGUE_TIMEOUT_S')
+        ) as http:
             while True:
                 response = await http.get(url, params={'starting_after': cursor} if cursor else None)
                 response.raise_for_status()
@@ -547,13 +573,19 @@ async def public_cards(*, timeout_s: float | None = None) -> tuple[dict[str, Any
                         f'model catalogue repeated the page after {cursor}; pagination does not advance'
                     )
                 cursor = data[-1]['id']
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429 or exc.response.status_code >= 500:
+            raise
+        raise ModelCatalogueError(
+            f'public model catalogue fetch failed: {exc}', status_code=exc.response.status_code
+        ) from exc
+    except httpx.TransportError:
+        raise
     except (httpx.HTTPError, ValueError) as exc:
-        status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        raise ModelCatalogueError(f'public model catalogue fetch failed: {exc}', status_code=status) from exc
+        raise ModelCatalogueError(f'public model catalogue fetch failed: {exc}') from exc
     if not cards:
         raise ModelCatalogueError('public model catalogue returned no cards')
-    _public_cards[base] = result = tuple(cards)
-    return result
+    return tuple(cards)
 
 
 def reset_public_cards() -> None:
@@ -574,8 +606,11 @@ async def load_garden() -> dict[str, ScoredModel]:
 
     A card whose ladder names no REQUIRED_INDEX_VERSION rung is left out with
     a warning, since its scores sit on another scale, and so is one whose
-    default effort rung names another version. A card with no ladder
-    carries no version and is kept, with one warning naming them. A scored card
+    default effort rung names another version, or whose ladder has no
+    REQUIRED_INDEX_VERSION score at its default effort or headline. A card
+    with no ladder ranks on its headline, taken to be on the catalogue's
+    version once the catalogue carries REQUIRED_INDEX_VERSION rungs; one
+    warning names those cards. A scored card
     left out for its price, which is not a USD per-token one, is named in a
     warning too.
 
@@ -618,13 +653,28 @@ async def load_garden() -> dict[str, ScoredModel]:
         logger.warning(
             '{} scored catalogue cards have a {} and are left out: {}', len(ids), reason, ', '.join(sorted(ids))
         )
-    unversioned = sorted(router_id for router_id in garden if not versions[router_id])
+    unversioned = sorted(
+        card['id']
+        for card in kept
+        if card['id'] not in garden
+        and _price_gap(card) is None
+        and isinstance(card.get('artificial_intelligence'), Mapping)
+        and _score(card['artificial_intelligence'].get('artificial_analysis_intelligence_index')) is not None
+    )
     if unversioned:
         logger.warning(
-            '{} seatable catalogue cards have no effort ladder, so their index version is unknown and is taken as {}: {}',
+            '{} scored catalogue cards have no AA index {} score at their default effort or headline and are left out: {}',
             len(unversioned),
             REQUIRED_INDEX_VERSION,
             ', '.join(unversioned),
+        )
+    headline_only = sorted(router_id for router_id in garden if not versions[router_id])
+    if headline_only:
+        logger.warning(
+            '{} catalogue cards have no effort ladder and rank on their unversioned headline, taken as {}: {}',
+            len(headline_only),
+            REQUIRED_INDEX_VERSION,
+            ', '.join(headline_only),
         )
     if not garden:
         raise ModelCatalogueError('public model catalogue has cards but none with a USD price and a score')

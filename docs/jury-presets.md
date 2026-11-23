@@ -16,12 +16,12 @@ correctness = llm_jury(
 
 Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, uncached, one call per judge per item. The token counts are a flat 3:1 assumption, the same for every seat whatever its reasoning effort, and the same ratio the seats are ranked on. Every figure is recomputed by a weekly check from the live model catalog's rates (seats priced from `MANUAL_MODEL_CARDS` use that register's dated rates), so a repricing shows up as a failing run rather than a quietly wrong table.
 
-Hosting in brackets is the region the catalog lists for each endpoint on 2026-11-17. `cheap-aggregate` and `open-weight-portable` seat `tencent/deepseek-v4.1-flash`, which is served only from Singapore, and `strong-jury` keeps it in reserve. `balanced-trio`, the default, seats the same model on Baseten instead at twice the rate, so the default never routes to Singapore unasked. Tencent doubles its rate on weekdays from 01:00 to 04:00 and from 06:00 to 10:00 UTC, which adds about $0.53 per 1,000 items for each Tencent seat, so the 4.05 and 8.70 figures are best-case costs and run to about 4.58 and 9.23 inside those hours.
+Hosting in brackets is the region the catalog lists for each endpoint on 2026-11-17. `cheap-aggregate` and `open-weight-portable` seat `tencent/deepseek-v4.1-flash`, which is served only from Singapore, and `strong-jury` keeps it in reserve. `balanced-trio`, the default, seats the same model on Baseten instead at twice the rate, so the default never routes to Singapore unasked. Tencent doubles its rate on weekdays from 01:00 to 04:00 and from 06:00 to 10:00 UTC, which adds about $0.53 per 1,000 items for each Tencent seat, so the 4.05 and 8.70 figures are best-case costs and run to about 4.58 and 9.23 inside those hours. If you do not want a judge served from Singapore, list the panel by hand with `baseten/deepseek-v4.1-flash` in place of the Tencent seat, as `balanced-trio` does; it serves the same weights for about $0.53 more per 1,000 items.
 
 | Preset | Judges (hosting) | Aggregation | $ / 1k | Reserve (hosting) |
 | --- | --- | --- | --- | --- |
 | **`balanced-trio`** (default) | `baseten/deepseek-v4.1-flash` (Global)<br>`openai/gpt-6-luna` (US)<br>`google-ai/gemini-3.8-flash` (Global) | majority | 4.45 | `deepseek/deepseek-flash` (Global) |
-| **`strong-jury`** | `anthropic/claude-opus-5-5` (Global)<br>`openai/gpt-6.1-sol` (US)<br>`google-ai/gemini-3.8-flash` (Global) | majority | 27.00 | `tencent/deepseek-v4.1-flash` (Singapore) |
+| **`strong-jury`** | `anthropic/claude-opus-5-5` (Global)<br>`openai/gpt-6.1-sol` (US)<br>`google-ai/gemini-4-carbon` (Global) | majority | 32.00 | `tencent/deepseek-v4.1-flash` (Singapore) |
 | **`cheap-aggregate`** | `google-ai/gemini-3.8-flash` (Global)<br>`tencent/deepseek-v4.1-flash` (Singapore)<br>`wafer/MiniMax-M3.1-Flash` (Global) | majority | 4.05 | `wafer/GLM-5.3-Flash` (Global) |
 | **`open-weight-portable`** | `tencent/deepseek-v4.1-flash` (Singapore)<br>`moonshotai/kimi-k3.1-pro` (Global)<br>`wafer/GLM-5.3-Flash` (Global) | majority | 8.70 | `wafer/MiniMax-M3.1-Flash` (Global) |
 | **`eu-region`** | `aws/eu.anthropic.claude-haiku-5-5` (EU)<br>`google/eu.gemini-3.7-flash` (EU)<br>`openai/eu.gpt-6-luna` (EU) | majority | 4.18 | `google/eu.claude-sonnet-5` (EU) |
@@ -33,7 +33,7 @@ Hosting in brackets is the region the catalog lists for each endpoint on 2026-11
 
 **`balanced-trio`** is the default and the right answer for most subjective evaluation. Three lineages means three different ways of being wrong, which is the whole reason to run a panel instead of one judge three times.
 
-**`strong-jury`** costs about six times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
+**`strong-jury`** costs about seven times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it. For the strongest Anthropic seat, list the panel by hand with `anthropic/claude-fable-5-2` in place of Opus 5.5: it scores 61.8 against 48.2 and raises the panel to about $48 per 1,000 items.
 
 **`cheap-aggregate`** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it seats the same Gemini model and the same DeepSeek weights as `balanced-trio` (DeepSeek on Tencent instead of Baseten) and costs a little less; the difference is the third lineage (MiniMax instead of OpenAI).
 
@@ -64,7 +64,7 @@ A preset sends no reasoning effort, so each seat runs at its provider's default.
 from evaluatorq import get_preset
 
 get_preset("strong-jury").seated_efforts()
-# {'anthropic/claude-opus-5-5': 'medium', 'openai/gpt-6.1-sol': 'medium', 'google-ai/gemini-3.8-flash': 'medium'}
+# {'anthropic/claude-opus-5-5': 'medium', 'openai/gpt-6.1-sol': 'medium', 'google-ai/gemini-4-carbon': 'medium'}
 ```
 
 Seats are ranked on their Artificial Analysis score at that default effort. Where a card has no score at its default, it ranks on its headline index, which carries no reasoning level: `tencent/deepseek-v4.1-flash` runs at `high` while Artificial Analysis measures it only at `max` and `none`, so it ranks on its `max` headline although it runs lower, and `wafer/GLM-5.3-Flash`'s card carries a headline with no rungs at all. `openai/gpt-6.1-terra` has no score in the catalog, so it is priced and ranked from its `MANUAL_MODEL_CARDS` entry. Gemini 4 Hydrogen is listed by Google as a stable Gemini 4 model, but stays out of the panel until its live card carries an Artificial Analysis score; Gemini 4 Carbon is scored and waits on a reviewer decision about which preset takes it.
@@ -79,6 +79,8 @@ Two more limits worth knowing before you quote a number:
 ## How a preset stays current
 
 Seats are chosen in this package. `evaluatorq.common.model_frontier` reads the keyless public `/v2/model-catalog`, where scored cards carry Artificial Analysis intelligence scores per reasoning effort beside their rates, and ranks each model at its default effort on a 3:1 blended price. Compare seats within each lineage, because lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
+
+The public catalog lists every model on the platform, not the ones your workspace has enabled, so a preset can seat a model your workspace has switched off; that judge then fails at call time with the router's error. Enable the model, or list the panel by hand.
 
 Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh; the exceptions are seats the catalog lists without a score, which are ranked from the dated `MANUAL_MODEL_CARDS` register. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog; a failure leaves that run red in Actions and opens a pull request (see below). Each failure names the seat and the register to update:
 

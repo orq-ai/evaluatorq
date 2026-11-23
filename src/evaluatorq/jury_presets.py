@@ -285,14 +285,16 @@ STRONG_JURY = JuryPreset(
         # Reseated 2026-11-10 from gpt-5.6-sol ($8.00 blend): on AA v5 GPT-6.1
         # Sol is 46.3 at medium for $4.00 against 29.0 (estimated). 2026-11-17.
         'openai/gpt-6.1-sol',
-        # Reseated 2026-11-10 from gemini-3.6-flash, as on balanced-trio.
-        'google-ai/gemini-3.8-flash',
+        # Reseated 2026-11-23 from gemini-3.8-flash (v5 30.1, $1.50 blend):
+        # Gemini 4 Carbon is 58.3 at its medium default for $4.00, level with
+        # the other two seats for $5 more per 1k items.
+        'google-ai/gemini-4-carbon',
     ),
     # Reseated 2026-11-10 from deepseek-v4-pro, then to Tencent 2026-11-17 for
     # price; a reserve only runs when a seat retires.
     reserve_judges=('tencent/deepseek-v4.1-flash',),
     use_when='Customer-facing benchmarks, preference data, anything that compounds.',
-    estimated_cost_per_1k=27.00,
+    estimated_cost_per_1k=32.00,
 )
 
 CHEAP_AGGREGATE = JuryPreset(
@@ -487,9 +489,10 @@ why not. An empty register means the arithmetic and the shipped presets agree.
 
 REVIEWED_SUCCESSORS: dict[str, str] = {
     'gemini-4-carbon': (
-        'google-ai/gemini-4-carbon, listed 2026-11-11, scores 58.3 at its medium '
-        'default for $2/$10 per 1M ($4.00 blend), on staging only (2026-11-17). '
-        'Not seated pending a reviewer decision on which preset should take it.'
+        'google-ai/gemini-4-carbon scores 58.3 at its medium default for $2/$10 per 1M '
+        '($4.00 blend). Seated on strong-jury 2026-11-23; balanced-trio and '
+        'cheap-aggregate keep gemini-3.8-flash at a $1.50 blend, since they are priced '
+        'as budget panels.'
     ),
     'gemini-4-hydrogen': _UNSCORED,
     'gemini-decision-1': _UNSCORED,
@@ -533,7 +536,7 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'glm-4-32b-0414-128k': _OLDER_GENERATION,
     'glm-4.5-airx': _OLDER_GENERATION,
     'glm-4.5-x': _OLDER_GENERATION,
-    'claude-fable-5-2': 'AA v5 61.8 at its high default for $8/$40 per 1M ($16.00 blend), against the seated Opus 5.5 at 48.2 for $4/$20: twice the rate. Seated in the Anthropic Only router pool; not taken for strong-jury pending a reviewer decision on cost. 2026-11-17.',
+    'claude-fable-5-2': 'AA v5 61.8 at its high default for $8/$40 per 1M ($16.00 blend), against the seated Opus 5.5 at 48.2 for $4/$20: twice the rate for a seat already level with the other two. Kept as an opt-in for strong-jury (docs/jury-presets.md), seated in the Anthropic Only router pool. 2026-11-23.',
     'claude-mythos-5-2': '$8/$40 per 1M, the Fable 5.2 rate, with no AA index on the public card (2026-11-17). Review for strong-jury once scored.',
     'deepseek-v4.1-flash-1017': _UNSCORED,
     'gemini-nano-banana-2.1': _NOT_A_JUDGE,
@@ -543,9 +546,9 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'glm-5.3-flashx': 'Same 27.8 AA v5 index as the seated wafer/GLM-5.3-Flash at $0.37/$1.25 against $0.05/$0.20: same score, seven times the price. 2026-11-17.',
     'deepseek-v4.1-flash-fast': 'Baseten fast variant at $0.60/$2.40 per 1M, AA v5 index 29.4, the same as the seated tencent/deepseek-v4.1-flash at four times its 3:1 blend ($1.05 against $0.263). 2026-11-17.',
     'gemini-4-argon': (
-        "AA v5 index 50.4 at high, $2/$10 per 1M ($4.00 blend), against strong-jury's gemini-3.8-flash "
-        'at a $1.50 blend. Its card defaults to medium, which AA does not score (2026-11-17). Review for '
-        'strong-jury alongside gemini-4-carbon.'
+        'AA v5 index 50.4 at high, $2/$10 per 1M ($4.00 blend), the price of the seated '
+        'gemini-4-carbon (58.3 at medium) for a lower score. Its card defaults to medium, '
+        'which AA does not score (2026-11-17).'
     ),
 }
 
