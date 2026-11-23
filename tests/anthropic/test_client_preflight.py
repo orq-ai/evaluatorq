@@ -393,7 +393,8 @@ async def test_an_insights_run_that_only_clusters_still_checks_the_model_that_me
 
     message = str(info.value)
     assert '(insights.labels)=' in message
-    assert 'insights.summary' not in message, 'the summary model is a Claude id and is not the problem'
+    # An explicit summary model is named by its argument, so that is the label to look for.
+    assert 'summary_model' not in message and 'claude-sonnet-5-5' not in message, 'the summary model is a Claude id'
     assert fake.messages.calls == []
     assert not (tmp_path / 'runs').exists(), 'nothing was written for a run that never started'
 
