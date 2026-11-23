@@ -96,6 +96,10 @@ def _build_stats_table(report: RedTeamReport, summary: ReportSummary) -> Table:
         )
         stats.add_row('Jury Health', value)
 
+    # A judge that abstains and still sends a verdict is read as abstaining. Shown for one judge or a panel.
+    if summary.samples_with_coerced_verdict:
+        stats.add_row('Coerced Verdicts', Text(f'{summary.samples_with_coerced_verdict} samples', style='yellow'))
+
     # Datapoint breakdown (hybrid runs)
     breakdown = summary.datapoint_breakdown
     if breakdown:

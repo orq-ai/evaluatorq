@@ -2022,6 +2022,13 @@ class ReportSummary(BaseModel):
         description='Panel-of-judges operational health across multi-judge samples (RES-1649): judge failures, '
         'replacements, ties, inconclusive panels, repetition failures, abstentions. None for single-judge runs.',
     )
+    samples_with_coerced_verdict: int = Field(
+        default=0,
+        ge=0,
+        description='Samples where a judge sent abstain=True together with a verdict on at least one pass, which was '
+        'coerced to an abstention. Counts a panel (JuryVote.repetitions_coerced) and the single-judge path '
+        "(raw_output['verdict_coerced']) alike, so it is set on single-judge runs too.",
+    )
     datapoint_breakdown: dict[str, int] | None = Field(
         default=None,
         description='Datapoint counts by source: static, template_dynamic, generated_dynamic (hybrid runs only)',

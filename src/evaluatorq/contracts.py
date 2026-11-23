@@ -1098,7 +1098,7 @@ class JuryVote(BaseModel):
         default=0,
         ge=0,
         description='Count of repetitions flagged verdict_coerced. Also stamped on the orq.judge span as '
-        'judge.repetitions_coerced. No report renders it yet.',
+        'judge.repetitions_coerced. The red-team report and the dashboard show it.',
     )
 
     @model_validator(mode='after')

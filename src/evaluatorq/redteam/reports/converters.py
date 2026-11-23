@@ -994,6 +994,21 @@ def _compute_jury_reliability(results: list[RedTeamResult]) -> JuryReliability |
     return JuryReliability(krippendorff_alpha=alpha, samples=samples)
 
 
+def coerced_passes(evaluation: Any) -> int:
+    """How many judge passes of one result were coerced from a verdict to an abstention.
+
+    A panel records it per judge (``JuryVote.repetitions_coerced``). The single-judge path builds no vote, so its
+    writers leave a ``verdict_coerced`` flag in ``raw_output``; that counts as one pass.
+    """
+    if evaluation is None:
+        return 0
+    jury = getattr(evaluation, 'jury', None)
+    if jury is not None:
+        return sum(vote.repetitions_coerced for vote in jury.votes)
+    raw_output = getattr(evaluation, 'raw_output', None)
+    return 1 if isinstance(raw_output, dict) and raw_output.get('verdict_coerced') is True else 0
+
+
 def _compute_jury_health(results: list[RedTeamResult]) -> JuryHealth | None:
     """Roll per-sample jury panel health up into a run-level count (RES-1649).
 
@@ -1277,6 +1292,7 @@ def compute_report_summary(
         by_framework=by_framework,
         jury_reliability=_compute_jury_reliability(results),
         jury_health=_compute_jury_health(results),
+        samples_with_coerced_verdict=sum(1 for r in results if coerced_passes(r.evaluation)),
     )
 
 

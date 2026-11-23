@@ -152,6 +152,9 @@ def _render_summary_section(section: ReportSection) -> str:
     if health:
         h = JuryHealth.model_validate(health)
         detail_rows.append(['Jury Health', f'{h.issue_summary()} ({h.samples} multi-judge samples)'])
+    coerced = data.get('samples_with_coerced_verdict') or 0
+    if coerced:
+        detail_rows.append(['Coerced Verdicts', f'{coerced} samples (judge abstained and also sent a verdict)'])
     duration_seconds = data.get('duration_seconds')
     if duration_seconds is not None:
         mins, secs = divmod(int(duration_seconds), 60)
