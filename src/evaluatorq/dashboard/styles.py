@@ -3076,7 +3076,37 @@ _SIM_COMPARE_CSS = """
 .report-hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
 .report-hero-actions .cmp-bar { margin: 0; }
 
-/* Compare picker bar on the sim run overview and in the report hero. Controls
+/* Quiet compare button in the report hero's top-right corner. Comparing is an
+   occasional action, so the button reads as a text link until hovered; its
+   popover suggests earlier runs above the "any other run" picker. */
+.report-hero { position: relative; }
+.report-hero:has(> .cmp-menu) .report-hero-title { padding-right: 104px; }
+.cmp-menu { position: absolute; top: 0; right: 0; z-index: 20; }
+.cmp-menu-btn { display: inline-flex; align-items: center; height: 28px; padding: 0 10px;
+  list-style: none; border: 1px solid transparent; border-radius: var(--radius-md);
+  font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; color: var(--text-muted);
+  cursor: pointer; user-select: none; }
+.cmp-menu-btn::-webkit-details-marker { display: none; }
+.cmp-menu-btn:hover, .cmp-menu[open] > .cmp-menu-btn { border-color: var(--border-default);
+  background: var(--surface-card); color: var(--text-strong); }
+.cmp-menu-btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-menu-pop { position: absolute; top: calc(100% + 6px); right: 0; width: 340px; padding: 6px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  background: var(--surface-card); box-shadow: var(--shadow-lg); }
+.cmp-menu-label { padding: 8px 8px 4px; font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint); }
+.cmp-menu-item { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px;
+  border-radius: var(--radius-md); text-decoration: none; color: var(--text-body); }
+.cmp-menu-item:hover { background: var(--app-gray-50); }
+.cmp-menu-item:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-menu-name { font-size: 13px; font-weight: 500; color: var(--text-strong);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-menu-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.cmp-menu-pop .cmp-bar { margin: 0; padding: 4px 8px 6px; flex-wrap: nowrap; }
+.cmp-menu-pop .cmp-bar-label { display: none; }
+.cmp-menu-pop .cmp-bar select { flex: 1; min-width: 0; }
+
+/* Compare picker bar inside the report compare menu. Controls
    mirror the filter-rail trigger look (12.5px sans, card surface, default
    hairline, md radius) so the bar reads as part of the same control family. */
 .cmp-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 14px; }

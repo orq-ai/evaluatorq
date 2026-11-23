@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.common.cli_oauth import OAuthSession
     from evaluatorq.common.model_roles import Role
+    from evaluatorq.dashboard.compare_suggest import CompareCandidate
     from evaluatorq.dashboard.library import ReportCard
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
     from evaluatorq.dashboard.orq_scope import OAuthScopes
@@ -684,6 +685,25 @@ def run_compare_control(rid: str, choices: list[tuple[str, str]], action: str) -
         f'<select name="b" aria-label="Run B">{opts}</select>'
         '<button type="submit" class="btn-secondary">Compare</button>'
         '</form>'
+    )
+
+
+def compare_menu(rid: str, suggestions: list[CompareCandidate], choices: list[tuple[str, str]], action: str) -> str:
+    """The report hero's quiet compare button: a popover with suggested earlier
+    runs, then the "any other run" picker. Empty when there is no other run."""
+    picker = run_compare_control(rid, choices, action)
+    if not picker:
+        return ''
+    items = ''.join(
+        f'<a class="cmp-menu-item" href="{esc(action)}?{esc(urlencode({"a": rid, "b": c.rid}))}">'
+        f'<span class="cmp-menu-name">{esc(c.name)}</span>'
+        f'<span class="cmp-menu-meta">{c.when:%Y-%m-%d} · {esc(c.headline)}</span></a>'
+        for c in suggestions
+    )
+    earlier = f'<div class="cmp-menu-label">Earlier runs</div>{items}' if items else ''
+    return (
+        '<details class="cmp-menu"><summary class="cmp-menu-btn">⇄ Compare</summary>'
+        f'<div class="cmp-menu-pop">{earlier}<div class="cmp-menu-label">Any other run</div>{picker}</div></details>'
     )
 
 

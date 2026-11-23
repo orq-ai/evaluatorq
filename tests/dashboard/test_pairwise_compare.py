@@ -239,3 +239,42 @@ def test_leftover_counts_only_show_when_non_zero() -> None:
     extra = render_pairwise_compare_page('ra', 'rb', a, _run('b', [('q', 'A'), ('r', 'B')]))
     assert 'Only in run B' in extra
     assert '0 only in A, 1 only in B' in extra
+
+
+def _cand(rid: str, name: str):
+    from datetime import datetime, timezone
+
+    from evaluatorq.dashboard.compare_suggest import CompareCandidate
+
+    return CompareCandidate(rid, name, datetime(2026, 11, 18, tzinfo=timezone.utc), None, 'goal 74% · 40 conversations')
+
+
+def test_compare_menu_lists_suggestions_then_any_run() -> None:
+    from evaluatorq.dashboard.view import compare_menu
+
+    choices = [('r1', 'a'), ('r2', 'b'), ('r3', 'c')]
+    html = compare_menu('r1', [_cand('r2', 'agent v2'), _cand('r3', 'agent v1')], choices, '/compare/sim')
+    assert '<details class="cmp-menu"' in html and '⇄ Compare' in html
+    assert 'Earlier runs' in html and '2026-11-18 · goal 74% · 40 conversations' in html
+    first, second = html.index('/compare/sim?a=r1&amp;b=r2'), html.index('/compare/sim?a=r1&amp;b=r3')
+    assert first < second < html.index('class="cmp-bar"')
+
+
+def test_compare_menu_without_suggestions_shows_only_any_run() -> None:
+    from evaluatorq.dashboard.view import compare_menu
+
+    html = compare_menu('r1', [], [('r1', 'a'), ('r2', 'b')], '/compare/pairwise')
+    assert 'Earlier runs' not in html and 'class="cmp-bar"' in html
+
+
+def test_compare_menu_empty_when_no_other_run() -> None:
+    from evaluatorq.dashboard.view import compare_menu
+
+    assert compare_menu('r1', [], [('r1', 'a')], '/compare/sim') == ''
+
+
+def test_compare_menu_escapes_run_names() -> None:
+    from evaluatorq.dashboard.view import compare_menu
+
+    html = compare_menu('r1', [_cand('r2', '<b>x</b>')], [('r1', 'a'), ('r2', '<b>x</b>')], '/compare/sim')
+    assert '<b>x</b>' not in html
