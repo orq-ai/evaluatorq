@@ -51,7 +51,6 @@ from evaluatorq.common.model_catalogue import (
     _entry_metadata,
     _finite_nonneg,
     _parse_default_reasoning_effort,
-    _parse_pricing,
     _parse_reasoning_efforts,
     _reasoning_effort_config,
     model_cards,
@@ -873,12 +872,11 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
     autorouter = metadata.get('autorouter')
     v2 = (autorouter.get('v2') if isinstance(autorouter, dict) else None) or {}
     index = v2.get('intelligence_index') if isinstance(v2, dict) else None
-    input_cost, output_cost, _ = _card_rates(card)
+    # The same rates `cost_of` bills with, time-of-day averaging included, so the chart and a run's cost agree.
+    input_cost, output_cost, pricing = _card_rates(card)
     headline = _score(index)
     if headline is None or input_cost is None or output_cost is None:
         return None
-    # Read through the same parser `cost_of` bills with, so the chart and a run's cost use one rate.
-    pricing = _parse_pricing(str(card['provider']), str(card['model_id']), metadata)
     aa_pricing = v2.get('aa_pricing') if isinstance(v2, dict) else None
     aa_cache_read = (
         _finite_nonneg(aa_pricing.get('price_1m_cache_hit_tokens')) if isinstance(aa_pricing, dict) else None

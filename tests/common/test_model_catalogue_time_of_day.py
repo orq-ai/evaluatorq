@@ -274,3 +274,5 @@ def test_frontier_prices_the_card_at_the_averaged_rates():
     # Uses the real clock, which is after the recorded dated set.
     assert scored.input_price == pytest.approx(0.99)
     assert scored.output_price == pytest.approx(2.97)
+    # The cache-read rate drives the default 7:2:1 price mix, so it must be the averaged one too.
+    assert scored.cache_read_price == pytest.approx(0.033)
