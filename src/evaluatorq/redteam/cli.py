@@ -865,8 +865,16 @@ def _prompt_list(label: str) -> list[str]:
         items.append(item)
 
 
+def _choose(label: str, options: list[str], default: str) -> str:
+    """Ask until the answer is one of *options*; plain ``str`` prompts work on every Typer version."""
+    while True:
+        answer = typer.prompt(label, default=default).strip().lower()
+        if answer in options:
+            return answer
+        typer.echo(f'Error: choose one of {", ".join(options)}.', err=True)
+
+
 def _ask_definition(vuln_id: str | None) -> Any:
-    import click
     from pydantic import ValidationError
 
     from evaluatorq.redteam.custom import CustomVulnerability, JudgeExamples
@@ -877,13 +885,10 @@ def _ask_definition(vuln_id: str | None) -> Any:
         typer.echo('What kind of risk is it?')
         for key, (label, _) in _DOMAIN_CHOICES.items():
             typer.echo(f'  {key}. {label}')
-        choice = typer.prompt('Choose', default='1', type=click.Choice(list(_DOMAIN_CHOICES)), show_choices=False)
+        choice = _choose('Choose', list(_DOMAIN_CHOICES), default='1')
         domain = _DOMAIN_CHOICES[choice][1] or typer.prompt('Name the kind of risk').strip()
-        severity = typer.prompt(
-            'How bad is a failure?',
-            default=Severity.MEDIUM.value,
-            type=click.Choice([s.value for s in Severity]),
-        )
+        levels = [s.value for s in Severity]
+        severity = _choose(f'How bad is a failure? ({", ".join(levels)})', levels, default=Severity.MEDIUM.value)
         attacks = _prompt_list('Attack idea') if typer.confirm('Add your own attack ideas?', default=False) else []
         passing: list[str] = []
         failing: list[str] = []

@@ -73,8 +73,10 @@ def test_bad_entry_fails_before_the_run_and_names_file_and_entry(tmp_path: Path)
     result, fake = _run(['--custom', str(rules)])
     assert result.exit_code != 0
     fake.assert_not_awaited()
-    assert 'rules.yaml' in result.output
-    assert 'refund_promises' in result.output
+    # The error panel wraps long paths (Windows temp dirs), so compare without whitespace and borders.
+    flat = ''.join(result.output.replace('│', '').split())
+    assert 'rules.yaml' in flat
+    assert 'refund_promises' in flat
 
 
 def test_config_schema_includes_the_definition_model() -> None:
