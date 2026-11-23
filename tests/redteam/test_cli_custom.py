@@ -179,3 +179,19 @@ def test_no_input_refuses_a_mapping_file(tmp_path: Path) -> None:
     result = runner.invoke(app, ['new-vulnerability', 'other_rule', '--no-input', '--file', str(rules)])
     assert result.exit_code != 0
     assert rules.read_text() == original
+
+
+def test_comment_only_rules_file_fails_before_the_run(tmp_path: Path) -> None:
+    rules = tmp_path / 'rules.yaml'
+    rules.write_text('# nothing here yet\n')
+    result, fake = _run(['--custom', str(rules)])
+    assert result.exit_code != 0
+    fake.assert_not_awaited()
+    assert 'definesnovulnerabilities' in ''.join(result.output.replace('│', '').split())
+
+
+def test_no_input_rejects_an_invalid_id(tmp_path: Path) -> None:
+    rules = tmp_path / 'rules.yaml'
+    result = runner.invoke(app, ['new-vulnerability', 'Bad-Id', '--no-input', '--file', str(rules)])
+    assert result.exit_code != 0
+    assert not rules.exists()

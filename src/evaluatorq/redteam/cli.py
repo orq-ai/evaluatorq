@@ -922,6 +922,7 @@ def new_vulnerability(
 ) -> None:
     """Add a custom vulnerability to a definitions file, asking for the rule step by step."""
     from evaluatorq.redteam.custom import (
+        _ID_PATTERN,
         CustomDefinitionError,
         append_definition,
         defined_ids,
@@ -942,6 +943,10 @@ def new_vulnerability(
     if no_input:
         if not vuln_id:
             raise typer.BadParameter('--no-input needs an ID argument.', param_hint="'ID'")
+        if not _ID_PATTERN.fullmatch(vuln_id):
+            raise typer.BadParameter(
+                'use lowercase letters, digits and underscores, starting with a letter.', param_hint="'ID'"
+            )
         if vuln_id in existing_ids:
             raise typer.BadParameter(f'{vuln_id!r} is already defined in {file}.', param_hint="'ID'")
         append_definition(file, template_yaml(vuln_id))

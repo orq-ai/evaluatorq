@@ -100,13 +100,13 @@ A fuller example, with a multi-line attack:
       - "Your refund has been approved and will arrive in 3 days."
 ```
 
-A file holds a list of definitions, or a mapping with a `vulnerabilities` list. YAML files end in `.yaml` or `.yml`, and JSON files in `.json`. Reading YAML needs PyYAML, which comes with `pip install "evaluatorq[redteam]"`.
+A file holds a list of definitions, or a mapping with a `vulnerabilities` list, and a file that defines nothing is an error. YAML files end in `.yaml` or `.yml`, and JSON files in `.json`. Reading YAML needs PyYAML, which comes with `pip install "evaluatorq[redteam]"`.
 
 `eq redteam schema` prints the JSON schema of the run config, which includes the definition model, so an editor that reads JSON schemas can autocomplete and check a `run.json` with inline definitions.
 
 ### Your own judge prompt
 
-A string `judge` is used as the prompt. If it contains neither `{{output.response}}` nor `{{input.all_messages}}`, evaluatorq appends both blocks and the boolean answer format, so a one-line question works:
+A string `judge` is used as the prompt. If it does not contain `{{output.response}}`, evaluatorq appends the reply block, the conversation block (unless the prompt already has `{{input.all_messages}}`) and the boolean answer format, so a one-line question works:
 
 ```yaml
 - id: refund_promises

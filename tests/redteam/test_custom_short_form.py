@@ -145,7 +145,12 @@ def test_static_rows_are_valid_inputs() -> None:
 def test_static_mode_stops_on_rule_without_attacks() -> None:
     register_vulnerability(id='refund_promises', description=RULE)
     with pytest.raises(ValueError, match='dynamic mode'):
-        custom_static_datapoints(['refund_promises'])
+        custom_static_datapoints(['refund_promises'], explicit=True)
+
+
+def test_static_full_sweep_skips_rule_without_attacks() -> None:
+    register_vulnerability(id='refund_promises', description=RULE)
+    assert custom_static_datapoints(['ASI01', 'refund_promises']) == []
 
 
 def test_reregistering_a_changed_definition_raises() -> None:
@@ -176,6 +181,8 @@ def test_judge_prompt_with_only_conversation_still_gets_reply() -> None:
     entity = get_evaluator_for_vulnerability(vuln, model_id='m')
     assert entity is not None
     assert '{{output.response}}' in entity.prompt
+    assert entity.prompt.count('{{input.all_messages}}') == 1
+    assert '<conversation>' not in entity.prompt
 
 
 def test_full_strategy_for_another_vulnerability_is_rejected() -> None:

@@ -4387,6 +4387,7 @@ def _load_static_datapoints(
     categories: list[str] | None,
     resolved_delivery_methods: set[DeliveryMethod | str] | None,
     resolved_strategy_names: set[str] | None,
+    explicit_selection: bool = False,
 ) -> list[Any]:
     # Load the shared dataset once for all targets (a replay brings its own)
     if prefetched_data is not None:
@@ -4424,7 +4425,7 @@ def _load_static_datapoints(
     if prefetched_data is None:
         from evaluatorq.redteam.custom import custom_static_datapoints
 
-        data += custom_static_datapoints(categories)
+        data += custom_static_datapoints(categories, explicit=explicit_selection)
 
     # The delivery-method filter was applied at load time (above). Strategy-name
     # selection cannot apply to static rows (dataset records with no strategy
@@ -4757,6 +4758,7 @@ async def _run_static(
         categories=categories,
         resolved_delivery_methods=resolved_delivery_methods,
         resolved_strategy_names=resolved_strategy_names,
+        explicit_selection=filter_selection is not None,
     )
     _report_static_filter_results(
         data=data,

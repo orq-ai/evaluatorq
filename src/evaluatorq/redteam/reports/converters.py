@@ -1204,6 +1204,8 @@ def compute_report_summary(
 
     vuln_summaries: dict[str, VulnerabilitySummary] = {}
     for v, v_counts in by_vuln.items():
+        if v is None:
+            continue
         # A saved report can hold custom vulnerabilities this process never registered;
         # they keep their own row instead of being dropped (RES-1922).
         vuln_enum = (

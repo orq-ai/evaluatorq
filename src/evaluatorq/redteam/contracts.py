@@ -2559,7 +2559,7 @@ class ReportSnapshot(BaseModel):
     """Concise report summary used by CLI report commands."""
 
     pipeline: Pipeline
-    framework: OpenFramework | None = None
+    framework: ReportFramework | None = None
     total_results: int
     categories_tested: list[str]
     resistance_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
