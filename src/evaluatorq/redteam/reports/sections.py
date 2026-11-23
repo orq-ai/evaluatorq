@@ -42,6 +42,7 @@ from evaluatorq.common.reports.palette import SEVERITY_RANK, SEVERITY_WEIGHTS
 from evaluatorq.contracts import ReportSection, TokenUsage
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, SEVERITY_DEFINITIONS, RedTeamReport, RedTeamResult
 from evaluatorq.redteam.reports._utils import extract_prompt, extract_response
+from evaluatorq.redteam.reports.converters import samples_with_coerced_verdict
 from evaluatorq.redteam.reports.guidance import REMEDIATION_GUIDANCE
 
 # ---------------------------------------------------------------------------
@@ -134,7 +135,7 @@ def _build_summary_section(report: RedTeamReport) -> ReportSection:
             'narrative': report.executive_summary,
             'jury_reliability': s.jury_reliability.model_dump(mode='json') if s.jury_reliability else None,
             'jury_health': s.jury_health.model_dump(mode='json') if s.jury_health else None,
-            'samples_with_coerced_verdict': s.samples_with_coerced_verdict,
+            'samples_with_coerced_verdict': samples_with_coerced_verdict(report),
         },
     )
 

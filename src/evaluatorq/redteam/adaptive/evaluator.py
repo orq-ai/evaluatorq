@@ -16,7 +16,7 @@ from evaluatorq.common.jury import (
     single_verdict_error_payload,
 )
 from evaluatorq.common.jury import provider_family as provider_family
-from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, VERDICT_COERCED_RAW_OUTPUT_KEY
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
@@ -364,7 +364,7 @@ class OWASPEvaluator:
                 'raw_content': outcome.raw_content,
                 # This path builds no JuryVote, so the flag has to travel here for a coerced
                 # verdict to read the same with one judge as on a panel.
-                'verdict_coerced': outcome.verdict_coerced,
+                VERDICT_COERCED_RAW_OUTPUT_KEY: outcome.verdict_coerced,
                 # Which endpoint actually served this verdict. Recorded here rather
                 # than as a first-class field because it is a diagnostic: when a
                 # judge reports no cost, this is what separates "the model is not in

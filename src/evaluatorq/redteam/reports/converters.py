@@ -11,7 +11,13 @@ from loguru import logger as _converters_logger
 from pydantic import ValidationError
 
 from evaluatorq.common.target_call import TargetCallResult, classify_error_type
-from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, AgentResponse, AgentResponseError, Message
+from evaluatorq.contracts import (
+    EVAL_ERROR_RAW_OUTPUT_KEY,
+    VERDICT_COERCED_RAW_OUTPUT_KEY,
+    AgentResponse,
+    AgentResponseError,
+    Message,
+)
 from evaluatorq.redteam.contracts import (
     JURY_RAW_OUTPUT_KEY,
     OWASP_CATEGORY_NAMES,
@@ -1006,7 +1012,19 @@ def coerced_passes(evaluation: Any) -> int:
     if jury is not None:
         return sum(vote.repetitions_coerced for vote in jury.votes)
     raw_output = getattr(evaluation, 'raw_output', None)
-    return 1 if isinstance(raw_output, dict) and raw_output.get('verdict_coerced') is True else 0
+    return 1 if isinstance(raw_output, dict) and raw_output.get(VERDICT_COERCED_RAW_OUTPUT_KEY) is True else 0
+
+
+def samples_with_coerced_verdict(report: RedTeamReport) -> int:
+    """How many samples of a report had a coerced verdict, counted from its results.
+
+    The summary carries the same count, but only for a report converted since the count existed: an older saved
+    report loads it as 0 while its results still record the coerced passes. Counting here keeps the report's
+    headline and its per-attack panel in agreement. A report saved without results falls back to the summary.
+    """
+    if not report.results:
+        return report.summary.samples_with_coerced_verdict
+    return sum(1 for result in report.results if coerced_passes(result.evaluation))
 
 
 def sample_count(count: int) -> str:

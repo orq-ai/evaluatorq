@@ -28,7 +28,7 @@ from evaluatorq.common.llm_client import as_llm_client
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
-from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, TokenUsage
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, VERDICT_COERCED_RAW_OUTPUT_KEY, TokenUsage
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
@@ -413,7 +413,7 @@ def create_owasp_evaluator(
                 # This path builds no JuryVote, so the coerced flag travels here, as on the adaptive path.
                 raw_output: dict[str, Any] = {
                     'raw_content': outcome.raw_content,
-                    'verdict_coerced': outcome.verdict_coerced,
+                    VERDICT_COERCED_RAW_OUTPUT_KEY: outcome.verdict_coerced,
                 }
                 verdict_error = single_verdict_error_payload(outcome, category)
                 if verdict_error is not None:

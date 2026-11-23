@@ -12,7 +12,11 @@ from rich.console import Console
 from evaluatorq.dashboard.redteam_transcripts import render_attack_fragment
 from evaluatorq.redteam.contracts import JuryResult, JuryVote, Pipeline, RedTeamReport, RedTeamResult, ReportSummary
 from evaluatorq.redteam.reports import export_html, export_markdown
-from evaluatorq.redteam.reports.converters import coerced_passes, compute_report_summary
+from evaluatorq.redteam.reports.converters import (
+    coerced_passes,
+    compute_report_summary,
+    samples_with_coerced_verdict,
+)
 from evaluatorq.redteam.reports.display import print_report_summary
 
 
@@ -159,3 +163,25 @@ def test_a_report_saved_before_the_count_existed_loads_with_zero() -> None:
     assert loaded.samples_with_coerced_verdict == 0
     for rendered in (export_markdown(_report(loaded)), export_html(_report(loaded))):
         assert 'coerced verdicts' not in rendered.lower()
+
+
+def test_an_older_saved_report_counts_its_coerced_samples_from_the_results(rt_result_vuln: RedTeamResult) -> None:
+    """Saved before the summary carried the count: the summary says 0 and the results still record the passes."""
+    results = [
+        _with(rt_result_vuln, jury=_panel(2, 0)),
+        _with(rt_result_vuln, raw_output={'verdict_coerced': True}),
+        rt_result_vuln,
+    ]
+    older = _report(ReportSummary()).model_copy(update={'results': results, 'total_results': len(results)})
+    assert older.summary.samples_with_coerced_verdict == 0
+
+    assert samples_with_coerced_verdict(older) == 2
+    assert '| Coerced Verdicts | 2 samples (judge abstained and also sent a verdict) |' in export_markdown(older)
+    assert '>2 samples<' in export_html(older).split('id="rttab-config"', 1)[1]
+    console = Console(record=True, width=200)
+    print_report_summary(older, console=console)
+    assert '2 samples' in console.export_text()
+
+
+def test_a_report_without_results_keeps_the_count_its_summary_carries() -> None:
+    assert samples_with_coerced_verdict(_report(ReportSummary(samples_with_coerced_verdict=4))) == 4
