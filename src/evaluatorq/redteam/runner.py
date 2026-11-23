@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import functools
 import json
 import re
 import uuid
@@ -13,7 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from loguru import logger
 
@@ -99,7 +100,7 @@ from evaluatorq.redteam.contracts import (
     parse_target,
     resolve_open_value,
 )
-from evaluatorq.redteam.custom import CustomSource, register_custom
+from evaluatorq.redteam.custom import CustomSource, register_custom, restore_registrations
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str, resolve_delivery_methods
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import (
@@ -550,7 +551,7 @@ def _cap_datapoints_balanced(datapoints: list[Any], cap: int) -> list[Any]:
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from openai import AsyncOpenAI
 
@@ -642,9 +643,9 @@ def _resolve_save_mode(*, save: SaveMode | bool) -> SaveMode:
         warnings.warn(
             'Passing save=True/False is deprecated. Use SaveMode.FINAL / SaveMode.NONE instead.',
             DeprecationWarning,
-            # 3, not 2: this helper is one frame deeper than red_team, where the
-            # warning used to be raised. The user's call site is the target.
-            stacklevel=3,
+            # 4: this helper, red_team, and the registry-restoring wrapper sit
+            # between the warning and the user's call site.
+            stacklevel=4,
         )
         save = SaveMode.FINAL if save else SaveMode.NONE
     elif save not in SaveMode.__members__.values():
@@ -1388,6 +1389,23 @@ def _persist_and_index_run(
 # ---------------------------------------------------------------------------
 
 
+_P = ParamSpec('_P')
+_R = TypeVar('_R')
+
+
+def _run_scoped_registrations(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+    """Undo the run's `custom` and `strategies` registrations when `red_team` returns,
+    so they do not leak into later runs in the same process."""
+
+    @functools.wraps(func)
+    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with restore_registrations():
+            return await func(*args, **kwargs)
+
+    return wrapper
+
+
+@_run_scoped_registrations
 async def red_team(
     target: str | AgentTarget | list[str | AgentTarget],
     *,

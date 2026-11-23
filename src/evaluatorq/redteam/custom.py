@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -52,7 +53,7 @@ from evaluatorq.redteam.vulnerability_registry import clear_custom_vulnerabiliti
 from evaluatorq.redteam.vulnerability_registry import register_vulnerability_def as _register_def
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Generator, Sequence
 
 __all__ = [
     'CustomDefinitionError',
@@ -112,6 +113,56 @@ def clear_custom_registrations() -> None:
     clear_custom_strategies()
     clear_custom_vulnerabilities()
     clear_registered_values()
+
+
+def _refill(live: dict[Any, Any], saved: dict[Any, Any]) -> None:
+    live.clear()
+    live.update(saved)
+
+
+@contextmanager
+def restore_registrations(*, on_error_only: bool = False) -> Generator[None]:
+    """Put every custom registry back to its state at entry when the block exits.
+
+    `red_team` uses it so a run's custom rules and strategy objects do not leak into
+    later runs in the same process, and `register_custom` uses it on failure so a file
+    is registered completely or not at all (*on_error_only*).
+    """
+    from evaluatorq.redteam import contracts, vulnerability_registry
+    from evaluatorq.redteam.adaptive import strategy_registry
+    from evaluatorq.redteam.frameworks.owasp import evaluators
+
+    values = {name: dict(store) for name, store in contracts._REGISTERED_VALUES.items()}  # noqa: SLF001
+    vdefs = dict(vulnerability_registry._custom_vulnerability_defs)  # noqa: SLF001
+    strategies = {v: list(s) for v, s in strategy_registry._custom_strategies.items()}  # noqa: SLF001
+    no_generation = set(strategy_registry._generation_disabled)  # noqa: SLF001
+    by_vuln = dict(evaluators.VULNERABILITY_EVALUATOR_REGISTRY)
+    by_code = dict(evaluators.OWASP_EVALUATOR_REGISTRY)
+    judges = dict(evaluators._custom_judges)  # noqa: SLF001
+    definitions = dict(_DEFINITIONS)
+
+    def restore() -> None:
+        for name, store in contracts._REGISTERED_VALUES.items():  # noqa: SLF001
+            store.clear()
+            store.update(values[name])
+        _refill(vulnerability_registry._custom_vulnerability_defs, vdefs)  # noqa: SLF001
+        _refill(strategy_registry._custom_strategies, strategies)  # noqa: SLF001
+        _refill(evaluators.VULNERABILITY_EVALUATOR_REGISTRY, by_vuln)
+        _refill(evaluators.OWASP_EVALUATOR_REGISTRY, by_code)
+        _refill(evaluators._custom_judges, judges)  # noqa: SLF001
+        _refill(_DEFINITIONS, definitions)
+        strategy_registry._generation_disabled.clear()  # noqa: SLF001
+        strategy_registry._generation_disabled.update(no_generation)  # noqa: SLF001
+        vulnerability_registry._rebuild_indexes()  # noqa: SLF001
+        strategy_registry._rebuild_strategy_registries()  # noqa: SLF001
+
+    try:
+        yield
+    except BaseException:
+        restore()
+        raise
+    if not on_error_only:
+        restore()
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +311,19 @@ def _strategy_from_prompt(
     )
 
 
+def _check_attack_owners(definition: CustomVulnerability) -> None:
+    """A full strategy in `attacks` must belong to this rule, or it would attack another vulnerability."""
+    for attack in definition.attacks:
+        if isinstance(attack, AttackStrategy) and attack.vulnerability is not None:
+            owner = str.__str__(attack.vulnerability)
+            if owner != definition.id:
+                msg = (
+                    f'Attack {attack.name!r} of {definition.id!r} names vulnerability {owner!r}; '
+                    f'leave it unset or use {definition.id!r}.'
+                )
+                raise ValueError(msg)
+
+
 def register_vulnerability(definition: CustomVulnerability | None = None, /, **fields: Any) -> AnyVulnerability:
     """Register a custom vulnerability from its short form and return its id.
 
@@ -281,6 +345,8 @@ def register_vulnerability(definition: CustomVulnerability | None = None, /, **f
     if not definition.generate and not definition.attacks:
         msg = f'{vid!r} has generate: false and no attacks, so it would never be tested.'
         raise ValueError(msg)
+
+    _check_attack_owners(definition)
 
     previous = _DEFINITIONS.get(vid)
     if previous is not None:
@@ -504,12 +570,13 @@ def register_custom(sources: CustomSource | Sequence[CustomSource] | None) -> li
         seen[definition.id] = origin
 
     registered: list[AnyVulnerability] = []
-    for origin, definition in pending:
-        try:
-            registered.append(register_vulnerability(definition))
-        except ValueError as e:  # noqa: PERF203
-            msg = f'{origin}, {definition.id}: {e}'
-            raise CustomDefinitionError(msg) from e
+    with restore_registrations(on_error_only=True):
+        for origin, definition in pending:
+            try:
+                registered.append(register_vulnerability(definition))
+            except ValueError as e:  # noqa: PERF203
+                msg = f'{origin}, {definition.id}: {e}'
+                raise CustomDefinitionError(msg) from e
     return registered
 
 

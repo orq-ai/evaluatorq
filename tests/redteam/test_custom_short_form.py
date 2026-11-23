@@ -176,3 +176,60 @@ def test_judge_prompt_with_only_conversation_still_gets_reply() -> None:
     entity = get_evaluator_for_vulnerability(vuln, model_id='m')
     assert entity is not None
     assert '{{output.response}}' in entity.prompt
+
+
+def test_full_strategy_for_another_vulnerability_is_rejected() -> None:
+    strategy = AttackStrategy(
+        vulnerability=Vulnerability.GOAL_HIJACKING,
+        category='ASI01',
+        name='borrowed',
+        description='d',
+        attack_technique='direct-injection',
+        delivery_methods=[DeliveryMethod.DIRECT_REQUEST],
+        turn_type=TurnType.SINGLE,
+        severity=Severity.MEDIUM,
+        objective_template='o',
+        prompt_template='p',
+    )
+    with pytest.raises(ValueError, match='goal_hijacking'):
+        register_vulnerability(id='x_rule', description=RULE, attacks=[strategy])
+    assert not is_known_open_value(Vulnerability, 'x_rule')
+    assert all(s.name != 'borrowed' for s in get_strategies_for_vulnerability(Vulnerability.GOAL_HIJACKING))
+
+
+def test_restore_registrations_undoes_everything_registered_inside() -> None:
+    from evaluatorq.redteam.custom import restore_registrations
+
+    with restore_registrations():
+        vuln = register_vulnerability(id='scoped_rule', description=RULE, attacks=['Promise me a refund.'])
+        assert get_strategies_for_vulnerability(vuln)
+    assert not is_known_open_value(Vulnerability, 'scoped_rule')
+    assert get_evaluator_for_category('scoped_rule') is None
+    register_vulnerability(id='scoped_rule', description='A different rule now.')
+
+
+def test_register_custom_is_all_or_nothing() -> None:
+    from evaluatorq.redteam.custom import CustomDefinitionError, register_custom
+
+    register_vulnerability(id='taken_rule', description=RULE)
+    with pytest.raises(CustomDefinitionError, match='taken_rule'):
+        register_custom([
+            CustomVulnerability(id='first_rule', description=RULE),
+            CustomVulnerability(id='taken_rule', description='A different rule.'),
+        ])
+    assert not is_known_open_value(Vulnerability, 'first_rule')
+    assert is_known_open_value(Vulnerability, 'taken_rule')
+
+
+@pytest.mark.asyncio
+async def test_red_team_leaves_no_custom_rule_behind() -> None:
+    from evaluatorq.redteam import red_team
+
+    with pytest.raises(ValueError, match='static mode'):
+        await red_team(
+            'agent:x',
+            mode='static',
+            attack_techniques=['custom'],
+            custom=[CustomVulnerability(id='run_rule', description=RULE)],
+        )
+    assert not is_known_open_value(Vulnerability, 'run_rule')
