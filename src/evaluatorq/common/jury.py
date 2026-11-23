@@ -13,6 +13,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from evaluatorq.common.judge import JudgeOutcome, judge_error_payload
+from evaluatorq.common.llm_client import LLMConfigurationError
 from evaluatorq.common.tracing import (
     current_otel_context,
     set_span_attrs,
@@ -419,6 +420,8 @@ async def _call_prediction(
 ) -> Prediction:
     try:
         return await judge_fn(model)
+    except LLMConfigurationError:
+        raise
     except Exception as exc:
         # When the caller has no redundancy to fall back on (a lone judge, no
         # replacements), let the error abort the run instead of silently

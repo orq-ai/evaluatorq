@@ -84,6 +84,8 @@ jobs:
           # Exit 1 means "findings", which is the expected case here.
           uv run python -m evaluatorq.preset_drift --output drift-report.json || true
           test -s drift-report.json
+          # The presets before the agent edits them, so the PR body can show what moved.
+          uv run python -m evaluatorq.preset_drift --snapshot "$RUNNER_TEMP/presets-before.json"
 
       - name: Skip when a drift PR is already open
         id: existing
@@ -165,16 +167,25 @@ jobs:
           git checkout -b "$branch"
 
           body="$RUNNER_TEMP/pr-body.md"
+          findings="$(python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); print(len(r["findings"]), sum(f["needs_human"] for f in r["findings"]))' "$RUNNER_TEMP/drift/drift-report.json")"
+          read -r total human <<< "$findings"
           {
             if [ "$fixed" = true ]; then
-              echo "The weekly preset freshness check failed. An agent (Pi, through the orq router) proposed the changes below, and the live check passes again on this branch."
+              echo "> [!NOTE]"
+              echo "> **The live check passes again on this branch.** The weekly preset freshness check failed; an agent (Pi, through the orq router) proposed the changes below."
               title="fix(jury): reseat presets after weekly drift"
             else
-              echo "**Needs human attention.** The weekly preset freshness check failed and the automated change did not make it pass, or the agent could not confirm what it needed. Read the sections below and decide."
+              echo "> [!WARNING]"
+              echo "> **Needs human attention: $human of $total findings have no automatic fix.** The weekly preset freshness check failed and this branch does not make it pass. Work through **Decisions needed** below."
               title="chore(jury): preset drift needs human attention"
             fi
+            echo ">"
+            echo "> Agent output; nothing merges automatically. Opened with the default token, so CI may wait for a maintainer to approve it (\`action_required\`), or push to the branch."
             echo
-            echo "This PR is agent output. Review the diff and the sources before merging. It was opened with the default token, so its CI runs may be waiting for a maintainer to approve them (\`action_required\`), or you can push to the branch."
+            # Deterministic: built from the preset code before and after the agent's edit, not from its prose.
+            uv run python -m evaluatorq.preset_drift --summary "$RUNNER_TEMP/presets-before.json" --report "$RUNNER_TEMP/drift/drift-report.json"
+            echo
+            echo "<details><summary>Agent notes: what it changed, the sources it checked, what it left alone</summary>"
             echo
             if [ -f "$DRIFT_SUMMARY" ]; then
               cat "$DRIFT_SUMMARY"
@@ -186,11 +197,15 @@ jobs:
               echo '```'
             fi
             echo
-            echo "## Deterministic drift report"
+            echo "</details>"
+            echo
+            echo "<details><summary>Deterministic drift report ($total findings, JSON)</summary>"
             echo
             echo '```json'
             cat "$RUNNER_TEMP/drift/drift-report.json"
             echo '```'
+            echo
+            echo "</details>"
             echo
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           } > "$body"

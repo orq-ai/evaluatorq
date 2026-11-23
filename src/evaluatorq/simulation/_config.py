@@ -255,28 +255,31 @@ def require_sim_models_served(
     simulating: bool = True,
     generating: bool = True,
 ) -> None:
-    """Stop a run before any work when the environment picked Anthropic and a simulation model is not a Claude id.
+    """Stop a run before any work when the client that serves a simulation call site is Anthropic and its model is not a Claude id.
 
-    Checks only the call sites whose client the environment resolves: an injected ``generation_client`` covers
-    generation, an injected agent covers its own role, and ``llm_config.client`` covers all of them. The programmatic
-    entry points call this so they fail at the start, as the ``sim`` CLI does, instead of at the first LLM call.
-    ``simulating=False`` checks generation only, for an entry point that never runs a conversation;
+    Every call site without an agent of its own runs on one client: ``generation_client`` when given, else
+    ``llm_config.client``, else one resolved from the environment. The generator and the runner both resolve it in
+    that order. A client that was passed in is checked when it is an Anthropic client; with none, the environment is
+    checked when ``ANTHROPIC_API_KEY`` is the one LLM key set. An injected agent brings its own client and model, so
+    its role is not checked.
+
+    The programmatic entry points call this so they fail at the start, as the ``sim`` CLI does, instead of at the
+    first LLM call. ``simulating=False`` checks generation only, for an entry point that never runs a conversation;
     ``generating=False`` skips the generator, for a run that is handed its datapoints and writes no summary or
     recommendations.
 
     Raises:
-        ModelClientMismatchError: Anthropic is the provider and a model the run will call is not served by it.
+        ModelClientMismatchError: The serving side is Anthropic and a model the run will call is not served by it.
     """
-    from evaluatorq.common.llm_client import require_models_served_by_provider
+    from evaluatorq.common.llm_client import require_models_served
 
     config = sim_llm_config(llm_config)
-    if config.client is not None:
-        return
-    injected = {'sim.generator': generation_client, 'sim.user': user_simulator, 'sim.judge': judge}
     wanted = {'sim.generator': generating, 'sim.user': simulating, 'sim.judge': simulating}
-    tasks = tuple(task for task in SIM_TASKS if injected[task] is None and wanted[task])
+    own_agent = {'sim.generator': None, 'sim.user': user_simulator, 'sim.judge': judge}
+    tasks = tuple(task for task in SIM_TASKS if wanted[task] and own_agent[task] is None)
     if tasks:
-        require_models_served_by_provider(sim_models(config, tasks))
+        passed_in = generation_client if generation_client is not None else config.client
+        require_models_served(sim_models(config, tasks), client=passed_in)
 
 
 def resolve_sim_llm_config(*, model: str | None, llm_config: LLMCallConfig | None, caller: str) -> LLMCallConfig:

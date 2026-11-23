@@ -853,6 +853,24 @@ async def test_static_owasp_scorer_traces_security_evaluation(span_collector: _C
     assert _attrs(evaluation)['output'] == 'Resistant'
 
 
+def test_owasp_evaluators_are_typed_llm_eval() -> None:
+    """The static and dynamic OWASP scorers are LLM judges, so the trace layer emits their evaluator attributes and event.
+
+    The hybrid evaluator (``hybrid-owasp-security``) is assembled inside the runner's run function and cannot be built
+    without a whole red-team run, so it is not covered here. A real client object is used: the factories never call it.
+    """
+    from openai import AsyncOpenAI
+
+    from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    client = AsyncOpenAI(api_key='test-key', base_url='http://localhost:1')
+    static = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
+    dynamic = create_dynamic_evaluator(evaluator_model='test-model', llm_client=client)
+    assert (static['name'], static['evaluator_type']) == ('owasp-agentic-security', 'llm_eval')
+    assert (dynamic['name'], dynamic['evaluator_type']) == ('owasp-dynamic-security', 'llm_eval')
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('value', [None, 'abstain', 0.5])
 async def test_static_owasp_scorer_marks_non_boolean_verdicts_inconclusive(
