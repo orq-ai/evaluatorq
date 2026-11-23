@@ -99,7 +99,7 @@ def _sim(name: str, created: datetime, **extra: object) -> str:
         total_results=0,
         scorer_averages={'goal_achieved': 1.0},
         results=[],
-        **extra,  # type: ignore[arg-type]
+        **extra,
     ).model_dump_json()
 
 
