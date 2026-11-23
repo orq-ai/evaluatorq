@@ -221,7 +221,7 @@ async def test_jitter_bounded_at_quarter_of_wait(monkeypatch: pytest.MonkeyPatch
 
 
 def _http_status_error(status: int) -> httpx.HTTPStatusError:
-    request = httpx.Request('POST', 'https://my.orq.ai/v2/traces/v3oql')
+    request = httpx.Request('POST', 'https://my.orq.ai/v3/traces/search')
     return httpx.HTTPStatusError('boom', request=request, response=httpx.Response(status, request=request))
 
 
