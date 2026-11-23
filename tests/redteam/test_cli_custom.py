@@ -116,6 +116,17 @@ def test_edit_opens_the_file_only_in_a_terminal(tmp_path: Path, monkeypatch: pyt
     assert opened == [str(rules)]
 
 
+def test_no_input_appends_next_to_an_unfilled_template(tmp_path: Path) -> None:
+    rules = tmp_path / 'rules.yaml'
+    assert runner.invoke(app, ['new-vulnerability', 'tone_rule', '--no-input', '--file', str(rules)]).exit_code == 0
+    result = runner.invoke(app, ['new-vulnerability', 'other_rule', '--no-input', '--file', str(rules)])
+    assert result.exit_code == 0, result.output
+    assert '- id: other_rule' in rules.read_text()
+    again = runner.invoke(app, ['new-vulnerability', 'tone_rule', '--no-input', '--file', str(rules)])
+    assert again.exit_code != 0
+    assert 'already defined' in again.output
+
+
 def test_no_input_rejects_existing_id(tmp_path: Path) -> None:
     rules = tmp_path / 'rules.yaml'
     rules.write_text(RULES_YAML)

@@ -925,16 +925,16 @@ def new_vulnerability(
     from evaluatorq.redteam.custom import (
         CustomDefinitionError,
         append_definition,
+        defined_ids,
         definition_yaml,
         ensure_appendable,
-        load_custom_vulnerabilities,
         template_yaml,
     )
 
     if file.suffix.lower() not in {'.yaml', '.yml'}:
         raise typer.BadParameter('new-vulnerability writes YAML; use a .yaml or .yml file.', param_hint="'--file'")
     try:
-        existing_ids = {d.id for d in load_custom_vulnerabilities(file)} if file.exists() else set()
+        existing_ids = defined_ids(file) if file.exists() else set()
         ensure_appendable(file)
     except CustomDefinitionError as e:
         typer.echo(f'Error: {e}', err=True)

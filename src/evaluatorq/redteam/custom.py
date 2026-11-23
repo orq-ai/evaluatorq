@@ -452,6 +452,11 @@ def _read_definitions_file(path: Path) -> list[Any]:
     return data
 
 
+def defined_ids(path: str | Path) -> set[str]:
+    """Ids already in a definitions file, without validating the entries, so an unfilled template does not block appending."""
+    return {e['id'] for e in _read_definitions_file(Path(path)) if isinstance(e, dict) and isinstance(e.get('id'), str)}
+
+
 def load_custom_vulnerabilities(path: str | Path) -> list[CustomVulnerability]:
     """Read and validate a definitions file (YAML or JSON by extension) without registering it."""
     path = Path(path)
