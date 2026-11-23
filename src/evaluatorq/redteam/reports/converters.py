@@ -5,11 +5,12 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, TypeVar, cast
+from typing import Any, TypedDict, TypeVar, cast
 
 from loguru import logger as _converters_logger
 from pydantic import ValidationError
 
+from evaluatorq.common.structured_output import sum_usage_coverage
 from evaluatorq.common.target_call import TargetCallResult, classify_error_type
 from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, AgentResponse, AgentResponseError, Message
 from evaluatorq.redteam.contracts import (
@@ -267,6 +268,20 @@ def _normalize_output_dict(d: dict[str, Any]) -> dict[str, Any]:
     return _flatten_error_fields(_flatten_turns(d))
 
 
+class _TargetOnlyUsage(TypedDict):
+    token_usage: TokenUsage | None
+    token_usage_target: TokenUsage | None
+
+
+def _target_only_usage(usage: TokenUsage | None) -> _TargetOnlyUsage:
+    """Usage fields for a step that is one target reply and nothing else.
+
+    A static attack's execution and a bare ``AgentResponse`` payload contain no
+    attacker or seed-replay calls, so all of their usage is the target's.
+    """
+    return {'token_usage': usage, 'token_usage_target': usage}
+
+
 def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
     """Normalize evaluatorq job output into a typed payload."""
 
@@ -287,7 +302,7 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
         return JobOutputPayload(
             final_response=raw_output.text,
             response=raw_output.text,
-            token_usage=raw_output.usage,
+            **_target_only_usage(raw_output.usage),
             **error_fields,
             # ponytail: the assistant turn only. An AgentResponse carries no request
             # side, so there is no fuller conversation to reconstruct here.
@@ -514,7 +529,7 @@ def static_sample_to_result(
         evaluation=evaluation,
         vulnerable=vulnerable,
         evaluation_error=evaluation_error,
-        execution=ExecutionDetails(turns=1, max_turns=1, token_usage=execution_usage),
+        execution=ExecutionDetails(turns=1, max_turns=1, **_target_only_usage(execution_usage)),
         error=row.error,
         error_type=_classify_error(row.error, existing_type=row.error_type),
         error_stage=getattr(row, 'error_stage', None),
@@ -704,6 +719,7 @@ def dynamic_evaluatorq_results_to_report(
             objective_achieved=job_output.objective_achieved,
             objective_rationale=job_output.objective_rationale,
             token_usage=token_usage,
+            token_usage_target=job_output.token_usage_target,
             token_usage_bootstrap=job_output.token_usage_bootstrap,
             seed_context=job_output.seed_context,
             backtracked_turns=job_output.backtracked_turns,
@@ -919,6 +935,11 @@ def _aggregate_token_usage(results: list[RedTeamResult]) -> TokenUsage | None:
             total = total + r.evaluation.token_usage
             found = True
     return total if found else None
+
+
+def target_token_usage_coverage(results: Sequence[RedTeamResult]) -> tuple[TokenUsage | None, int]:
+    """The target agent's own usage summed over *results*, and how many results recorded none."""
+    return sum_usage_coverage([r.execution.token_usage_target if r.execution else None for r in results])
 
 
 def _aggregate_token_usage_by_source(results: list[RedTeamResult]) -> dict[str, TokenUsage]:
@@ -1266,6 +1287,7 @@ def compute_report_summary(
         pre_execution_errors=len(run_errors),
         errors_by_type=errors_by_type,
         token_usage_total=_aggregate_token_usage(results),
+        token_usage_target=target_token_usage_coverage(results)[0],
         token_usage_by_source=_aggregate_token_usage_by_source(results),
         by_vulnerability=vuln_summaries,
         by_category=cat_summaries,
