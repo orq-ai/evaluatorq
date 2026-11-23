@@ -240,3 +240,15 @@ async def test_red_team_leaves_no_custom_rule_behind() -> None:
             custom=[CustomVulnerability(id='run_rule', description=RULE)],
         )
     assert not is_known_open_value(Vulnerability, 'run_rule')
+
+
+def test_id_with_trailing_newline_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        CustomVulnerability(id='refund_promises\n', description=RULE)
+
+
+def test_unregistered_custom_row_uses_the_stored_name() -> None:
+    from evaluatorq.redteam.reports.display import _format_vulnerability_label
+
+    assert _format_vulnerability_label('refund_promises', 'Refund promises') == 'Refund promises'
+    assert _format_vulnerability_label('refund_promises') == 'refund_promises'

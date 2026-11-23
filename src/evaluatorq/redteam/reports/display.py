@@ -25,10 +25,14 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-def _format_vulnerability_label(vuln_str: str) -> str:
-    """Format 'goal_hijacking' -> 'Goal Hijacking (ASI01)'."""
+def _format_vulnerability_label(vuln_str: str, stored_name: str | None = None) -> str:
+    """Format 'goal_hijacking' -> 'Goal Hijacking (ASI01)'.
+
+    A custom rule that is not registered here (its run's scope has ended, or the report
+    was saved elsewhere) falls back to the name stored in the report.
+    """
     if not is_known_open_value(Vulnerability, vuln_str):
-        return vuln_str
+        return stored_name or vuln_str
     vdef = VULNERABILITY_DEFS.get(resolve_open_value(Vulnerability, vuln_str))
     if vdef:
         cats = ', '.join(code for codes in vdef.framework_mappings.values() for code in codes)
@@ -148,7 +152,7 @@ def _build_vulnerability_table(summary: ReportSummary) -> Table | None:
             else f'{evaluated} of {vuln_summary.total_attacks}'
         )
         vuln_table.add_row(
-            _format_vulnerability_label(vuln_summary.vulnerability),
+            _format_vulnerability_label(vuln_summary.vulnerability, vuln_summary.vulnerability_name),
             Text(vuln_summary.domain.replace('_', ' ').title(), style='white'),
             Text(tested_label, style='cyan' if evaluated == vuln_summary.total_attacks else 'yellow'),
             Text(

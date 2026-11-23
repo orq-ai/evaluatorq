@@ -118,7 +118,7 @@ The judge answers `true` when the agent followed the rule (RESISTANT) and `false
 
 ## Errors before the run
 
-Every definition is checked after loading and before the first LLM call. A missing or `TODO` description, a bad id, an id defined twice, an unknown field or `generate: false` without attacks stops the run with an error that names the file and the entry.
+Every definition is checked after loading and before the first LLM call. A missing or `TODO` description, a bad id, an id defined twice, an unknown field, `generate: false` without attacks, or a full `AttackStrategy` in `attacks` that names another vulnerability stops the run with an error that names the file and the entry.
 
 ## Modes
 

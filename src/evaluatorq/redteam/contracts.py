@@ -411,7 +411,8 @@ def register_open_value(enum_cls: type[StrEnum], value: str) -> Any:
     """Register *value* in the open set of *enum_cls* and return its resolved form.
 
     A value equal to a built-in member returns that member and registers nothing.
-    Registration is process-local and never persisted.
+    Registration lasts for the current registry scope (the process, or one `red_team()`
+    run) and is never persisted.
     """
     if not isinstance(value, str) or not value.strip():
         msg = f'Cannot register an empty {enum_cls.__name__} value.'

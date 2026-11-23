@@ -1,6 +1,7 @@
 """Register custom vulnerabilities, strategies, judges and open-set values (RES-1922).
 
-Everything registered here is process-local and lives until `clear_custom_registrations`.
+A registration made outside `red_team()` lasts for the process, until `clear_custom_registrations`;
+one made inside a run (its `custom` argument) ends with the run.
 """
 
 from __future__ import annotations
@@ -173,7 +174,7 @@ class CustomVulnerability(BaseModel):
     @field_validator('id')
     @classmethod
     def _check_id(cls, value: str) -> str:
-        if not _ID_PATTERN.match(value):
+        if not _ID_PATTERN.fullmatch(value):
             msg = f'Custom vulnerability id {value!r} must be lowercase letters, digits and underscores.'
             raise ValueError(msg)
         return value
