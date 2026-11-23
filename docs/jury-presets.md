@@ -18,10 +18,10 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, un
 
 | Preset | Judges | Aggregation | $ / 1k | Reserve |
 | --- | --- | --- | --- | --- |
-| **`balanced-trio`** (default) | `baseten/deepseek-v4.1-flash`<br>`openai/gpt-6-luna`<br>`google-ai/gemini-3.8-flash` | majority | 4.45 | `deepseek/deepseek-flash` |
-| **`strong-jury`** | `anthropic/claude-opus-5-5`<br>`openai/gpt-6.1-sol`<br>`google-ai/gemini-3.8-flash` | majority | 27.00 | `baseten/deepseek-v4.1-flash` |
+| **`balanced-trio`** (default) | `deepseek/deepseek-flash`<br>`openai/gpt-6-luna`<br>`google-ai/gemini-3.8-flash` | majority | 3.75 | `wafer/DeepSeek-V4.1-Flash-1017` |
+| **`strong-jury`** | `anthropic/claude-opus-5-5`<br>`openai/gpt-6.1-sol`<br>`google-ai/gemini-3.8-flash` | majority | 27.00 | `deepseek/deepseek-flash` |
 | **`cheap-aggregate`** | `zai/glm-5.3-flash`<br>`particle/deepseek-v4.1-flash-1017`<br>`google-ai/gemini-3.8-flash` | majority | 4.11 | `mistral/mistral-large-4` |
-| **`open-weight-portable`** | `baseten/deepseek-v4.1-flash`<br>`wafer/Kimi-K3.1-Pro`<br>`zai/glm-5.3-flash` | majority | 9.29 | `greenpt/qwen3.6-35b-a3b` |
+| **`open-weight-portable`** | `deepseek/deepseek-flash`<br>`wafer/Kimi-K3.1-Pro`<br>`zai/glm-5.3-flash` | majority | 8.59 | `greenpt/qwen3.6-35b-a3b` |
 | **`eu-region`** | `aws/eu.anthropic.claude-haiku-5-5`<br>`google/eu.gemini-3.7-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 4.64 | `google/eu.claude-sonnet-5` |
 | **`single-provider-trio`** | `openai/gpt-6.1-sol`<br>`openai/gpt-6.1-terra`<br>`openai/gpt-6-luna` | majority | 12.40 | `openai/gpt-6-sol` |
 
@@ -31,9 +31,9 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, un
 
 **`balanced-trio`** is the default and the right answer for most subjective evaluation. Three lineages means three different ways of being wrong, which is the whole reason to run a panel instead of one judge three times.
 
-**`strong-jury`** costs about six times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
+**`strong-jury`** costs about seven times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
 
-**`cheap-aggregate`** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it shares two seats with `balanced-trio` and costs about the same; the difference is the third lineage (DeepSeek instead of OpenAI). The `zai/glm-5.3-flash` seat is costed on its catalog card rate ($0.075/$0.25 per million); usage on the judge endpoint has been billed at twice that, which would put the panel at $4.35 rather than $4.11.
+**`cheap-aggregate`** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it shares two lineages with `balanced-trio` (DeepSeek and Google) and costs about the same; the difference is the third lineage (Zhipu instead of OpenAI). The `zai/glm-5.3-flash` seat is costed on its catalog card rate ($0.075/$0.25 per million); usage on the judge endpoint has been billed at twice that, which would put the panel at $4.35 rather than $4.11.
 
 **`open-weight-portable`** buys independence from any closed frontier vendor, and a migration path if you later want to serve the judges yourself. It is not the cheap option: most of its cost is the Kimi K3.1 Pro seat.
 
@@ -65,7 +65,7 @@ get_preset("strong-jury").seated_efforts()
 # {'anthropic/claude-opus-5-5': 'medium', 'openai/gpt-6.1-sol': 'medium', 'google-ai/gemini-3.8-flash': 'medium'}
 ```
 
-Seats are ranked on their Artificial Analysis score at that default effort. Where a card has no score at its default, it ranks on its headline index, which carries no reasoning level: `baseten/deepseek-v4.1-flash` runs at `high` while Artificial Analysis measures it only at `max` and `none`, so it ranks on its `max` headline although it runs lower, and `mistral/mistral-large-4`'s card carries a headline with no rungs at all. `openai/gpt-6.1-terra`'s headline is on index v5.0.1 rather than the v4.3 every other card uses, so the in-family frontier check exempts GPT-6.1 Sol from it. Gemini 4 Carbon and Gemini 4 Hydrogen are listed by Google as stable Gemini 4 models, but remain out of the panel until their live cards carry an Artificial Analysis score that can be compared with the seated Gemini 3.8 judge.
+Seats are ranked on their Artificial Analysis score at that default effort. Where a card has no score at its default, it ranks on its headline index, which carries no reasoning level: `mistral/mistral-large-4`'s card carries a headline with no rungs at all. Gemini 4 Carbon and Gemini 4 Hydrogen are listed by Google as stable Gemini 4 models, but remain out of the panel until their live cards carry an Artificial Analysis score that can be compared with the seated Gemini 3.8 judge.
 
 `llm_jury()` takes one `reasoning_effort` for the whole panel, so passing one overrides every seat's default. Per-judge call settings are a schema change and a separate ticket.
 

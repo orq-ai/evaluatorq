@@ -258,9 +258,13 @@ BALANCED_TRIO = JuryPreset(
         # keeping it was an Anthropic vote, and this panel is sold on three
         # families rather than three brands, which deepseek satisfies.
         # Reseated 2026-11-10 from deepseek-v4-pro (headline 36.0, $0.544
-        # blend): v4.1 Flash is 39.5 for $0.525. Neither card scores its high
-        # default, so both rank on the headline index (no reasoning level).
-        'baseten/deepseek-v4.1-flash',
+        # blend): v4.1 Flash is 39.5 for $0.525. Reseated 2026-11-23 to
+        # DeepSeek's own route: baseten/deepseek-v4.1-flash left the workspace
+        # garden, and deepseek/deepseek-flash now carries its own score. The
+        # undated id is the one DeepSeek moves to its newest Flash (V4.1 Flash
+        # 1017 today), so the upgrade check can see it. Card rate $0.14/$0.28;
+        # weekday peak windows bill $0.30/$1.20 (public catalogue 2026-11-12).
+        'deepseek/deepseek-flash',
         # Accepted evaluatorq reseat on coherent measured AA v4.3.2 medium:
         # GPT-6 Luna 29.9251773515762 vs GPT-5.6 Luna 25.0358741440784,
         # $0.20 vs $0.45 blended. Never compare the unversioned cached pair.
@@ -273,9 +277,11 @@ BALANCED_TRIO = JuryPreset(
     # Same lineage as the seat it backs, on purpose: a retirement is usually a
     # version bump, and flash keeps the panel at three families where a
     # fourth-vendor reserve would quietly reshape it.
-    reserve_judges=('deepseek/deepseek-flash',),
+    # Same weights on another host since 2026-11-23, so an outage at DeepSeek
+    # itself still leaves a route.
+    reserve_judges=('wafer/DeepSeek-V4.1-Flash-1017',),
     use_when='Default subjective eval. Three families, three error surfaces.',
-    estimated_cost_per_1k=4.45,
+    estimated_cost_per_1k=3.75,
 )
 
 STRONG_JURY = JuryPreset(
@@ -288,8 +294,9 @@ STRONG_JURY = JuryPreset(
         # Reseated 2026-11-10 from gemini-3.6-flash, as on balanced-trio.
         'google-ai/gemini-3.8-flash',
     ),
-    # Reseated 2026-11-10 from deepseek-v4-pro, as on balanced-trio.
-    reserve_judges=('baseten/deepseek-v4.1-flash',),
+    # Reseated 2026-11-10 from deepseek-v4-pro, then 2026-11-23 to DeepSeek's
+    # own route, as on balanced-trio.
+    reserve_judges=('deepseek/deepseek-flash',),
     use_when='Customer-facing benchmarks, preference data, anything that compounds.',
     estimated_cost_per_1k=27.00,
 )
@@ -329,8 +336,8 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
     judges=(
         # Held by gpt-oss-120b until the family entered NEVER_SEAT (PR #330
         # review, 2026-08-24), then deepseek-v4-pro; reseated 2026-11-10 to
-        # v4.1 Flash, as on balanced-trio.
-        'baseten/deepseek-v4.1-flash',
+        # v4.1 Flash, and 2026-11-23 to DeepSeek's own route, as on balanced-trio.
+        'deepseek/deepseek-flash',
         # Reseated 2026-11-23 from baseten/kimi-k3: Kimi's primary announcement
         # calls K3.1 Pro a new K3.1 series and a post-trained K3, and Wafer is the
         # cheapest reviewed route at the same 46.5 index. (verified 2026-11-23:
@@ -343,7 +350,7 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
     ),
     reserve_judges=('greenpt/qwen3.6-35b-a3b',),
     use_when='No dependence on a closed frontier vendor; migration path to self-hosting.',
-    estimated_cost_per_1k=9.29,
+    estimated_cost_per_1k=8.59,
 )
 
 EU_REGION = JuryPreset(
@@ -535,10 +542,8 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'glm-4.5-x': _OLDER_GENERATION,
     'claude-fable-5-2': '$8/$40 per 1M on every host, no AA index on the public card and no card in /v2/models (2026-11-10). Five times the Opus 5.5 rate it would compete with; review for strong-jury once scored.',
     'claude-mythos-5-2': 'Same as claude-fable-5-2: $8/$40 per 1M, unscored (2026-11-10). Review for strong-jury once scored.',
-    'deepseek-v4.1-flash-1017': _UNSCORED,
     'kimi-k2.8-preview': _UNSCORED,
     'kimi-k3.1-pro-highspeed': 'A faster K3.1 Pro at $4/$20 per 1M, unscored (2026-11-10). If K3.1 Pro is seated, this is its premium variant, not a separate decision.',
-    'kimi-k3.1-pro': '$2/$10 per 1M on moonshotai, cheaper than the seated K3 ($3/$15), but unscored on the public card and absent from /v2/models (2026-11-10). The likeliest Portable upgrade: re-review the moment it is scored.',
     'gemini-nano-banana-2.1': _NOT_A_JUDGE,
     'gemma-4-12b': 'munito EU host only, public AA index 9.4, under the 15.0 floor. 2026-11-10.',
     'qwen3.8-max-0902': "Public AA index 45.4 at $1.65/$4.95 per 1M, europe/us/apac. Alibaba holds only Portable's cost-chosen reserve ($0.30/$1.80), so a stronger, pricier Qwen is not a reserve upgrade; it would be a fourth-family judge, which no panel has a seat for. 2026-11-10.",
