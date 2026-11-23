@@ -539,6 +539,131 @@ def test_set_evaluation_attributes_emits_evaluator_span_when_typed() -> None:
         'reason': 'why',
     }
 
+    # Orq reads gen_ai.evaluation.passed with no fallback, so a failing verdict keeps it as False.
+    failing = MagicMock()
+    set_evaluation_attributes(failing, 0.0, pass_=False, evaluator_name='e', evaluator_type='python_eval')
+    failing_attrs = {c.args[0]: c.args[1] for c in failing.set_attribute.call_args_list}
+    assert failing_attrs['gen_ai.evaluation.passed'] is False
+    assert failing_attrs['gen_ai.evaluation.score.label'] == 'fail'
+
+
+def test_set_evaluation_attributes_scorer_error_result_is_an_error_event() -> None:
+    """A scorer that returns an inconclusive result marks it in raw_output; the event reports error.type, not a score."""
+    from unittest.mock import MagicMock
+    from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span, job_span = MagicMock(), MagicMock()
+    set_evaluation_attributes(
+        span,
+        'error',
+        explanation='judge blocked',
+        evaluator_name='e',
+        evaluator_type='llm_eval',
+        raw_output={EVAL_ERROR_RAW_OUTPUT_KEY: {'error_type': 'content_filter', 'message': 'blocked'}},
+        evaluated_span=job_span,
+    )
+    assert job_span.add_event.call_args.kwargs['attributes'] == {
+        'gen_ai.evaluation.name': 'e',
+        'error.type': 'content_filter',
+    }
+    # The span attributes are unchanged by the error marker.
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['gen_ai.evaluation.score.label'] == 'error'
+
+    # Open-vocabulary types survive as long as they are short.
+    dotted = MagicMock()
+    set_evaluation_attributes(
+        MagicMock(),
+        'error',
+        evaluator_name='e',
+        evaluator_type='llm_eval',
+        raw_output={EVAL_ERROR_RAW_OUTPUT_KEY: {'error_type': 'provider.429'}},
+        evaluated_span=dotted,
+    )
+    assert dotted.add_event.call_args.kwargs['attributes']['error.type'] == 'provider.429'
+
+    fallback = MagicMock()
+    messages: list[str] = []
+    sink = logger.add(messages.append, level='WARNING', format='{message}')
+    try:
+        set_evaluation_attributes(
+            MagicMock(),
+            'error',
+            evaluator_name='e',
+            evaluator_type='llm_eval',
+            raw_output={EVAL_ERROR_RAW_OUTPUT_KEY: {'message': 'no type given'}},
+            evaluated_span=fallback,
+        )
+    finally:
+        logger.remove(sink)
+    assert fallback.add_event.call_args.kwargs['attributes']['error.type'] == 'evaluation_error'
+    assert len(messages) == 1
+    assert 'without a usable error_type' in messages[0]
+
+
+def test_set_evaluation_attributes_no_result_event_without_evaluator_type() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    job_span = MagicMock()
+    set_evaluation_attributes(MagicMock(), 1.0, pass_=True, evaluator_name='e', evaluated_span=job_span)
+    job_span.add_event.assert_not_called()
+
+
+def test_set_evaluation_attributes_string_score_is_its_own_label() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span, job_span = MagicMock(), MagicMock()
+    set_evaluation_attributes(span, 'relevant', evaluator_name='e', evaluator_type='llm_eval', evaluated_span=job_span)
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['gen_ai.evaluation.score.label'] == 'relevant'
+    assert attrs['orq.evaluator.score.label'] == 'relevant'
+    assert 'gen_ai.evaluation.score.value' not in attrs
+    assert 'gen_ai.evaluation.passed' not in attrs
+    assert job_span.add_event.call_args.kwargs['attributes'] == {
+        'gen_ai.evaluation.name': 'e',
+        'gen_ai.evaluation.score.label': 'relevant',
+    }
+
+
+def test_set_evaluation_attributes_cuts_long_string_label_with_warning() -> None:
+    """The conventions want a low-cardinality label; a long string verdict is cut
+    on the span, with a warning, while orq.evaluation.output keeps the full value."""
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    records: list[str] = []
+    handler_id = logger.add(lambda message: records.append(message.record['message']), level='WARNING')
+    try:
+        span = MagicMock()
+        long = 'x' * 100
+        set_evaluation_attributes(span, long, evaluator_name='verbose', evaluator_type='llm_eval')
+    finally:
+        logger.remove(handler_id)
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    label = attrs['gen_ai.evaluation.score.label']
+    assert len(label) == 64
+    assert label.endswith('…')
+    assert json.loads(attrs['orq.evaluation.output'])['value'] == long
+    assert len(records) == 1
+    assert "'verbose'" in records[0]
+    assert '100-character' in records[0]
+
+
+def test_set_evaluation_attributes_short_string_label_does_not_warn() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    records: list[str] = []
+    handler_id = logger.add(lambda message: records.append(message.record['message']), level='WARNING')
+    try:
+        set_evaluation_attributes(MagicMock(), 'x' * 64, evaluator_name='e', evaluator_type='llm_eval')
+    finally:
+        logger.remove(handler_id)
+    assert records == []
+
 
 def test_set_evaluation_attributes_output_type_boolean() -> None:
     """A bool score must report output_type 'boolean', not 'number' — bool is an

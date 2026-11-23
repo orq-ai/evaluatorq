@@ -22,6 +22,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import (
     as_llm_client,
     configured_llm_provider,
+    require_models_served_by_client,
     require_models_served_by_provider,
     resolve_orq_credential,
     resolve_results_base_url,
@@ -818,24 +819,28 @@ def _validate_credentials_and_deps(
     resolved_mode: Pipeline,
     dataset: Path | str | StaticDataset | None,
 ) -> None:
-    # Early credential validation, before any work. A role with its own client, or a run with an injected client,
-    # needs nothing from the environment; every other role resolves its client from it.
-    if llm_client is None:
-        provider = configured_llm_provider()
-        planned = redteam_models(config, mode=resolved_mode)
-        from_env: dict[str, str] = {}
-        for role, models in planned.items():
-            role_config: LLMCallConfig = getattr(config, role)
-            if role_config.client is None:
-                from_env.update(models)
-        if from_env:
-            if provider is None:
-                raise CredentialError(
-                    'Missing LLM credentials for attack/evaluation models. '
-                    'Set OPENAI_API_KEY for direct OpenAI access, ORQ_API_KEY to use the ORQ router, '
-                    'or ANTHROPIC_API_KEY to use Claude directly.'
-                )
-            require_models_served_by_provider(from_env)
+    # Early validation, before any work. `passed_in_client` gives the client each role runs on when one was passed
+    # in, in the order the run itself uses. A role with none is resolved from the environment: it needs credentials
+    # and is checked against the provider the environment picks.
+    from_env: dict[str, str] = {}
+    # Grouped by client, so two roles on one client are reported together in one error.
+    on_client: dict[int, tuple[object, dict[str, str]]] = {}
+    for role, models in redteam_models(config, mode=resolved_mode).items():
+        role_client = passed_in_client(role, config, llm_client)
+        if role_client is None:
+            from_env.update(models)
+        else:
+            on_client.setdefault(id(role_client), (role_client, {}))[1].update(models)
+    for passed_in, models in on_client.values():
+        require_models_served_by_client(passed_in, models)
+    if from_env:
+        if configured_llm_provider() is None:
+            raise CredentialError(
+                'Missing LLM credentials for attack/evaluation models. '
+                'Set OPENAI_API_KEY for direct OpenAI access, ORQ_API_KEY to use the ORQ router, '
+                'or ANTHROPIC_API_KEY to use Claude directly.'
+            )
+        require_models_served_by_provider(from_env)
 
     # Fail fast: static/hybrid runs that pull static datapoints from HuggingFace
     # need huggingface-hub. Check now rather than deep in the static leg — in
@@ -2042,18 +2047,29 @@ def _create_static_job_for_agent_target(
     return agent_target_job
 
 
+def passed_in_client(role: str, config: LLMConfig | None, llm_client: Any) -> Any:
+    """The client a role runs on when the caller passed one in, or ``None`` when it is left to the environment.
+
+    The one place that knows the order, shared by the pre-flight check and the run so they cannot disagree. The two
+    roles differ: the attacker takes the run-wide ``llm_client`` first and its own ``attacker.client`` second; the
+    evaluator takes its own ``evaluator.client`` first and the run-wide client second.
+    """
+    own = getattr(config, role).client if config is not None else None
+    first, second = (llm_client, own) if role == 'attacker' else (own, llm_client)
+    return first if first is not None else second
+
+
 def _resolve_attacker_llm_client(
     llm_client: AsyncOpenAI | None,
     pipeline_config: LLMConfig | None,
     *,
     create_if_missing: bool,
 ) -> AsyncOpenAI | None:
-    # Per-role attacker client wins over the default factory so a caller-supplied
-    # `pipeline_config.attacker.client` is never silently replaced (ENG-1820).
-    if llm_client is not None:
-        return llm_client
-    if pipeline_config is not None and pipeline_config.attacker.client is not None:
-        return pipeline_config.attacker.client
+    # A caller-supplied client, in `passed_in_client`'s order, wins over the default factory, so
+    # `pipeline_config.attacker.client` is never silently replaced by a built one (ENG-1820).
+    passed_in = passed_in_client('attacker', pipeline_config, llm_client)
+    if passed_in is not None:
+        return passed_in
     if create_if_missing:
         return create_async_llm_client(
             role_config=pipeline_config.attacker if pipeline_config is not None else None,
@@ -3960,8 +3976,7 @@ def _build_redteam_evaluators(*, inputs: _RedTeamEvaluatorInputs) -> list[Any]:
     resolved_llm_client = llm_client
 
     # Resolve evaluator client — prefer per-role evaluator client if set
-    evaluator_client = pipeline_config.evaluator.client if pipeline_config else None
-    evaluator_client = evaluator_client or resolved_llm_client
+    evaluator_client = passed_in_client('evaluator', pipeline_config, resolved_llm_client)
 
     # Build evaluator — hybrid routes on hybrid_source; dynamic uses the
     # dynamic evaluator directly.
@@ -4521,8 +4536,7 @@ def _build_static_evaluator(*, inputs: _StaticEvaluatorInputs) -> Any:
 
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
 
-    evaluator_client = pipeline_config.evaluator.client if pipeline_config else None
-    evaluator_client = evaluator_client or llm_client
+    evaluator_client = passed_in_client('evaluator', pipeline_config, llm_client)
     evaluator_cfg = pipeline_config.evaluator if pipeline_config else None
     panel_cfg = pipeline_config.evaluator if pipeline_config else None
     # Resolved model ids (falling back to the raw target string when a context

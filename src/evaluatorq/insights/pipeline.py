@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import __version__
-from evaluatorq.common.llm_client import as_llm_client, configured_llm_provider, is_anthropic_client, resolve_llm_client
+from evaluatorq.common.llm_client import (
+    LLMConfigurationError,
+    as_llm_client,
+    configured_llm_provider,
+    is_anthropic_client,
+    resolve_llm_client,
+)
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import start_manifest
@@ -440,6 +446,43 @@ async def _build_dimension(  # noqa: C901
     return result
 
 
+def _require_insights_models_served(
+    llm_client: Any,
+    *,
+    summary_model: str,
+    label_model: str | None,
+    query_models: tuple[str, str] | None,
+) -> None:
+    """Stop before any work when the client that serves the run is Anthropic and a model the run will call is not a Claude id.
+
+    Checks what a run with at least one trace is sure to call: the summary model, the label model when labels or a
+    query are asked for, and the two query models for a query population. The embedding model is not checked here: it
+    goes to ``embedding_client``, which is never an Anthropic client. A classify-only model is checked as the fast
+    model it falls back to off the Orq router.
+
+    Raises:
+        ModelClientMismatchError: The serving side is Anthropic and at least one of those models is not served by it.
+    """
+    from evaluatorq.common.judge import models_called_off_router
+    from evaluatorq.common.llm_client import require_models_served
+    from evaluatorq.common.model_roles import Role, model_source
+
+    def named(model: str, role: Role, task: str, argument: str) -> tuple[str, str]:
+        default_model, default_label = model_source(role, task)
+        return (default_label if model == default_model else argument), model
+
+    models = dict([named(summary_model, 'smart', 'insights.summary', 'summary_model')])
+    if label_model is not None:
+        models.update([named(label_model, 'classifier', 'insights.labels', 'classifier_model')])
+    if query_models is not None:
+        compiler, finder_classifier = query_models
+        models.update([
+            named(compiler, 'fast', 'finder.compiler', 'compiler_model'),
+            named(finder_classifier, 'classifier', 'finder.classifier', 'classifier_model'),
+        ])
+    require_models_served(models_called_off_router(models), client=llm_client)
+
+
 async def insights(  # noqa: C901
     population: InsightsPopulation,
     *,
@@ -526,6 +569,12 @@ async def insights(  # noqa: C901
     classifier_model = resolved['classifier']
     summary_model = resolved['summary']
     embedding_model = resolved['embedding']
+    _require_insights_models_served(
+        llm_client,
+        summary_model=summary_model,
+        label_model=classifier_model if specs or coding_enabled or population.query is not None else None,
+        query_models=(compiler_model, finder_classifier_model) if population.query is not None else None,
+    )
     if trace_input_chars is None:
         from evaluatorq.trace_finder.settings import effective_settings
 
@@ -842,6 +891,8 @@ async def insights(  # noqa: C901
                         for warning in result.warnings:
                             run.warnings.append(warning)
                         _stage_end(writer, stage_name)
+                    except LLMConfigurationError:
+                        raise
                     except Exception as exc:  # noqa: BLE001 - a dimension failure must preserve other dimensions
                         message = str(exc)
                         _discard_dimension(run.traces, dimension)

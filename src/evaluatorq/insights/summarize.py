@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from evaluatorq.common.llm_client import LLMConfigurationError
 from evaluatorq.common.model_input import (
     cap_text,
     effective_trace_input_chars,
@@ -168,6 +169,8 @@ async def _summarize_one(
                 max_tokens=SUMMARY_MAX_TOKENS,
                 label='insights.summary',
             )
+        except LLMConfigurationError:
+            raise
         except Exception as exc:  # noqa: BLE001 - a per-trace failure must never fail the run
             if usage is not None:
                 usage.add('summary', usage_from_exception(exc))

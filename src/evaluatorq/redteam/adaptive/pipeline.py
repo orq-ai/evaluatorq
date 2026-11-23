@@ -23,6 +23,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.common.jury import append_jury_summary, attach_jury_raw_output
+from evaluatorq.common.llm_client import LLMConfigurationError
 from evaluatorq.common.messages import coerce_content_text, drop_unreplayable_tool_records
 from evaluatorq.common.target_call import call_target_with_retry, close_target
 from evaluatorq.common.thread_context import build_thread_id, conversation_thread
@@ -655,7 +656,11 @@ def create_dynamic_redteam_job(
                     },
                 )
             except Exception as e:
-                if isinstance(e, (TypeError, AttributeError, KeyError, IndexError, ImportError, NameError)):
+                # A configuration error is the same for every attack, so it ends the run like a programming error.
+                if isinstance(
+                    e,
+                    (LLMConfigurationError, TypeError, AttributeError, KeyError, IndexError, ImportError, NameError),
+                ):
                     raise
                 tb = traceback.format_exc(limit=8)
                 mapped_code, mapped_msg = resolved_backend.map_error(e)
