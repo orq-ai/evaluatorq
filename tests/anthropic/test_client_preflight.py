@@ -368,6 +368,37 @@ async def test_a_default_insights_run_with_an_anthropic_client_stops_before_any_
 
 
 @pytest.mark.asyncio
+async def test_an_insights_run_that_only_clusters_still_checks_the_model_that_merges_clusters(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """No labels and no sentiment, so nothing labels a trace; clustering still sends the classifier model to the merge step."""
+    from evaluatorq.insights import pipeline
+    from evaluatorq.insights.models import InsightsPopulation
+
+    fake = RawAnthropic()
+    for name in ('resolve_population', 'label_traces', 'summarize_traces', '_build_dimension'):
+        monkeypatch.setattr(pipeline, name, _fail_if_reached(name))
+    monkeypatch.setattr(pipeline, 'resolve_orq_client', lambda: pytest.fail('resolved an Orq client'))
+
+    with pytest.raises(ModelClientMismatchError) as info:
+        await pipeline.insights(
+            InsightsPopulation(),
+            dimensions=('intent',),
+            labels=(),
+            summary_model='claude-sonnet-5-5',
+            runs_dir=tmp_path / 'runs',
+            llm_client=cast('Any', fake),
+            embedding_client=cast('Any', object()),
+        )
+
+    message = str(info.value)
+    assert '(insights.labels)=' in message
+    assert 'insights.summary' not in message, 'the summary model is a Claude id and is not the problem'
+    assert fake.messages.calls == []
+    assert not (tmp_path / 'runs').exists(), 'nothing was written for a run that never started'
+
+
+@pytest.mark.asyncio
 async def test_insights_left_to_an_anthropic_only_environment_stops_the_same_way(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:

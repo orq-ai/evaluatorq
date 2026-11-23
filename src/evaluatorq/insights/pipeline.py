@@ -455,8 +455,9 @@ def _require_insights_models_served(
 ) -> None:
     """Stop before any work when the client that serves the run is Anthropic and a model the run will call is not a Claude id.
 
-    Checks what a run with at least one trace is sure to call: the summary model, the label model when labels or a
-    query are asked for, and the two query models for a query population. The embedding model is not checked here: it
+    Checks what a run with at least one trace is sure to call: the summary model, the label model when labels, a
+    dimension (its clusters are merged with that model) or a query are asked for, and the two query models for a query
+    population. The embedding model is not checked here: it
     goes to ``embedding_client``, which is never an Anthropic client. A classify-only model is checked as the fast
     model it falls back to off the Orq router.
 
@@ -572,7 +573,8 @@ async def insights(  # noqa: C901
     _require_insights_models_served(
         llm_client,
         summary_model=summary_model,
-        label_model=classifier_model if specs or coding_enabled or population.query is not None else None,
+        # Clustering sends the classifier model to the merge step, so any dimension needs it, labels or not.
+        label_model=classifier_model if specs or dimensions or coding_enabled or population.query is not None else None,
         query_models=(compiler_model, finder_classifier_model) if population.query is not None else None,
     )
     if trace_input_chars is None:
