@@ -48,7 +48,7 @@ Price blends the rates per 1M tokens as 7:0:2:1 (cache read : cache write : fres
 5 model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.
 ```
 
-`Score per $` counts only the points above the minimum score: it is `(score - min_score) / price`, with `min_score` taken as 0 when you pass `--min-score 0`. A model at the floor gets 0, so the column rewards what a model adds beyond the cheapest usable one.
+`Score per $` counts only the points above the minimum score: it is `(score - min_score) / price`. The minimum score is a fixed number, 10 by default, so the column rewards the points a model scores above it, and a model exactly at the minimum gets 0. `min_score=None` in Python counts from 0, the same as `--min-score 0`.
 
 Read the table from the top down: each row is cheaper than the one above it and scores lower. Price is the `agentic` blend, which assumes most input tokens are cache reads, as in an agent loop. As a `--mix` ratio it is `7:0:2:1`, because the ratio has a cache-write slot second; [The price axis](#the-price-axis) explains the blend and how to switch to the 3:1 list blend. `Cache read $/1M` is the cache-read rate the blend used. Pick from these rows: a dominated model is never the better choice on these two axes, and `--dominated` lists each one with the frontier model that beats it. `Est.` marks a score that Orq estimated from an older benchmark version instead of measuring.
 
