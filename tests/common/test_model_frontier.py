@@ -6,27 +6,29 @@ particular that every model is ranked at its catalogue default effort, where
 judges run, and priced on a 3:1 blend of its own rates.
 """
 
+import asyncio
 from typing import Any
 
+import httpx
 import pytest
 from loguru import logger
 
-from evaluatorq.common import model_catalogue, model_frontier
+from evaluatorq.common import model_catalogue, model_frontier, retry
 from tests.common.garden_fakes import card
 
 from evaluatorq.common.model_frontier import (
-    AA_FILLS,
     MAX_BLEND,
     MIN_SEAT_INDEX,
     NEVER_SEAT,
+    NO_STRUCTURED_VERDICT,
     SUPERSEDED,
     MANUAL_MODEL_CARDS,
     UNROUTABLE,
     ScoredModel,
-    catalog_scope,
     derive_trio,
     derived_successor,
     garden_from_cards,
+    headline_contradicts_its_own_rung,
     in_family_upgrades,
     load_garden,
     load_garden_sync,
@@ -129,11 +131,6 @@ class TestDefaultEffortRanking:
 
         assert m.default_index == pytest.approx(37.8)
 
-    def test_a_disabled_card_is_unseatable(self):
-        m = scored('x/a', 40.0, 1.0, enabled=False)
-
-        assert unseatable_reason(m) == 'disabled in the model catalogue'
-
     def test_an_unknown_default_ranks_on_the_headline(self):
         m = scored(
             'mistral/mistral-medium-latest',
@@ -216,7 +213,6 @@ class TestSelfContradictingCards:
 
         assert seatable(m)
 
-
     def test_in_family_upgrades_never_promotes_a_contradicted_card(self):
         incumbent = scored('openai/gpt-5.4-mini', 29.8, 1.0)
         pretender = scored('openai/gpt-5-mini', 44.0, 0.8, effort_indices={'none': 20.0})
@@ -264,6 +260,10 @@ class TestSeatable:
 
         assert not seatable(scored(f'some-new-host/{family}-turbo', 99.0, 0.01))
 
+    def test_the_contributor_tier_stays_out_and_the_standard_tier_stays_seatable(self):
+        assert not seatable(scored('meta/muse-spark-1.3-contributor', 99.0, 0.01))
+        assert seatable(scored('meta/muse-spark-1.3', 99.0, 0.01))
+
 
 class TestRankCheapestTop:
     """The cheap-aggregate derivation: best model per family under a blend ceiling."""
@@ -293,12 +293,11 @@ class TestRankCheapestTop:
 
         assert self.rank(garden) == ['a/cheap', 'b/z']
 
-    def test_unseatable_unrouteable_eu_disabled_free_and_floor_models_are_excluded(self):
+    def test_unseatable_unrouteable_eu_free_and_floor_models_are_excluded(self):
         garden = self.garden(
             scored('ok/m', 20.0, 0.2),
             scored('minimax/MiniMax-M2.7', 40.0, 0.2),
             scored('eu/m', 40.0, 0.2, region='europe'),
-            scored('off/m', 40.0, 0.2, enabled=False),
             scored('free/m', 40.0, 0.0),
             scored('floor/m', MIN_SEAT_INDEX - 1, 0.2),
         )
@@ -317,6 +316,13 @@ def test_default_ceiling_is_the_published_max_blend():
     assert [m.router_id for m in rank_cheapest_top(garden, lambda rid: rid.split('/')[0])] == ['a/in']
 
 
+def test_a_host_that_answers_schemas_in_prose_loses_the_cheap_seat_to_one_that_does_not(monkeypatch):
+    monkeypatch.setitem(NO_STRUCTURED_VERDICT, 'vendor/m-1', 'answers json_schema in prose')
+    garden = {m.router_id: m for m in (scored('vendor/m-1', 30.0, 0.3), scored('host/m-1', 30.0, 0.3))}
+
+    assert [m.router_id for m in rank_cheapest_top(garden, lambda rid: 'm')] == ['host/m-1']
+
+
 class TestManualModelCards:
     def test_every_entry_is_comparable(self):
         for router_id, model in with_manual_cards({}).items():
@@ -331,31 +337,68 @@ class TestManualModelCards:
 
 
 def test_scored_model_from_card_reads_rates_per_million_and_the_default_effort():
-    card: dict[str, object] = {
-        'provider': 'p',
-        'model_id': 'm',
-        'input_cost': 0.0002,
-        'output_cost': 0.001,
-        'enabled': True,
-        'metadata': {
-            'region': 'rest',
-            'autorouter': {
-                'v2': {
-                    'intelligence_index': 30.0,
-                    'aa_slug': 'm-high',
-                    'reasoning_efforts': {'high': {'aa_slug': 'm-high', 'intelligence_index': 30.0}},
-                }
-            },
+    card_ = card(
+        'p',
+        'm',
+        index=30.0,
+        pricing={
+            'input': {'cost': 0.2, 'currency': 'USD', 'per': 1_000_000, 'unit': 'tokens'},
+            'output': {'cost': 1.0, 'currency': 'usd', 'per': 1_000_000, 'unit': 'tokens'},
         },
-        'parameters': [{'parameter': 'reasoningEffort', 'config': {'default': 'high', 'options': [{'value': 'high'}]}}],
-    }
+        supported_parameters=['reasoning_effort'],
+        default_effort='high',
+        default_effort_scored=True,
+        reasoning_efforts={'high': {'intelligence_index': 30.0, 'index_version': 'v5', 'index_is_estimated': False}},
+    )
 
-    model = scored_model_from_card(card)
+    model = scored_model_from_card(card_)
 
     assert model is not None
-    assert (model.router_id, model.input_price, model.output_price) == ('p/m', 0.2, 1.0)
+    assert (model.router_id, model.provider, model.input_price, model.output_price) == ('p/m', 'p', 0.2, 1.0)
     assert (model.default_effort, model.default_index, model.headline_effort) == ('high', 30.0, 'high')
-    assert scored_model_from_card({'provider': 'p', 'model_id': 'n'}) is None
+    assert model.region is None
+    assert scored_model_from_card({'id': 'p/n'}) is None
+
+
+@pytest.mark.parametrize(
+    'rate',
+    [
+        None,
+        {'cost': 1.0, 'currency': 'EUR', 'per': 1_000_000, 'unit': 'tokens'},
+        {'cost': 1.0, 'currency': 'USD', 'per': 1, 'unit': 'requests'},
+        {'cost': 1.0, 'currency': 'USD', 'per': 0, 'unit': 'tokens'},
+        {'cost': 'n/a', 'currency': 'USD', 'per': 1_000_000, 'unit': 'tokens'},
+    ],
+)
+def test_a_card_without_a_usd_token_rate_is_left_out(rate):
+    pricing = {'input': rate, 'output': {'cost': 1.0, 'currency': 'USD', 'per': 1_000_000, 'unit': 'tokens'}}
+
+    assert scored_model_from_card(card('p', 'm', pricing=pricing)) is None
+
+
+def test_a_per_thousand_rate_is_scaled_to_per_million():
+    rate = {'cost': 0.001, 'currency': 'USD', 'per': 1000, 'unit': 'tokens'}
+    model = scored_model_from_card(card('p', 'm', pricing={'input': rate, 'output': rate}))
+
+    assert model is not None
+    assert (model.input_price, model.output_price) == (1.0, 1.0)
+
+
+@pytest.mark.parametrize(
+    ('location', 'region'), [(['eu'], 'europe'), (['eu', 'us'], None), (['us'], None), (None, None)]
+)
+def test_only_an_eu_only_card_is_region_pinned(location, region):
+    model = scored_model_from_card(card('p', 'm', location=location))
+
+    assert model is not None
+    assert model.region == region
+
+
+def test_a_default_effort_without_the_parameter_is_ignored():
+    model = scored_model_from_card(card('p', 'm', default_effort='high', default_effort_scored=True))
+
+    assert model is not None
+    assert (model.effort_parameter, model.default_effort, model.headline_effort) == (False, None, 'high')
 
 
 class TestSuperseded:
@@ -382,8 +425,8 @@ class TestSuperseded:
         assert derived_successor('a/m-1', garden) == 'a/m-2'
 
     def test_an_unseatable_newer_card_does_not_retire_a_working_model(self):
-        """A disabled successor cannot take the seat, so the older version keeps its place in the cheap ranking."""
-        garden = {m.router_id: m for m in (scored('a/m-1', 30.0, 0.2), scored('a/m-2', 40.0, 0.2, enabled=False))}
+        """A free successor cannot take the seat, so the older version keeps its place in the cheap ranking."""
+        garden = {m.router_id: m for m in (scored('a/m-1', 30.0, 0.2), scored('a/m-2', 40.0, 0.0))}
 
         assert derived_successor('a/m-1', garden) is None
         assert [m.router_id for m in rank_cheapest_top(garden, lambda rid: rid.split('/')[0], 1.0)] == ['a/m-1']
@@ -412,32 +455,29 @@ class TestSuperseded:
 
 
 class TestAaFills:
-    def test_fills_only_the_missing_default_rung_and_never_overrides_live(self):
-        router_id = next(iter(AA_FILLS))
-        effort = AA_FILLS[router_id]['effort']
-        empty = graded(router_id, effort, {})
-        measured = graded(router_id, effort, {effort: 10.0})
+    """The register is empty on the v5 garden; these pin the rules for its next entry."""
 
-        assert with_aa_fills({router_id: empty})[router_id].default_index == AA_FILLS[router_id]['index']
-        assert with_aa_fills({router_id: measured})[router_id].default_index == 10.0
+    @pytest.fixture(autouse=True)
+    def one_fill(self, monkeypatch):
+        monkeypatch.setattr(model_frontier, 'AA_FILLS', {'p/m': {'effort': 'max', 'index': 30.0, 'source': 'test'}})
+
+    def test_fills_only_the_missing_default_rung_and_never_overrides_live(self):
+        empty = graded('p/m', 'max', {})
+        measured = graded('p/m', 'max', {'max': 10.0})
+
+        assert with_aa_fills({'p/m': empty})['p/m'].default_index == 30.0
+        assert with_aa_fills({'p/m': measured})['p/m'].default_index == 10.0
 
     def test_a_fill_never_lands_on_a_rung_other_than_the_default(self):
-        router_id = next(iter(AA_FILLS))
-        other = graded(router_id, 'high', {})
+        other = graded('p/m', 'high', {})
 
-        filled = with_aa_fills({router_id: other})[router_id]
+        filled = with_aa_fills({'p/m': other})['p/m']
         assert filled.effort_indices == {}
         assert filled.default_index == other.intelligence_index
 
 
-def _v2_card(v2: dict[str, Any]) -> dict[str, object]:
-    return {
-        'provider': 'p',
-        'model_id': 'm',
-        'input_cost': 0.001,
-        'output_cost': 0.004,
-        'metadata': {'autorouter': {'v2': v2}},
-    }
+def _effort_card(index: float, **fields: Any) -> dict[str, Any]:
+    return card('p', 'm', index=index, supported_parameters=['reasoning_effort'], **fields)
 
 
 class TestEffortCapture:
@@ -446,107 +486,309 @@ class TestEffortCapture:
     @pytest.mark.parametrize('ladder', [['high'], 'high', {'high': 'not-a-rung', 'low': None}])
     def test_a_malformed_ladder_reads_as_absent(self, ladder):
         """External data: a bad `reasoning_efforts` must not take the whole garden down."""
-        model = scored_model_from_card(
-            _v2_card({'aa_slug': 'm', 'intelligence_index': 40.0, 'reasoning_efforts': ladder})
-        )
+        model = scored_model_from_card(_effort_card(40.0, reasoning_efforts=ladder))
 
         assert model is not None
         assert model.effort_indices == {}
         assert model.headline_effort is None
 
-    @pytest.mark.parametrize('host_default', ['none', 'max'])
-    def test_a_host_default_does_not_prove_the_headline_was_measured_there(self, host_default):
+    @pytest.mark.parametrize('flag', [{}, {'default_effort_scored': False}, {'default_effort_scored': 'true'}])
+    def test_a_host_default_does_not_prove_the_headline_was_measured_there(self, flag):
+        model = scored_model_from_card(_effort_card(57.1, default_effort='max', **flag))
+
+        assert model is not None
+        assert model.default_effort == 'max'
+        assert model.headline_effort == 'high'
+
+    def test_a_headline_is_placed_on_the_one_rung_with_its_index(self):
+        """Without a scored default, an equal index is the only evidence of where the headline was measured."""
+        rungs = {'none': {'intelligence_index': 11.7, 'index_version': 'v5'}, 'reasoning': {'intelligence_index': 14.8, 'index_version': 'v5'}}
+        model = scored_model_from_card(card('p', 'm', index=14.8, reasoning_efforts=rungs))
+
+        assert model is not None
+        assert model.headline_effort == 'reasoning'
+        assert not headline_contradicts_its_own_rung(model)
+
+    def test_a_scored_default_wins_over_an_equal_index_on_another_rung(self):
+        rungs = {'medium': {'intelligence_index': 30.0, 'index_version': 'v5'}, 'high': {'intelligence_index': 40.0, 'index_version': 'v5'}}
         model = scored_model_from_card(
-            _v2_card({'aa_slug': 'kimi-k3', 'intelligence_index': 57.1, 'default_effort': host_default})
+            _effort_card(40.0, default_effort='medium', default_effort_scored=True, reasoning_efforts=rungs)
         )
 
         assert model is not None
-        assert model.effort_indices == {}
-        assert model.headline_effort is None
+        assert model.headline_effort == 'medium'
 
-    def test_a_non_reasoning_high_headline_is_not_folded_into_an_adaptive_ladder(self):
-        model = scored_model_from_card(
-            _v2_card({
-                'aa_slug': 'claude-sonnet-4-6',
-                'aa_name': 'Claude Sonnet 4.6 (Non-reasoning, High Effort)',
-                'intelligence_index': 35.9,
-                'default_effort': 'high',
-                'reasoning_efforts': {'max': {'aa_slug': 'claude-sonnet-4-6-adaptive', 'intelligence_index': 47.2}},
-            })
-        )
+    def test_a_scored_default_with_no_v5_rung_is_unscored(self):
+        """The headline names no version, so a default with no v5 rung cannot rank on it."""
+        model = scored_model_from_card(_effort_card(40.0, default_effort='medium', default_effort_scored=True))
 
-        assert model is not None
-        assert model.effort_indices == {'max': 47.2}
-        assert model.headline_effort is None
+        assert model is None
+
+    def test_two_rungs_on_the_headline_index_place_it_nowhere(self):
+        rungs = {'high': {'intelligence_index': 30.0, 'index_version': 'v5'}, 'max': {'intelligence_index': 30.0, 'index_version': 'v5'}}
+        model = scored_model_from_card(_effort_card(30.0, default_effort='medium', reasoning_efforts=rungs))
+
+        assert model is None
 
     def test_measured_default_and_other_rungs_remain_distinct(self):
         model = scored_model_from_card(
-            _v2_card({
-                'aa_slug': 'gpt-6-sol-medium',
-                'intelligence_index': 39.7820971749522,
-                'default_effort': 'medium',
-                'reasoning_efforts': {
-                    'medium': {'aa_slug': 'gpt-6-sol-medium', 'intelligence_index': 39.7820971749522},
-                    'max': {'aa_slug': 'gpt-6-sol', 'intelligence_index': 47.5276426437724},
+            _effort_card(
+                39.7820971749522,
+                default_effort='medium',
+                default_effort_scored=True,
+                reasoning_efforts={
+                    'medium': {'intelligence_index': 39.7820971749522, 'index_version': 'v5'},
+                    'max': {'intelligence_index': 47.5276426437724, 'index_version': 'v5'},
                 },
-            })
+            )
         )
 
         assert model is not None
         assert model.effort_indices == {'medium': 39.7820971749522, 'max': 47.5276426437724}
         assert model.headline_effort == 'medium'
+        assert model.default_index == 39.7820971749522
+
+
+NO_LADDER: dict[str, Any] = {'reasoning_efforts': None}
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+V5_RUNG = {'reasoning_efforts': {'medium': {'intelligence_index': 40.0, 'index_version': 'v5'}}}
+
+
+def _serve(monkeypatch: pytest.MonkeyPatch, pages: list[Any], calls: list[httpx.Request] | None = None) -> None:
+    """Point the public catalogue fetch at canned pages, served in order."""
+    queue = list(pages)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if calls is not None:
+            calls.append(request)
+        page = queue.pop(0)
+        if isinstance(page, Exception):
+            raise page
+        return page if isinstance(page, httpx.Response) else httpx.Response(200, json=page)
+
+    real = httpx.AsyncClient
+    monkeypatch.setenv('ORQ_BASE_URL', 'https://catalog.test')
+    monkeypatch.setattr(
+        model_frontier.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
+    )
 
 
 class TestLiveGarden:
-    """The garden is read from /v2/models; these stub the fetch, never the parsing."""
-
-    def test_a_catalogue_with_a_disabled_card_is_workspace_scoped(self):
-        cards = [card('a', 'one'), card('b', 'two', enabled=False)]
-
-        assert catalog_scope(cards) == 'workspace'
-        assert catalog_scope(cards[:1]) == 'project'
+    """The garden is read from the public catalogue; these stub the HTTP transport, never the parsing."""
 
     def test_unscored_cards_are_left_out_of_the_garden(self):
-        cards = [card('a', 'one'), card('b', 'unscored', metadata={})]
-
-        assert set(garden_from_cards(cards)) == {'a/one'}
-
-    def test_a_non_usd_card_is_left_out_rather_than_mixed_in(self):
-        """The catalogue's own price reader decides, so the garden and the pricing table agree."""
-        cards = [card('a', 'one'), card('b', 'eur', input_currency='eur')]
+        cards = [card('a', 'one'), card('b', 'unscored', index=None)]
 
         assert set(garden_from_cards(cards)) == {'a/one'}
 
     @pytest.mark.asyncio
-    async def test_load_garden_ranks_the_fetched_cards(self, monkeypatch):
-        async def fetch(_client=None):
-            return (card('a', 'one'), card('b', 'two', enabled=False))
-
-        monkeypatch.setattr(model_frontier, 'model_cards', fetch)
+    async def test_pages_are_followed_and_deprecated_cards_dropped(self, monkeypatch):
+        monkeypatch.setenv('ORQ_API_KEY', 'a-key-the-public-read-must-not-send')
+        calls: list[httpx.Request] = []
+        _serve(
+            monkeypatch,
+            [
+                {'data': [card('a', 'one', **V5_RUNG), card('a', 'old', deprecated=True)], 'has_more': True},
+                {'data': [card('b', 'two'), 'not a card', {'deprecated': False}], 'has_more': False},
+            ],
+            calls,
+        )
 
         garden = await load_garden()
 
         assert set(garden) == {'a/one', 'b/two'}
-        assert garden['b/two'].enabled is False
+        assert [str(r.url) for r in calls] == [
+            'https://catalog.test/v2/model-catalog',
+            'https://catalog.test/v2/model-catalog?starting_after=a%2Fold',
+        ]
+        assert all('authorization' not in r.headers for r in calls)
+        assert list(await model_frontier.public_listings()) == ['a/one', 'b/two']
 
     @pytest.mark.asyncio
-    async def test_a_project_scoped_catalogue_is_used_with_a_warning(self, monkeypatch):
-        """Decision RES-1346: warn and carry on, since a project key is what most callers hold."""
-        cards = (card('a', 'one'),)
+    async def test_the_cards_are_fetched_once_per_process(self, monkeypatch):
+        calls: list[httpx.Request] = []
+        _serve(monkeypatch, [{'data': [card('a', 'one')], 'has_more': False}], calls)
 
-        async def fetch(_client=None):
-            return cards
+        first = await model_frontier.public_cards()
+        listings = await model_frontier.public_listings()
 
-        monkeypatch.setattr(model_frontier, 'model_cards', fetch)
+        assert first is await model_frontier.public_cards()
+        assert list(listings) == ['a/one']
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ('pages', 'status'),
+        [
+            ([httpx.Response(200, text='not json')], None),
+            ([{'data': [], 'has_more': True}], None),
+            ([{'data': [], 'has_more': False}], None),
+            ([{'data': [{'no': 'id'}], 'has_more': True}], None),
+            ([{'data': 7, 'has_more': False}], None),
+            ([[1, 2]], None),
+            ([{'data': [card('a', 'x')], 'has_more': True}] * 2, None),
+        ],
+    )
+    async def test_a_bad_fetch_raises_and_is_not_cached(self, monkeypatch, pages, status):
+        """A garden from a partial roster would retire live seats, so every failure is loud."""
+        _serve(monkeypatch, [*pages, {'data': [card('a', 'one')], 'has_more': False}])
+
+        with pytest.raises(model_catalogue.ModelCatalogueError) as raised:
+            await model_frontier.public_cards()
+
+        assert raised.value.status_code == status
+        assert [c['id'] for c in await model_frontier.public_cards()] == ['a/one']
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('failure', [httpx.Response(503), httpx.Response(429), httpx.ConnectError('down')])
+    async def test_a_transient_failure_is_retried(self, monkeypatch, failure):
+        monkeypatch.setattr(retry.asyncio, 'sleep', _no_sleep)
+        _serve(monkeypatch, [failure, {'data': [card('a', 'one')], 'has_more': False}])
+
+        assert [c['id'] for c in await model_frontier.public_cards()] == ['a/one']
+
+    @pytest.mark.asyncio
+    async def test_a_persistent_503_raises_and_is_not_cached(self, monkeypatch):
+        monkeypatch.setattr(retry.asyncio, 'sleep', _no_sleep)
+        _serve(monkeypatch, [httpx.Response(503)] * retry.MAX_RETRY_ATTEMPTS + [{'data': [card('a', 'one')], 'has_more': False}])
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await model_frontier.public_cards()
+
+        assert [c['id'] for c in await model_frontier.public_cards()] == ['a/one']
+
+    @pytest.mark.asyncio
+    async def test_concurrent_cold_callers_share_one_fetch(self, monkeypatch):
+        calls: list[httpx.Request] = []
+        _serve(monkeypatch, [{'data': [card('a', 'one')], 'has_more': False}], calls)
+
+        first, second = await asyncio.gather(model_frontier.public_cards(), model_frontier.public_cards())
+
+        assert first is second
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_catalogue_with_no_scored_usd_card_raises(self, monkeypatch):
+        """Every card dropped reads as every seat retired, so an empty garden is a failed read."""
+        _serve(
+            monkeypatch,
+            [
+                {
+                    'data': [card('a', 'eur', pricing={'input': {'cost': 1.0, 'currency': 'EUR'}}, **V5_RUNG)],
+                    'has_more': False,
+                }
+            ],
+        )
+
+        with pytest.raises(model_catalogue.ModelCatalogueError, match='none with a USD price'):
+            await load_garden()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        'rungs',
+        [{}, {'reasoning_efforts': {'high': {'intelligence_index': 51.2, 'index_version': 'v4.3'}}}],
+        ids=['no-ladders', 'v4.3-ladder'],
+    )
+    async def test_a_catalogue_not_on_index_v5_raises(self, monkeypatch, rungs):
+        """Prod before the platform release: scored cards, but the floor would rank them on the wrong version."""
+        _serve(
+            monkeypatch,
+            [{'data': [card('a', 'one', **NO_LADDER | rungs), card('b', 'two', **NO_LADDER)], 'has_more': False}],
+        )
+
+        with pytest.raises(model_catalogue.ModelCatalogueError, match='no AA index v5 rung'):
+            await load_garden()
+
+    @pytest.mark.asyncio
+    async def test_a_card_left_on_an_older_index_is_dropped_not_ranked(self, monkeypatch):
+        """Mid-migration: one card still on v4.3 must not be ranked against v5 scores."""
+        old = {'reasoning_efforts': {'high': {'intelligence_index': 51.2, 'index_version': 'v4.3'}}}
+        _serve(
+            monkeypatch,
+            [{'data': [card('a', 'new', **V5_RUNG), card('b', 'old', **old), card('c', 'plain')], 'has_more': False}],
+        )
+
+        assert set(await load_garden()) == {'a/new', 'c/plain'}
+
+    @pytest.mark.asyncio
+    async def test_a_kept_card_ranks_on_its_v5_rungs_only(self, monkeypatch):
+        """{medium: v5, high: v4.3} on a medium default ranks on the v5 rung, never the v4.3 one."""
+        mixed = {
+            'reasoning_efforts': {
+                'medium': {'intelligence_index': 24.6, 'index_version': 'v5'},
+                'high': {'intelligence_index': 34.5, 'index_version': 'v4.3'},
+            },
+            'supported_parameters': ['reasoning_effort'],
+            'default_effort': 'medium',
+        }
+        _serve(monkeypatch, [{'data': [card('a', 'mixed', index=34.5, **mixed)], 'has_more': False}])
+
+        mixed_model = (await load_garden())['a/mixed']
+        assert mixed_model.effort_indices == {'medium': 24.6}
+        assert mixed_model.default_index == 24.6
+
+    @pytest.mark.asyncio
+    async def test_a_card_whose_default_rung_is_off_version_is_left_out(self, monkeypatch):
+        """{medium: v5, high: v4.3} on a high default, headline 34.5: the headline must not stand in for the v4.3 rung."""
+        mixed = {
+            'reasoning_efforts': {
+                'medium': {'intelligence_index': 24.6, 'index_version': 'v5'},
+                'high': {'intelligence_index': 34.5, 'index_version': 'v4.3'},
+            },
+            'supported_parameters': ['reasoning_effort'],
+            'default_effort': 'high',
+        }
+        _serve(
+            monkeypatch,
+            [{'data': [card('a', 'mixed', index=34.5, **mixed), card('b', 'new', **V5_RUNG)], 'has_more': False}],
+        )
         messages: list[str] = []
-        sink = logger.add(messages.append, level='WARNING')
+        sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
         try:
             garden = await load_garden()
         finally:
-            logger.remove(sink)
+            logger.remove(sink_id)
 
-        assert set(garden) == {'a/one'}
-        assert any('project-scoped' in m for m in messages)
+        assert set(garden) == {'b/new'}
+        assert any('a/mixed' in m and "'high'" in m and "'v4.3'" in m for m in messages)
+
+    @pytest.mark.asyncio
+    async def test_cards_left_out_for_price_or_an_unversioned_score_are_logged(self, monkeypatch):
+        eur = {'input': {'cost': 1.0, 'currency': 'EUR', 'per': 1_000_000, 'unit': 'tokens'}, 'output': {}}
+        _serve(
+            monkeypatch,
+            [
+                {
+                    'data': [
+                        card('a', 'ladder', **V5_RUNG),
+                        card('b', 'eur', pricing=eur),
+                        card('c', 'free-text', pricing={}),
+                        card('d', 'unscored', index=None, pricing={}),
+                        card('e', 'plain', **NO_LADDER),
+                        card('f', 'off-rung', reasoning_efforts={'high': {'intelligence_index': 12.0, 'index_version': 'v5'}}),
+                    ],
+                    'has_more': False,
+                }
+            ],
+        )
+        messages: list[str] = []
+        sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+        try:
+            garden = await load_garden()
+        finally:
+            logger.remove(sink_id)
+
+        assert set(garden) == {'a/ladder', 'e/plain'}
+        assert any('non-USD price' in m and 'b/eur' in m and 'c/free-text' not in m for m in messages)
+        assert any('no USD per-token price' in m and 'c/free-text' in m for m in messages)
+        assert not any('d/unscored' in m for m in messages)
+        assert any('no AA index v5 score' in m and 'f/off-rung' in m and 'e/plain' not in m for m in messages)
+        assert any('no effort ladder' in m and 'e/plain' in m and 'a/ladder' not in m for m in messages)
 
     def test_the_sync_reader_refuses_inside_a_running_loop(self):
         import asyncio
@@ -556,61 +798,6 @@ class TestLiveGarden:
                 load_garden_sync()
 
         asyncio.run(inside())
-
-    @pytest.mark.asyncio
-    async def test_reading_cards_without_a_key_says_why(self, monkeypatch):
-        """A garden from an empty table would retire every seat, so the raw reader is always strict."""
-        from evaluatorq.common.llm_client import MissingLLMCredentialsError
-
-        monkeypatch.delenv('ORQ_API_KEY', raising=False)
-        monkeypatch.setattr(model_catalogue, '_catalogues', {})
-
-        with pytest.raises(MissingLLMCredentialsError):
-            await model_catalogue.model_cards()
-
-    @pytest.mark.asyncio
-    async def test_raw_cards_share_the_parsed_tables_fetch_and_cache(self, monkeypatch):
-        """One GET per process and credential serves both readers, so they describe one catalogue."""
-        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
-        monkeypatch.setattr(model_catalogue, '_catalogues', {})
-        calls: list[str] = []
-
-        async def fetch(host, api_key, oauth_fetch):
-            calls.append(host)
-            return [card('a', 'one'), 'not a card']
-
-        monkeypatch.setattr(model_catalogue, '_fetch_catalogue_payload', fetch)
-
-        first = await model_catalogue.model_cards()
-        second = await model_catalogue.model_cards()
-        info = await model_catalogue.get_model_info('a/one')
-
-        assert first is second
-        assert [c['model_id'] for c in first] == ['one']
-        assert info is not None
-        assert len(calls) == 1
-
-
-    @pytest.mark.asyncio
-    async def test_cards_read_after_a_pricing_lookup_come_from_the_same_fetch(self, monkeypatch):
-        """Pricing usually runs first; the raw cards must already be cached by that read."""
-        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
-        monkeypatch.setattr(model_catalogue, '_catalogues', {})
-        monkeypatch.setattr(model_catalogue, '_raw_catalogues', {})
-        calls: list[str] = []
-
-        async def fetch(host, api_key, oauth_fetch):
-            calls.append(host)
-            return [card('a', 'one')]
-
-        monkeypatch.setattr(model_catalogue, '_fetch_catalogue_payload', fetch)
-
-        info = await model_catalogue.get_model_info('a/one')
-        cards = await model_catalogue.model_cards()
-
-        assert info is not None
-        assert [c['model_id'] for c in cards] == ['one']
-        assert len(calls) == 1
 
 
 class TestRankCheapestTopSuccessors:
@@ -646,17 +833,9 @@ class TestMalformedScores:
     """External card data never takes the whole garden down, and never reads as a score by accident."""
 
     @staticmethod
-    def card_with(headline: object, rungs: dict[str, Any] | None = None) -> dict[str, object]:
-        v2: dict[str, Any] = {'intelligence_index': headline}
-        if rungs is not None:
-            v2['reasoning_efforts'] = rungs
-        return {
-            'provider': 'p',
-            'model_id': 'm',
-            'input_cost': 0.001,
-            'output_cost': 0.004,
-            'metadata': {'autorouter': {'v2': v2}},
-        }
+    def card_with(headline: object, rungs: dict[str, Any] | None = None) -> dict[str, Any]:
+        extra = {} if rungs is None else {'reasoning_efforts': rungs}
+        return card('p', 'm', index=headline, **extra)
 
     @pytest.mark.parametrize('headline', [float('nan'), float('inf'), True, 'n/a'])
     def test_a_non_finite_or_non_numeric_headline_is_unscored(self, headline):
@@ -664,7 +843,7 @@ class TestMalformedScores:
 
     @pytest.mark.parametrize('rung', ['n/a', True, float('nan')])
     def test_a_bad_rung_is_dropped_and_the_card_survives(self, rung):
-        card_ = self.card_with(30, {'low': {'intelligence_index': rung}, 'high': {'intelligence_index': 40}})
+        card_ = self.card_with(40, {'low': {'intelligence_index': rung, 'index_version': 'v5'}, 'high': {'intelligence_index': 40, 'index_version': 'v5'}})
         garden = model_frontier.garden_from_cards([card_, card('q', 'other')])
         assert set(garden) == {'p/m', 'q/other'}
         assert garden['p/m'].effort_indices == {'high': 40.0}
@@ -673,9 +852,13 @@ class TestMalformedScores:
 class TestSmallRobustness:
     def test_a_misspelled_manual_card_field_is_refused(self):
         with pytest.raises(ValueError, match='defualt_effort'):
-            ScoredModel.model_validate(
-                {'router_id': 'x/y', 'intelligence_index': 1.0, 'input_price': 1.0, 'output_price': 1.0, 'defualt_effort': 'low'}
-            )
+            ScoredModel.model_validate({
+                'router_id': 'x/y',
+                'intelligence_index': 1.0,
+                'input_price': 1.0,
+                'output_price': 1.0,
+                'defualt_effort': 'low',
+            })
 
     @pytest.mark.parametrize(
         ('stamp', 'expected'),

@@ -1,7 +1,8 @@
-"""Hand-built model gardens and `/v2/models` cards for offline frontier, preset and pool tests.
+"""Hand-built model gardens and public `/v2/model-catalog` cards for offline frontier, preset and pool tests.
 
-Router IDs and per-1M prices are real (read off the live `/v2/models` cards on
-2026-11-10); every intelligence index is invented, so nothing here is a claim
+Router IDs and per-1M prices are real (read off the live catalogue cards on
+2026-11-10, with the rows marked 2026-11-17 from the public `/v2/model-catalog`);
+every intelligence index is invented, so nothing here is a claim
 about a model.
 """
 
@@ -23,8 +24,12 @@ PRICES: dict[str, tuple[float, float]] = {
     'openai/gpt-5.6-sol': (4.0, 20.0),
     'openai/gpt-6-luna': (0.1, 0.5),
     'openai/gpt-6-sol': (2.0, 10.0),
+    'openai/gpt-6.1-sol': (2.0, 10.0),  # public /v2/model-catalog card, 2026-11-17
     'anthropic/claude-opus-5-5': (4.0, 20.0),
     'anthropic/claude-haiku-4-5-20251001': (1.0, 5.0),
+    'anthropic/claude-haiku-5-5': (0.10, 0.50),  # public /v2/model-catalog card, 2026-11-17
+    'anthropic/claude-sonnet-5-5': (2.0, 10.0),  # public /v2/model-catalog card, 2026-11-17
+    'anthropic/claude-fable-5-2': (8.0, 40.0),  # public /v2/model-catalog card, 2026-11-17
     'google/gemini-3.6-flash': (1.5, 7.5),
     'google-ai/gemini-3.8-flash': (1.0, 3.0),
     'google/eu.claude-sonnet-5': (2.2, 11.0),
@@ -37,11 +42,19 @@ PRICES: dict[str, tuple[float, float]] = {
     'baseten/deepseek-v4.1-flash': (0.30, 1.20),
     'mistral/mistral-large-4': (0.68, 2.09),
     'tensorix/qwen/qwen3-coder-30b-a3b-instruct': (0.06, 0.25),
+    # Seats added by the AA index v5 reseat, public /v2/model-catalog cards, 2026-11-17.
+    'tencent/deepseek-v4.1-flash': (0.15, 0.60),
+    'wafer/MiniMax-M3.1-Flash': (0.15, 0.60),
+    'moonshotai/kimi-k3.1-pro': (2.0, 10.0),
+    'wafer/GLM-5.3-Flash': (0.05, 0.20),
+    'openai/eu.gpt-6-luna': (0.11, 0.55),
+    'alibaba/qwen3.6-35b-a3b': (0.248, 1.485),
+    'google-ai/gemini-4-carbon': (2.0, 10.0),  # public /v2/model-catalog card, 2026-11-23
 }
 
 
-def scored(router_id: str, index: float, region: str = 'us', **fields: Any) -> ScoredModel:
-    """A headline-ranked, enabled card at its real rates."""
+def scored(router_id: str, index: float, region: str | None = None, **fields: Any) -> ScoredModel:
+    """A headline-ranked card at its real rates."""
     input_price, output_price = PRICES[router_id]
     return ScoredModel(
         router_id=router_id,
@@ -50,7 +63,6 @@ def scored(router_id: str, index: float, region: str = 'us', **fields: Any) -> S
         output_price=output_price,
         region=region,
         provider=router_id.split('/')[0],
-        enabled=True,
         **fields,
     )
 
@@ -61,8 +73,8 @@ def synthetic_garden() -> dict[str, ScoredModel]:
     Shaped so that: the open frontier is a three-lineage trio with tiers at
     least MIN_TIER_RATIO apart (grok, deepseek-v4-pro, glm-5.3-flash); OpenAI
     Only seats three OpenAI models none of which is on the open frontier; EU
-    Region Only seats three EU-pinned hosts; and Anthropic Only has two
-    distinct models, so it lands in the underivable register.
+    Region Only seats three EU-pinned hosts; and Anthropic Only seats Fable,
+    Sonnet and Haiku 5.5 with Opus in reserve, the shape the v5 catalogue gives.
     """
     models = [
         scored('xai/grok-4.5', 53.8),
@@ -73,6 +85,9 @@ def synthetic_garden() -> dict[str, ScoredModel]:
         scored('openai/gpt-6-luna', 30.0),
         scored('anthropic/claude-opus-5-5', 51.0),
         scored('anthropic/claude-haiku-4-5-20251001', 24.0),
+        scored('anthropic/claude-fable-5-2', 62.0),
+        scored('anthropic/claude-sonnet-5-5', 45.0),
+        scored('anthropic/claude-haiku-5-5', 30.0),
         scored('google/eu.claude-sonnet-5', 53.0, region='europe'),
         scored('openai/eu.gpt-5.6-luna', 38.0, region='europe'),
         scored('tensorix/qwen/qwen3-coder-30b-a3b-instruct', 20.0, region='europe'),
@@ -81,18 +96,25 @@ def synthetic_garden() -> dict[str, ScoredModel]:
 
 
 def seated_garden() -> dict[str, ScoredModel]:
-    """Every listed router ID a shipped preset seats, at its real rates; seats with no live card come from MANUAL_MODEL_CARDS."""
+    """Every router ID a shipped preset seats, at its real rates; seats with no scored card come from MANUAL_MODEL_CARDS."""
     return {router_id: scored(router_id, 40.0) for router_id in PRICES}
 
 
-def card(provider: str, model_id: str, **overrides: Any) -> dict[str, Any]:
-    """A raw `/v2/models` card, shaped the way the endpoint returns one."""
+def card(provider: str, model_id: str, index: object = 40.0, **overrides: Any) -> dict[str, Any]:
+    """A public `/v2/model-catalog` card, shaped the way the endpoint returns one."""
     base: dict[str, Any] = {
-        'provider': provider,
-        'model_id': model_id,
-        'input_cost': 0.001,
-        'output_cost': 0.004,
-        'enabled': True,
-        'metadata': {'region': 'us', 'autorouter': {'v2': {'intelligence_index': 40.0}}},
+        'id': f'{provider}/{model_id}',
+        'provider': {'id': provider},
+        'pricing': {
+            'input': {'cost': 1.0, 'currency': 'USD', 'per': 1_000_000, 'unit': 'tokens'},
+            'output': {'cost': 4.0, 'currency': 'USD', 'per': 1_000_000, 'unit': 'tokens'},
+        },
+        'supported_parameters': ['max_tokens', 'temperature'],
+        'location': ['us'],
+        'artificial_intelligence': {'artificial_analysis_intelligence_index': index},
+        'deprecated': False,
     }
+    if isinstance(index, (int, float)) and not isinstance(index, bool):
+        # A ladder rung on the headline, so the card ranks on a v5 score like a live one.
+        base['reasoning_efforts'] = {'high': {'intelligence_index': index, 'index_version': 'v5'}}
     return base | overrides

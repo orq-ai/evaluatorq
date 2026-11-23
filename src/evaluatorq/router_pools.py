@@ -11,7 +11,7 @@ in this file: each pool is derived from its constraint predicate by
 `common.model_frontier.derive_trio`, whose four criteria are each traceable to what
 Arian's RES-1285 benchmark measured (see its docstring). The same function
 that seats a model reseats it when the live garden changes, which is the
-auto-update story: pools are derived from `/v2/models` on first use, never from
+auto-update story: pools are derived from the public model catalogue on first use, never from
 a committed copy.
 
 Constraints (region, vendor, open weights) are applied *before* the frontier
@@ -164,12 +164,9 @@ _SPECS: tuple[_PoolSpec, ...] = (
         constraint='single vendor: Anthropic lineage',
         predicate=lambda m: _family(m) == 'anthropic' and m.region != 'europe',
         use_when=(
-            'Same procurement argument, Anthropic side. The tier rule is relaxed '
-            'here and the pool is weaker for it: the served lineup spans a fifth of '
-            'the price range a mixed pool routes across. A single-vendor pool '
-            'simply has less room, and this is where that shows. EU-pinned '
-            'endpoints are excluded like everywhere else; residency buyers take '
-            'EU Region Only.'
+            'Same procurement argument, Anthropic side. Members come from the '
+            'live constrained frontier, as for OpenAI Only. EU-pinned endpoints '
+            'are excluded like everywhere else; residency buyers take EU Region Only.'
         ),
     ),
     _PoolSpec(
@@ -220,8 +217,10 @@ DROPPED_POOLS: dict[str, str] = {
         'weight. On 2026-11-10 the catalog had five cards but a two-model '
         'seatable frontier (haiku-5-5, opus-5-5): haiku-4-5 and sonnet-4 are '
         'dominated by haiku-5-5 and opus-4-5 is unrankable at its default. '
-        'Reinstate when the seatable Bedrock frontier is wide enough for the '
-        'derivation to have something to decide.'
+        'On the AA v5 catalogue (2026-11-17) the seatable frontier is five '
+        '(fable-5-2, opus-5-5, sonnet-5-5, haiku-5-5, us-east-1 gpt-6.1-sol), '
+        'so the derivation now has a choice; reinstating the pool is a '
+        'follow-up ticket, not part of RES-1887.'
     ),
     'Open-Weight / Portable': (
         'Derives to the same three models as Balanced Pareto Trio: ranked at '
@@ -238,36 +237,7 @@ DROPPED_POOLS: dict[str, str] = {
 
 # The spec remains available for derivation; this is an explicit data blocker,
 # not a retirement or permission to seat a dominated/unmeasured third model.
-REVIEWED_UNDERIVABLE_POOLS: dict[str, tuple[tuple[str, ...], str]] = {
-    'Anthropic Only': (
-        ('claude-haiku-4-5-20251001', 'claude-opus-5-5'),
-        (
-            'The 2026-10-02 catalogue supports only Haiku 4.5 (no effort '
-            'parameter, 23.7, $2.00 blend) and Opus 5.5 (medium, '
-            '51.2434931792768, $8.00 blend). Ten other scored non-EU cards '
-            'lack their default score in this cache; Sonnet 5.5 is unscored. '
-            'Do not fold the non-reasoning 4.6 high headlines into adaptive high. '
-            'Current coherent AA v4.3.2 measures four relevant defaults: '
-            'Sonnet 5 high 31.6623246664651, Sonnet 5.5 high 46.7533528066958, '
-            'Opus 5 high 48.1219182595908 and Opus 5.5 medium 51.2434931792768. '
-            'Dominance leaves Sonnet 5.5 and Opus 5.5; current Haiku 15.410949885381 '
-            'is estimated, not measured. The cache is ingestion-blocked, not proof '
-            'of upstream absence. Keep the spec; never splice versions to add a third.'
-        ),
-    ),
-    'OpenAI Only': (
-        ('gpt-6-luna', 'gpt-6-sol'),
-        (
-            'The 2026-11-10 non-EU OpenAI frontier is two models: GPT-6 Sol '
-            '(medium 39.8, $2/$10) and GPT-6 Luna (medium 29.9, $0.10/$0.50). '
-            'They dominate every other seatable card: GPT-5.6 Sol 39.2 at $4/$20, '
-            'GPT-5.6 Terra 30.1 at $2/$12, GPT-5.6 Luna 25.0 at $0.20/$1.20, '
-            'GPT-5.4 18.2 and GPT-5 22.9. GPT-6.1 Sol is EU-only and GPT-6.1 '
-            'Terra is unscored. Keep the spec; it derives again once a third '
-            'GPT-6-generation tier is scored.'
-        ),
-    ),
-}
+REVIEWED_UNDERIVABLE_POOLS: dict[str, tuple[tuple[str, ...], str]] = {}
 
 
 def request_cost_per_1k(model: ScoredModel) -> float:
@@ -333,13 +303,10 @@ def build_pools(scored: dict[str, ScoredModel] | None = None) -> tuple[dict[str,
     the other pools down with it.
     """
     scored = scored if scored is not None else load_garden_sync()
-    # enabled is False only when the catalog says the workspace switched the
-    # model off: listed and scored, but not servable, so not seatable. None
-    # (a card without the field) passes.
     # Seatability applies before any constraint: the floor removes the noise
     # tier and NEVER_SEAT removes families the platform will not recommend
     # regardless of score (model_frontier documents both).
-    models = [m for m in scored.values() if m.enabled is not False and seatable(m)]
+    models = [m for m in scored.values() if seatable(m)]
     pools: dict[str, RouterPool] = {}
     underivable: dict[str, str] = {}
 
