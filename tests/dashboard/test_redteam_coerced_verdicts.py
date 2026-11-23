@@ -135,3 +135,27 @@ def test_the_attack_panel_adds_nothing_for_a_single_judge_that_was_not_coerced(
 
     assert 'Judge health' not in html
     assert 'coerced' not in html
+
+
+def test_one_coerced_sample_reads_as_one_sample_everywhere() -> None:
+    single = _report(ReportSummary(samples_with_coerced_verdict=1))
+
+    assert '| Coerced Verdicts | 1 sample (judge abstained and also sent a verdict) |' in export_markdown(single)
+    config = export_html(single).split('id="rttab-config"', 1)[1]
+    assert '>1 sample<' in config
+    console = Console(record=True, width=200)
+    print_report_summary(single, console=console)
+    shown = console.export_text()
+    assert '1 sample' in shown
+    assert '1 samples' not in shown
+
+
+def test_a_report_saved_before_the_count_existed_loads_with_zero() -> None:
+    saved = ReportSummary().model_dump(mode='json')
+    del saved['samples_with_coerced_verdict']
+
+    loaded = ReportSummary.model_validate(saved)
+
+    assert loaded.samples_with_coerced_verdict == 0
+    for rendered in (export_markdown(_report(loaded)), export_html(_report(loaded))):
+        assert 'coerced verdicts' not in rendered.lower()

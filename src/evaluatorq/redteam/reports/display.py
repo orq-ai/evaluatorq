@@ -13,6 +13,7 @@ from rich.text import Text
 from evaluatorq.common.reports import rate_style
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, RedTeamReport, ReportSummary
+from evaluatorq.redteam.reports.converters import sample_count
 from evaluatorq.redteam.vulnerability_registry import VULNERABILITY_DEFS, Vulnerability
 
 if TYPE_CHECKING:
@@ -98,7 +99,7 @@ def _build_stats_table(report: RedTeamReport, summary: ReportSummary) -> Table:
 
     # A judge that abstains and still sends a verdict is read as abstaining. Shown for one judge or a panel.
     if summary.samples_with_coerced_verdict:
-        stats.add_row('Coerced Verdicts', Text(f'{summary.samples_with_coerced_verdict} samples', style='yellow'))
+        stats.add_row('Coerced Verdicts', Text(sample_count(summary.samples_with_coerced_verdict), style='yellow'))
 
     # Datapoint breakdown (hybrid runs)
     breakdown = summary.datapoint_breakdown

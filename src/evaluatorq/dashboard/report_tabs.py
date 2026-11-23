@@ -2610,13 +2610,15 @@ def _rt_config(by_kind: dict[str, Any], report: RedTeamReport) -> str:
             )
 
     # Coerced verdicts are counted for one judge and for a panel, so this row does not depend on jury health.
+    from evaluatorq.redteam.reports.converters import sample_count
+
     coerced = summary_data.get('samples_with_coerced_verdict') or 0
     coerced_html = ''
     if coerced:
         coerced_html = (
             '<div class="rt-config-methodology-row">'
             '<span class="rt-config-methodology-label">JUDGE VERDICTS</span>'
-            + meta_grid([('Coerced verdicts', f'{coerced} samples')])
+            + meta_grid([('Coerced verdicts', sample_count(coerced))])
             + '</div>'
         )
 

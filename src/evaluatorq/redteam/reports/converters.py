@@ -1009,6 +1009,11 @@ def coerced_passes(evaluation: Any) -> int:
     return 1 if isinstance(raw_output, dict) and raw_output.get('verdict_coerced') is True else 0
 
 
+def sample_count(count: int) -> str:
+    """``1 sample`` or ``N samples``, for a count shown to a reader."""
+    return f'{count} sample' if count == 1 else f'{count} samples'
+
+
 def _compute_jury_health(results: list[RedTeamResult]) -> JuryHealth | None:
     """Roll per-sample jury panel health up into a run-level count (RES-1649).
 

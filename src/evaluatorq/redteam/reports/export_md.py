@@ -30,6 +30,7 @@ from evaluatorq.common.reports import truncate as _truncate
 # float-only variant — import the None-safe html_helpers one directly instead.
 from evaluatorq.common.reports.html_helpers import pct as _pct
 from evaluatorq.redteam.contracts import JuryHealth
+from evaluatorq.redteam.reports.converters import sample_count
 from evaluatorq.redteam.reports.sections import build_report_sections
 
 if TYPE_CHECKING:
@@ -154,7 +155,7 @@ def _render_summary_section(section: ReportSection) -> str:
         detail_rows.append(['Jury Health', f'{h.issue_summary()} ({h.samples} multi-judge samples)'])
     coerced = data.get('samples_with_coerced_verdict') or 0
     if coerced:
-        detail_rows.append(['Coerced Verdicts', f'{coerced} samples (judge abstained and also sent a verdict)'])
+        detail_rows.append(['Coerced Verdicts', f'{sample_count(coerced)} (judge abstained and also sent a verdict)'])
     duration_seconds = data.get('duration_seconds')
     if duration_seconds is not None:
         mins, secs = divmod(int(duration_seconds), 60)
