@@ -428,7 +428,9 @@ def check_axes(*, index: str, effort: str | None, x: str) -> None:
     if x not in X_AXIS_SPECS:
         raise ValueError(f'unknown x axis {x!r}; choose one of {", ".join(X_AXES)}')
     if effort is not None and index != 'intelligence':
-        raise ValueError('domain indices exist only at the default reasoning effort: pass effort=None')
+        raise ValueError(
+            'domain indices exist only at the one effort Artificial Analysis benchmarked: pass effort=None'
+        )
 
 
 def score_of(model: ScoredModel, *, index: Index = 'intelligence', effort: str | None = None) -> float | None:

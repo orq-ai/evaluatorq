@@ -115,7 +115,9 @@ def _checked_options(*, index: str, x: str, effort: str | None, mix: str | None)
     if x not in X_AXES:
         raise typer.BadParameter(f'choose one of {", ".join(X_AXES)}', param_hint='--x')
     if effort is not None and index != 'intelligence':
-        raise typer.BadParameter('domain indices exist only at the default effort', param_hint='--effort')
+        raise typer.BadParameter(
+            'domain indices exist only at the one effort Artificial Analysis benchmarked', param_hint='--effort'
+        )
     if mix is not None and x != 'price':
         raise typer.BadParameter('a price mix applies only to --x price', param_hint='--mix')
     try:
@@ -140,7 +142,8 @@ def pareto_cmd(
         typer.Option(
             '--model',
             help='Show only this model, compared against every other model in the comparison, including when --provider '
-            'would leave it out. A provider/model id, or a bare id held by exactly one model. Repeatable.',
+            'would leave it out. The full router id, or the id after the provider or its last part when exactly one '
+            'model has it. Repeatable.',
         ),
     ] = None,
     effort: Annotated[
@@ -208,7 +211,7 @@ def pareto_cmd(
             match = find_model(pool, model_id=model_id)
             if match is None:
                 raise typer.BadParameter(
-                    f'{model_id!r} matches no model, or more than one; pass the provider/model id', param_hint='--model'
+                    f'{model_id!r} matches no model, or more than one; pass the full router id', param_hint='--model'
                 )
             shown.add(match.router_id)
             named[match.router_id] = match

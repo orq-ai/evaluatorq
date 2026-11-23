@@ -12,7 +12,7 @@ eq models pareto [OPTIONS]
 |---|---|---|
 | `--dominated` | `bool` / `false` | List dominated models and the frontier model that beats each, instead of the frontier. |
 | `--provider` | `str` (repeatable) | Compare only models from this provider or developer, such as `openai`. Case and an `-ai` suffix are ignored, so `google` also matches `google-ai`. |
-| `--model` | `str` (repeatable) | Show only this model, compared against every other model in the comparison. A `provider/model` id, or a bare id held by exactly one model, looked up among the one listing kept per model before `--provider` filters. A three-part id such as `tensorix/qwen/qwen3-coder-30b-a3b-instruct` needs the full id. Shown whether it is on the frontier or not. |
+| `--model` | `str` (repeatable) | Show only this model, compared against every other model in the comparison. The full router id, or a shorter id that exactly one model has: the part after the provider, or the last part. It is looked up among the one listing kept per model before `--provider` filters. Shown whether it is on the frontier or not. |
 | `--effort` | `str` / none | Score the intelligence index at this reasoning effort instead of each model's default. Only with `--index intelligence`, and only an effort at least one catalogue model has a score at. |
 | `--index` | `str` / `intelligence` | The y axis: `intelligence`, `economics`, `engineering`, `finance_and_accounting`, `healthcare_and_medical`, `legal` or `strategy_and_ops`. An index no catalogue model has a score on is refused. |
 | `--x` | `str` / `price` | The x axis: `price` (blended price per million tokens, see `--mix`), `output_speed` or `time_to_first_token`. |

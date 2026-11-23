@@ -127,7 +127,9 @@ def _filters_html(
         )
 
     effort_disabled = (
-        ' disabled title="Domain indices exist only at the default effort"' if index != 'intelligence' else ''
+        ' disabled title="Domain indices exist only at the one effort Artificial Analysis benchmarked"'
+        if index != 'intelligence'
+        else ''
     )
     mix_disabled = ' disabled title="The mix applies only to the price axis"' if x != 'price' else ''
     mix_options = [(name, _MIX_OPTION_LABELS[name]) for name in PRICE_MIXES]
@@ -148,8 +150,8 @@ def _filters_html(
         f'{options([("", "Default level"), *((e, e) for e in efforts)], effort)}</select></label>'
         f'<label>X axis <select name="x" onchange="this.form.submit()">'
         f'{options([(v, X_AXIS_SPECS[v].short_label) for v in X_AXES], x)}</select></label>'
-        '<label title="How the price axis blends token prices, as cache read : fresh input : output. Add '
-        '?mix=READ:WRITE:FRESH:OUTPUT to the address for your own ratio.">'
+        '<label title="How the price axis blends token prices, as cache read : cache write : fresh input : output. '
+        'Add ?mix=READ:WRITE:FRESH:OUTPUT to the address for your own ratio.">'
         f'Price mix <select name="mix" onchange="this.form.submit()"{mix_disabled}>'
         f'{options(mix_options, mix.name or mix.ratio)}</select></label>'
         f'<label>Developer <select name="developer" onchange="this.form.submit()">'
@@ -380,7 +382,8 @@ async def models_page(req: Request) -> HTMLResponse:
     mix = _mix(q.get('mix'))
     models, alert = await _load(req, include_disabled=bool(q.get('disabled')))
     intro = (
-        '<p class="models-intro">Each dot is one model, at its developer\'s own listing. A model is '
+        '<p class="models-intro">Each dot is one model, at its developer\'s own listing when there is one, '
+        'else at the cheapest listing, preferring one without a region. A model is '
         '<b>dominated</b> when another is at least as good on both axes and strictly better on one; the orange '
         "line joins the models nothing dominates. Hollow dots are estimated scores. Price blends the card's rates "
         'per 1M tokens: by default 7 parts cache read, 2 parts fresh input and 1 part output (the Artificial Analysis '

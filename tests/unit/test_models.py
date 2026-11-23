@@ -240,7 +240,7 @@ class TestPareto:
         assert result.excluded[0].router_id == 'b/mid'
 
     def test_domain_index_refuses_an_effort(self) -> None:
-        with pytest.raises(ValueError, match='default reasoning effort'):
+        with pytest.raises(ValueError, match='one effort Artificial Analysis benchmarked'):
             pareto([MID], index='legal', effort='high')
 
     def test_unknown_axis_is_refused(self) -> None:
@@ -513,6 +513,23 @@ class TestFindModel:
         assert find_model(pool, model_id='cheap') == CHEAP
         assert find_model(pool, model_id='mid') is None  # two hosts share the bare id
         assert find_model(pool, model_id='nope') is None
+
+    def test_three_part_router_id(self) -> None:
+        coder = model('tensorix/qwen/qwen3-coder-30b-a3b-instruct', 9.6, 0.05, 0.2)
+        pool = [MID, coder, CHEAP]
+        assert find_model(pool, model_id='tensorix/qwen/qwen3-coder-30b-a3b-instruct') == coder
+        assert find_model(pool, model_id='qwen/qwen3-coder-30b-a3b-instruct') == coder
+        assert find_model(pool, model_id='qwen3-coder-30b-a3b-instruct') == coder
+
+    def test_ambiguous_short_ids_are_refused(self) -> None:
+        a = model('tensorix/qwen/qwen3-coder', 9.6, 0.05, 0.2)
+        b = model('other/qwen/qwen3-coder', 9.6, 0.06, 0.2)
+        c = model('deepinfra/qwen3-coder', 9.6, 0.07, 0.2)
+        assert find_model([a, b], model_id='qwen/qwen3-coder') is None
+        assert find_model([a, b], model_id='qwen3-coder') is None
+        # The id after the provider decides before the last segment is tried.
+        assert find_model([a, c], model_id='qwen3-coder') == c
+        assert find_model([a, c], model_id='qwen/qwen3-coder') == a
 
 
 @pytest.fixture
