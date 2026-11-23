@@ -69,15 +69,13 @@ def fmt_category(code: str) -> str:
 
 def fmt_vulnerability(vuln_id: str) -> str:
     """Format a vulnerability ID into a human-readable name."""
+    from evaluatorq.redteam.contracts import is_known_open_value, resolve_open_value
     from evaluatorq.redteam.vulnerability_registry import VULNERABILITY_DEFS, Vulnerability
 
-    try:
-        vuln_enum = Vulnerability(vuln_id)
-        vdef = VULNERABILITY_DEFS.get(vuln_enum)
+    if is_known_open_value(Vulnerability, vuln_id):
+        vdef = VULNERABILITY_DEFS.get(resolve_open_value(Vulnerability, vuln_id))
         if vdef:
             return vdef.name
-    except ValueError:
-        pass
     return vuln_id.replace('_', ' ').title()
 
 

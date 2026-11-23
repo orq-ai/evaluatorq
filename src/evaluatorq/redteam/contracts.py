@@ -12,7 +12,7 @@ Semantic convention:
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias
 
 from loguru import logger
 from pydantic import (
@@ -20,11 +20,15 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    GetCoreSchemaHandler,
+    GetJsonSchemaHandler,
     field_serializer,
     field_validator,
     model_validator,
 )
 from pydantic.fields import FieldInfo
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import core_schema
 from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.jury import duplicate_judges_message
@@ -33,6 +37,7 @@ from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import RunSummary, StrEnum
+from evaluatorq.redteam.registry_scope import ScopedDict
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -188,6 +193,7 @@ class Framework(StrEnum):
     FAIRNESS = 'FAIRNESS'
     GDPR = 'GDPR'
     AI_ACT = 'AI-ACT'
+    CUSTOM = 'Custom'
 
 
 class VulnerabilityDomain(StrEnum):
@@ -348,6 +354,170 @@ class AgentCapability(StrEnum):
     USER_DATA = 'user_data'
 
 
+# ---------------------------------------------------------------------------
+# Open value sets (RES-1922)
+# ---------------------------------------------------------------------------
+
+
+class RegisteredValue(str):  # noqa: FURB189 - must hash and compare as its str, like StrEnum members
+    """A value registered at runtime for one of the open enum sets.
+
+    Vulnerabilities, attack techniques, vulnerability domains, frameworks and agent
+    capabilities are each "a built-in enum member or a registered string". A registered
+    value is a ``str`` subclass exposing ``.value`` and ``.name``, so code written for
+    members (``vuln.value``) works on it unchanged, and it hashes and compares as its string.
+
+    Unlike delivery methods (passthrough-unknown), these sets reject a value that is
+    neither a member nor registered: an unknown vulnerability has no strategies and no
+    judge, so letting it through would produce an unscoreable run.
+    """
+
+    __slots__ = ()
+
+    @property
+    def value(self) -> str:
+        return str.__str__(self)
+
+    @property
+    def name(self) -> str:
+        return str.__str__(self)
+
+    def __repr__(self) -> str:
+        return f'RegisteredValue({str.__str__(self)!r})'
+
+
+_OPEN_SETS = ('Vulnerability', 'AttackTechnique', 'VulnerabilityDomain', 'Framework', 'AgentCapability')
+_REGISTERED_VALUES: ScopedDict[str, dict[str, RegisteredValue]] = ScopedDict(
+    'open_values', {name: {} for name in _OPEN_SETS}
+)
+
+
+def _open_set_store(enum_cls: type[StrEnum]) -> dict[str, RegisteredValue]:
+    try:
+        return _REGISTERED_VALUES[enum_cls.__name__]
+    except KeyError:
+        msg = f'{enum_cls.__name__} is not an open value set; open sets: {", ".join(_OPEN_SETS)}.'
+        raise TypeError(msg) from None
+
+
+def _enum_member(enum_cls: type[StrEnum], value: str) -> Any:
+    try:
+        return enum_cls(value)
+    except ValueError:
+        return None
+
+
+def register_open_value(enum_cls: type[StrEnum], value: str) -> Any:
+    """Register *value* in the open set of *enum_cls* and return its resolved form.
+
+    A value equal to a built-in member returns that member and registers nothing.
+    Registration lasts for the current registry scope (the process, or one `red_team()`
+    run) and is never persisted.
+    """
+    if not isinstance(value, str) or not value.strip():
+        msg = f'Cannot register an empty {enum_cls.__name__} value.'
+        raise ValueError(msg)
+    member = _enum_member(enum_cls, value)
+    if member is not None:
+        return member
+    return _open_set_store(enum_cls).setdefault(value, RegisteredValue(value))
+
+
+def resolve_open_value(enum_cls: type[StrEnum], value: Any) -> Any:
+    """A member value gives the member, a registered value its `RegisteredValue`;
+    anything else raises ``ValueError`` listing the known values."""
+    if isinstance(value, enum_cls):
+        return value
+    if isinstance(value, str):
+        raw = str.__str__(value)
+        member = _enum_member(enum_cls, raw)
+        if member is not None:
+            return member
+        registered = _open_set_store(enum_cls).get(raw)
+        if registered is not None:
+            return registered
+    msg = f'Unknown {enum_cls.__name__} {value!r}. Known values: {", ".join(known_open_values(enum_cls))}.'
+    raise ValueError(msg)
+
+
+def is_known_open_value(enum_cls: type[StrEnum], value: str) -> bool:
+    """True when *value* is a member value of *enum_cls* or registered in its open set."""
+    return _enum_member(enum_cls, value) is not None or value in _open_set_store(enum_cls)
+
+
+def known_open_values(enum_cls: type[StrEnum]) -> list[str]:
+    """Member values in declaration order, then registered ones."""
+    return [m.value for m in enum_cls] + list(_open_set_store(enum_cls))
+
+
+def registered_open_values(enum_cls: type[StrEnum]) -> list[RegisteredValue]:
+    """Only the values registered at runtime for *enum_cls*."""
+    return list(_open_set_store(enum_cls).values())
+
+
+def unregister_open_value(enum_cls: type[StrEnum], value: str) -> None:
+    """Remove one registered value; a no-op when it was never registered."""
+    _open_set_store(enum_cls).pop(value, None)
+
+
+def clear_registered_values() -> None:
+    """Forget every runtime-registered value in every open set (test isolation)."""
+    for store in _REGISTERED_VALUES.values():
+        store.clear()
+
+
+class _OpenSet:
+    """Pydantic marker for an open-set field: validates through `resolve_open_value` and
+    serializes to the plain string in JSON, so saved reports keep their shape.
+
+    *lenient* is for report models: a saved report must load in a process where its
+    custom rules are not registered, so an unknown non-empty string becomes a
+    `RegisteredValue` (without registering it) instead of an error.
+    """
+
+    __slots__ = ('enum_cls', 'lenient')
+
+    def __init__(self, enum_cls: type[StrEnum], *, lenient: bool = False) -> None:
+        self.enum_cls = enum_cls
+        self.lenient = lenient
+
+    def _validate(self, value: Any) -> Any:
+        if self.lenient and isinstance(value, str) and value and not is_known_open_value(self.enum_cls, value):
+            return RegisteredValue(value)
+        return resolve_open_value(self.enum_cls, value)
+
+    def __get_pydantic_core_schema__(self, source: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        return core_schema.no_info_plain_validator_function(
+            self._validate,
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                lambda v: v.value, return_schema=core_schema.str_schema(), when_used='json'
+            ),
+        )
+
+    def __get_pydantic_json_schema__(self, schema: Any, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
+        return {
+            'type': 'string',
+            'description': f'A built-in {self.enum_cls.__name__} value or one registered at runtime.',
+        }
+
+
+# Plain (non-validating) unions for type hints on registry keys and function parameters.
+AnyVulnerability: TypeAlias = Vulnerability | RegisteredValue
+AnyFramework: TypeAlias = Framework | RegisteredValue
+AnyAgentCapability: TypeAlias = AgentCapability | RegisteredValue
+
+OpenVulnerability: TypeAlias = Annotated[Vulnerability | RegisteredValue, _OpenSet(Vulnerability)]
+OpenAttackTechnique: TypeAlias = Annotated[AttackTechnique | RegisteredValue, _OpenSet(AttackTechnique)]
+OpenVulnerabilityDomain: TypeAlias = Annotated[VulnerabilityDomain | RegisteredValue, _OpenSet(VulnerabilityDomain)]
+OpenFramework: TypeAlias = Annotated[Framework | RegisteredValue, _OpenSet(Framework)]
+OpenAgentCapability: TypeAlias = Annotated[AgentCapability | RegisteredValue, _OpenSet(AgentCapability)]
+ReportAttackTechnique: TypeAlias = Annotated[AttackTechnique | RegisteredValue, _OpenSet(AttackTechnique, lenient=True)]
+ReportVulnerabilityDomain: TypeAlias = Annotated[
+    VulnerabilityDomain | RegisteredValue, _OpenSet(VulnerabilityDomain, lenient=True)
+]
+ReportFramework: TypeAlias = Annotated[Framework | RegisteredValue, _OpenSet(Framework, lenient=True)]
+
+
 class SaveMode(StrEnum):
     """Controls what gets persisted to disk after a red team run."""
 
@@ -376,10 +546,10 @@ def normalize_framework(framework: 'Framework | str') -> 'Framework':
 
     OWASP-AGENTIC is an alias for OWASP-ASI.
     """
-    value = framework.value if isinstance(framework, Framework) else framework
+    value = framework.value if isinstance(framework, Framework) else str.__str__(framework)
     if value == Framework.OWASP_AGENTIC.value:
         return Framework.OWASP_ASI
-    return Framework(value)
+    return resolve_open_value(Framework, value)
 
 
 def normalize_category(category: str) -> str:
@@ -414,14 +584,12 @@ def infer_framework(category: str) -> str:
         category: Category code (e.g., 'ASI01', 'LLM07', 'OWASP-ASI01')
 
     Returns:
-        'OWASP-ASI' or 'OWASP-LLM'
+        The framework the registry maps the code to ('OWASP-ASI', 'OWASP-LLM', a
+        registered framework), or 'Custom' for an unmapped code (RES-1479).
     """
-    normalized = normalize_category(category)
-    if normalized.startswith('ASI'):
-        return 'OWASP-ASI'
-    if normalized.startswith('LLM'):
-        return 'OWASP-LLM'
-    return 'unknown'
+    from evaluatorq.redteam.vulnerability_registry import framework_for_category
+
+    return framework_for_category(category)
 
 
 # ---------------------------------------------------------------------------
@@ -467,8 +635,8 @@ class RedTeamInput(BaseModel):
         'matches a known value (exact); unknown values are kept as a raw string (open-set).',
     )
     severity: Severity = Field(description='Attack severity level')
-    vulnerability_domain: VulnerabilityDomain = Field(description='Vulnerability domain (where the fix belongs)')
-    framework: Framework = Field(default=Framework.OWASP_AGENTIC, description='Security framework identifier')
+    vulnerability_domain: OpenVulnerabilityDomain = Field(description='Vulnerability domain (where the fix belongs)')
+    framework: OpenFramework = Field(default=Framework.OWASP_AGENTIC, description='Security framework identifier')
     evaluator_id: str = Field(default='', description='Evaluator identifier (optional)')
     evaluator_name: str = Field(default='', description='Evaluator name (optional)')
     turn_type: TurnType = Field(description='Conversation turn type')
@@ -508,9 +676,9 @@ class RedTeamInput(BaseModel):
         has_cat = bool(data.get('category'))
         if has_vuln:
             try:
-                vuln_enum = Vulnerability(data['vulnerability'])
+                vuln_enum = resolve_open_value(Vulnerability, data['vulnerability'])
             except ValueError:
-                valid = sorted(v.value for v in Vulnerability)
+                valid = sorted(known_open_values(Vulnerability))
                 msg = f'Unknown vulnerability {data["vulnerability"]!r}.{VALID_VULNERABILITIES_MARKER}{valid}.'
                 raise ValueError(msg) from None
             if not has_cat:
@@ -525,8 +693,10 @@ class RedTeamInput(BaseModel):
     @classmethod
     def _normalize_framework(cls, value: Any) -> Any:
         """Normalize framework string aliases to canonical Framework enum values."""
-        if isinstance(value, str):
-            return normalize_framework(value)
+        # Only the alias is mapped here; the field type decides whether an unknown value is
+        # an error (inputs) or kept as-is (reports loaded without their custom registrations).
+        if isinstance(value, str) and str.__str__(value) == Framework.OWASP_AGENTIC.value:
+            return Framework.OWASP_ASI
         return value
 
     @field_validator('delivery_method', mode='before')
@@ -1130,11 +1300,11 @@ OWASP_ASI_TOP_10: list[str] = list(_ASI_CATEGORY_NAMES)
 class VulnerabilityDef(BaseModel):
     """Definition of a vulnerability with metadata and framework mappings."""
 
-    id: Vulnerability
+    id: OpenVulnerability
     name: str = Field(description='Human-readable name, e.g. "Agent Goal Hijacking"')
-    domain: VulnerabilityDomain
+    domain: OpenVulnerabilityDomain
     description: str = ''
-    default_attack_technique: AttackTechnique
+    default_attack_technique: OpenAttackTechnique
     framework_mappings: dict[str, list[str]] = Field(
         default_factory=dict,
         description='Framework -> category codes, e.g. {"OWASP-ASI": ["ASI01"]}',
@@ -1154,18 +1324,18 @@ class AttackStrategy(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    vulnerability: Vulnerability | None = Field(default=None, description='Primary vulnerability identifier')
+    vulnerability: OpenVulnerability | None = Field(default=None, description='Primary vulnerability identifier')
     category: str = Field(description='OWASP category code (e.g., ASI01, LLM01) — kept for backwards compat')
     name: str = Field(description='Strategy identifier (e.g., indirect_injection_via_email)')
     description: str = Field(description='Human-readable description of the attack')
-    attack_technique: AttackTechnique = Field(description='Primary attack technique')
+    attack_technique: OpenAttackTechnique = Field(description='Primary attack technique')
     delivery_methods: list[DeliveryMethod] = Field(description='Applicable delivery methods')
     turn_type: TurnType = Field(description='Single or multi-turn attack')
     severity: Severity = Field(default=Severity.MEDIUM, description='Expected severity if successful')
 
     # Context requirements for filtering
     requires_tools: bool = Field(default=False, description='Requires agent to have tools')
-    required_capabilities: list[AgentCapability] = Field(
+    required_capabilities: list[OpenAgentCapability] = Field(
         default_factory=list,
         description='Capability tags required for this strategy (any match = eligible)',
     )
@@ -1523,15 +1693,15 @@ class AttackInfo(BaseModel):
     id: str = Field(description="Unique identifier (e.g., 'OWASP-ASI01-0153' or 'ASI01-role_confusion-001')")
     vulnerability: str = Field(default='', description='Vulnerability identifier (primary key in new format)')
     category: str = Field(description="Short-form category code (e.g., 'ASI01', 'LLM01') — kept for backwards compat")
-    framework: Framework = Field(description="OWASP framework ('OWASP-ASI' or 'OWASP-LLM')")
-    attack_technique: AttackTechnique
+    framework: ReportFramework = Field(description="OWASP framework ('OWASP-ASI' or 'OWASP-LLM')")
+    attack_technique: ReportAttackTechnique
     delivery_methods: list[DeliveryMethod | str] = Field(
         description='Delivery methods (always a list). Open set: known values are DeliveryMethod '
         'members, custom dataset values are kept as raw strings.'
     )
     turn_type: TurnType
     severity: Severity
-    vulnerability_domain: VulnerabilityDomain | None = Field(
+    vulnerability_domain: ReportVulnerabilityDomain | None = Field(
         default=None, description='Vulnerability domain (null for dynamic attacks without a fixed domain)'
     )
     source: str = Field(
@@ -1561,8 +1731,10 @@ class AttackInfo(BaseModel):
     @classmethod
     def _normalize_framework(cls, value: Any) -> Any:
         """Normalize framework string aliases to canonical Framework enum values."""
-        if isinstance(value, str):
-            return normalize_framework(value)
+        # Only the alias is mapped here; the field type decides whether an unknown value is
+        # an error (inputs) or kept as-is (reports loaded without their custom registrations).
+        if isinstance(value, str) and str.__str__(value) == Framework.OWASP_AGENTIC.value:
+            return Framework.OWASP_ASI
         return value
 
 
@@ -2102,7 +2274,7 @@ class RedTeamReport(BaseModel):
     created_at: datetime
     description: str | None = None
     pipeline: Pipeline = Field(description="'static', 'dynamic', or 'hybrid'")
-    framework: Framework | None = None
+    framework: ReportFramework | None = None
 
     categories_tested: list[str]
     tested_agents: list[str] = Field(default_factory=list, description='Names/keys of tested agents in this report')
@@ -2195,8 +2367,10 @@ class RedTeamReport(BaseModel):
     @classmethod
     def _normalize_framework(cls, value: Any) -> Any:
         """Normalize framework string aliases to canonical Framework enum values."""
-        if isinstance(value, str):
-            return normalize_framework(value)
+        # Only the alias is mapped here; the field type decides whether an unknown value is
+        # an error (inputs) or kept as-is (reports loaded without their custom registrations).
+        if isinstance(value, str) and str.__str__(value) == Framework.OWASP_AGENTIC.value:
+            return Framework.OWASP_ASI
         return value
 
     @field_validator('pipeline_warnings')
@@ -2389,7 +2563,7 @@ class ReportSnapshot(BaseModel):
     """Concise report summary used by CLI report commands."""
 
     pipeline: Pipeline
-    framework: Framework | None = None
+    framework: ReportFramework | None = None
     total_results: int
     categories_tested: list[str]
     resistance_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)

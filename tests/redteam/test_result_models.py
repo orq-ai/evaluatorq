@@ -103,7 +103,7 @@ class TestInferFramework:
         assert infer_framework('OWASP-ASI05') == 'OWASP-ASI'
 
     def test_unknown(self):
-        assert infer_framework('CUSTOM01') == 'unknown'
+        assert infer_framework('CUSTOM01') == 'Custom'
 
 
 # ---------------------------------------------------------------------------

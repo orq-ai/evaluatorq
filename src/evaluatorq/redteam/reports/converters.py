@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, TypedDict, TypeVar, cast
+from typing import Any, TypedDict, TypeVar
 
 from loguru import logger as _converters_logger
 from pydantic import ValidationError
@@ -18,6 +18,7 @@ from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     AgentContext,
     AgentInfo,
+    AnyFramework,
     AttackInfo,
     AttackSource,
     AttackStrategy,
@@ -29,7 +30,6 @@ from evaluatorq.redteam.contracts import (
     DomainSummary,
     EvaluatedRow,
     ExecutionDetails,
-    Framework,
     FrameworkSummary,
     JobOutputPayload,
     JuryHealth,
@@ -39,6 +39,7 @@ from evaluatorq.redteam.contracts import (
     PipelineStage,
     RedTeamReport,
     RedTeamResult,
+    RegisteredValue,
     ReportSummary,
     RunError,
     SeveritySummary,
@@ -50,7 +51,9 @@ from evaluatorq.redteam.contracts import (
     Vulnerability,
     VulnerabilitySummary,
     infer_framework,
+    is_known_open_value,
     normalize_category,
+    resolve_open_value,
 )
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_metadata_for_category
@@ -379,15 +382,16 @@ def _coerce_job_output_text(raw_output: Any) -> str:
     return str(raw_output)
 
 
-def _normalize_attack_technique(value: str | None) -> AttackTechnique:
-    """Normalize free-form/static dataset techniques to supported enum values."""
+def _normalize_attack_technique(value: str | None) -> AttackTechnique | RegisteredValue:
+    """Normalize free-form/static dataset techniques to supported or registered values."""
     raw = str(value or '').strip()
     if not raw:
         return AttackTechnique.INDIRECT_INJECTION
+    if is_known_open_value(AttackTechnique, raw):
+        return resolve_open_value(AttackTechnique, raw)
     lowered = raw.lower().replace('_', '-').replace(' ', '-')
-    supported = {str(item.value) for item in AttackTechnique}
-    if lowered in supported:
-        return AttackTechnique(lowered)
+    if is_known_open_value(AttackTechnique, lowered):
+        return resolve_open_value(AttackTechnique, lowered)
     # Common jailbreak-like labels in LLM datasets map to direct injection.
     _converters_logger.warning('Unknown attack technique %r, defaulting to direct-injection', raw)
     return AttackTechnique.DIRECT_INJECTION
@@ -453,7 +457,7 @@ def static_sample_to_result(
         id=inp.id,
         vulnerability=vulnerability_str,
         category=category,
-        framework=cast('Framework', infer_framework(category)),
+        framework=infer_framework(category),
         attack_technique=_normalize_attack_technique(inp.attack_technique),
         delivery_methods=delivery_methods,
         turn_type=inp.turn_type,
@@ -686,7 +690,7 @@ def dynamic_evaluatorq_results_to_report(
             id=inputs.get('id', f'{category}-{strategy.name}'),
             vulnerability=vulnerability_str,
             category=category,
-            framework=cast('Framework', infer_framework(category)),
+            framework=infer_framework(category),
             attack_technique=strategy.attack_technique,
             # AttackInfo.delivery_methods is the open set (DeliveryMethod | str); a copy
             # widens the strategy's closed list[DeliveryMethod] (list is invariant).
@@ -1200,11 +1204,13 @@ def compute_report_summary(
 
     vuln_summaries: dict[str, VulnerabilitySummary] = {}
     for v, v_counts in by_vuln.items():
-        try:
-            vuln_enum = Vulnerability(v)
-        except ValueError:
-            _converters_logger.warning('Skipping unknown vulnerability %r in by_vulnerability grouping.', v)
+        if v is None:
             continue
+        # A saved report can hold custom vulnerabilities this process never registered;
+        # they keep their own row instead of being dropped (RES-1922).
+        vuln_enum = (
+            resolve_open_value(Vulnerability, v) if is_known_open_value(Vulnerability, v) else RegisteredValue(v)
+        )
         vdef = VULNERABILITY_DEFS.get(vuln_enum)
         v_eval_total = v_counts.passed + v_counts.failed
         v_vulns = v_counts.failed
@@ -1302,7 +1308,7 @@ def compute_report_summary(
     )
 
 
-def _dominant_framework(results: list[RedTeamResult]) -> Framework | None:
+def _dominant_framework(results: list[RedTeamResult]) -> AnyFramework | None:
     """Return the dominant framework, or None if mixed/empty."""
     if not results:
         return None
@@ -1377,7 +1383,7 @@ def merge_reports(
 
     all_results: list[RedTeamResult] = []
     all_errors: list[RunError] = []
-    frameworks: set[Framework | None] = set()
+    frameworks: set[AnyFramework | None] = set()
     pipelines: set[Pipeline] = set()
     merged_agent_contexts: dict[str, AgentContext] = {}
 
@@ -1391,7 +1397,7 @@ def merge_reports(
             merged_agent_contexts.update(report.agent_contexts)
 
     # Resolve framework: use single value if unanimous, else None
-    resolved_framework: Framework | None = None
+    resolved_framework: AnyFramework | None = None
     non_none_frameworks = {f for f in frameworks if f is not None}
     if len(non_none_frameworks) == 1:
         resolved_framework = non_none_frameworks.pop()

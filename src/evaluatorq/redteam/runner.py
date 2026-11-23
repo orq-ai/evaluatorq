@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import functools
 import json
 import re
 import uuid
@@ -13,7 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from loguru import logger
 
@@ -65,6 +66,7 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     get_strategies_for_category,
     get_strategies_for_vulnerability,
     list_available_categories,
+    register_strategy,
     select_applicable_strategies,
     select_applicable_strategies_for_vulnerability,
 )
@@ -77,7 +79,9 @@ from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     SUPPORTED_TARGET_KINDS,
     AgentContext,
+    AnyVulnerability,
     AttackSource,
+    AttackStrategy,
     AttackTechnique,
     DeliveryMethod,
     LLMConfig,
@@ -91,9 +95,12 @@ from evaluatorq.redteam.contracts import (
     TargetConfig,
     TargetKind,
     Vulnerability,
+    known_open_values,
     normalize_category,
     parse_target,
+    resolve_open_value,
 )
+from evaluatorq.redteam.custom import CustomSource, register_custom
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str, resolve_delivery_methods
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import (
@@ -103,6 +110,7 @@ from evaluatorq.redteam.hooks import (
     ManifestStageHooks,
     PipelineHooks,
 )
+from evaluatorq.redteam.registry_scope import run_scope
 from evaluatorq.redteam.replay import DATAPOINTS_KEY as REPLAY_DATAPOINTS_KEY
 from evaluatorq.redteam.replay import RUN_CONFIG_KEY as REPLAY_RUN_CONFIG_KEY
 from evaluatorq.redteam.replay import RedTeamReplay, load_redteam_replay
@@ -180,6 +188,22 @@ rather than to this value so a replay can tell "unset" from "explicitly 5" and
 restore the replayed run's budget only in the former case."""
 
 
+def _register_strategy_objects(strategies: list[str | AttackStrategy] | None) -> list[str] | None:
+    """Register the `AttackStrategy` objects in ``strategies`` and return the name filter.
+
+    A list holding nothing but objects filters nothing; mixed with names, the objects join the filter.
+    """
+    if strategies is None:
+        return None
+    names = [s for s in strategies if isinstance(s, str)]
+    objects = [s for s in strategies if isinstance(s, AttackStrategy)]
+    for strategy in objects:
+        register_strategy(strategy)
+    if objects and not names:
+        return None
+    return names + [s.name for s in objects]
+
+
 def _resolve_attack_techniques(
     values: list[AttackTechnique | str] | None,
 ) -> set[AttackTechnique] | None:
@@ -188,9 +212,9 @@ def _resolve_attack_techniques(
         return None
     try:
         raw_values = set(values)
-        return {AttackTechnique(value) for value in raw_values}
+        return {resolve_open_value(AttackTechnique, value) for value in raw_values}
     except (TypeError, ValueError) as exc:
-        valid = ', '.join(technique.value for technique in AttackTechnique)
+        valid = ', '.join(known_open_values(AttackTechnique))
         raise ValueError(f'Unknown attack technique(s) {values!r}; expected one of: {valid}.') from exc
 
 
@@ -528,7 +552,7 @@ def _cap_datapoints_balanced(datapoints: list[Any], cap: int) -> list[Any]:
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from openai import AsyncOpenAI
 
@@ -620,9 +644,9 @@ def _resolve_save_mode(*, save: SaveMode | bool) -> SaveMode:
         warnings.warn(
             'Passing save=True/False is deprecated. Use SaveMode.FINAL / SaveMode.NONE instead.',
             DeprecationWarning,
-            # 3, not 2: this helper is one frame deeper than red_team, where the
-            # warning used to be raised. The user's call site is the target.
-            stacklevel=3,
+            # 4: this helper, red_team, and the run-scope wrapper sit
+            # between the warning and the user's call site.
+            stacklevel=4,
         )
         save = SaveMode.FINAL if save else SaveMode.NONE
     elif save not in SaveMode.__members__.values():
@@ -915,8 +939,8 @@ def _resolve_vulns_and_categories(
     replay: RedTeamReplay | None,
     vulnerabilities: list[str] | None,
     categories: list[str] | None,
-) -> tuple[list[Vulnerability] | None, list[str]]:
-    resolved_vulns: list[Vulnerability] | None
+) -> tuple[list[AnyVulnerability] | None, list[str]]:
+    resolved_vulns: list[AnyVulnerability] | None
     if replay is not None:
         # A replay's scope is whatever it recorded. Resolving vulnerabilities
         # (and running `_apply_evaluability_gate` on the result) would re-derive a
@@ -937,7 +961,7 @@ def _resolve_vulns_and_categories(
             # category codes — a code is unknown only when it is neither. Using
             # resolve_category_safe alone would mislabel a valid vulnerability ID (e.g.
             # 'goal_hijacking') as unrecognized in a mixed list.
-            valid_vuln_ids = {v.value for v in Vulnerability}
+            valid_vuln_ids = set(known_open_values(Vulnerability))
             unknown = [c for c in categories if c not in valid_vuln_ids and resolve_category_safe(c) is None]
             raise ValueError(
                 f'Unrecognized categor{"y" if len(unknown) == 1 else "ies"}: '
@@ -969,9 +993,9 @@ def _resolve_vulns_and_categories(
 
 def _apply_evaluability_gate(
     *,
-    resolved_vulns: list[Vulnerability] | None,
+    resolved_vulns: list[AnyVulnerability] | None,
     resolved_categories: list[str],
-) -> tuple[list[Vulnerability] | None, list[str], list[str]]:
+) -> tuple[list[AnyVulnerability] | None, list[str], list[str]]:
     # Evaluability gate: a vulnerability with no registered evaluator can be attacked
     # but not scored, so prune it up front (raise if none are scorable) rather than
     # burning tokens on attacks that always read "no verdict". Currently inert — every
@@ -1061,7 +1085,7 @@ class _PipelineDispatchInputs:
     mode: Pipeline | str | None
     name: str | None
     categories: list[str]
-    resolved_vulns: list[Vulnerability] | None
+    resolved_vulns: list[AnyVulnerability] | None
     max_turns: int
     max_per_category: int | None
     attack_model: str
@@ -1366,6 +1390,23 @@ def _persist_and_index_run(
 # ---------------------------------------------------------------------------
 
 
+_P = ParamSpec('_P')
+_R = TypeVar('_R')
+
+
+def _run_scoped_registrations(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+    """Run `red_team` in its own registry scope: it sees the built-ins and the global
+    registrations, and its `custom` and `strategies` definitions stay inside the run."""
+
+    @functools.wraps(func)
+    async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with run_scope():
+            return await func(*args, **kwargs)
+
+    return wrapper
+
+
+@_run_scoped_registrations
 async def red_team(
     target: str | AgentTarget | list[str | AgentTarget],
     *,
@@ -1373,7 +1414,8 @@ async def red_team(
     mode: Pipeline | str | None = None,
     categories: list[str] | None = None,
     vulnerabilities: list[str] | None = None,
-    strategies: list[str] | None = None,
+    strategies: list[str | AttackStrategy] | None = None,
+    custom: CustomSource | Sequence[CustomSource] | None = None,
     datapoints: list[DataPoint] | None = None,
     attack_techniques: list[AttackTechnique | str] | None = None,
     delivery_methods: list[DeliveryMethod | str] | None = None,
@@ -1430,6 +1472,8 @@ async def red_team(
             apply to static (dataset) datapoints, which carry no strategy name —
             a warning is emitted if combined with ``static`` mode. ``None``
             disables the filter; an empty list selects nothing (see below).
+            An ``AttackStrategy`` object in the list is registered for its
+            vulnerability and runs like a shipped strategy; it does not filter.
         datapoints: Trace seed rows produced by ``datapoints_from_traces``. They
             require this target and use the dynamic pipeline; they cannot be
             combined with ``dataset`` or ``previous_run``.
@@ -1521,6 +1565,12 @@ async def red_team(
             generation (e.g. "this agent handles financial transactions, try to
             get it to approve fraudulent ones"). Appended to adversarial system
             prompts and objective generation prompts.
+        custom: Custom vulnerabilities to register before the run: a definitions file
+            path (YAML or JSON), a `CustomVulnerability`, a dict of its fields, or a list
+            of these. Registered rules join the default selection and can be picked with
+            ``vulnerabilities=[<id>]``. Every entry is validated before any LLM call.
+            They exist only for this run, as do ``AttackStrategy`` objects in
+            ``strategies``: concurrent and later runs do not see them.
         verbosity: Verbosity level (0=silent, 1=summary progress bar,
             2=per-attack progress bars). Defaults to ``0``.
         save: What to persist to disk. ``'none'`` writes nothing. ``'final'``
@@ -1578,6 +1628,9 @@ async def red_team(
 
     save = _resolve_save_mode(save=save)
 
+    register_custom(custom)
+    strategy_names = _register_strategy_objects(strategies)
+
     # Called for its raising side effect only, so a typo is rejected here rather than deep inside filter resolution.
     _validate_attack_techniques(attack_techniques)
 
@@ -1610,7 +1663,7 @@ async def red_team(
             dataset=dataset,
             categories=categories,
             vulnerabilities=vulnerabilities,
-            strategies=strategies,
+            strategies=strategy_names,
             datapoints=datapoints,
             attack_techniques=attack_techniques,
             delivery_methods=delivery_methods,
@@ -1664,7 +1717,7 @@ async def red_team(
     )
 
     resolved_filters = _resolve_filter_sets(
-        strategies=strategies,
+        strategies=strategy_names,
         attack_techniques=attack_techniques,
         delivery_methods=delivery_methods,
         vulnerabilities=vulnerabilities,
@@ -2293,7 +2346,7 @@ async def _prepare_target(
     filter_selection: tuple[str, list[str]] | None = None,
     mode: Pipeline,
     categories: list[str] | None,
-    resolved_vulns: list[Vulnerability] | None,
+    resolved_vulns: list[AnyVulnerability] | None,
     max_turns: int,
     max_per_category: int | None,
     attack_model: str,
@@ -2823,7 +2876,7 @@ def _ctx_end_meta(
 class _DynamicEstimationInputs:
     replay_datapoints: list[DataPoint] | None
     trace_datapoints: list[DataPoint] | None
-    resolved_vulns: list[Vulnerability] | None
+    resolved_vulns: list[AnyVulnerability] | None
     resolved_categories: list[str]
     first_agent_context: AgentContext
     first_caps_for_estimate: AgentCapabilities | None
@@ -2955,7 +3008,7 @@ class _TargetPrepInputs:
     mode: Pipeline
     filter_selection: tuple[str, list[str]] | None
     categories: list[str] | None
-    resolved_vulns: list[Vulnerability] | None
+    resolved_vulns: list[AnyVulnerability] | None
     max_turns: int
     max_per_category: int | None
     attack_model: str
@@ -3104,7 +3157,7 @@ class _AgentTargetDatapointInputs:
     at_label: str
     resolved_categories: list[str]
     at_ctx: AgentContext
-    resolved_vulns: list[Vulnerability] | None
+    resolved_vulns: list[AnyVulnerability] | None
     max_per_category: int | None
     max_turns: int
     generate_strategies: bool
@@ -3287,7 +3340,7 @@ async def _run_dynamic_or_hybrid(
     mode: Pipeline,
     name: str | None = None,
     categories: list[str] | None,
-    resolved_vulns: list[Vulnerability] | None = None,
+    resolved_vulns: list[AnyVulnerability] | None = None,
     max_turns: int,
     max_per_category: int | None,
     attack_model: str,
@@ -3906,7 +3959,7 @@ class _ConfirmPayloadInputs:
     strategy_breakdown: dict[str, Any]
     all_target_labels: list[str]
     dataset: Any
-    resolved_vulns: list[Vulnerability] | None
+    resolved_vulns: list[AnyVulnerability] | None
     replay_of: str | None
 
 
@@ -4337,6 +4390,7 @@ def _load_static_datapoints(
     categories: list[str] | None,
     resolved_delivery_methods: set[DeliveryMethod | str] | None,
     resolved_strategy_names: set[str] | None,
+    explicit_selection: bool = False,
 ) -> list[Any]:
     # Load the shared dataset once for all targets (a replay brings its own)
     if prefetched_data is not None:
@@ -4370,6 +4424,11 @@ def _load_static_datapoints(
             msg = 'All datapoints were filtered out — no evaluator registered for any category.'
             raise ValueError(msg)
         data = filtered_data
+
+    if prefetched_data is None:
+        from evaluatorq.redteam.custom import custom_static_datapoints
+
+        data += custom_static_datapoints(categories, explicit=explicit_selection)
 
     # The delivery-method filter was applied at load time (above). Strategy-name
     # selection cannot apply to static rows (dataset records with no strategy
@@ -4702,6 +4761,7 @@ async def _run_static(
         categories=categories,
         resolved_delivery_methods=resolved_delivery_methods,
         resolved_strategy_names=resolved_strategy_names,
+        explicit_selection=filter_selection is not None,
     )
     _report_static_filter_results(
         data=data,

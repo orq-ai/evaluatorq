@@ -349,6 +349,7 @@ dependencies = [
   crewai = [ "crewai>=0.70.0; python_version >= '3.11'" ]
   redteam = [
   "huggingface-hub>=0.20.0",
+  "pyyaml>=6.0",
   "vl-convert-python>=1.6.0"
 ]
   simulation = [
