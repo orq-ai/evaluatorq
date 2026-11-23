@@ -392,7 +392,8 @@ async def test_an_insights_run_that_only_clusters_still_checks_the_model_that_me
         )
 
     message = str(info.value)
-    assert '(insights.labels)=' in message
+    # The model belongs to the insights.labels setting, and this run would only use it to merge clusters.
+    assert '(insights.labels), used to merge clusters=' in message
     # An explicit summary model is named by its argument, so that is the label to look for.
     assert 'summary_model' not in message, 'the summary model is a Claude id and is not the problem'
     assert fake.messages.calls == []
@@ -422,7 +423,13 @@ def _default_classifier() -> str:
 INSIGHTS_CASES: dict[str, tuple[Callable[[], Any], dict[str, Any], list[str] | None, list[str]]] = {
     # ``id: (client, models, refused, not_listed)``. A model is checked only when the run calls it.
     'only the summary model, a claude id': (_anthropic, {}, None, []),
-    'labels asked for': (_anthropic, {'label_model': 'openai/gpt-6-luna'}, ['classifier_model=openai/gpt-6-luna'], ['summary']),
+    'labels asked for': (_anthropic, {'label_model': 'openai/gpt-6-luna'}, ['classifier_model=openai/gpt-6-luna'], ['summary', 'merge clusters']),
+    'no labels, a dimension only': (
+        _anthropic,
+        {'label_model': 'openai/gpt-6-luna', 'label_model_only_merges': True},
+        ['classifier_model, used to merge clusters=openai/gpt-6-luna'],
+        ['summary'],
+    ),
     'a query population': (
         _anthropic, {'label_model': CLAUDE, 'query_models': ('openai/gpt-5.4-mini', CLAUDE)}, ['serve compiler_model=openai/gpt-5.4-mini.'], [],
     ),
@@ -448,7 +455,14 @@ def test_insights_checks_the_models_the_run_calls(case: Any) -> None:
 
     client, models, refused, not_listed = case
     # A callable model is resolved here, so the role default is read under this test's environment.
-    models = {'summary_model': CLAUDE, 'label_model': None, 'query_models': None, 'filter_model': None, **models}
+    models = {
+        'summary_model': CLAUDE,
+        'label_model': None,
+        'query_models': None,
+        'filter_model': None,
+        'label_model_only_merges': False,
+        **models,
+    }
     resolved: dict[str, Any] = {key: value() if callable(value) else value for key, value in models.items()}
     _check(lambda: _require_insights_models_served(client(), **resolved), refused, not_listed)
 

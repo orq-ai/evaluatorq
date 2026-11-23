@@ -466,6 +466,7 @@ def _require_insights_models_served(
     label_model: str | None,
     query_models: tuple[str, str] | None,
     filter_model: str | None = None,
+    label_model_only_merges: bool = False,
 ) -> None:
     """Stop before any work when the client that serves the run is Anthropic and a model the run will call is not a Claude id.
 
@@ -489,7 +490,10 @@ def _require_insights_models_served(
 
     models = dict([named(summary_model, 'smart', 'insights.summary', 'summary_model')])
     if label_model is not None:
-        models.update([named(label_model, 'classifier', 'insights.labels', 'classifier_model')])
+        source, model = named(label_model, 'classifier', 'insights.labels', 'classifier_model')
+        # With no labels asked for, the only call this model gets is the cluster merge; say so, or the error points
+        # a user who asked for no labels at a labelling step.
+        models[f'{source}, used to merge clusters' if label_model_only_merges else source] = model
     if query_models is not None:
         compiler, finder_classifier = query_models
         models.update([
@@ -587,11 +591,13 @@ async def insights(  # noqa: C901
     classifier_model = resolved['classifier']
     summary_model = resolved['summary']
     embedding_model = resolved['embedding']
+    labels_run = bool(specs or coding_enabled or population.query is not None)
     _require_insights_models_served(
         llm_client,
         summary_model=summary_model,
         # Clustering sends the classifier model to the merge step, so any dimension needs it, labels or not.
-        label_model=classifier_model if specs or dimensions or coding_enabled or population.query is not None else None,
+        label_model=classifier_model if labels_run or dimensions else None,
+        label_model_only_merges=not labels_run,
         query_models=(compiler_model, finder_classifier_model) if population.query is not None else None,
         filter_model=_llm_filter_model(population),
     )
