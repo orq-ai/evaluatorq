@@ -703,13 +703,13 @@
   });
 
   document.body.addEventListener('input', function (evt) {
-    const search = evt.target.closest('.finder-facets .facet-search');
+    const search = evt.target.closest('.finder-facets .facet-search, .filter-dd .facet-search');
     if (!search) return;
     const query = search.value.trim().toLocaleLowerCase();
     const richPick = search.closest('.rich-pick--filter');
     const sub = search.closest('.facet-sub');
-    if (!richPick && !sub) return;
-    const list = richPick || sub;
+    const list = richPick || sub || search.closest('.filter-dd');
+    if (!list) return;
     let visible = 0;
     list.querySelectorAll('.facet-values .model-option, .facet-values label').forEach(function (option) {
       const label = option.querySelector('input + span');
@@ -720,7 +720,7 @@
     list.querySelector('.facet-no-results').hidden = visible !== 0;
   });
   document.body.addEventListener('keydown', function (evt) {
-    if (evt.key === 'Enter' && evt.target.matches('.rich-pick--filter .facet-search')) evt.preventDefault();
+    if (evt.key === 'Enter' && evt.target.matches('.rich-pick--filter .facet-search, .filter-dd .facet-search')) evt.preventDefault();
   });
 
   // Unticking a value in the menu must also drop the hidden input the chip row submits.
