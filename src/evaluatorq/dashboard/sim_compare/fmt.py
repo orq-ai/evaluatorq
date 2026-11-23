@@ -6,12 +6,14 @@ from evaluatorq.dashboard.report_kit import pill
 from evaluatorq.dashboard.sim_compare.model import FLAT_DELTA
 
 
-def delta_pill(delta: float | None, text: str, *, higher_better: bool | None = True) -> str:
+def delta_pill(delta: float | None, text: str, *, higher_better: bool | None = True, flat: float = FLAT_DELTA) -> str:
     """Signed change pill. Colour follows good/bad (green/red), not direction;
-    ``higher_better=None`` keeps it neutral (e.g. conversation count, turns)."""
+    ``higher_better=None`` keeps it neutral (e.g. conversation count, turns).
+    A change smaller than *flat* reads as "no change"; the default suits scores
+    and rates, and sub-cent costs pass ``COST_FLAT_DELTA``."""
     if delta is None:
         return pill('n/a', tone='neutral')
-    if abs(delta) < FLAT_DELTA:
+    if abs(delta) < flat:
         return pill('no change', tone='neutral')
     arrow = '\u25b2' if delta > 0 else '\u25bc'
     tone = 'neutral' if higher_better is None else 'good' if (delta > 0) == higher_better else 'danger'

@@ -7,6 +7,7 @@ from functools import cached_property, lru_cache
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.matching import pair_indices_by_key
+from evaluatorq.common.structured_output import sum_usage_coverage
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.filters import FILTERS
 from evaluatorq.dashboard.sim_views import (
@@ -22,9 +23,12 @@ from evaluatorq.simulation.reports.sections import (
 )
 
 if TYPE_CHECKING:
+    from evaluatorq.contracts import Usage
     from evaluatorq.simulation.contracts import SimulationEntry, SimulationResult
 
 FLAT_DELTA = 0.005
+COST_FLAT_DELTA = 0.00005
+"""Half of the smallest step ``fmt_cost`` shows ($0.0001): a smaller cost change would print as $0.0000."""
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +235,10 @@ class Aggregates:
     avg_score: float | None
     avg_turns: float | None
     errors: int
+    target_usage: Usage | None = None
+    """The target agent's own usage summed over the conversations that reported it."""
+    target_missing: int = 0
+    """Conversations with no recorded target usage."""
 
 
 def aggregates(side: Side) -> Aggregates:
@@ -241,12 +249,15 @@ def aggregates(side: Side) -> Aggregates:
     if not side.results:
         return Aggregates(0, None, None, None, 0)
     data = _build_summary_section(side.results).data
+    target_usage, target_missing = sum_usage_coverage([r.target_token_usage for r in side.results])
     return Aggregates(
         conversations=data['total_conversations'],
         goal_rate=data['success_rate'],
         avg_score=data['avg_goal_completion_score'],
         avg_turns=data['avg_turn_count'],
         errors=data['errors'],
+        target_usage=target_usage,
+        target_missing=target_missing,
     )
 
 

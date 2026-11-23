@@ -6,13 +6,13 @@ from collections import Counter
 from itertools import cycle
 from typing import Any
 
-from evaluatorq.common.reports import esc, kpi_cards, pct
+from evaluatorq.common.reports import esc, fmt_cost, kpi_cards, pct
 from evaluatorq.dashboard.filters import _sim_options_from_results
-from evaluatorq.dashboard.report_kit import panel
+from evaluatorq.dashboard.report_kit import TARGET_COST_UNKNOWN_TIP, cost_figure, panel
 from evaluatorq.dashboard.report_tabs import sim_entity_dialog
 from evaluatorq.dashboard.sim_compare.fmt import delta_pill, fmt_num, run_key
 from evaluatorq.dashboard.sim_compare.heatmap import where_panel
-from evaluatorq.dashboard.sim_compare.model import FLAT_DELTA, Comparison, MatchedPair, ScoreRow, Side
+from evaluatorq.dashboard.sim_compare.model import COST_FLAT_DELTA, FLAT_DELTA, Comparison, MatchedPair, ScoreRow, Side
 from evaluatorq.dashboard.sim_compare.state import TableState, first_page, run_query, swap_link, toggled
 from evaluatorq.dashboard.sim_compare.table import render_conversations, resolve_view
 from evaluatorq.dashboard.view import GOAL_OUTCOME_LABEL, _render_sim_filter_rail, filter_fragment
@@ -295,6 +295,9 @@ def _tiles(cmp: Comparison) -> str:
         *,
         higher: bool | None,
         outcome: bool = False,
+        flat: float = FLAT_DELTA,
+        tip: str = '',
+        note: str = '',
     ) -> dict:
         if outcome and cmp.outcome_filter:
             return {
@@ -304,13 +307,43 @@ def _tiles(cmp: Comparison) -> str:
             }
         d = None if va is None or vb is None else vb - va
         # An unchanged value already reads as "x → x"; a "no change" pill on top is noise.
-        flat = d is not None and abs(d) < FLAT_DELTA
-        pill = '' if flat else delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher)
+        unchanged = d is not None and abs(d) < flat
+        pill = (
+            '' if unchanged else delta_pill(d, delta_text(d) if d is not None else '', higher_better=higher, flat=flat)
+        )
+        title = f' title="{esc(tip)}"' if tip else ''
+        note_html = f'<span class="cmp-tile-note">{esc(note)}</span>' if note else ''
         return {
             'label': label,
             'value': fmt(vb),
-            'sub_html': f'<span class="cmp-tile-ab">{esc(fmt(va))} &rarr; {esc(fmt(vb))}</span>{pill}',
+            'sub_html': f'<span class="cmp-tile-ab"{title}>{esc(fmt(va))} &rarr; {esc(fmt(vb))}</span>{pill}{note_html}',
         }
+
+    # Target agent's own cost per conversation that reported usage, so a run where fewer
+    # conversations reported does not read as cheaper. An unknown side shows "unknown" and an
+    # n/a change, never a $0 baseline. Unequal coverage keeps the change neutral: the two
+    # averages are over different conversations. Unpriced calls still make it a lower bound.
+    figs = [cost_figure(agg.target_usage, unknown_tip=TARGET_COST_UNKNOWN_TIP) for agg in (a, b)]
+    reported = [agg.conversations - agg.target_missing for agg in (a, b)]
+    cost_a, cost_b = (
+        None if agg.target_usage is None or agg.target_usage.total_cost is None else agg.target_usage.total_cost / n
+        for agg, n in zip((a, b), reported, strict=True)
+    )
+    cost_tip = ' '.join(
+        f'{which}: {fig.tip}'
+        if fig.unknown
+        else f'{which}: average over the {n} of {agg.conversations} conversations that reported target usage.'
+        + (f' {fig.tip}' if fig.tip else '')
+        for which, fig, n, agg in zip('AB', figs, reported, (a, b), strict=True)
+    )
+    coverage = [(n, agg.conversations) for n, agg in zip(reported, (a, b), strict=True)]
+    coverage_differs = not any(fig.unknown for fig in figs) and coverage[0] != coverage[1]
+    cost_notes = [
+        'A {} of {}, B {} of {} conversations reported usage'.format(*coverage[0], *coverage[1])
+        if coverage_differs
+        else '',
+        'lower bound' if any(fig.qualifier for fig in figs) else '',
+    ]
 
     return kpi_cards(
         [
@@ -342,6 +375,17 @@ def _tiles(cmp: Comparison) -> str:
             ),
             tile('Avg turns', a.avg_turns, b.avg_turns, lambda v: fmt_num(v, 1), lambda d: f'{d:+.1f}', higher=None),
             tile('Errors', a.errors, b.errors, lambda v: f'{v:.0f}', lambda d: f'{d:+.0f}', higher=False),
+            tile(
+                'Target cost / conv.',
+                cost_a,
+                cost_b,
+                lambda v: 'unknown' if v is None else fmt_cost(v),
+                lambda d: f'{"+" if d > 0 else "-"}{fmt_cost(abs(d))}',
+                higher=None if coverage_differs else False,
+                flat=COST_FLAT_DELTA,
+                tip=cost_tip,
+                note='; '.join(n for n in cost_notes if n),
+            ),
         ],
         modifier='cmp',
     )

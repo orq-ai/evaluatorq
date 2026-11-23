@@ -1679,6 +1679,12 @@ class ExecutionDetails(BaseModel):
         description="Attacker's self-reported reason (multi-turn); signal only, never scored",
     )
     token_usage: TokenUsage | None = None
+    token_usage_target: TokenUsage | None = Field(
+        default=None,
+        description="The target agent's own share of token_usage: the calls to the agent under test, without the "
+        'attacker and without the seed replay in token_usage_bootstrap. None when the target reported no usage, '
+        'and for reports saved before this field existed: unknown, not zero.',
+    )
     token_usage_bootstrap: TokenUsage | None = None
     seed_context: list[Message] = Field(default_factory=list)
     backtracked_turns: list[Turn] = Field(
@@ -2003,6 +2009,12 @@ class ReportSummary(BaseModel):
         description='Token usage billed after attack execution: the focus-area recommendation phase '
         '(condense + per-area calls) and the executive-summary narrative. None if neither ran or neither '
         'billed usage. Already folded into token_usage_total.',
+    )
+    token_usage_target: TokenUsage | None = Field(
+        default=None,
+        description="The sum of the results' execution.token_usage_target, skipping results without one: the "
+        'agent under test alone, without the attacker, seed replay, judges or post-processing. A part of '
+        'token_usage_total, never added to it. None when no result has one.',
     )
     by_vulnerability: dict[str, VulnerabilitySummary] = Field(default_factory=dict)
     by_category: dict[str, CategorySummary] = Field(default_factory=dict)
