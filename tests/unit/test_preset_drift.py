@@ -6,7 +6,7 @@ import pytest
 
 from evaluatorq.common.model_frontier import ScoredModel
 from evaluatorq.jury_presets import MAX_SEAT_AGE_DAYS, PRESETS, all_router_ids
-from evaluatorq.preset_drift import DriftReport, drift_report, earliest_listing
+from evaluatorq.preset_drift import DriftReport, Finding, drift_report, earliest_listing, render_summary, snapshot_presets
 
 UTC = timezone.utc
 DAY_MS = 86_400_000
@@ -121,3 +121,53 @@ def test_a_waiver_for_a_seat_that_is_now_scored_is_reported_as_stale(monkeypatch
     stale = [f for f in report.findings if f.kind == 'stale_waiver' and f.subject == 'deepseek/deepseek-flash']
     assert stale
     assert any('UNSCORED_SEAT_WAIVERS' in option for option in stale[0].options)
+
+
+def _snapshot(judges, reserves=('r/reserve',), cost=1.0):
+    return {'trio': {'judges': list(judges), 'reserve_judges': list(reserves), 'estimated_cost_per_1k': cost}}
+
+
+def test_the_summary_strikes_a_replaced_seat_beside_its_successor():
+    before = _snapshot(['a/one', 'b/two', 'c/three'], cost=4.45)
+    after = _snapshot(['a/one', 'd/four', 'c/three'], cost=3.75)
+
+    summary = render_summary(before, after, DriftReport())
+
+    assert '~~`b/two`~~ → **`d/four`**' in summary
+    assert '4.45 → **3.75**' in summary
+    assert 'xychart-beta' in summary
+
+
+def test_a_seat_that_only_moved_reads_as_kept():
+    before = _snapshot(['a/one', 'b/two', 'c/three'])
+    after = _snapshot(['a/one', 'c/three', 'b/two'])
+
+    summary = render_summary(before, after, DriftReport())
+
+    assert '~~' not in summary
+    assert 'xychart-beta' not in summary, 'no chart when no estimate moved'
+
+
+def test_a_decision_the_branch_answered_is_ticked_and_an_open_one_is_not():
+    before = _snapshot(['a/one', 'b/two', 'c/three'])
+    after = _snapshot(['a/one', 'd/four', 'c/three'])
+    report = DriftReport(
+        findings=[
+            Finding(kind='unscored_seat', subject='b/two', held_by=['trio'], detail='gone', needs_human=True),
+            Finding(kind='unscored_seat', subject='b/two', held_by=['other'], detail='gone', needs_human=True),
+            Finding(kind='unseatable', subject='c/three', held_by=['trio'], detail='disabled', needs_human=True),
+        ]
+    )
+
+    summary = render_summary(before, after, report)
+
+    assert '- [x] ~~**`b/two`** in `trio`, `other`' in summary
+    assert '- [ ] **`c/three`** in `trio`: disabled' in summary
+    assert '`c/three` ⛔' in summary
+
+
+def test_the_snapshot_round_trips_every_shipped_preset():
+    snapshot = snapshot_presets()
+
+    assert set(snapshot) == set(PRESETS)
+    assert render_summary(snapshot, snapshot, DriftReport()).count('🔁') == 1, 'only the legend line marks a change'
