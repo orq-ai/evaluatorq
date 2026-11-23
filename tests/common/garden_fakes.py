@@ -37,6 +37,7 @@ PRICES: dict[str, tuple[float, float]] = {
     'baseten/deepseek-v4.1-flash': (0.30, 1.20),
     'mistral/mistral-large-4': (0.68, 2.09),
     'tensorix/qwen/qwen3-coder-30b-a3b-instruct': (0.06, 0.25),
+    'wafer/DeepSeek-V4.1-Flash-1017': (0.13, 0.50),  # public /v2/model-catalog, 2026-11-23
 }
 
 
