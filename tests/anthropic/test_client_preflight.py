@@ -426,6 +426,16 @@ INSIGHTS_CASES: dict[str, tuple[Callable[[], Any], dict[str, Any], list[str] | N
     'a query population': (
         _anthropic, {'label_model': CLAUDE, 'query_models': ('openai/gpt-5.4-mini', CLAUDE)}, ['serve compiler_model=openai/gpt-5.4-mini.'], [],
     ),
+    # A query population that selects its filters with an LLM calls one more model, which has no argument of its own.
+    'the filter model of a query population': (
+        _anthropic,
+        {'label_model': CLAUDE, 'query_models': (CLAUDE, CLAUDE), 'filter_model': 'openai/gpt-5.4-mini'},
+        ['fast_filter_model=openai/gpt-5.4-mini'],
+        ['compiler_model', 'classifier_model'],
+    ),
+    'a query population whose filter model is a claude id': (
+        _anthropic, {'label_model': CLAUDE, 'query_models': (CLAUDE, CLAUDE), 'filter_model': CLAUDE}, None, [],
+    ),
     # The classify-only default is checked as the fast model it falls back to off the router.
     'the classify-only default': (_anthropic, {'label_model': _default_classifier}, ['standing in for the classify-only'], []),
     'another kind of client': (_openai, {'summary_model': 'openai/gpt-6-sol'}, None, []),
@@ -438,6 +448,58 @@ def test_insights_checks_the_models_the_run_calls(case: Any) -> None:
 
     client, models, refused, not_listed = case
     # A callable model is resolved here, so the role default is read under this test's environment.
-    models = {'summary_model': CLAUDE, 'label_model': None, 'query_models': None, **models}
+    models = {'summary_model': CLAUDE, 'label_model': None, 'query_models': None, 'filter_model': None, **models}
     resolved: dict[str, Any] = {key: value() if callable(value) else value for key, value in models.items()}
     _check(lambda: _require_insights_models_served(client(), **resolved), refused, not_listed)
+
+
+@pytest.mark.parametrize(
+    ('query', 'mode', 'checked'),
+    [
+        ('refund complaints', 'llm', True),
+        ('refund complaints', 'llm+decision', False),
+        (None, None, False),
+    ],
+)
+def test_the_filter_model_is_checked_only_when_an_llm_selects_the_filters(
+    query: str | None, mode: str | None, checked: bool
+) -> None:
+    from evaluatorq.common.model_roles import role_model
+    from evaluatorq.insights.models import InsightsPopulation
+    from evaluatorq.insights.pipeline import _llm_filter_model
+
+    model = _llm_filter_model(InsightsPopulation(query=query, filter_selection=cast('Any', mode)))
+
+    assert model == (role_model('fast', task='finder.filters') if checked else None)
+
+
+@pytest.mark.asyncio
+async def test_a_query_population_that_selects_filters_with_an_llm_stops_on_the_filter_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Every model with an argument is a Claude id; the filter model has none and falls back to the fast role."""
+    from evaluatorq.insights import pipeline
+    from evaluatorq.insights.models import InsightsPopulation
+
+    fake = RawAnthropic()
+    for name in ('resolve_population', 'label_traces', 'summarize_traces', '_build_dimension'):
+        monkeypatch.setattr(pipeline, name, _fail_if_reached(name))
+    monkeypatch.setattr(pipeline, 'resolve_orq_client', lambda: pytest.fail('resolved an Orq client'))
+
+    with pytest.raises(ModelClientMismatchError) as info:
+        await pipeline.insights(
+            InsightsPopulation(query='refund complaints', filter_selection='llm'),
+            dimensions=(),
+            labels=(),
+            summary_model=CLAUDE,
+            compiler_model=CLAUDE,
+            classifier_model=CLAUDE,
+            runs_dir=tmp_path / 'runs',
+            llm_client=cast('Any', fake),
+        )
+
+    message = str(info.value)
+    assert '(finder.filters)=' in message
+    assert 'compiler_model' not in message
+    assert fake.messages.calls == []
+    assert not (tmp_path / 'runs').exists(), 'nothing was written for a run that never started'
