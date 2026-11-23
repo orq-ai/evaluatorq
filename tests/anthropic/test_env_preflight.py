@@ -115,10 +115,14 @@ def test_a_simulation_checks_only_the_roles_the_environment_serves() -> None:
     from evaluatorq.simulation._config import require_sim_models_served
 
     injected = object()
+    # The judge has no agent of its own and no client was passed in, so the environment serves it.
     with pytest.raises(ModelClientMismatchError) as info:
-        require_sim_models_served(None, generation_client=injected, user_simulator=injected, judge=None)
+        require_sim_models_served(None, generation_client=None, user_simulator=injected, judge=None, generating=False)
     assert 'EVALUATORQ_SMART_MODEL' in str(info.value)
     assert 'EVALUATORQ_FAST_MODEL' not in str(info.value)
+    # A generation client serves every call site without its own agent (the runner builds the judge on it), so the
+    # environment is not consulted: a stray ANTHROPIC_API_KEY must not reject a run on an injected client.
+    require_sim_models_served(None, generation_client=injected, user_simulator=injected, judge=None)
 
     require_sim_models_served(None, generation_client=injected, user_simulator=injected, judge=injected)
     require_sim_models_served(LLMCallConfig(model='claude-sonnet-5-5'), generation_client=None)

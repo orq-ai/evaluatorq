@@ -149,6 +149,15 @@ def sum_structured_usage(usages: Sequence[TokenUsage | None]) -> TokenUsage | No
     return total
 
 
+def sum_usage_coverage(usages: Sequence[TokenUsage | None]) -> tuple[TokenUsage | None, int]:
+    """`sum_structured_usage` plus how many entries reported no usage at all.
+
+    The count is what makes a summed figure honest: a total over 3 of 5 items is
+    a lower bound, and a caller that only has the sum cannot say so.
+    """
+    return sum_structured_usage(usages), sum(1 for u in usages if u is None)
+
+
 def log_structured_usage(usage: TokenUsage | None, *, phase: str) -> None:
     """Announce what a phase of structured generation cost.
 

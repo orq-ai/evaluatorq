@@ -9,18 +9,20 @@ listing dates, not release notes.
 
 `drift_report()` is pure over a garden and a listing map, so it runs offline on
 hand-built cards. `python -m evaluatorq.preset_drift` reads the live garden and
-prints the report as JSON (needs a workspace-scoped `ORQ_API_KEY`).
+prints the report as JSON (needs a workspace-scoped `ORQ_API_KEY`); `--snapshot` and
+`--summary` render the Markdown summary the weekly drift PR opens with.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import pathlib
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -469,12 +471,155 @@ def live_report() -> DriftReport:
     )
 
 
+class SnapshotEntry(TypedDict):
+    judges: list[str]
+    reserve_judges: list[str]
+    estimated_cost_per_1k: float
+
+
+PresetSnapshot = dict[str, SnapshotEntry]
+"""Preset name to its judges, reserves and published estimate, as plain JSON."""
+
+_CHANGED, _FAILING = '🔁', '⛔'
+
+
+def snapshot_presets() -> PresetSnapshot:
+    """The shipped presets as JSON, so a later process can show what an edit moved."""
+    return {
+        name: {
+            'judges': list(preset.judges),
+            'reserve_judges': list(preset.reserve_judges),
+            'estimated_cost_per_1k': preset.estimated_cost_per_1k,
+        }
+        for name, preset in PRESETS.items()
+    }
+
+
+def _seat_cell(before: list[str], after: list[str], failing: set[str]) -> str:
+    """One table cell: kept seats plain, each new seat beside the one it replaced, struck through.
+
+    Compared as sets, so a seat that only changed position reads as kept.
+    """
+    removed = iter([seat for seat in before if seat not in after])
+    lines: list[str] = []
+    for seat in after:
+        mark = f' {_FAILING}' if seat in failing else ''
+        if seat in before:
+            lines.append(f'`{seat}`{mark}')
+        elif (old := next(removed, None)) is not None:
+            lines.append(f'{_CHANGED} ~~`{old}`~~ → **`{seat}`**{mark}')
+        else:
+            lines.append(f'{_CHANGED} **`{seat}`** (added){mark}')
+    lines.extend(f'{_CHANGED} ~~`{old}`~~ (removed)' for old in removed)
+    return '<br>'.join(lines) or 'none'
+
+
+def _cost_cell(before: float | None, after: float) -> str:
+    if before is None or before == after:
+        return f'{after:.2f}'
+    return f'{before:.2f} → **{after:.2f}**'
+
+
+def _decisions(report: DriftReport, before: PresetSnapshot, after: PresetSnapshot) -> list[str]:
+    """Needs-human findings, one checklist line per kind and subject, with every preset that holds it.
+
+    A finding about a seat the branch removed from every preset is ticked and
+    struck through: the edit answered it, and the live recheck confirms.
+    """
+
+    def seated(snapshot: PresetSnapshot) -> set[str]:
+        return {seat for entry in snapshot.values() for seat in (*entry['judges'], *entry['reserve_judges'])}
+
+    gone = seated(before) - seated(after)
+    grouped: dict[tuple[str, str], Finding] = {}
+    held: dict[tuple[str, str], list[str]] = {}
+    for finding in report.findings:
+        if not finding.needs_human:
+            continue
+        key = (finding.kind, finding.subject)
+        grouped.setdefault(key, finding)
+        held.setdefault(key, [])
+        held[key].extend(p for p in finding.held_by if p not in held[key])
+    lines = []
+    for key, finding in grouped.items():
+        where = f' in {", ".join(f"`{p}`" for p in held[key])}' if held[key] else ''
+        text = f'**`{finding.subject}`**{where}: {finding.detail} (`{finding.kind}`)'
+        lines.append(f'- [x] ~~{text}~~ Reseated on this branch.' if finding.subject in gone else f'- [ ] {text}')
+    return lines
+
+
+def render_summary(before: PresetSnapshot, after: PresetSnapshot, report: DriftReport) -> str:
+    """The top of the drift PR body: what moved, what it costs, and what a person must decide.
+
+    Deterministic, so every weekly PR reads the same way whatever the agent wrote.
+    A seat is marked failing when a needs-human finding names it and the edit
+    kept it.
+    """
+    failing = {f.subject for f in report.findings if f.needs_human}
+    rows = ['| Preset | Judges | Reserve | $ per 1k items |', '| --- | --- | --- | --- |']
+    names = list(after) + [n for n in before if n not in after]
+    for name in names:
+        old, new = before.get(name), after.get(name)
+        if new is None:
+            rows.append(f'| ~~`{name}`~~ (removed) | | | |')
+            continue
+        judges = _seat_cell(old['judges'] if old else [], new['judges'], failing)
+        reserves = _seat_cell(old['reserve_judges'] if old else [], new['reserve_judges'], failing)
+        cost = _cost_cell(old['estimated_cost_per_1k'] if old else None, new['estimated_cost_per_1k'])
+        rows.append(f'| `{name}` | {judges} | {reserves} | {cost} |')
+    decisions = _decisions(report, before, after)
+    out = [
+        '## What changes',
+        '',
+        *rows,
+        '',
+        f'{_CHANGED} changed on this branch · {_FAILING} still failing, needs a person',
+        '',
+    ]
+    shared = [n for n in names if n in before and n in after]
+    costs_before = [before[n]['estimated_cost_per_1k'] for n in shared]
+    costs_after = [after[n]['estimated_cost_per_1k'] for n in shared]
+    if costs_before != costs_after:
+        labels = ', '.join(f'"{n}"' for n in shared)
+        out += [
+            '```mermaid',
+            'xychart-beta',
+            '    title "Estimated $ per 1,000 items: before (left bar) and after (right bar)"',
+            f'    x-axis [{labels}]',
+            f'    y-axis "USD" 0 --> {int(max(costs_before + costs_after)) + 1}',
+            f'    bar [{", ".join(str(c) for c in costs_before)}]',
+            f'    bar [{", ".join(str(c) for c in costs_after)}]',
+            '```',
+            '',
+        ]
+    out += ['## Decisions needed', '']
+    out += decisions or ['None: every finding had an option the arithmetic allows.']
+    return '\n'.join(out) + '\n'
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description='Report how jury presets and router pools have drifted from the live garden.'
     )
     parser.add_argument('--output', help='Write the JSON report here instead of stdout.')
+    parser.add_argument('--snapshot', help='Write the shipped presets as JSON here and exit. No network.')
+    parser.add_argument(
+        '--summary',
+        metavar='BEFORE_JSON',
+        help='Print the Markdown PR summary comparing this --snapshot file with the presets as they are now. Needs --report. No network.',
+    )
+    parser.add_argument('--report', help='The JSON drift report the summary lists decisions from.')
     args = parser.parse_args(argv)
+    if args.snapshot:
+        pathlib.Path(args.snapshot).write_text(json.dumps(snapshot_presets(), indent=2) + '\n', encoding='utf-8')
+        return 0
+    if args.summary:
+        if not args.report:
+            parser.error('--summary needs --report')
+        before = json.loads(pathlib.Path(args.summary).read_text(encoding='utf-8'))
+        report = DriftReport.model_validate_json(pathlib.Path(args.report).read_text(encoding='utf-8'))
+        sys.stdout.write(render_summary(before, snapshot_presets(), report))
+        return 0
     report = live_report()
     text = report.model_dump_json(indent=2)
     if args.output:

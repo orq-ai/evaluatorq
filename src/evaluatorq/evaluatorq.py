@@ -1,6 +1,6 @@
 import asyncio
 import inspect
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 from loguru import logger
 
 from .common.env_config import env_raw
+from .common.llm_client import LLMConfigurationError
 from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
 from .common.output_adapters import has_meaningful_output
@@ -551,6 +552,33 @@ async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
             experiment_url_out.append(upload_response.experiment_url)
 
 
+def _log_errors_a_configuration_error_hides(errors: Sequence[BaseException | None], stopping: BaseException) -> None:
+    """Log each error from the run that will not be raised because ``stopping`` is; our own cancellations say nothing."""
+    for error in errors:
+        if error is None or error is stopping or isinstance(error, asyncio.CancelledError):
+            continue
+        logger.warning(
+            'Discarding error while a configuration error stops the run: {}: {}', type(error).__name__, error
+        )
+
+
+def _cancel_rest_on_configuration_error(
+    tasks: Sequence[asyncio.Task[Any]], errors: list[LLMConfigurationError]
+) -> Callable[[asyncio.Task[Any]], None]:
+    """A done-callback that, when a row ends on `LLMConfigurationError`, records it and cancels the rows still running."""
+
+    def on_done(done: asyncio.Task[Any]) -> None:
+        error = None if done.cancelled() else done.exception()
+        if not isinstance(error, LLMConfigurationError):
+            return
+        errors.append(error)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+    return on_done
+
+
 async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResult:
     """Run the processing phase against a dataset fetched batch by batch.
 
@@ -564,7 +592,11 @@ async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResul
     Returns:
         Every row's results, flattened in datapoint order.
 
+    A row that raises `LLMConfigurationError` stops the run: it would fail the same way on every row, so the rows in
+    flight are cancelled, no further row starts, and that error is raised as itself.
+
     Raises:
+        LLMConfigurationError: The first one any row raised.
         BaseException: The single fetch or task error, re-raised as it arrived.
         _StreamingEvaluationError: Several failures, collected together.
     """
@@ -601,10 +633,16 @@ async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResul
     polling_task = asyncio.create_task(_poll_progress(progress, state))
     fetch_error: BaseException | None = None
     cancelled_for_fetch: set[asyncio.Task[Any]] = set()
+    # A configuration error is the same for every row. The first one stops the run: rows in flight are cancelled,
+    # no further row starts, and that error is raised as itself, not wrapped with the others.
+    configuration_errors: list[LLMConfigurationError] = []
+    stop_on_configuration_error = _cancel_rest_on_configuration_error(processing_tasks, configuration_errors)
 
     try:
         # Fetch and process batches
         async for batch in fetch_dataset_batches(orq_client, dataset_id, include_messages=include_messages):
+            if configuration_errors:
+                break
             state.total += len(batch.datapoints)
 
             # Start processing this batch immediately
@@ -622,6 +660,7 @@ async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResul
                         on_datapoint_complete,
                     )
                 )
+                task.add_done_callback(stop_on_configuration_error)
                 processing_tasks.append(task)
                 datapoint_index += 1
 
@@ -660,6 +699,12 @@ async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResul
                 error,
             )
         raise fetch_error
+    if configuration_errors:
+        # The run stops on the configuration error. Whatever else went wrong in the same run is not raised, so it is
+        # logged here; the cancellations are ours and say nothing.
+        stopping = configuration_errors[0]
+        _log_errors_a_configuration_error_hides([fetch_error, *task_errors], stopping)
+        raise stopping
 
     errors = ([fetch_error] if fetch_error is not None else []) + task_errors
     if errors:

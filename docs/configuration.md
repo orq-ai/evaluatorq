@@ -343,6 +343,8 @@ info = await get_model_info('my-self-hosted-llama')
 
 Costs are USD **per 1000 tokens**, matching what `/v2/models` publishes.
 
+Some models are priced by time of day: DeepSeek charges a peak rate from 01:00 to 04:00 and 06:00 to 10:00 UTC on weekdays and half that rate the rest of the time. The catalogue prices such a model at the simple mean of its peak and off-peak rates, for input, output and cache reads alike, and sets `ModelInfo.pricing.time_of_day_average` to `True`. The mean is not weighted by how many hours are peak or by when your run happened, so a run made entirely off-peak is reported 50% above what it was billed and one made entirely at peak 25% below. Until `/v2/models` publishes the peak and off-peak prices itself, evaluatorq carries them for `deepseek/deepseek-v4-pro` and `deepseek/deepseek-flash`, and logs a warning, falling back to the card's flat rates, when a card moves to a newer price set than the one those figures were copied for.
+
 The id is stored unprefixed, so `'openai/gpt-x'` and `'gpt-x'` register and resolve the same entry — register either spelling and both lookups find it. Registering both replaces rather than duplicates: there is one model. `reasoning_efforts=None` means "unknown, cannot pre-validate"; an empty set means the same thing and is normalized to `None`, because a literally-empty accepted-values list would reject every effort including the defaults.
 
 ## Routers (`orq/*`)

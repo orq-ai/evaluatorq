@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 from pydantic import BaseModel
 
+from evaluatorq.common.llm_client import LLMConfigurationError
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import generate_structured, usage_from_exception
 from evaluatorq.common.template_engine import render_template
@@ -209,6 +210,8 @@ async def _describe_one(
                 max_tokens=4096,
                 label='insights.describe',
             )
+        except LLMConfigurationError:
+            raise
         except Exception as exc:  # noqa: BLE001 - a per-cluster failure must never fail the run
             if usage is not None:
                 usage.add('describe', usage_from_exception(exc))
@@ -304,6 +307,8 @@ async def _describe_top_one(
                 max_tokens=4096,
                 label='insights.describe_top_level',
             )
+        except LLMConfigurationError:
+            raise
         except Exception as exc:  # noqa: BLE001 - a per-cluster failure must never fail the run
             if usage is not None:
                 usage.add('describe', usage_from_exception(exc))
