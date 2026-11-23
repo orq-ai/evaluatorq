@@ -297,7 +297,51 @@ def _winner(point: ParetoPoint, by_id: dict[str, ParetoPoint]) -> ParetoPoint | 
     return by_id.get(point.dominated_by or '')
 
 
-def _chart(result: ParetoResult, by_id: dict[str, ParetoPoint]) -> str:
+_GUIDE_SAMPLES = 40
+_MAX_GUIDES = 4
+
+
+def _guide_ks(lo: float, hi: float) -> list[float]:
+    """The 1-2-5 steps strictly inside (lo, hi), at most four spread across it: every other step when more fit."""
+    if hi <= 0 or hi <= lo:
+        return []
+    decade = 10.0 ** math.floor(math.log10(max(lo, hi * 1e-6)))
+    ks: list[float] = []
+    while decade <= hi:
+        ks += [s * decade for s in (1, 2, 5) if lo < s * decade < hi]
+        decade *= 10
+    if len(ks) > _MAX_GUIDES:
+        ks = ks[::2]
+    if len(ks) > _MAX_GUIDES:
+        ks = [ks[round(i * (len(ks) - 1) / (_MAX_GUIDES - 1))] for i in range(_MAX_GUIDES)]
+    return ks
+
+
+def _guide_rows(result: ParetoResult, floor: float) -> list[dict[str, Any]]:
+    """Samples of the curves `score = floor + k * x` the chart draws as Score per $ guides; none off the price axis.
+
+    `k` comes from `_guide_ks` over the plotted Score per $ range. Each curve is sampled at 40 log-spaced prices
+    across the plotted x range, keeping the samples whose score stays inside the plotted score range.
+    """
+    if result.x != 'price':
+        return []
+    values = [p.pareto_score for p in result.points if p.pareto_score is not None]
+    xs = [p.x for p in result.points if p.x > 0]
+    if not values or not xs:
+        return []
+    lo_x, hi_x = min(xs), max(xs)
+    lo_s, hi_s = min(p.score for p in result.points), max(p.score for p in result.points)
+    step = math.log(hi_x / lo_x) / (_GUIDE_SAMPLES - 1)
+    samples = [lo_x * math.exp(i * step) for i in range(_GUIDE_SAMPLES)]
+    return [
+        {'x': x, 'score': score, 'k': f'{k:,g}'}
+        for k in _guide_ks(min(values), max(values))
+        for x in samples
+        if lo_s <= (score := floor + k * x) <= hi_s
+    ]
+
+
+def _chart(result: ParetoResult, by_id: dict[str, ParetoPoint], floor: float) -> str:
     spec = result.x_spec
     axis = _AXIS_TEXT[result.x]
     rows = [
@@ -334,6 +378,7 @@ def _chart(result: ParetoResult, by_id: dict[str, ParetoPoint]) -> str:
         lower_is_better=spec.lower_is_better,
         tooltip=tooltip,
         x_format=axis.chart_format,
+        guides=_guide_rows(result, floor),
     )
     return render_embed(chart, 'models-pareto') if chart else ''
 
@@ -347,6 +392,7 @@ def _sort_key(column: str, x: str, mix: PriceMix) -> Callable[[ParetoPoint], Any
         'price': lambda p: mix.price(p.model),
         'rates': lambda p: (p.model.input_price, p.model.output_price),
         'cache': lambda p: p.cache_read_rate if p.cache_read_rate is not None else math.inf,
+        'value': lambda p: -p.pareto_score if p.pareto_score is not None else math.inf,
         'dominated_by': lambda p: (p.dominated_by or '', -p.score),
     }
     return keys.get(column, keys['score'])
@@ -440,6 +486,7 @@ _COLUMNS = (
     _Col('score', 'Score', 'desc', numeric=True),
     _Col('dominated_by', 'Beaten by', 'asc'),
     _Col('x', 'X', None, numeric=True),
+    _Col('value', 'Score per $', 'desc', numeric=True),
     _Col('price', 'Price $/1M', 'asc', numeric=True),
     _Col('rates', 'Input / output $/1M', 'asc', numeric=True),
     _Col('cache', 'Cache read $/1M', 'asc', numeric=True),
@@ -501,6 +548,8 @@ def _row(
         _beaten_by_cell(p, result, by_id, steps),
         f'<td class="num">{_AXIS_TEXT[result.x].fmt(p.x)}</td>',
     ]
+    if 'value' not in hidden:
+        cells.append(f'<td class="num">{"—" if p.pareto_score is None else f"{p.pareto_score:,.1f}"}</td>')
     if 'price' not in hidden:
         cells.append(f'<td class="num">{_usd(mix.price(m))}</td>')
     cells.append(f'<td class="num num-secondary">{_usd(m.input_price)} / {_usd(m.output_price)}</td>')
@@ -526,6 +575,8 @@ def _contributor_row(m: ScoredModel, reason: str, result: ParetoResult, *, mix: 
         f'<td title="{esc(reason)}">not compared</td>',
         f'<td class="num">{"—" if xv is None else _AXIS_TEXT[result.x].fmt(xv)}</td>',
     ]
+    if 'value' not in hidden:
+        cells.append('<td class="num">—</td>')
     if 'price' not in hidden:
         cells.append(f'<td class="num">{_usd(mix.price(m))}</td>')
     cells.append(f'<td class="num num-secondary">{_usd(m.input_price)} / {_usd(m.output_price)}</td>')
@@ -556,8 +607,8 @@ def _table(
     steps = {p.model.router_id: _step_up(p, frontier[i - 1] if i else None, result) for i, p in enumerate(frontier)}
     # On a speed axis the price column is otherwise gone, so it comes back as its own column.
     hidden = {'cache'} if not (result.mix and result.mix.read) else set()
-    if result.x == 'price':
-        hidden.add('price')
+    # Score per $ is the score over the price, so it only means something when price is the x axis.
+    hidden.add('price' if result.x == 'price' else 'value')
     points = [p for p in result.points if p.on_frontier or not q.get('frontier')]
     points.sort(key=_sort_key(q.get('sort', 'score'), result.x, mix), reverse=q.get('dir') == 'rev')
     columns = [c for c in _COLUMNS if c.key not in hidden]
@@ -764,7 +815,7 @@ async def models_page(req: Request) -> HTMLResponse:
     return _shell(
         f'{_answer_cards(result, state.min_score)}{_intro(result.x_spec.short_label)}'
         f'{_filters_html(q, state)}{_summary(result, state)}'
-        f'<div class="models-chart">{_chart(result, by_id)}</div>'
+        f'<div class="models-chart">{_chart(result, by_id, state.min_score)}</div>'
         f'{_price_caption(mix) if x == "price" else ""}'
         f'{_table(result, q, by_id, mix, {m.router_id: m for m in pool}, state.developers)}'
     )

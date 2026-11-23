@@ -841,6 +841,48 @@ class TestDashboardPage:
         assert 'per $' not in text
         assert 'Fastest' in text
 
+    def test_guide_rows_follow_score_equals_floor_plus_k_x(self, fake_catalogue: list[ScoredModel]) -> None:
+        from evaluatorq.dashboard.models_views import _guide_rows
+
+        result = pareto(fake_catalogue, min_score=10)
+        rows = _guide_rows(result, 10.0)
+        xs = [p.x for p in result.points]
+        scores = [p.score for p in result.points]
+        # Score per $ spans 6.45 (a/strong) to 28.6 (c/cheap), so the 1-2-5 steps strictly inside are 10 and 20.
+        assert sorted({r['k'] for r in rows}, key=float) == ['10', '20']
+        for r in rows:
+            assert r['score'] == pytest.approx(10.0 + float(r['k']) * r['x'], abs=1e-9)
+            assert min(xs) <= r['x'] <= max(xs)
+            assert min(scores) <= r['score'] <= max(scores)
+
+    def test_no_guides_off_the_price_axis(self, fake_catalogue: list[ScoredModel]) -> None:
+        from evaluatorq.dashboard.models_views import _guide_rows
+
+        pool = [
+            model(m.router_id, m.intelligence_index or 0, 1.0, 1.0, output_tokens_per_second=100.0 - i * 10)
+            for i, m in enumerate(fake_catalogue)
+        ]
+        assert _guide_rows(pareto(pool, x='output_speed', min_score=10), 10.0) == []
+
+    def test_table_has_a_score_per_dollar_column_on_price_only(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        text = self._models_text(client, monkeypatch, fake_catalogue, '/models?sort=value')
+        head = text.split('<thead>', 1)[1].split('</thead>', 1)[0]
+        assert 'Score per $' in head
+        # Right after the price (x) column, before the input / output rates.
+        assert head.index('sort=x') < head.index('Score per $') < head.index('sort=rates')
+        body = text.split('</thead>', 1)[1]
+        # Highest Score per $ first: c/cheap (28.6), b/mid (21.4), d/bad (8.9), a/strong (6.5).
+        order = [body.index(f'title="{rid}"') for rid in ('c/cheap', 'b/mid', 'd/bad', 'a/strong')]
+        assert order == sorted(order)
+        assert '<td class="num">28.6</td>' in body and '<td class="num">21.4</td>' in body
+        pool = [
+            model(m.router_id, m.intelligence_index or 0, 1.0, 1.0, output_tokens_per_second=100.0 - i * 10)
+            for i, m in enumerate(fake_catalogue)
+        ]
+        assert 'Score per $' not in self._models_text(client, monkeypatch, pool, '/models?x=output_speed')
+
     def test_no_cards_without_a_frontier(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:

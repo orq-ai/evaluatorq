@@ -380,6 +380,7 @@ def vl_frontier_scatter(
     lower_is_better: bool,
     tooltip: list[dict[str, Any]],
     x_format: str = '~g',
+    guides: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Score against a ratio quantity, with the Pareto frontier joined by a step line and labelled.
 
@@ -388,6 +389,9 @@ def vl_frontier_scatter(
     tooltip. The x axis is logarithmic: price, speed
     and latency all span orders of magnitude, and a linear axis spends most of the plot on one outlier. Its
     tick labels are formatted with the d3 `x_format` and thinned to 1-2-5 steps at any range.
+
+    `guides` rows (``x``, ``score``, ``k``) draw one faint dashed curve per ``k``, labelled ``<k> per $`` at its
+    highest point. They sit behind the dots, with no legend entry and no tooltip; none when `guides` is empty.
     """
     if not rows:
         return {}
@@ -418,9 +422,37 @@ def vl_frontier_scatter(
             'encoding': {'x': x_enc, 'y': y_enc, 'color': color, 'tooltip': tooltip},
         }
 
+    layers: list[dict[str, Any]] = []
+    if guides:
+        guide_mark = {'color': COLORS['ink_300'], 'tooltip': None}
+        layers.append({
+            'data': {'values': guides},
+            'layer': [
+                {
+                    'mark': {'type': 'line', 'strokeDash': [4, 3], 'strokeWidth': 1, 'opacity': 0.5, **guide_mark},
+                    'encoding': {
+                        'x': x_enc,
+                        'y': y_enc,
+                        'detail': {'field': 'k', 'type': 'nominal'},
+                        'order': {'field': 'x', 'type': 'quantitative'},
+                    },
+                },
+                {
+                    'transform': [
+                        {'joinaggregate': [{'op': 'max', 'field': 'score', 'as': 'top'}], 'groupby': ['k']},
+                        {'filter': 'datum.score === datum.top'},
+                        {'calculate': "datum.k + ' per $'", 'as': 'guide_label'},
+                    ],
+                    # Full ink_300, unlike the line: at half opacity the label is too faint to read.
+                    'mark': {'type': 'text', 'align': 'right', 'dx': -4, 'dy': -6, 'fontSize': 10, **guide_mark},
+                    'encoding': {'x': x_enc, 'y': y_enc, 'text': {'field': 'guide_label'}},
+                },
+            ],
+        })
     return {
         'data': {'values': rows},
         'layer': [
+            *layers,
             {
                 'data': {'values': frontier},
                 'mark': {
