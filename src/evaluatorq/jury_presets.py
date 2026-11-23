@@ -310,8 +310,9 @@ CHEAP_AGGREGATE = JuryPreset(
     # test_cheap_aggregate_matches_the_live_derivation fails with a readable
     # diff when the live ranking moves; a change here is a deliberate edit.
     # Ranked 2026-11-23 from the live catalogue: glm-5.3-flash 41.8,
-    # deepseek-v4.1-flash-1017 32.6, gemini-3.8-flash 30.1; mistral-large-4
-    # 26.1 is next.
+    # deepseek-v4.1-flash-1017 32.6 (on Particle, which NEVER_SEAT now refuses,
+    # so the DeepSeek seat is DeepSeek's own route), gemini-3.8-flash 30.1;
+    # mistral-large-4 26.1 is next.
     judges=(
         # Default effort max; the live card has no ladder, so 41.8 is the AA
         # API value for the same slug (AA_FILLS). PRICE HOLD: the card says
@@ -319,16 +320,16 @@ CHEAP_AGGREGATE = JuryPreset(
         # billed at $0.15/$0.50 ($0.2375 blend), twice the card. The live card
         # leads here and the estimate uses it; at the billed rate this seat
         # costs $0.475 per 1k instead of $0.2375 and the panel estimate is
-        # $4.35 instead of $4.11. Replace the registry rate the day Zai billing
+        # $3.83 instead of $3.59. Replace the registry rate the day Zai billing
         # is confirmed.
         'zai/glm-5.3-flash',
-        'particle/deepseek-v4.1-flash-1017',
+        'deepseek/deepseek-flash',
         'google-ai/gemini-3.8-flash',
     ),
     # Next-ranked family under the ceiling.
     reserve_judges=('mistral/mistral-large-4',),
     use_when='High volume regression eval, nightly reruns, HITL triage feeders.',
-    estimated_cost_per_1k=4.11,
+    estimated_cost_per_1k=3.59,
 )
 
 OPEN_WEIGHT_PORTABLE = JuryPreset(
@@ -545,7 +546,7 @@ REVIEWED_SUCCESSORS: dict[str, str] = {
     'kimi-k2.8-preview': _UNSCORED,
     'kimi-k3.1-pro-highspeed': 'A faster K3.1 Pro at $4/$20 per 1M, unscored (2026-11-10). If K3.1 Pro is seated, this is its premium variant, not a separate decision.',
     'gemini-nano-banana-2.1': _NOT_A_JUDGE,
-    'gemma-4-12b': 'munito EU host only, public AA index 9.4, under the 15.0 floor. 2026-11-10.',
+    'gemma-4-12b': 'munito EU host only, public AA index 9.4, under the 15.0 floor of the time and the 10.0 one since 2026-11-23. 2026-11-10.',
     'qwen3.8-max-0902': "Public AA index 45.4 at $1.65/$4.95 per 1M, europe/us/apac. Alibaba holds only Portable's cost-chosen reserve ($0.30/$1.80), so a stronger, pricier Qwen is not a reserve upgrade; it would be a fourth-family judge, which no panel has a seat for. 2026-11-10.",
     'glm-5.3-fast': 'Public AA index 44.8 at $2.10/$6.60 per 1M against the seated glm-5.3-flash at $0.075/$0.25 per 1M on the card: stronger, far pricier. 2026-11-10.',
     'glm-5.3-flashx': 'Same 41.8 public index as the seated glm-5.3-flash at $0.37/$1.25 against $0.075/$0.25: same score, five times the price. 2026-11-10.',

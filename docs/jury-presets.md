@@ -20,7 +20,7 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, un
 | --- | --- | --- | --- | --- |
 | **`balanced-trio`** (default) | `deepseek/deepseek-flash`<br>`openai/gpt-6-luna`<br>`google-ai/gemini-3.8-flash` | majority | 3.75 | `wafer/DeepSeek-V4.1-Flash-1017` |
 | **`strong-jury`** | `anthropic/claude-opus-5-5`<br>`openai/gpt-6.1-sol`<br>`google-ai/gemini-3.8-flash` | majority | 27.00 | `deepseek/deepseek-flash` |
-| **`cheap-aggregate`** | `zai/glm-5.3-flash`<br>`particle/deepseek-v4.1-flash-1017`<br>`google-ai/gemini-3.8-flash` | majority | 4.11 | `mistral/mistral-large-4` |
+| **`cheap-aggregate`** | `zai/glm-5.3-flash`<br>`deepseek/deepseek-flash`<br>`google-ai/gemini-3.8-flash` | majority | 3.59 | `mistral/mistral-large-4` |
 | **`open-weight-portable`** | `deepseek/deepseek-flash`<br>`wafer/Kimi-K3.1-Pro`<br>`zai/glm-5.3-flash` | majority | 8.59 | `greenpt/qwen3.6-35b-a3b` |
 | **`eu-region`** | `aws/eu.anthropic.claude-haiku-5-5`<br>`google/eu.gemini-3.7-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 4.64 | `google/eu.claude-sonnet-5` |
 | **`single-provider-trio`** | `openai/gpt-6.1-sol`<br>`openai/gpt-6.1-terra`<br>`openai/gpt-6-luna` | majority | 12.40 | `openai/gpt-6-sol` |
@@ -33,7 +33,7 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, un
 
 **`strong-jury`** costs about seven times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
 
-**`cheap-aggregate`** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it shares two lineages with `balanced-trio` (DeepSeek and Google) and costs about the same; the difference is the third lineage (Zhipu instead of OpenAI). The `zai/glm-5.3-flash` seat is costed on its catalog card rate ($0.075/$0.25 per million); usage on the judge endpoint has been billed at twice that, which would put the panel at $4.35 rather than $4.11.
+**`cheap-aggregate`** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it shares two seats with `balanced-trio` (`deepseek/deepseek-flash` and `google-ai/gemini-3.8-flash`) and costs about the same; the difference is the third lineage (Zhipu instead of OpenAI). The `zai/glm-5.3-flash` seat is costed on its catalog card rate ($0.075/$0.25 per million); usage on the judge endpoint has been billed at twice that, which would put the panel at $3.83 rather than $3.59.
 
 **`open-weight-portable`** buys independence from any closed frontier vendor, and a migration path if you later want to serve the judges yourself. It is not the cheap option: most of its cost is the Kimi K3.1 Pro seat.
 
