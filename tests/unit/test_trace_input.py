@@ -877,7 +877,7 @@ async def test_open_query_window_still_sends_the_required_bounds() -> None:
 
     [body] = bodies
     assert body['from'] == '2000-01-01T00:00:00Z'
-    assert datetime.fromisoformat(body['to']) <= datetime.now(timezone.utc)
+    assert datetime.fromisoformat(body['to'].replace('Z', '+00:00')) <= datetime.now(timezone.utc)
     assert 'query' not in body
 
 
