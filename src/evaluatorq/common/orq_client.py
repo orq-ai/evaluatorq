@@ -14,13 +14,14 @@ SDK, nothing else.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import shutil
 import stat
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from loguru import logger
 
@@ -61,6 +62,17 @@ def resolve_orq_client(api_key: str | None = None, base_url: str | None = None) 
         raise ImportError(_INSTALL_HINT) from e
 
     return Orq(api_key=key, server_url=base_url or orq_server_url())
+
+
+def create_orq_dataset(client: Orq, *, display_name: str, path: str | None = None) -> Any:
+    """Create a dataset on either SDK calling convention.
+
+    SDK 4.14 to 4.15 takes one ``request`` dict; 4.17 and later takes ``display_name`` and ``path`` as keyword arguments, and rejects ``request``.
+    """
+    create = cast('Any', client.datasets.create)
+    if 'request' in inspect.signature(create).parameters:
+        return create(request={'display_name': display_name, 'path': path})
+    return create(display_name=display_name, path=path)
 
 
 async def close_orq_client(client: Orq) -> None:

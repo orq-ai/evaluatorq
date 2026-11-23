@@ -233,7 +233,7 @@ class TestOrqDatasetFetchError:
 
         page_one = {
             'object': 'list',
-            'data': [{'_id': 'dp-1', 'workspace_id': 'ws', 'dataset_id': 'ds', 'inputs': {}}],
+            'data': [{'_id': 'dp-1', 'workspace_id': 'ws', 'dataset_id': 'ds', 'inputs': {}, 'created_by_id': 'user-1', 'updated_by_id': 'user-1'}],
             'has_more': True,
         }
 

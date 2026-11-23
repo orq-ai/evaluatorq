@@ -63,6 +63,7 @@ from evaluatorq.common.llm_client import (
 )
 from evaluatorq.common.llm_limit import DEFAULT_LLM_PARALLELISM, check_llm_parallelism_option, llm_concurrency_limit
 from evaluatorq.common.model_roles import role_model
+from evaluatorq.common.orq_client import create_orq_dataset
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
 from evaluatorq.common.run_manifest import read_manifest
 from evaluatorq.contracts import LLMCallConfig
@@ -2146,7 +2147,7 @@ def upload_dataset(
 
     if dataset_id is None:
         # name is guaranteed non-None here (validated above); SDK expects a TypedDict.
-        created = client.datasets.create(request={'display_name': name or '', 'path': path})
+        created = create_orq_dataset(client, display_name=name or '', path=path)
         dataset_id = created.id
         typer.echo(f'Created dataset {dataset_id} ("{name}")', err=True)
 

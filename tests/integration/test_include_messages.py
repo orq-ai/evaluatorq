@@ -17,6 +17,7 @@ import pytest
 from orq_ai_sdk import Orq
 
 from evaluatorq import evaluatorq
+from evaluatorq.common.orq_client import create_orq_dataset
 from evaluatorq.types import DataPoint, DatasetIdInput
 
 
@@ -33,12 +34,7 @@ def orq_client() -> Orq:
 @pytest.fixture
 def test_dataset(orq_client: Orq) -> Generator[str, None, None]:
     """Create a temporary dataset and clean it up after the test."""
-    dataset = orq_client.datasets.create(
-        request={
-            'display_name': 'test-include-messages-conflict',
-            'path': 'evaluatorq-test',
-        }
-    )
+    dataset = create_orq_dataset(orq_client, display_name='test-include-messages-conflict', path='evaluatorq-test')
     assert dataset is not None, 'Failed to create dataset'
     dataset_id = dataset.id
 
