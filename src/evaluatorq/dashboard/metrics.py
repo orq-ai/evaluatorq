@@ -820,6 +820,9 @@ _TARGET_LABELS: dict[str, str] = {
     'callback': 'Callback',
 }
 
+# Labels that name a kind of target, not a concrete one: they never identify the agent a run tested.
+GENERIC_TARGET_LABELS = frozenset({*_TARGET_LABELS.values(), 'unknown'})
+
 # Target kind → icon category the view renders ('agent' | 'llm' | 'deployment' | 'other').
 _TARGET_KIND_CATEGORY: dict[str, str] = {
     'orq_agent': 'agent',
@@ -1192,6 +1195,11 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
     agg = _sim_aggregate(_roots_key(roots), library.fingerprint(roots))
     page = min(max(1, page), max(1, -(-agg.total_runs // per_page)))
     return replace(agg, recent=agg.recent[(page - 1) * per_page : page * per_page], page=page, per_page=per_page)
+
+
+def sim_run_rows(roots: list[Path] | None = None) -> list[SimRunRow]:
+    """Every sim run row, newest first, from the same cached aggregate as `sim_overview`."""
+    return _sim_aggregate(_roots_key(roots), library.fingerprint(roots)).recent
 
 
 # ---------------------------------------------------------------------------
