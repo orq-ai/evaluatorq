@@ -947,12 +947,16 @@ async def test_failed_span_detail_fails_the_trace_and_cancels_its_other_detail_c
         _span('broken', parent_id=None, started_at='2026-01-01T00:00:00Z'),
         _span('slow', parent_id='broken', started_at='2026-01-01T00:00:01Z'),
     ]
+    slow_started = asyncio.Event()
     slow_cancelled = asyncio.Event()
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/v3/traces/t1/spans/broken':
+            # Fail only once the slow call is in flight; otherwise it can be cancelled before it starts.
+            await slow_started.wait()
             return httpx.Response(404, json={'message': 'span not found'})
         if request.url.path == '/v3/traces/t1/spans/slow':
+            slow_started.set()
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
