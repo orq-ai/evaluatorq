@@ -746,10 +746,25 @@ def _status_of(exc: BaseException) -> int | None:
     return status if isinstance(status, int) else None
 
 
+def _body_message(exc: BaseException) -> str | None:
+    """The ``message`` field of an Orq error body; older SDKs put the whole raw body in ``str(exc)``."""
+    body = getattr(exc, 'body', None)
+    if not isinstance(body, str):
+        return None
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return None
+    message = payload.get('message') if isinstance(payload, dict) else None
+    if not isinstance(message, str):
+        return None
+    return message.strip() or None
+
+
 def _describe_error(exc: BaseException) -> str:
     """An Orq request error as text that names its HTTP status; the SDK's own message often leaves it out."""
     status = _status_of(exc)
-    message = str(exc).strip() or type(exc).__name__
+    message = _body_message(exc) or str(exc).strip() or type(exc).__name__
     return f'HTTP {status}: {message}' if isinstance(status, int) and str(status) not in message else message
 
 
@@ -830,7 +845,7 @@ class _TraceApi:
         """``GET /v3/traces/{id}/conversation``: the selected span's ordered Responses items.
 
         orq-ai-sdk gained ``traces.get_conversation`` in 4.17, above this
-        package's 4.14 floor. On an older SDK this is one raw GET on the SDK
+        package's 4.15 floor. On an older SDK this is one raw GET on the SDK
         client's own transport and credentials, retried by the same
         ``with_retry`` layer as every SDK call.
         """

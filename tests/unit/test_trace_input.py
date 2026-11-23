@@ -1097,10 +1097,10 @@ async def test_a_rate_limited_conversation_is_retried_once_by_with_retry(monkeyp
 
 @pytest.mark.asyncio
 async def test_an_sdk_without_get_conversation_reads_the_route_directly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """orq-ai-sdk 4.14 to 4.16 has no ``traces.get_conversation``; the importer then makes one raw GET."""
+    """orq-ai-sdk 4.15 and 4.16 have no ``traces.get_conversation``; the importer then makes one raw GET."""
     from orq_ai_sdk.traces import Traces
 
-    monkeypatch.delattr(Traces, 'get_conversation_async')
+    monkeypatch.delattr(Traces, 'get_conversation_async', raising=False)
     spans = [
         {
             **_span('root', parent_id=None, started_at='2026-01-01T00:00:00Z'),
