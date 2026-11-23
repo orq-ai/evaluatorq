@@ -469,20 +469,21 @@ def test_compare_transcript_invalid_index_is_400(roots: list[Path]):
     assert resp.status_code == 400
 
 
-def test_overview_drops_compare_selectors(roots: list[Path]):
-    client = TestClient(build_app(roots))
-    html = client.get('/?surface=sim').text
-    assert 'Compare runs' not in html
+def test_overview_lets_you_pick_two_runs_to_compare(roots: list[Path]):
+    """The runs list carries a checkbox per run outside each row link, plus a
+    "Compare selected" button that starts disabled (the JS enables it at two)."""
+    html = TestClient(build_app(roots)).get('/?surface=sim').text
+    assert '<form id="cmp-pick" class="cmp-pick" action="/compare/sim" method="get">' in html
+    assert 'disabled>Compare selected</button>' in html
+    for rid in _rids(roots):
+        assert f'value="{rid}" aria-label="Select' in html
+        # the checkbox closes before the row link opens: never an input inside an <a>
+        assert f'</label><a class="runs-grid-row" href="/r/{rid}"' in html
     assert 'name="a"' not in html and 'name="b"' not in html
 
 
-def test_compare_bar_absent_on_sim_overview(roots: list[Path]):
-    client = TestClient(build_app(roots))
-    resp = client.get('/?surface=sim')
-    assert resp.status_code == 200
-    html = resp.text
-    assert 'action="/compare/sim"' not in html
-    assert 'Recent runs' in html
+def test_redteam_overview_has_no_compare_picks(roots: list[Path]):
+    assert 'cmp-pick' not in TestClient(build_app(roots)).get('/?surface=redteam').text
 
 
 def test_compare_control_on_sim_report(roots: list[Path]):

@@ -259,10 +259,13 @@ def _stat_tile(label: str, value: str, unit: str = '', sub: str = '') -> str:
     )
 
 
-def _panel(title: str, sub: str, inner: str, *, cls: str = '', title_tag: str = 'div') -> str:
+def _panel(title: str, sub: str, inner: str, *, cls: str = '', title_tag: str = 'div', actions: str = '') -> str:
     cls_attr = f' {cls}' if cls else ''
     sub_html = f'<div class="panel-sub">{esc(sub)}</div>' if sub else ''
-    return f'<div class="panel{cls_attr}"><{title_tag} class="panel-title">{esc(title)}</{title_tag}>{sub_html}{inner}</div>'
+    head = f'<{title_tag} class="panel-title">{esc(title)}</{title_tag}>'
+    if actions:
+        head = f'<div class="panel-head">{head}{actions}</div>'
+    return f'<div class="panel{cls_attr}">{head}{sub_html}{inner}</div>'
 
 
 def _bars(
@@ -589,7 +592,27 @@ def _redteam_row(r: Any) -> str:
     )
 
 
-def _run_grid(rows: list[Any], *, redteam: bool = False) -> str:
+def compare_pick_form(surface: str) -> str:
+    """The runs list's "Compare selected" form. Row checkboxes join it through
+    ``form="cmp-pick"``; ``dashboard.js`` enables the button at exactly two."""
+    return (
+        f'<form id="cmp-pick" class="cmp-pick" action="/compare/{esc(surface)}" method="get">'
+        '<button type="submit" class="btn-secondary" disabled>Compare selected</button></form>'
+    )
+
+
+def _compare_pick_row(row_html: str, rid: str, name: str, *, pickable: bool) -> str:
+    """*row_html* (a row link) with its compare checkbox beside it, never inside the link."""
+    box = (
+        f'<label class="run-pick"><input type="checkbox" form="cmp-pick" value="{esc(rid)}"'
+        f' aria-label="Select {esc(name)} to compare"></label>'
+        if pickable
+        else '<span class="run-pick"></span>'
+    )
+    return f'<div class="run-pick-row">{box}{row_html}</div>'
+
+
+def _run_grid(rows: list[Any], *, redteam: bool = False, pick: bool = False) -> str:
     """Run-level table as a clickable anchor-grid — the WHOLE row links to the
     run's report. Borderless (no boxed table chrome), aligned columns.
     Shared by the Red Team + Agent Sim surfaces (identical row shape).
@@ -603,7 +626,10 @@ def _run_grid(rows: list[Any], *, redteam: bool = False) -> str:
         f'<span>{status_head}</span><span>{score_head}</span><span>Cases</span><span>Cost</span><span></span></div>'
     )
     row = _redteam_row if redteam else _sim_row
-    return f'<div class="runs-grid">{head}{"".join(map(row, rows))}</div>'
+    if not pick:
+        return f'<div class="runs-grid">{head}{"".join(map(row, rows))}</div>'
+    picked = ''.join(_compare_pick_row(row(r), r.rid, r.name, pickable=not r.error) for r in rows)
+    return f'<div class="runs-grid has-pick">{_compare_pick_row(head, "", "", pickable=False)}{picked}</div>'
 
 
 def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
@@ -792,12 +818,14 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
 def _run_overview(*, data: SimOverview | RedTeamOverview, surface: str, band: str) -> str:
     """Shared overview shell: scope, KPI strip, run grid, and pagination."""
     pager = _run_pager(surface, data.page, data.total_runs, data.per_page)
+    pick = surface == 'sim' and sum(not r.error for r in data.recent) >= 2
     panel = _panel(
         'Recent runs',
         '',
-        _run_grid(data.recent, redteam=surface == 'redteam') + pager,
+        _run_grid(data.recent, redteam=surface == 'redteam', pick=pick) + pager,
         cls='' if pager else 'panel--flush',
         title_tag='h2',
+        actions=compare_pick_form(surface) if pick else '',
     )
     scope = f'All {data.total_runs:,} runs' if data.total_runs != 1 else '1 run'
     surface_class = 'rt-overview' if surface == 'redteam' else 'sim-overview'
@@ -831,8 +859,15 @@ def runs_screen_body(rows: list[RunRow], surface: str) -> str:
             f'Run a {esc(label.lower())} job to generate one.</div>'
             '</div></section>'
         )
-    head = '<div class="runs-head"><span>Job</span><span>Score</span><span>Status</span><span></span></div>'
+    pick = surface == 'pairwise' and sum(not r.error for r in rows) >= 2
+    form = compare_pick_form(surface) if pick else ''
+    head = f'<div class="runs-head"><span>Job</span><span>Score</span><span>Status</span><span>{form}</span></div>'
     body = ''.join(_run_row(r, show_badge=False) for r in rows)
+    if pick:
+        head = _compare_pick_row(head, '', '', pickable=False)
+        body = ''.join(
+            _compare_pick_row(_run_row(r, show_badge=False), r.id, r.name, pickable=not r.error) for r in rows
+        )
     return (
         f'<section class="runs-screen"><div class="runs-card">{head}<div class="run-list">{body}</div></div></section>'
     )

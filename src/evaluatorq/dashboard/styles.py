@@ -3075,6 +3075,31 @@ _SIM_COMPARE_CSS = """
 /* Hero action row: trace-link buttons */
 .report-hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
 
+/* Runs-list compare picks: a checkbox column beside each row link (never inside
+   it), and "Compare selected" in the panel head. The row rule moves from the
+   link to the wrapper so it spans the checkbox column too. */
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.run-overview .panel-head { margin-bottom: 14px; }
+.run-overview .panel-head .panel-title { margin-bottom: 0; }
+.cmp-pick { margin: 0; }
+.cmp-pick .btn-secondary { height: 28px; font-size: 12.5px; }
+.cmp-pick .btn-secondary:disabled { color: var(--text-faint); cursor: default; background: var(--surface-card); }
+.run-pick-row { display: flex; align-items: stretch; }
+.run-pick-row > :last-child { flex: 1 1 auto; min-width: 0; }
+.run-pick { flex: 0 0 28px; display: flex; align-items: center; justify-content: flex-end; }
+.run-pick input { margin: 0; width: 14px; height: 14px; accent-color: var(--teal-600); cursor: pointer; }
+.run-pick-row:hover { background: var(--app-gray-50); }
+.run-overview .has-pick > .run-pick-row { border-bottom: 1px solid var(--border-subtle); }
+.run-overview .has-pick > .run-pick-row:first-child { border-bottom-color: var(--border-default); }
+.run-overview .has-pick > .run-pick-row:last-child { border-bottom: 0; }
+.run-overview .has-pick .runs-grid-row, .run-overview .has-pick .runs-grid-head { border: 0; }
+.run-overview .has-pick .runs-grid-row, .run-overview .has-pick .runs-grid-head { padding-left: 12px; }
+.run-list > .run-pick-row + .run-pick-row { border-top: 1px solid var(--border-subtle); }
+.runs-card .run-pick-row .run-row, .runs-card .run-pick-row .runs-head { border: 0; padding-left: 12px; }
+.runs-card > .run-pick-row { background: var(--app-gray-50); border-bottom: 1px solid var(--border-subtle); }
+.runs-card > .run-pick-row:hover { background: var(--app-gray-50); }
+.runs-card .run-pick { flex-basis: 32px; }
+
 /* Quiet compare button in the report hero's top-right corner. Comparing is an
    occasional action, so the button reads as a text link until hovered; its
    popover suggests earlier runs above the "any other run" picker. */

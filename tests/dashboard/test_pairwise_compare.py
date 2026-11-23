@@ -278,3 +278,15 @@ def test_compare_menu_escapes_run_names() -> None:
 
     html = compare_menu('r1', [_cand('r2', '<b>x</b>')], [('r1', 'a'), ('r2', '<b>x</b>')], '/compare/sim')
     assert '<b>x</b>' not in html
+
+
+def test_pairwise_runs_list_offers_compare_picks_only_with_two_runs(tmp_path: Path) -> None:
+    d = tmp_path / 'runs'
+    d.mkdir()
+    first = report_id(_run('alpha', [('q', 'A')]).save(d / 'a.json'))
+    html = TestClient(build_app(roots=[d])).get('/?surface=pairwise').text
+    assert 'cmp-pick' not in html
+    second = report_id(_run('beta', [('q', 'B')]).save(d / 'b.json'))
+    html = TestClient(build_app(roots=[d])).get('/?surface=pairwise').text
+    assert 'action="/compare/pairwise"' in html
+    assert f'form="cmp-pick" value="{first}"' in html and f'form="cmp-pick" value="{second}"' in html

@@ -1024,3 +1024,26 @@ test('an outerHTML swap of a trace block scrolls the replacement, not the detach
 
   assert.equal(thread.scrollTop, 400 - 100 / 2 + 40 / 2);
 });
+
+test('runs-list compare picks enable the button only for exactly two runs and name them a and b', () => {
+  const box = value => ({ value, checked: false, name: '', matches: sel => sel === 'input[form="cmp-pick"]', closest: () => null });
+  const boxes = [box('r3'), box('r2'), box('r1')];
+  const button = { disabled: true };
+  const app = loadDashboard({
+    query: sel => (sel === '#cmp-pick button' ? button : null),
+    queryAll: sel => (sel === 'input[form="cmp-pick"]' ? boxes : []),
+  });
+  const pick = (i, on) => { boxes[i].checked = on; app.body.emit('change', { target: boxes[i] }); };
+  pick(2, true);
+  assert.equal(button.disabled, true);
+  pick(0, true);
+  assert.equal(button.disabled, false);
+  assert.deepEqual(boxes.map(b => b.name), ['a', '', 'b']);
+  pick(1, true);
+  assert.equal(button.disabled, true);
+  assert.deepEqual(boxes.map(b => b.name), ['', '', '']);
+  pick(1, false);
+  pick(0, false);
+  assert.equal(button.disabled, true);
+  assert.deepEqual(boxes.map(b => b.name), ['', '', '']);
+});

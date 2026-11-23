@@ -331,6 +331,19 @@
   }
 
   document.addEventListener('DOMContentLoaded', function () { initInsightsMaps(document); });
+
+  // Runs-list compare: exactly two ticked rows enable "Compare selected". Rows
+  // are newest first, so the first ticked run is A and the second is B.
+  document.body.addEventListener('change', function (evt) {
+    if (!evt.target.matches('input[form="cmp-pick"]')) return;
+    const boxes = Array.from(document.querySelectorAll('input[form="cmp-pick"]'));
+    const picked = boxes.filter(function (box) { return box.checked; });
+    const ready = picked.length === 2;
+    boxes.forEach(function (box) { box.name = ready && picked.indexOf(box) >= 0 ? (box === picked[0] ? 'a' : 'b') : ''; });
+    const button = document.querySelector('#cmp-pick button');
+    if (button) button.disabled = !ready;
+  });
+
   document.body.addEventListener('change', function (evt) {
     if (evt.target.matches('[data-map-color]')) drawInsightsMap(evt.target.closest('.insights-map-view').querySelector('.insights-map-chart'));
     if (evt.target.matches('[data-map-projection]')) {
