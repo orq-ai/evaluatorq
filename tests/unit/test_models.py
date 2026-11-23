@@ -798,6 +798,55 @@ class TestDashboardPage:
         assert 'title="b/mid"' in text  # d/bad's nearest dominator, named with its gap
         assert 'e/free' in text  # listed under "not plotted"
 
+    def _models_text(self, client: Any, monkeypatch: pytest.MonkeyPatch, pool: list[ScoredModel], path: str) -> str:
+        from evaluatorq.dashboard import models_views
+
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
+            del client, include_disabled
+            return pool
+
+        monkeypatch.setattr(models_views, 'load_models', fake_load)
+        return client.get(path).text
+
+    def test_cards_name_the_best_score_and_the_best_score_per_dollar(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        tiny = model('z/tiny', 10.5, 0.05, 0.05)
+        text = self._models_text(client, monkeypatch, [*fake_catalogue, tiny], '/models')
+        assert text.count('class="stat-tile"') == 3
+        assert 'Best score' in text and '50.0' in text and 'a/strong' in text
+        # c/cheap: (20 - 10) / $0.35 blended under the default mix = 28.6, shown as 29.
+        assert 'per $' in text
+        assert re.search(r'Best score per \$</div><div class="stat-value">29<span class="stat-unit"> per \$</span>', text)
+        assert 'Cheapest at score ≥ 10' in text and 'z/tiny' in text
+
+    def test_cheapest_card_hidden_when_it_is_the_best_value(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        text = self._models_text(client, monkeypatch, fake_catalogue, '/models')
+        assert text.count('class="stat-tile"') == 2
+        assert 'Cheapest' not in text.split('models-cards', 1)[1].split('models-intro', 1)[0]
+
+    def test_speed_axis_shows_no_score_per_dollar_card(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        pool = [
+            model(m.router_id, m.intelligence_index or 0, 1.0, 1.0, output_tokens_per_second=100.0 - i * 10)
+            for i, m in enumerate(fake_catalogue)
+        ]
+        text = self._models_text(client, monkeypatch, pool, '/models?x=output_speed')
+        assert 'models-cards' in text
+        assert 'per $' not in text
+        assert 'Fastest' in text
+
+    def test_no_cards_without_a_frontier(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        text = self._models_text(client, monkeypatch, fake_catalogue, '/models?min_score=100')
+        assert 'models-cards' not in text
+
     def test_tooltip_names_the_estimate_flag(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:

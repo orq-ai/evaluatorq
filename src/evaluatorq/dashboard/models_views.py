@@ -37,6 +37,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.vega import render_embed, vl_frontier_scatter
 from evaluatorq.dashboard import model_choices
 from evaluatorq.dashboard.auth import auth_or_reason
+from evaluatorq.dashboard.controls import stat_tile
 from evaluatorq.dashboard.report_kit import tag
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.tables import flipped, sortable_th
@@ -187,7 +188,7 @@ class _AxisText(NamedTuple):
     gain: str  # what a model that beats another is, in the gap text
     same: str  # no difference on this axis
     cost: str  # what the next model up on score costs on this axis
-    best: str  # the lead sentence's name for the best x value
+    best: str  # the answer card's label for the best x value
     chart_format: str  # the chart's tick format
     fmt: Callable[[float], str]
     unit: str  # appended where a bare number would be ambiguous
@@ -202,7 +203,7 @@ _AXIS_TEXT = {
         'lower TTFT',
         'same TTFT',
         'slower to first token',
-        'Lowest TTFT',
+        'Quickest first token',
         '~g',
         X_AXIS_SPECS['time_to_first_token'].format,
         ' s',
@@ -641,24 +642,35 @@ def _shell(inner: str) -> HTMLResponse:
     return HTMLResponse(page('Pareto Frontier', body, active_nav='models'))
 
 
-def _point_text(p: ParetoPoint, result: ParetoResult) -> str:
+def _x_text(p: ParetoPoint, result: ParetoResult) -> str:
     axis = _AXIS_TEXT[result.x]
-    return f'{_name(p.model)} ({p.score:.1f}, {axis.fmt(p.x)}{axis.unit})'
+    return f'{axis.fmt(p.x)}{axis.unit}'
 
 
-def _headline(result: ParetoResult, min_score: float) -> str:
-    """The two quick answers: the best score, and the best x at the score floor."""
-    parts: list[str] = []
-    if result.frontier:
-        best = result.frontier[0]
-        cheapest = min(result.frontier, key=lambda p: result.x_spec.best_first(p.x))
-        word = _AXIS_TEXT[result.x].best
-        if best is cheapest:
-            parts.append(f'Best score and {word.lower()}: {_point_text(best, result)}.')
-        else:
-            floor = f' at score {min_score:g} or more' if min_score > 0 else ''
-            parts.append(f'{word}{floor}: {_point_text(cheapest, result)}. Best score: {_point_text(best, result)}.')
-    return f'<p class="models-headline">{esc(" ".join(parts))}</p>' if parts else ''
+def _answer_cards(result: ParetoResult, min_score: float) -> str:
+    """Three quick answers: the best score, the best score per dollar (price axis) and the best x at the floor."""
+    if not result.frontier:
+        return ''
+    best = max(result.frontier, key=lambda p: p.score)
+    cards = [stat_tile('Best score', f'{best.score:.1f}', sub=f'{_name(best.model)} · {_x_text(best, result)}')]
+    valued = [p for p in result.frontier if p.pareto_score is not None]
+    value = max(valued, key=lambda p: cast('float', p.pareto_score), default=None)
+    if value is not None:
+        cards.append(
+            stat_tile(
+                'Best score per $',
+                f'{cast("float", value.pareto_score):,.0f}',
+                ' per $',
+                f'{_name(value.model)} · score {value.score:.1f} · {_x_text(value, result)}',
+            )
+        )
+    cheapest = min(result.frontier, key=lambda p: result.x_spec.best_first(p.x))
+    if cheapest is not value:
+        label = _AXIS_TEXT[result.x].best + (f' at score ≥ {min_score:g}' if min_score > 0 else '')
+        cards.append(
+            stat_tile(label, _x_text(cheapest, result), sub=f'{_name(cheapest.model)} · score {cheapest.score:.1f}')
+        )
+    return f'<div class="stat-band models-cards">{"".join(cards)}</div>'
 
 
 def _summary(result: ParetoResult, state: _State) -> str:
@@ -711,7 +723,7 @@ async def models_page(req: Request) -> HTMLResponse:
     )
     by_id = {p.model.router_id: p for p in result.points}
     return _shell(
-        f'{_headline(result, state.min_score)}{_intro(result.x_spec.short_label)}'
+        f'{_answer_cards(result, state.min_score)}{_intro(result.x_spec.short_label)}'
         f'{_filters_html(q, state)}{_summary(result, state)}'
         f'<div class="models-chart">{_chart(result, by_id)}</div>'
         f'{_price_caption(mix) if x == "price" else ""}'
