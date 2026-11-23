@@ -8,7 +8,13 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from typing import Any
 
-from evaluatorq.common.reports import CACHED_TOKENS_LABEL, cost_coverage, fmt_cached_tokens, fmt_cost
+from evaluatorq.common.reports import (
+    CACHED_TOKENS_LABEL,
+    cost_coverage,
+    fmt_cached_tokens,
+    fmt_cost,
+    fmt_cost_coverage,
+)
 from evaluatorq.simulation.token_usage import token_value
 
 
@@ -60,6 +66,10 @@ def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
         coverage = cost_coverage(int(token_value(data, 'priced_calls')), int(token_value(data, 'calls')))
         rows.append(['Total Cost', f'{fmt_cost(total_cost)}{coverage}'])
 
+    # Absent on sections built before target usage was recorded: no row, rather than a guess.
+    if 'target_missing_conversations' in data:
+        rows.append(['Target Agent Cost', _target_cost(data)])
+
     # Whole-run figure, rendered as its own labelled rows so it cannot be mistaken
     # for the simulation-only numbers above.
     if 'run_total_total_tokens' in data:
@@ -78,3 +88,16 @@ def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
             )
             rows.append(['Run Total Cost (incl. generation & summary)', f'{fmt_cost(run_total_cost)}{coverage}'])
     return rows
+
+
+def _target_cost(data: Mapping[str, Any]) -> str:
+    cost = data.get('target_total_cost')
+    conversations = int(token_value(data, 'target_conversations'))
+    return fmt_cost_coverage(
+        cost if isinstance(cost, int | float) and not isinstance(cost, bool) else None,
+        priced_calls=int(token_value(data, 'target_priced_calls')),
+        calls=int(token_value(data, 'target_calls')),
+        reported=conversations - int(token_value(data, 'target_missing_conversations')),
+        items=conversations,
+        noun='conversations',
+    )

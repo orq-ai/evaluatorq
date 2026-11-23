@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from loguru import logger
 
 from evaluatorq.common.messages import coerce_content_text, messages_to_text
+from evaluatorq.common.structured_output import sum_usage_coverage
 from evaluatorq.contracts import ReportSection, Usage
 from evaluatorq.simulation.contracts import CriteriaRow, SimulationEntry, TranscriptMessage, criterion_id_for
 from evaluatorq.simulation.evaluators.scorers import read_criteria_meta
@@ -504,6 +505,15 @@ def _build_token_usage_section(
         'priced_calls': usage_total.priced_calls,
         'unknown_usage_conversations': sum(1 for r in results if not r.token_usage_known),
     }
+    # The target agent's own part of the totals above, from the same results, so it
+    # follows a filtered view as they do.
+    target, target_missing = sum_usage_coverage([r.target_token_usage for r in results])
+    data['target_conversations'] = len(results)
+    data['target_missing_conversations'] = target_missing
+    if target is not None:
+        data['target_total_cost'] = target.total_cost
+        data['target_calls'] = target.calls
+        data['target_priced_calls'] = target.priced_calls
     # Whole-run figure: simulation + generation + executive summary. Omitted when the
     # caller has no figure that fairly represents the run (e.g. a filtered view).
     if run_token_usage_total is not None:
