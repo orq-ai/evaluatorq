@@ -868,12 +868,15 @@ def _search(req: Request) -> NotStr:
     return NotStr(search_results(library.scan(roots), q))
 
 
-def _pairwise_hero_actions(rid: str, roots: list[Path] | None) -> str:
-    """The hero 'Compare with' control: the other pairwise runs, capped like the overview picker."""
-    from evaluatorq.dashboard.view import run_compare_control
+def _compare_menu(rid: str, surface: Literal['sim', 'pairwise'], roots: list[Path] | None) -> str:
+    """The report hero's compare menu: earlier runs to suggest, then any other run of *surface*."""
+    from evaluatorq.dashboard.compare_suggest import candidates, suggest
+    from evaluatorq.dashboard.view import compare_menu
 
-    choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'pairwise' and not c.error][:100]
-    return run_compare_control(rid, choices, '/compare/pairwise')
+    cands = candidates(surface, roots)
+    current = next((c for c in cands if c.rid == rid), None)
+    suggestions = suggest(current, cands) if current is not None else []
+    return compare_menu(rid, suggestions, [(c.rid, c.name) for c in cands], f'/compare/{surface}')
 
 
 def _report_view(rid: str, req: Request) -> NotStr | Response:
@@ -926,14 +929,7 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
     # their tabs, so they are no longer appended separately.
 
     if surface == 'sim':
-        from evaluatorq.dashboard.view import run_compare_control
-
-        # Same choice list as the overview picker (sim only, no error runs,
-        # capped); the control itself drops the current run from the options.
-        choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-        body_html = report_tabs.sim_report_tabs(
-            rid, report_obj, compare_html=run_compare_control(rid, choices, '/compare/sim')
-        )
+        body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=_compare_menu(rid, 'sim', roots))
     elif surface == 'redteam':
         body_html = report_tabs.redteam_report_tabs(rid, report_obj)
     elif surface == 'pairwise':
@@ -946,7 +942,7 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
         body_html = pairwise_tabs.pairwise_report_tabs(
             rid,
             report_obj,
-            hero_actions_html=_pairwise_hero_actions(rid, roots),
+            hero_actions_html=_compare_menu(rid, 'pairwise', roots),
             focus=focus,
         )
     else:
@@ -1024,7 +1020,9 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
     # content (tables, charts) tracks the filter, not just the HTMX panels.
 
     if surface == 'sim':
-        body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered)
+        body_html = await asyncio.to_thread(
+            report_tabs.sim_report_tabs, rid, report_obj, filtered, _compare_menu(rid, 'sim', roots)
+        )
     elif surface == 'redteam':
         from evaluatorq.redteam.reports.converters import rebuild_filtered_report
 
@@ -1038,7 +1036,7 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
             rid,
             report_obj,
             filtered,
-            hero_actions_html=_pairwise_hero_actions(rid, roots),
+            hero_actions_html=_compare_menu(rid, 'pairwise', roots),
         )
     else:
         body_html = adapter.body_from_results(report_obj, filtered)

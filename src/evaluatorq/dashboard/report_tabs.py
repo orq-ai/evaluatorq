@@ -1764,7 +1764,7 @@ def _sim_hero(run: SimulationRun, compare_html: str = '', *, target_label: str |
     from evaluatorq.dashboard.report_kit import hero_cost_line
 
     run_btn = trace_link_button(run_trace_url(run.run_id, run.experiment_url), 'View all run traces ↗')
-    inner = run_btn + trace_link_button(run.experiment_url, 'Open experiment in Orq') + compare_html
+    inner = run_btn + trace_link_button(run.experiment_url, 'Open experiment in Orq')
     actions = f'<div class="report-hero-actions">{inner}</div>' if inner else ''
     # Whole-run figures, like the run's saved totals: the hero does not follow the filter.
     _, target_missing = sum_usage_coverage([r.target_token_usage for r in run.results])
@@ -1777,7 +1777,7 @@ def _sim_hero(run: SimulationRun, compare_html: str = '', *, target_label: str |
         f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
         '<div class="report-hero-meta">'
         f'<p class="report-hero-sub">target {esc(target_label or run.target_kind)}</p>{cost_html}</div>'
-        f'{actions}</header>'
+        f'{actions}{compare_html}</header>'
     )
 
 

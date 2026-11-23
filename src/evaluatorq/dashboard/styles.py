@@ -3072,9 +3072,8 @@ _RT_REPORT_CSS = """
 # theme tokens. Kept with the other dashboard CSS blocks rather than inlined
 # per-request in the sim_compare package.
 _SIM_COMPARE_CSS = """
-/* Hero action row: trace-link button + the on-report compare control */
+/* Hero action row: trace-link buttons */
 .report-hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
-.report-hero-actions .cmp-bar { margin: 0; }
 
 /* Quiet compare button in the report hero's top-right corner. Comparing is an
    occasional action, so the button reads as a text link until hovered; its

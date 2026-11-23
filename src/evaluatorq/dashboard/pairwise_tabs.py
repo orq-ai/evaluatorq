@@ -99,14 +99,13 @@ def _swap_text(run: PairwiseRun) -> str:
 def _hero(run: PairwiseRun, hero_actions_html: str) -> str:
     judges = len(run.judges) or len(judge_order(run))
     criteria = f' · criteria: {esc(run.criteria)}' if run.criteria else ''
-    actions = f'<div class="report-hero-actions">{hero_actions_html}</div>' if hero_actions_html else ''
     return (
         '<header class="report-hero">'
         '<p class="report-hero-kicker">Pairwise</p>'
         f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
         f'<p class="report-hero-sub">{_swatch("A", run.label_a)} vs {_swatch("B", run.label_b)}'
         f' · {judges} {"judge" if judges == 1 else "judges"} · swap {esc(_swap_text(run))}{criteria}</p>'
-        f'{actions}</header>'
+        f'{hero_actions_html}</header>'
     )
 
 

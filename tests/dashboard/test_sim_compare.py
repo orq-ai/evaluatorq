@@ -890,3 +890,35 @@ def test_compare_page_places_the_heatmap_after_outcomes(roots: list[Path]):
     client = TestClient(build_app(roots))
     html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
     assert html.index('Outcomes') < html.index('Where it changed') < html.index('id="cmp-conversations"')
+
+
+@pytest.fixture
+def versioned_roots(tmp_path: Path) -> list[Path]:
+    from datetime import timedelta
+
+    sim = tmp_path / 'sim-runs'
+    sim.mkdir()
+    for i, run in enumerate((_run_a(), _run_b())):
+        run.run_name = f'agent v{i + 1}'
+        run.created_at = datetime(2026, 11, 1, tzinfo=timezone.utc) + timedelta(days=i)
+        (sim / f'v{i + 1}.json').write_text(run.model_dump_json())
+    return [tmp_path / 'runs', sim]
+
+
+def test_sim_report_hero_has_compare_menu_with_earlier_run(versioned_roots: list[Path]):
+    sim = versioned_roots[1]
+    v1, v2 = report_id(sim / 'v1.json'), report_id(sim / 'v2.json')
+    html = TestClient(build_app(versioned_roots)).get(f'/r/{v2}').text
+    assert '<details class="cmp-menu"' in html
+    assert f'/compare/sim?a={v2}&amp;b={v1}' in html
+    start = html.index('<header class="report-hero">')
+    hero = html[start : html.index('</header>', start)]
+    assert 'cmp-menu' in hero
+    assert hero.rstrip().endswith('</details>')  # its own corner, not in the trace-link row
+
+
+def test_sim_filter_keeps_the_compare_menu(versioned_roots: list[Path]):
+    """Applying a filter re-renders the hero; the compare menu must survive it."""
+    v2 = report_id(versioned_roots[1] / 'v2.json')
+    html = TestClient(build_app(versioned_roots)).post(f'/r/{v2}/filter', data={}).text
+    assert '<details class="cmp-menu"' in html

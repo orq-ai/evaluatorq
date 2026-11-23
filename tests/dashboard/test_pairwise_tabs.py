@@ -177,7 +177,7 @@ def test_run_name_and_labels_are_escaped() -> None:
     html = pairwise_report_tabs('rid', r, hero_actions_html='<a>go</a>')
     assert '<script>' not in html
     assert '&lt;script&gt;alert(1)&lt;/script&gt;' in html
-    assert '<div class="report-hero-actions"><a>go</a></div>' in html
+    assert '<a>go</a></header>' in html
 
 
 def test_empty_run_still_renders_every_tab() -> None:
@@ -330,7 +330,8 @@ def test_filter_keeps_the_compare_control(run: PairwiseRun, tmp_path: Path) -> N
     rid = report_id(run.save(runs_dir / 'one.json'))
     run.save(runs_dir / 'two.json')
     c = TestClient(build_app(roots=[runs_dir]))
-    assert 'action="/compare/pairwise"' in c.post(f'/r/{rid}/filter', data={}).text
+    html = c.post(f'/r/{rid}/filter', data={}).text
+    assert 'action="/compare/pairwise"' in html and '<details class="cmp-menu"' in html
 
 
 def test_report_page_has_the_comparisons_list(client: tuple[TestClient, str]) -> None:
