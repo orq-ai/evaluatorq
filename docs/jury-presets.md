@@ -21,7 +21,7 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, un
 | **`balanced-trio`** (default) | `deepseek/deepseek-flash`<br>`openai/gpt-6-luna`<br>`google-ai/gemini-3.8-flash` | majority | 3.75 | `greenpt/deepseek-v4-flash-0731` |
 | **`strong-jury`** | `anthropic/claude-opus-5-5`<br>`openai/gpt-6.1-sol`<br>`google-ai/gemini-3.8-flash` | majority | 27.00 | `deepseek/deepseek-flash` |
 | **`cheap-aggregate`** | `google-ai/gemini-3.8-flash`<br>`deepseek/deepseek-flash`<br>`zai/glm-5.3-flash` | majority | 3.59 | `mistral/mistral-large-4` |
-| **`open-weight-portable`** | `deepseek/deepseek-flash`<br>`wafer/Kimi-K3.1-Pro`<br>`zai/glm-5.3-flash` | majority | 8.59 | `cerebras/qwen-3.8-27b` |
+| **`open-weight-portable`** | `deepseek/deepseek-flash`<br>`moonshotai/kimi-k3.1-pro`<br>`zai/glm-5.3-flash` | majority | 8.59 | `cerebras/qwen-3.8-27b` |
 | **`eu-region`** | `aws/eu.anthropic.claude-haiku-5-5`<br>`google/eu.gemini-3.7-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 4.64 | `google/eu.claude-sonnet-5` |
 | **`single-provider-trio`** | `openai/gpt-6.1-sol`<br>`openai/gpt-6.1-terra`<br>`openai/gpt-6-luna` | majority | 12.40 | `openai/gpt-6-sol` |
 

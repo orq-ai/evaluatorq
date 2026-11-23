@@ -39,6 +39,7 @@ PRICES: dict[str, tuple[float, float]] = {
     'tensorix/qwen/qwen3-coder-30b-a3b-instruct': (0.06, 0.25),
     'greenpt/deepseek-v4-flash-0731': (0.14, 0.35),  # live /v2/models card, 2026-11-23
     'cerebras/qwen-3.8-27b': (0.99, 1.49),  # live /v2/models card, 2026-11-23
+    'moonshotai/kimi-k3.1-pro': (2.0, 10.0),  # live /v2/models card, 2026-11-23
 }
 
 

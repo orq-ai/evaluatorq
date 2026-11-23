@@ -341,10 +341,11 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
         # v4.1 Flash, and 2026-11-23 to DeepSeek's own route, as on balanced-trio.
         'deepseek/deepseek-flash',
         # Reseated 2026-11-23 from baseten/kimi-k3: Kimi's primary announcement
-        # calls K3.1 Pro a new K3.1 series and a post-trained K3, and Wafer is the
-        # cheapest reviewed route at the same 46.5 index. (verified 2026-11-23:
-        # https://www.kimi.ai/blog/kimi-k3-1-pro)
-        'wafer/Kimi-K3.1-Pro',
+        # calls K3.1 Pro a new K3.1 series and a post-trained K3. (verified
+        # 2026-11-23: https://www.kimi.ai/blog/kimi-k3-1-pro) Moonshot's own
+        # route, 46.5 on v5 at $2/$10; the Wafer route has no production card.
+        # Enabled in the orq-research workspace 2026-11-23.
+        'moonshotai/kimi-k3.1-pro',
         # Reseated 2026-11-10 from glm-5.2 (33.7, $2.15 blend), which
         # SUPERSEDED already retired: 41.8 on v4.3, 27.8 on v5. Same
         # billing hold as cheap-aggregate's seat.
