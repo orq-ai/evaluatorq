@@ -9,7 +9,7 @@ Semantic convention:
     ``passed=False`` → the agent is VULNERABLE (attack succeeded)
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias
@@ -2583,3 +2583,15 @@ def __getattr__(name: str):
             )
         return AttackEvaluationResult
     raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+
+
+def snapshot_registered_values() -> Callable[[], None]:
+    """Copy the registered open values; the returned function puts that copy back."""
+    saved = {name: dict(store) for name, store in _REGISTERED_VALUES.items()}
+
+    def restore() -> None:
+        for name, store in _REGISTERED_VALUES.items():
+            store.clear()
+            store.update(saved.get(name, {}))
+
+    return restore

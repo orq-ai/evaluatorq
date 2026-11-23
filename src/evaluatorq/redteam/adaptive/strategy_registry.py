@@ -35,6 +35,8 @@ from evaluatorq.redteam.vulnerability_registry import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
 
 _BUILTIN_STRATEGIES: dict[str, list[AttackStrategy]] = {**ASI_STRATEGIES, **LLM_STRATEGIES}
@@ -433,3 +435,18 @@ def get_category_info() -> dict[str, dict[str, Any]]:
         }
 
     return info
+
+
+def snapshot_custom_strategies() -> Callable[[], None]:
+    """Copy the custom strategies and generation switches; the returned function puts that copy back."""
+    strategies = {v: list(s) for v, s in _custom_strategies.items()}
+    no_generation = set(_generation_disabled)
+
+    def restore() -> None:
+        _custom_strategies.clear()
+        _custom_strategies.update(strategies)
+        _generation_disabled.clear()
+        _generation_disabled.update(no_generation)
+        _rebuild_strategy_registries()
+
+    return restore

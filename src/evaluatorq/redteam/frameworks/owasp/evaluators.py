@@ -260,3 +260,20 @@ def list_available_categories() -> list[str]:
         List of category codes (ASI01-ASI10, LLM01-LLM09)
     """
     return list(OWASP_EVALUATOR_REGISTRY.keys())
+
+
+def snapshot_evaluator_registries() -> Callable[[], None]:
+    """Copy the evaluator registries and custom judges; the returned function puts that copy back."""
+    by_vuln = dict(VULNERABILITY_EVALUATOR_REGISTRY)
+    by_code = dict(OWASP_EVALUATOR_REGISTRY)
+    judges = dict(_custom_judges)
+
+    def restore() -> None:
+        VULNERABILITY_EVALUATOR_REGISTRY.clear()
+        VULNERABILITY_EVALUATOR_REGISTRY.update(by_vuln)
+        OWASP_EVALUATOR_REGISTRY.clear()
+        OWASP_EVALUATOR_REGISTRY.update(by_code)
+        _custom_judges.clear()
+        _custom_judges.update(judges)
+
+    return restore

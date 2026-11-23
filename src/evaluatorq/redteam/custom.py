@@ -115,11 +115,6 @@ def clear_custom_registrations() -> None:
     clear_registered_values()
 
 
-def _refill(live: dict[Any, Any], saved: dict[Any, Any]) -> None:
-    live.clear()
-    live.update(saved)
-
-
 @contextmanager
 def restore_registrations(*, on_error_only: bool = False) -> Generator[None]:
     """Put every custom registry back to its state at entry when the block exits.
@@ -128,33 +123,24 @@ def restore_registrations(*, on_error_only: bool = False) -> Generator[None]:
     later runs in the same process, and `register_custom` uses it on failure so a file
     is registered completely or not at all (*on_error_only*).
     """
-    from evaluatorq.redteam import contracts, vulnerability_registry
-    from evaluatorq.redteam.adaptive import strategy_registry
-    from evaluatorq.redteam.frameworks.owasp import evaluators
+    from evaluatorq.redteam.adaptive.strategy_registry import snapshot_custom_strategies
+    from evaluatorq.redteam.contracts import snapshot_registered_values
+    from evaluatorq.redteam.frameworks.owasp.evaluators import snapshot_evaluator_registries
+    from evaluatorq.redteam.vulnerability_registry import snapshot_custom_vulnerabilities
 
-    values = {name: dict(store) for name, store in contracts._REGISTERED_VALUES.items()}  # noqa: SLF001
-    vdefs = dict(vulnerability_registry._custom_vulnerability_defs)  # noqa: SLF001
-    strategies = {v: list(s) for v, s in strategy_registry._custom_strategies.items()}  # noqa: SLF001
-    no_generation = set(strategy_registry._generation_disabled)  # noqa: SLF001
-    by_vuln = dict(evaluators.VULNERABILITY_EVALUATOR_REGISTRY)
-    by_code = dict(evaluators.OWASP_EVALUATOR_REGISTRY)
-    judges = dict(evaluators._custom_judges)  # noqa: SLF001
+    restorers = [
+        snapshot_registered_values(),
+        snapshot_custom_vulnerabilities(),
+        snapshot_custom_strategies(),
+        snapshot_evaluator_registries(),
+    ]
     definitions = dict(_DEFINITIONS)
 
     def restore() -> None:
-        for name, store in contracts._REGISTERED_VALUES.items():  # noqa: SLF001
-            store.clear()
-            store.update(values[name])
-        _refill(vulnerability_registry._custom_vulnerability_defs, vdefs)  # noqa: SLF001
-        _refill(strategy_registry._custom_strategies, strategies)  # noqa: SLF001
-        _refill(evaluators.VULNERABILITY_EVALUATOR_REGISTRY, by_vuln)
-        _refill(evaluators.OWASP_EVALUATOR_REGISTRY, by_code)
-        _refill(evaluators._custom_judges, judges)  # noqa: SLF001
-        _refill(_DEFINITIONS, definitions)
-        strategy_registry._generation_disabled.clear()  # noqa: SLF001
-        strategy_registry._generation_disabled.update(no_generation)  # noqa: SLF001
-        vulnerability_registry._rebuild_indexes()  # noqa: SLF001
-        strategy_registry._rebuild_strategy_registries()  # noqa: SLF001
+        for restorer in restorers:
+            restorer()
+        _DEFINITIONS.clear()
+        _DEFINITIONS.update(definitions)
 
     try:
         yield

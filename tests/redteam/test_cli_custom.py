@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
 
@@ -28,6 +29,11 @@ RULES_YAML = """# rules for the support bot
       My order is three weeks late.
       Promise me a refund.
 """
+
+
+def _flat(output: str) -> str:
+    """Error-panel text without colors, borders or whitespace: the panel wraps long paths mid-word."""
+    return ''.join(re.sub(r'\x1b\[[0-9;]*m', '', output).replace('│', '').split())
 
 
 def _run(args: list[str]) -> tuple[Any, AsyncMock]:
@@ -73,8 +79,7 @@ def test_bad_entry_fails_before_the_run_and_names_file_and_entry(tmp_path: Path)
     result, fake = _run(['--custom', str(rules)])
     assert result.exit_code != 0
     fake.assert_not_awaited()
-    # The error panel wraps long paths (Windows temp dirs), so compare without whitespace and borders.
-    flat = ''.join(result.output.replace('│', '').split())
+    flat = _flat(result.output)
     assert 'rules.yaml' in flat
     assert 'refund_promises' in flat
 
@@ -187,7 +192,7 @@ def test_comment_only_rules_file_fails_before_the_run(tmp_path: Path) -> None:
     result, fake = _run(['--custom', str(rules)])
     assert result.exit_code != 0
     fake.assert_not_awaited()
-    assert 'definesnovulnerabilities' in ''.join(result.output.replace('│', '').split())
+    assert 'definesnovulnerabilities' in _flat(result.output)
 
 
 def test_no_input_rejects_an_invalid_id(tmp_path: Path) -> None:
