@@ -493,8 +493,8 @@ def test_compare_control_on_sim_report(roots: list[Path]):
     rid_a, rid_b = _rids(roots)
     html = client.get(f'/r/{rid_a}').text
     assert f'name="a" value="{rid_a}"' in html
-    assert f'<option value="{rid_b}"' in html
-    assert f'<option value="{rid_a}"' not in html
+    assert f'data-model="{rid_b}"' in html
+    assert f'data-model="{rid_a}"' not in html
 
 
 # ---------------------------------------------------------------------------

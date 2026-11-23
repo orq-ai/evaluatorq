@@ -235,7 +235,7 @@ def test_sim_saved_run_export_honors_explicit_target_label(tmp_path, label):
     source.write_text(run.model_dump_json())
     result = CliRunner().invoke(sim_app, ['export', '-i', str(source), '-o', str(target), '--format', 'html', '--target-label', label])
     assert result.exit_code == 0, result.output
-    assert f'target {label}</p>' in target.read_text()
+    assert 'data-kind="agent">' in target.read_text() and f'{label}</span></p>' in target.read_text()
 
 
 def test_conversation_evidence_is_native_and_closed_by_default(rt_report_multi):

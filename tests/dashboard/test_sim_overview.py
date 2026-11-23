@@ -252,10 +252,10 @@ class TestSimOverviewScreen:
 
 def test_target_pill_normalizes_persisted_kind_and_marks_external() -> None:
     """Run-list target icons come only from saved JSON target kinds."""
-    from evaluatorq.dashboard.view import _target_pill
+    from evaluatorq.dashboard.view import target_pill
 
-    assert 'data-kind="agent"' in _target_pill('flight-delay-analyst', 'orq_agent')
-    external = _target_pill('tailscale-openai', 'callback')
+    assert 'data-kind="agent"' in target_pill('flight-delay-analyst', 'orq_agent')
+    external = target_pill('tailscale-openai', 'callback')
     assert 'data-kind="external"' in external
     assert '<span class="dot"></span>' not in external
 

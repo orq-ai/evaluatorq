@@ -1761,8 +1761,14 @@ def _sim_hero(run: SimulationRun, compare_html: str = '', *, target_label: str |
     # KPI cards intentionally omitted: the same metrics render in the 5-card
     # band inside the Overview tab (_sim_kpi_band), so a hero band duplicated
     # them above the tabs. Hero is now just title + subtitle.
+    from evaluatorq.common.reports.icons import target_pill
+    from evaluatorq.dashboard.metrics import sim_target
     from evaluatorq.dashboard.report_kit import hero_cost_line
 
+    # Without run_name, an old report falls back to the kind label ("Orq agent")
+    # instead of repeating the title above it.
+    label, kind = sim_target({**run.model_dump(mode='json'), 'run_name': ''})
+    target = (target_label or label, kind)  # an export's --target-label wins
     run_btn = trace_link_button(run_trace_url(run.run_id, run.experiment_url), 'View all run traces ↗')
     inner = run_btn + trace_link_button(run.experiment_url, 'Open experiment in Orq')
     actions = f'<div class="report-hero-actions">{inner}</div>' if inner else ''
@@ -1776,7 +1782,8 @@ def _sim_hero(run: SimulationRun, compare_html: str = '', *, target_label: str |
         '<p class="report-hero-kicker">Agent Simulation</p>'
         f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
         '<div class="report-hero-meta">'
-        f'<p class="report-hero-sub">target {esc(target_label or run.target_kind)}</p>{cost_html}</div>'
+        '<p class="report-hero-sub report-hero-target"><span class="report-hero-target-label">Target</span>'
+        f'{target_pill(*target)}</p>{cost_html}</div>'
         f'{actions}{compare_html}</header>'
     )
 

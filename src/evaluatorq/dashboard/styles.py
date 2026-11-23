@@ -1884,6 +1884,10 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .chart-card .donut-legend { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 16px; }
 /* Sim report is all-sans to match the mockup (no monospace anywhere). */
 .sim-report .report-hero-sub { font-family: var(--font-sans); }
+/* What was tested: a small label, then the same target pill the runs list uses. */
+.report-hero-target { display: flex; align-items: center; gap: 8px; }
+.report-hero-target-label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.report-hero-target .target-pill { font-size: 13px; color: var(--text-strong); background: var(--surface-card); }
 
 .sim-report .tab-count {
     font-family: var(--font-sans); font-size: 11px; font-weight: 600;
@@ -3101,19 +3105,18 @@ _SIM_COMPARE_CSS = """
 .runs-card .run-pick { flex-basis: 32px; }
 .runs-toolbar { display: flex; justify-content: flex-end; margin-bottom: 10px; }
 
-/* Quiet compare button in the report hero's top-right corner. Comparing is an
-   occasional action, so the button reads as a text link until hovered; its
-   popover suggests earlier runs above the "any other run" picker. */
+/* Compare button in the report hero's top-right corner, styled like the
+   secondary buttons; its popover suggests earlier runs above the
+   "any other run" picker. */
 .report-hero { position: relative; }
 .report-hero:has(> .cmp-menu) .report-hero-title { padding-right: 104px; }
 .cmp-menu { position: absolute; top: 0; right: 0; z-index: 20; }
 .cmp-menu-btn { display: inline-flex; align-items: center; height: 28px; padding: 0 10px;
-  list-style: none; border: 1px solid transparent; border-radius: var(--radius-md);
-  font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; color: var(--text-muted);
-  cursor: pointer; user-select: none; }
+  list-style: none; border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  background: var(--surface-card); font-family: var(--font-sans); font-size: 12.5px; font-weight: 500;
+  color: var(--text-body); cursor: pointer; user-select: none; }
 .cmp-menu-btn::-webkit-details-marker { display: none; }
-.cmp-menu-btn:hover, .cmp-menu[open] > .cmp-menu-btn { border-color: var(--border-default);
-  background: var(--surface-card); color: var(--text-strong); }
+.cmp-menu-btn:hover, .cmp-menu[open] > .cmp-menu-btn { background: var(--app-gray-50); color: var(--text-strong); }
 .cmp-menu-btn:focus-visible { outline: none; box-shadow: var(--ring); }
 .cmp-menu-pop { position: absolute; top: calc(100% + 6px); right: 0; width: 340px; padding: 6px;
   border: 1px solid var(--border-default); border-radius: var(--radius-md);
@@ -3128,21 +3131,13 @@ _SIM_COMPARE_CSS = """
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmp-menu-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
 .cmp-menu-pop .cmp-bar { margin: 0; padding: 4px 8px 6px; flex-wrap: nowrap; }
-.cmp-menu-pop .cmp-bar-label { display: none; }
-.cmp-menu-pop .cmp-bar select { flex: 1; min-width: 0; }
+.cmp-menu-pop .cmp-bar .model-pick { flex: 1; min-width: 0; }
+.cmp-menu-pop .cmp-bar .model-pick-btn { padding: 5px 9px; }
+.cmp-menu-pop .cmp-bar .rich-pick .finder-facets { right: auto; width: 324px; }
 
-/* Compare picker bar inside the report compare menu. Controls
-   mirror the filter-rail trigger look (12.5px sans, card surface, default
-   hairline, md radius) so the bar reads as part of the same control family. */
+/* Compare picker bar inside the report compare menu: the shared rich picker
+   (as in Settings) plus the Compare button. */
 .cmp-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 14px; }
-.cmp-bar-label { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint); }
-.cmp-bar select { height: 32px; padding: 0 9px; max-width: 320px;
-  border: 1px solid var(--border-default); border-radius: var(--radius-md);
-  background: var(--surface-card); color: var(--text-body);
-  font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; cursor: pointer; }
-.cmp-bar select:hover { background: var(--app-gray-50); }
-.cmp-bar select:focus-visible { outline: none; box-shadow: var(--ring); }
 .cmp-bar .btn-secondary { font-size: 12.5px; }
 
 .report-hero-title .cmp-vs { color: var(--orange-500); }

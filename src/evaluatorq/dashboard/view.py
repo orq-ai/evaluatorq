@@ -36,6 +36,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.reports.icons import _TARGET_ICONS as _TARGET_ICONS
+from evaluatorq.common.reports.icons import target_pill as target_pill
 from evaluatorq.common.reports.messages import render_message_list as render_message_list
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.simulation.metrics import TURN_METRICS
@@ -433,25 +434,6 @@ _CHEVRON = (
 )
 
 
-def _target_pill(label: str, kind: str, *, ellipsis: bool = False) -> str:
-    """Target cell rendered exclusively from the saved run's target kind.
-
-    Older JSON and extensions may carry raw storage kinds rather than the
-    display categories emitted by metrics, so normalize here too. Unknown
-    targets are external entities, not green status dots.
-    """
-    display_kind = {
-        'orq_agent': 'agent',
-        'orq_deployment': 'deployment',
-        'openai_model': 'llm',
-        'vercel': 'deployment',
-        'callback': 'external',
-        'other': 'external',
-    }.get(kind, kind if kind in _TARGET_ICONS else 'external')
-    text = f'<span class="target-label">{esc(label)}</span>' if ellipsis else esc(label)
-    return f'<span class="target-pill" data-kind="{esc(display_kind)}">{_TARGET_ICONS[display_kind]}{text}</span>'
-
-
 # Run lifecycle → label for the solid status pill (mirrors the platform's
 # success/error spans). 'finished' reads as 'success'.
 _STATUS_LABEL: dict[str, str] = {'finished': 'success', 'error': 'error', 'running': 'running'}
@@ -531,7 +513,7 @@ def _sim_row(r: Any) -> str:
         f'{r.name}, {when_text}, target {all_targets}, status {r.status}, {outcome_label}, '
         f'{r.errors} errored, goal completion {rate_text}, cost {_fmt_spend(r.cost)}'
     )
-    targets = ''.join(_target_pill(*t, ellipsis=True) for t in r.targets)
+    targets = ''.join(target_pill(*t, ellipsis=True) for t in r.targets)
     return (
         f'<a class="runs-grid-row" href="/r/{esc(r.rid)}" aria-label="{esc(label)}">'
         f'<span class="rg-job"><span class="rg-name" title="{esc(r.name)}">{esc(r.name)}{err}</span>'
@@ -571,10 +553,10 @@ def _redteam_row(r: Any) -> str:
     )
     targets_attrs = ''
     if len(r.targets) > 1:
-        targets = _target_pill(*r.targets[0], ellipsis=True) + f'<span class="target-more">+{len(r.targets) - 1}</span>'
+        targets = target_pill(*r.targets[0], ellipsis=True) + f'<span class="target-more">+{len(r.targets) - 1}</span>'
         targets_attrs = f' title="{esc(all_targets)}"'
     else:
-        targets = ''.join(_target_pill(*t, ellipsis=True) for t in r.targets)
+        targets = ''.join(target_pill(*t, ellipsis=True) for t in r.targets)
         if r.targets:
             targets_attrs = f' title="{esc(r.targets[0][0])}"'
     score_hint = f'<span class="sr-only">{esc(asr_flag)}</span>' if asr_flag else ''
@@ -696,25 +678,24 @@ def _fmt_compact(n: int) -> str:
     return str(n)
 
 
-def run_compare_control(rid: str, choices: list[tuple[str, str]], action: str) -> str:
+def run_compare_control(rid: str, choices: list[CompareCandidate], action: str) -> str:
     """Render the on-report compare control: this run is A, pick B from the
-    other runs of its surface. ``action`` is that surface's compare URL. Empty
+    other runs of its surface in the shared rich picker (name, then date and
+    headline, searchable). ``action`` is that surface's compare URL. Empty
     when there is no other run to compare against."""
-    others = [(r, name) for r, name in choices if r != rid]
+    others = [c for c in choices if c.rid != rid]
     if not others:
         return ''
-    opts = ''.join(f'<option value="{esc(r)}">{esc(name)}</option>' for r, name in others)
+    rows = [(c.rid, _pick_row(c.name, f'{c.when:%Y-%m-%d} · {c.headline}')) for c in others]
+    picker = _rich_pick('b', others[0].rid, rows, filterable=True)
     return (
         f'<form class="cmp-bar" action="{esc(action)}" method="get">'
         f'<input type="hidden" name="a" value="{esc(rid)}">'
-        '<span class="cmp-bar-label">Compare with</span>'
-        f'<select name="b" aria-label="Run B">{opts}</select>'
-        '<button type="submit" class="btn-secondary">Compare</button>'
-        '</form>'
+        f'{picker}<button type="submit" class="btn-secondary">Compare</button></form>'
     )
 
 
-def compare_menu(rid: str, suggestions: list[CompareCandidate], choices: list[tuple[str, str]], action: str) -> str:
+def compare_menu(rid: str, suggestions: list[CompareCandidate], choices: list[CompareCandidate], action: str) -> str:
     """The report hero's quiet compare button: a popover with suggested earlier
     runs, then the "any other run" picker. Empty when there is no other run."""
     picker = run_compare_control(rid, choices, action)

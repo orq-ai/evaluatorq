@@ -436,9 +436,9 @@ Click a row to open the conversation: required and prohibited criteria with thei
 There are two ways to open a comparison:
 
 - **From the runs list.** Tick two runs and click **Compare selected**. The button stays disabled until exactly two are ticked, and the newer run is A. Errored runs have no checkbox.
-- **From a report.** Click **⇄ Compare** in the top-right corner of the header. The current run is A. The menu first suggests up to three earlier runs as B, newest first, then offers a dropdown of every other run under **Any other run**.
+- **From a report.** Click **⇄ Compare** in the top-right corner of the header. The current run is A. The menu first suggests up to three earlier runs as B, newest first, then offers every other run under **Any other run**, in a searchable list that shows each run's date and headline score.
 
-A run is suggested when its name matches the current run's once case and a trailing version or date are dropped, so `checkout-agent v3` suggests `checkout-agent v2` and `checkout-agent-2026-11-18`. Only when no name matches does the menu fall back to earlier runs that tested the same agent. Default names such as `sim` or `simulation-20261118-143000-ab12cd34` never match by name, so those runs get only same-agent suggestions. A run with no single known agent (none recorded, or more than one) gets no same-agent suggestions. When neither rule finds a run, the menu shows only **Any other run**: a dropdown of every other run with a **Compare** button.
+A run is suggested when its name matches the current run's once case and a trailing version or date are dropped, so `checkout-agent v3` suggests `checkout-agent v2` and `checkout-agent-2026-11-18`. Only when no name matches does the menu fall back to earlier runs that tested the same agent. Default names such as `sim` or `simulation-20261118-143000-ab12cd34` never match by name, so those runs get only same-agent suggestions. A run with no single known agent (none recorded, or more than one) gets no same-agent suggestions. When neither rule finds a run, the menu shows only **Any other run** with its **Compare** button.
 
 Run A is drawn in grey and run B in dark ink; green and red always mean better and worse.
 

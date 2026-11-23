@@ -876,7 +876,7 @@ def _compare_menu(rid: str, surface: Literal['sim', 'pairwise'], roots: list[Pat
     cands = candidates(surface, roots)
     current = next((c for c in cands if c.rid == rid), None)
     suggestions = suggest(current, cands) if current is not None else []
-    return compare_menu(rid, suggestions, [(c.rid, c.name) for c in cands], f'/compare/{surface}')
+    return compare_menu(rid, suggestions, cands, f'/compare/{surface}')
 
 
 def _report_view(rid: str, req: Request) -> NotStr | Response:

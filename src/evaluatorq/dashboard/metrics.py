@@ -850,7 +850,7 @@ def _split_target(raw: str) -> tuple[str, str] | None:
     return (raw, '')  # no known prefix → treat the whole string as a name
 
 
-def _sim_target(data: dict[str, object]) -> tuple[str, str]:
+def sim_target(data: dict[str, object]) -> tuple[str, str]:
     """Best available (label, icon-kind) for a sim run.
 
     Prefers a concrete identifier when the report carries one — an explicit
@@ -1087,7 +1087,7 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
         cost_calls=spend.cost_calls,
         unknown_calls=spend.unknown_calls,
         score=_sim_run_score(data),
-        target=_sim_target(data),
+        target=sim_target(data),
     )
 
 
