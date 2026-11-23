@@ -153,16 +153,23 @@ def _filters_html(q: dict[str, str], st: _State) -> str:
     effort_options = [('', pick_row('Default level')), *((e, pick_row(e)) for e in st.efforts)]
     more_rows = (
         _field(
-            'Reasoning level',
-            'effort',
-            rich_pick('effort', st.effort, effort_options, current=effort_options[0][1]),
+            label='Reasoning level',
+            name='effort',
+            control=rich_pick('effort', st.effort, effort_options, current=effort_options[0][1]),
             off=''
             if st.effort_allowed
             else 'Domain indices exist only at the one effort Artificial Analysis benchmarked',
         )
         + '<div title="Models scoring below this on the chosen index are not plotted. 0 shows every model.">'
         + range_control(
-            'min_score', 'Minimum score', min_val=0, max_val=100, step='1', sel=[f'{st.min_score:g}'], floor=True
+            dim='min_score',
+            label='Minimum score',
+            min_val=0,
+            max_val=100,
+            step='1',
+            sel=[f'{st.min_score:g}'],
+            floor=True,
+            default=MIN_SEAT_INDEX,
         )
         + '</div><div class="filter-chip-row">'
         + ''.join(
@@ -184,15 +191,21 @@ def _filters_html(q: dict[str, str], st: _State) -> str:
         f'<form class="models-filters" method="get" action="{ROUTE}"'
         """ onchange="if (!event.target.matches('.facet-search')) this.requestSubmit()">"""
         + _field(
-            'Score',
-            'index',
-            rich_pick('index', st.index, [(i, pick_row(INDEX_AXES[i].label)) for i in st.indices], filterable=True),
+            label='Score',
+            name='index',
+            control=rich_pick(
+                'index', st.index, [(i, pick_row(INDEX_AXES[i].label)) for i in st.indices], filterable=True
+            ),
         )
-        + _field('X axis', 'x', rich_pick('x', st.x, [(v, pick_row(X_AXIS_SPECS[v].short_label)) for v in X_AXES]))
         + _field(
-            'Price mix',
-            'mix',
-            rich_pick('mix', st.mix.name or st.mix.ratio, mix_options),
+            label='X axis',
+            name='x',
+            control=rich_pick('x', st.x, [(v, pick_row(X_AXIS_SPECS[v].short_label)) for v in X_AXES]),
+        )
+        + _field(
+            label='Price mix',
+            name='mix',
+            control=rich_pick('mix', st.mix.name or st.mix.ratio, mix_options),
             off='The mix applies only to the price axis' if st.x != 'price' else '',
             title='How the price axis blends token prices, as cache read : cache write : fresh input : output. Add '
             '?mix=READ:WRITE:FRESH:OUTPUT to the address for your own ratio.',
@@ -743,23 +756,32 @@ def _answer_cards(result: ParetoResult, min_score: float) -> str:
     if not result.frontier:
         return ''
     best = max(result.frontier, key=lambda p: p.score)
-    cards = [stat_tile('Best score', f'{best.score:.1f}', sub=f'{_name(best.model)} · {_x_text(best, result)}')]
+    cards = [
+        stat_tile(label='Best score', value=f'{best.score:.1f}', sub=f'{_name(best.model)} · {_x_text(best, result)}')
+    ]
     valued = [p for p in result.frontier if p.pareto_score is not None]
     value = max(valued, key=lambda p: cast('float', p.pareto_score), default=None)
     if value is not None:
+        per_dollar = cast('float', value.pareto_score)
         cards.append(
             stat_tile(
-                'Best score per $',
-                f'{cast("float", value.pareto_score):,.0f}',
-                ' per $',
-                f'{_name(value.model)} · score {value.score:.1f} · {_x_text(value, result)}',
+                label='Best score per $',
+                # Whole numbers would print a score per $ under 0.5 as 0, so small values keep one decimal.
+                value=f'{per_dollar:,.0f}' if per_dollar >= 10 else f'{per_dollar:.1f}',
+                unit=' per $',
+                sub=f'{_name(value.model)} · score {value.score:.1f} · {_x_text(value, result)}',
             )
         )
     cheapest = min(result.frontier, key=lambda p: result.x_spec.best_first(p.x))
-    if cheapest is not value:
+    # A card naming the same model as another one adds nothing: one frontier model would fill every card.
+    if cheapest is not value and cheapest is not best:
         label = _AXIS_TEXT[result.x].best + (f' at score ≥ {min_score:g}' if min_score > 0 else '')
         cards.append(
-            stat_tile(label, _x_text(cheapest, result), sub=f'{_name(cheapest.model)} · score {cheapest.score:.1f}')
+            stat_tile(
+                label=label,
+                value=_x_text(cheapest, result),
+                sub=f'{_name(cheapest.model)} · score {cheapest.score:.1f}',
+            )
         )
     return f'<div class="stat-band models-cards">{"".join(cards)}</div>'
 

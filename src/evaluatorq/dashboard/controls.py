@@ -163,17 +163,24 @@ def _fmt_range_value(value: float, step: str) -> str:
     return f'{value:g}'
 
 
-def range_engaged(sel: list[str], *, min_val: float, max_val: float, floor: bool) -> bool:
+def range_engaged(sel: list[str], *, min_val: float, max_val: float, floor: bool, default: float | None = None) -> bool:
     """True when a range control is actively constraining results, i.e. its
     value differs from the no-op default bound (``min_val`` for floors,
-    ``max_val`` for ceilings). Absent/unparseable selections are not engaged."""
+    ``max_val`` for ceilings, or ``default`` when the page has its own).
+    Absent/unparseable selections are not engaged."""
     if not sel:
         return False
     try:
         value = float(sel[0])
     except (ValueError, TypeError):
         return False
-    return value != (min_val if floor else max_val)
+    return value != _range_default(min_val=min_val, max_val=max_val, floor=floor, default=default)
+
+
+def _range_default(*, min_val: float, max_val: float, floor: bool, default: float | None) -> float:
+    if default is not None:
+        return default
+    return min_val if floor else max_val
 
 
 def range_control(
@@ -186,6 +193,7 @@ def range_control(
     sel: list[str],
     floor: bool,
     show_max: bool = False,
+    default: float | None = None,
 ) -> str:
     """One min/max range control shared by raw-count and score thresholds.
 
@@ -196,15 +204,16 @@ def range_control(
     ``show_max`` appends the slider's upper bound beside the readout (e.g.
     min-turns shows the run's max turns). The readout gains ``is-engaged`` when
     the slider is moved off its no-op bound, so an active filter reads at a
-    glance without comparing numbers.
+    glance without comparing numbers. ``default`` replaces that no-op bound
+    for a page whose unset value sits inside the range.
     """
     raw = sel[0] if sel else None
-    default = min_val if floor else max_val
+    default = _range_default(min_val=min_val, max_val=max_val, floor=floor, default=default)
     try:
         value = float(raw) if raw is not None else default
     except (ValueError, TypeError):
         value = default
-    engaged = range_engaged(sel, min_val=min_val, max_val=max_val, floor=floor)
+    engaged = range_engaged(sel, min_val=min_val, max_val=max_val, floor=floor, default=default)
     readout_cls = 'filter-slider-readout is-engaged' if engaged else 'filter-slider-readout'
     glyph = '≥' if floor else '≤'
     readout = f'{glyph} {_fmt_range_value(value, step)}'

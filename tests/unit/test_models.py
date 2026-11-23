@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import random
 import re
+from pathlib import Path
 from typing import Any, cast, get_args
 
 import pytest
@@ -1098,6 +1099,79 @@ class TestDashboardPage:
         assert '<span class="filter-dd-value">All</span>' in all_ticked
         assert 'developer=a' not in all_ticked
         assert 'class="facet-search"' in every  # the developer list is searchable
+
+    def test_including_disabled_models_with_every_developer_ticked_keeps_the_new_developers(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        from evaluatorq.dashboard import models_views
+
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+        hidden = model('z/off', 45.0, 0.1, 0.1)
+
+        async def fake_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
+            del client
+            return [*fake_catalogue, hidden] if include_disabled else fake_catalogue
+
+        monkeypatch.setattr(models_views, 'load_models', fake_load)
+        # The toolbar drops the developer values when every box is ticked (dashboard.js), so the request carries none.
+        text = client.get('/models?disabled=1').text
+        assert 'value="z" checked' in text and 'z/off' in text
+        assert '<span class="filter-dd-value">All</span>' in text
+        js = (Path(models_views.__file__).parent / 'static' / 'dashboard.js').read_text()
+        assert "delete evt.detail.parameters.developer" in js
+
+    def test_min_score_readout_is_plain_at_the_page_default(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        default = self._models_text(client, monkeypatch, fake_catalogue, '/models')
+        assert 'data-default="10"' in default
+        assert '<span class="filter-slider-readout">≥ 10</span>' in default
+        zero = self._models_text(client, monkeypatch, fake_catalogue, '/models?min_score=0')
+        assert '<span class="filter-slider-readout is-engaged">≥ 0</span>' in zero
+        assert '<span class="filter-dd-more-badge">1</span>' in zero
+
+    def test_single_model_frontier_on_a_speed_axis_shows_one_card(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        only = model('a/only', 40.0, 1.0, 1.0, output_tokens_per_second=80.0)
+        text = self._models_text(client, monkeypatch, [only], '/models?x=output_speed')
+        assert text.count('class="stat-tile"') == 1
+        assert 'Fastest' not in text.split('models-cards', 1)[1].split('models-intro', 1)[0]
+
+    def test_score_per_dollar_card_keeps_a_decimal_below_ten(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # (10.4 - 10) / $1.00 = 0.4 per $; whole numbers would show it as 0.
+        near_floor = model('a/near', 10.4, 1.0, 1.0)
+        text = self._models_text(client, monkeypatch, [near_floor], '/models')
+        assert re.search(r'Best score per \$</div><div class="stat-value">0\.4<span class="stat-unit"> per \$</span>', text)
+
+    def test_more_filters_labels_match_the_toolbar_labels(self) -> None:
+        import tinycss2
+
+        from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+        declarations = {
+            d.name: tinycss2.serialize(d.value).strip()
+            for rule in tinycss2.parse_stylesheet(DASHBOARD_CSS, skip_whitespace=True, skip_comments=True)
+            if rule.type == 'qualified-rule'
+            and tinycss2.serialize(rule.prelude).strip() == '.models-filters .filter-dd-more-body .filter-label'
+            for d in tinycss2.parse_declaration_list(rule.content, skip_whitespace=True, skip_comments=True)
+            if d.type == 'declaration'
+        }
+        assert declarations.get('text-transform') == 'none'
+        assert declarations.get('letter-spacing') == '0'
+
+    def test_guide_steps_fall_back_to_four_evenly_spaced(self) -> None:
+        from evaluatorq.dashboard.models_views import _guide_ks
+
+        # 0.002 to 500,000 holds 26 1-2-5 steps; every other step still leaves 13 (0.002 to 200,000), so four are picked
+        # evenly across those, ends included.
+        ks = _guide_ks(0.0011, 1e6)
+        assert len(ks) == 4
+        assert ks == sorted(ks)
+        assert ks[0] == pytest.approx(0.002) and ks[-1] == pytest.approx(200_000)
+        assert all(0.0011 < k < 1e6 for k in ks)
 
     def test_more_filters_badge_counts_active_filters(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]

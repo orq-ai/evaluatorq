@@ -4269,7 +4269,8 @@ _MODELS_CSS = """
 .models-filters .filter-dd-more .filter-dd-trigger { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
 .models-filters .filter-dd-more-body { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: 300px; margin: 0; padding: 12px; gap: 12px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); }
 .models-filters .filter-dd-more-body .models-field { justify-content: space-between; }
-.models-filters .filter-dd-more-body .filter-label { display: block; margin-bottom: 4px; color: var(--text-faint); }
+/* The shared slider label is a mono caps heading on the report rails; here it matches the other toolbar labels. */
+.models-filters .filter-dd-more-body .filter-label { display: block; margin-bottom: 4px; font-family: inherit; font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-faint); }
 .models-chart { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px; background: var(--surface); overflow-x: auto; }
 .models-chart .vega-embed { width: 100%; min-width: 480px; }
 @media (max-width: 640px) { .models-chart .vega-embed { min-width: 360px; } }

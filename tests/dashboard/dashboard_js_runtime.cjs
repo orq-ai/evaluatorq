@@ -377,6 +377,69 @@ test('open filter dropdown survives a fragment swap', () => {
   assert.equal(replacement.open, false);
 });
 
+function paretoMenus() {
+  const node = name => ({ name, closest() { return null; }, matches() { return false; } });
+  const inside = node('inside');
+  const outside = node('chart');
+  const summary = { focused: false, focus() { this.focused = true; } };
+  const menu = (id, { models = true } = {}) => ({
+    id, open: true, models,
+    contains(target) { return target === this || target === inside; },
+    querySelector(selector) { return selector === 'summary' ? summary : null; },
+  });
+  const more = menu('filter-dd-more');
+  const developer = menu('filter-dd-developer');
+  const rail = menu('filter-dd-persona', { models: false });
+  const all = [more, developer, rail];
+  const app = loadDashboard({
+    pathname: '/models',
+    queryAll(selector) {
+      if (selector === 'form.models-filters details.filter-dd[open]') return all.filter(m => m.open && m.models);
+      return [];
+    },
+  });
+  return { app, more, developer, rail, inside, outside, summary };
+}
+
+test('Pareto toolbar pop-overs close on a click outside them, not inside, and leave report rails alone', () => {
+  const { app, more, developer, rail, inside, outside } = paretoMenus();
+  developer.open = false;
+  click(app, inside);
+  assert.equal(more.open, true, 'a click inside More filters keeps it open');
+  click(app, outside, { stopBubbling: true });
+  assert.equal(more.open, false, 'a click on the chart closes More filters, even when the chart stops bubbling');
+  assert.equal(rail.open, true, 'a report rail dropdown is not a Pareto pop-over');
+});
+
+test('Escape closes the open Pareto toolbar pop-overs and returns focus to the trigger', () => {
+  const { app, more, developer, rail, summary } = paretoMenus();
+  app.documentEvents.emit('keydown', keyEvent('Escape'));
+  assert.equal(more.open, false);
+  assert.equal(developer.open, false);
+  assert.equal(rail.open, true);
+  assert.equal(summary.focused, true);
+});
+
+test('the Pareto toolbar sends no developer values when every developer box is ticked', () => {
+  const app = loadDashboard({ pathname: '/models' });
+  const box = checked => ({ checked });
+  const form = boxes => ({
+    matches: selector => selector === 'form.models-filters',
+    querySelectorAll: selector => selector === 'input[type="checkbox"][name="developer"]' ? boxes : [],
+  });
+  const request = elt => {
+    const detail = { elt, parameters: { developer: ['a', 'b'], disabled: '1' } };
+    app.body.emit('htmx:configRequest', { detail });
+    return detail.parameters;
+  };
+  const all = request(form([box(true), box(true)]));
+  assert.equal('developer' in all, false, 'all ticked is no filter, so developers that appear later stay shown');
+  assert.equal(all.disabled, '1');
+  assert.deepEqual(request(form([box(true), box(false)])).developer, ['a', 'b']);
+  const rail = { matches: () => false, querySelectorAll: () => [box(true)] };
+  assert.deepEqual(request(rail).developer, ['a', 'b'], 'other filter forms keep their parameters');
+});
+
 for (const pathname of ['/traces', '/insights/new']) {
   test(`date menus on ${pathname} stay open inside and close outside, including after replacement`, () => {
     const inside = { closest() { return null; }, matches() { return false; } };

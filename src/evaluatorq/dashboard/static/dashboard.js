@@ -1079,6 +1079,33 @@
   }, true);
 })();
 
+// The Pareto Frontier toolbar (form.models-filters) opens its dropdowns as pop-overs over the chart, so a click
+// outside them or Escape closes them; the report rails keep their own behaviour. All developer boxes ticked is no
+// developer filter, so the request drops them: otherwise developers that appear later (Include disabled models)
+// would be filtered out by the list the page sent.
+(function () {
+  var OPEN = 'form.models-filters details.filter-dd[open]';
+  window.addEventListener('click', function (evt) {
+    document.querySelectorAll(OPEN).forEach(function (d) {
+      if (!d.contains(evt.target)) d.open = false;
+    });
+  }, true);
+  document.addEventListener('keydown', function (evt) {
+    if (evt.key !== 'Escape') return;
+    var open = Array.prototype.slice.call(document.querySelectorAll(OPEN));
+    if (!open.length) return;
+    open.forEach(function (d) { d.open = false; });
+    var summary = open[0].querySelector('summary');
+    if (summary) summary.focus();
+  });
+  document.body.addEventListener('htmx:configRequest', function (evt) {
+    var form = evt.detail.elt;
+    if (!form || !form.matches || !form.matches('form.models-filters')) return;
+    var boxes = Array.prototype.slice.call(form.querySelectorAll('input[type="checkbox"][name="developer"]'));
+    if (boxes.length && boxes.every(function (b) { return b.checked; })) delete evt.detail.parameters.developer;
+  });
+})();
+
 // Top failure modes panel — min-count slider filters bars client-side.
 (function () {
   document.body.addEventListener('input', function (evt) {

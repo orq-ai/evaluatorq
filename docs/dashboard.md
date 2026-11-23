@@ -482,8 +482,8 @@ Answer cards above the chart give the three quick answers, each for the models o
 | Card | What it shows |
 |---|---|
 | **Best score** | The highest score, with that model and its value on the x axis. |
-| **Best score per $** | The highest **Score per $**, such as `630 per $`, with that model, its score and its price. Shown only when the x axis is price. |
-| **Cheapest at score ≥ 10** | The cheapest frontier model that clears the minimum score. Hidden when it is the same model as **Best score per $**. On the speed axes it reads **Fastest** or **Quickest first token**. |
+| **Best score per $** | The highest **Score per $**, such as `630 per $`, with that model, its score and its price. Below 10 it keeps one decimal, such as `0.4 per $`. Shown only when the x axis is price. |
+| **Cheapest at score ≥ *minimum score*** | The cheapest frontier model that clears the minimum score, such as **Cheapest at score ≥ 10** on the default page. With the minimum score at `0` it reads plain **Cheapest**. On the speed axes it reads **Fastest at score ≥ *minimum score*** or **Quickest first token at score ≥ *minimum score***. Hidden when it names the same model as another card. |
 
 **Score per $** is the points a model scores above the minimum score, divided by its blended price: `(score - minimum score) / price`. A model exactly at the minimum score gets 0, and with the minimum score at `0` it is the plain score per dollar. It is the same number as the `Score per $` column of `eq models pareto` (see [Model Pareto frontier](model-pareto.md#the-frontier-in-one-command)).
 
@@ -498,8 +498,8 @@ The controls above the chart:
 | **Score** | Intelligence or a domain index such as legal. Lists only the indices at least one loaded model has a score on. | Intelligence |
 | **X axis** | Price, output speed or time to first token. | Price |
 | **Price mix** | **Agentic: 7:2:1 cached** (7 parts cache read, 2 parts fresh input, 1 part output) or **List: 3:1 input/output**. Greyed out on the other x axes. | Agentic |
-| **Developer** | Plots the models of the developers you tick. Type in its search box to narrow the list. Ticking every developer, or none, plots them all. | All developers |
-| **More filters** | Opens the five settings below. A number on the button counts how many of them differ from their default. | Closed |
+| **Developer** | Plots the models of the developers you tick. Type in its search box to narrow the list. Ticking every developer, or none, plots them all, and the page address then carries no developer list, so models that **Include disabled models** adds still show. | All developers |
+| **More filters** | Opens the five settings below. A number on the button counts how many of them differ from their default; the **Minimum score** readout turns teal under the same rule. A click outside the panel, or Escape, closes it, as it does the **Developer** list. | Closed |
 | **Reasoning level** | In **More filters**. Scores intelligence at one reasoning effort. Greyed out on a domain index. | Each model's default |
 | **Minimum score** | In **More filters**, a slider from 0 to 100. Hides models scoring below it on the chosen score; `0` plots every model. It is also the floor that Score per $ counts from. | 10 |
 | **Frontier only** | In **More filters**. Trims the table to the frontier models. | Off |
