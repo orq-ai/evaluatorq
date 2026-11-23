@@ -3099,6 +3099,7 @@ _SIM_COMPARE_CSS = """
 .runs-card > .run-pick-row { background: var(--app-gray-50); border-bottom: 1px solid var(--border-subtle); }
 .runs-card > .run-pick-row:hover { background: var(--app-gray-50); }
 .runs-card .run-pick { flex-basis: 32px; }
+.runs-toolbar { display: flex; justify-content: flex-end; margin-bottom: 10px; }
 
 /* Quiet compare button in the report hero's top-right corner. Comparing is an
    occasional action, so the button reads as a text link until hovered; its

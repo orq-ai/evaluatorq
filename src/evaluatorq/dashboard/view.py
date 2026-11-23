@@ -860,17 +860,15 @@ def runs_screen_body(rows: list[RunRow], surface: str) -> str:
             '</div></section>'
         )
     pick = surface == 'pairwise' and sum(not r.error for r in rows) >= 2
-    form = compare_pick_form(surface) if pick else ''
-    head = f'<div class="runs-head"><span>Job</span><span>Score</span><span>Status</span><span>{form}</span></div>'
+    toolbar = f'<div class="runs-toolbar">{compare_pick_form(surface)}</div>' if pick else ''
+    head = '<div class="runs-head"><span>Job</span><span>Score</span><span>Status</span><span></span></div>'
     body = ''.join(_run_row(r, show_badge=False) for r in rows)
     if pick:
         head = _compare_pick_row(head, '', '', pickable=False)
         body = ''.join(
             _compare_pick_row(_run_row(r, show_badge=False), r.id, r.name, pickable=not r.error) for r in rows
         )
-    return (
-        f'<section class="runs-screen"><div class="runs-card">{head}<div class="run-list">{body}</div></div></section>'
-    )
+    return f'<section class="runs-screen">{toolbar}<div class="runs-card">{head}<div class="run-list">{body}</div></div></section>'
 
 
 _ARROW_LEFT = (
