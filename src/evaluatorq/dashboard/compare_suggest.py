@@ -8,15 +8,16 @@ never match by name: every unnamed run would match every other one.
 
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from evaluatorq.dashboard import library, metrics
 
 if TYPE_CHECKING:
     from datetime import datetime
-    from pathlib import Path
 
 # Candidate list cap, the same as the "any other run" picker.
 MAX_CANDIDATES = 100
@@ -72,8 +73,24 @@ def candidates(surface: Literal['sim', 'pairwise'], roots: list[Path] | None) ->
     """Comparable runs of *surface*, newest first, errored runs left out."""
     if surface == 'sim':
         return [_sim_candidate(r) for r in metrics.sim_run_rows(roots) if not r.error][:MAX_CANDIDATES]
-    cards = [c for c in library.scan(roots) if c.surface == 'pairwise' and not c.error]
-    return [_pairwise_candidate(c, c.path) for c in cards[:MAX_CANDIDATES] if c.path is not None]
+    key = tuple(str(r.resolve()) for r in (roots or library.default_roots()))
+    return list(_pairwise_candidates(key, library.fingerprint(roots)))
+
+
+@functools.lru_cache(maxsize=8)
+def _pairwise_candidates(roots_key: tuple[str, ...], fingerprint: tuple[int, int, int]) -> tuple[CompareCandidate, ...]:
+    """Pairwise candidates for *roots_key*, cached until the stores' *fingerprint* changes."""
+    del fingerprint  # only part of the cache key
+    cards = [c for c in library.scan([Path(r) for r in roots_key]) if c.surface == 'pairwise' and not c.error]
+    found = []
+    for card in cards[:MAX_CANDIDATES]:
+        if card.path is None:
+            continue
+        try:
+            found.append(_pairwise_candidate(card, card.path))
+        except (OSError, ValueError):  # removed or rewritten since the scan: leave it out of the menu
+            continue
+    return tuple(found)
 
 
 def _sim_candidate(row: metrics.SimRunRow) -> CompareCandidate:

@@ -1020,9 +1020,8 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
     # content (tables, charts) tracks the filter, not just the HTMX panels.
 
     if surface == 'sim':
-        body_html = await asyncio.to_thread(
-            report_tabs.sim_report_tabs, rid, report_obj, filtered, _compare_menu(rid, 'sim', roots)
-        )
+        menu = await asyncio.to_thread(_compare_menu, rid, 'sim', roots)
+        body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered, menu)
     elif surface == 'redteam':
         from evaluatorq.redteam.reports.converters import rebuild_filtered_report
 
@@ -1031,12 +1030,9 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
     elif surface == 'pairwise':
         from evaluatorq.dashboard import pairwise_tabs
 
+        menu = await asyncio.to_thread(_compare_menu, rid, 'pairwise', roots)
         body_html = await asyncio.to_thread(
-            pairwise_tabs.pairwise_report_tabs,
-            rid,
-            report_obj,
-            filtered,
-            hero_actions_html=_compare_menu(rid, 'pairwise', roots),
+            pairwise_tabs.pairwise_report_tabs, rid, report_obj, filtered, hero_actions_html=menu
         )
     else:
         body_html = adapter.body_from_results(report_obj, filtered)

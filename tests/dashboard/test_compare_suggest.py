@@ -124,3 +124,39 @@ def test_pairwise_candidates_use_named_label_pairs(tmp_path: Path) -> None:
     by_rid = {c.rid: c for c in candidates('pairwise', [pw])}
     assert by_rid[report_id(pw / 'a.json')].target == 'gpt vs claude'
     assert by_rid[report_id(pw / 'b.json')].target is None
+
+
+def test_pairwise_candidates_reread_nothing_while_the_store_is_unchanged(tmp_path: Path, monkeypatch) -> None:
+    from evaluatorq.dashboard import library
+    from evaluatorq.pairwise_run import new_run
+
+    pw = tmp_path / 'pw'
+    pw.mkdir()
+    for i in range(3):
+        (pw / f'{i}.json').write_text(new_run(run_name=f'r{i}', label_a='x', label_b='y', judges=['j']).model_dump_json())
+    candidates('pairwise', [pw])
+    reads: list[Path] = []
+    real = library.read_json_cached
+    monkeypatch.setattr(library, 'read_json_cached', lambda p: reads.append(p) or real(p))
+    assert len(candidates('pairwise', [pw])) == 3
+    assert reads == []
+
+
+def test_pairwise_report_deleted_mid_scan_is_skipped(tmp_path: Path, monkeypatch) -> None:
+    from evaluatorq.dashboard import library
+    from evaluatorq.pairwise_run import new_run
+
+    pw = tmp_path / 'pw'
+    pw.mkdir()
+    for i in range(2):
+        (pw / f'{i}.json').write_text(new_run(run_name=f'r{i}', judges=['j']).model_dump_json())
+    real_scan = library.scan
+
+    def scan_then_delete(roots):
+        cards = real_scan(roots)
+        (pw / '0.json').unlink()  # removed after the scan listed it
+        return cards
+
+    monkeypatch.setattr(library, 'scan', scan_then_delete)
+    library.read_json.cache_clear()
+    assert [c.name for c in candidates('pairwise', [pw])] == ['r1']
