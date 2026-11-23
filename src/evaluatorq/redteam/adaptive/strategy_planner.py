@@ -35,6 +35,8 @@ from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from openai import AsyncOpenAI
 
     from evaluatorq.redteam.contracts import AgentContext, AttackStrategy
@@ -45,9 +47,11 @@ if TYPE_CHECKING:
 _MULTI_AGENT_ONLY_VULNS = {Vulnerability.INTER_AGENT_COMMS, Vulnerability.CASCADING_FAILURES}
 
 
-def planned_vulnerabilities(vulnerabilities: list[AnyVulnerability], *, multi_agent: bool) -> list[AnyVulnerability]:
+def planned_vulnerabilities(
+    vulnerabilities: Sequence[AnyVulnerability], *, multi_agent: bool
+) -> list[AnyVulnerability]:
     """``vulnerabilities`` without `_MULTI_AGENT_ONLY_VULNS` unless the target is multi-agent."""
-    return vulnerabilities if multi_agent else [v for v in vulnerabilities if v not in _MULTI_AGENT_ONLY_VULNS]
+    return list(vulnerabilities) if multi_agent else [v for v in vulnerabilities if v not in _MULTI_AGENT_ONLY_VULNS]
 
 
 def full_sweep_attack_ceiling(*, multi_agent: bool, generated_per_vulnerability: int) -> int:
@@ -65,7 +69,7 @@ def full_sweep_attack_ceiling(*, multi_agent: bool, generated_per_vulnerability:
 async def plan_strategies_for_vulnerabilities(
     *,
     agent_context: AgentContext,
-    vulnerabilities: list[AnyVulnerability],
+    vulnerabilities: Sequence[AnyVulnerability],
     llm_client: AsyncOpenAI | None,
     attack_model: str,
     max_turns: int,

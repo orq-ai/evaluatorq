@@ -166,7 +166,7 @@ def test_register_judge_rejects_unknown_id() -> None:
 
     judge = build_template_judge(rule=RULE, name='R', examples=None, model_id='m', vuln_id='typo_rule')
     with pytest.raises(ValueError):
-        register_judge('typo_rule', judge)
+        register_judge('typo_rule', judge)  # ty: ignore[invalid-argument-type]
 
 
 def test_judge_prompt_with_only_conversation_still_gets_reply() -> None:
