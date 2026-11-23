@@ -39,12 +39,13 @@ Older screenshots use `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 
 
 ## Models — `models-*.png`
 
-Captured on 2026-11-20 against the live Orq catalogue (73 models after keeping one listing per model), 1440×1250, light theme, headless Chromium.
+Captured on 2026-11-23 against the live Orq catalogue (72 models after keeping one listing per model), 1440×1250 viewport, top of the page, light theme, headless Chromium, with `eq dashboard` on the branch's defaults: agentic price mix (7:2:1 cached), minimum score 15.
 
 | File | Page |
 |---|---|
-| `models-01-frontier.png` | Models — intelligence index against list price, frontier line, table sorted by score |
-| `models-02-legal.png` | Models — the legal index, where most models have no score and are not plotted |
+| `models-01-frontier.png` | Models (`/models`) — intelligence index against the agentic blended price, frontier line, the Price mix and Minimum score controls, table sorted by score with the cache-read column |
+| `models-02-legal.png` | Models (`/models?index=legal`) — the legal index, where about half the models have no score and are not plotted |
+| `models-03-fallback.png` | Models (`/models?developer=alibaba`) — Qwen cache-read rates tagged **input** (two of the four in view), billed at the input rate because their cards list no cache price |
 
 ## Pending re-shoot
 
