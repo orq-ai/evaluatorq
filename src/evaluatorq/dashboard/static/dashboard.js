@@ -344,6 +344,21 @@
     if (button) button.disabled = !ready;
   });
 
+  // Report compare menu (<details>): close on a click outside it, and on Escape
+  // with focus back on its button.
+  document.addEventListener('click', function (evt) {
+    const here = evt.target.closest && evt.target.closest('.cmp-menu');
+    document.querySelectorAll('details.cmp-menu[open]').forEach(function (menu) { if (menu !== here) menu.open = false; });
+  });
+  document.addEventListener('keydown', function (evt) {
+    if (evt.key !== 'Escape') return;
+    document.querySelectorAll('details.cmp-menu[open]').forEach(function (menu) {
+      menu.open = false;
+      const summary = menu.querySelector('summary');
+      if (summary) summary.focus();
+    });
+  });
+
   document.body.addEventListener('change', function (evt) {
     if (evt.target.matches('[data-map-color]')) drawInsightsMap(evt.target.closest('.insights-map-view').querySelector('.insights-map-chart'));
     if (evt.target.matches('[data-map-projection]')) {

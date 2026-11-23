@@ -1047,3 +1047,19 @@ test('runs-list compare picks enable the button only for exactly two runs and na
   assert.equal(button.disabled, true);
   assert.deepEqual(boxes.map(b => b.name), ['', '', '']);
 });
+
+test('report compare menu closes on Escape and on a click outside it', () => {
+  const summary = { focus() { this.focused = true; } };
+  const menu = { open: true, contains: node => node === inside, querySelector: sel => (sel === 'summary' ? summary : null) };
+  const inside = { closest: sel => (sel === '.cmp-menu' ? menu : null), matches: () => false };
+  const outside = { closest: () => null, matches: () => false };
+  const app = loadDashboard({ queryAll: sel => (sel === 'details.cmp-menu[open]' ? [menu].filter(m => m.open) : []) });
+  click(app, inside);
+  assert.equal(menu.open, true);
+  click(app, outside);
+  assert.equal(menu.open, false);
+  menu.open = true;
+  app.documentEvents.emit('keydown', { key: 'Escape', target: outside });
+  assert.equal(menu.open, false);
+  assert.equal(summary.focused, true);
+});
