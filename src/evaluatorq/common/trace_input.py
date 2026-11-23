@@ -5,15 +5,27 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 import httpx
 from loguru import logger
+from pydantic import ValidationError
 
 from evaluatorq.common.env_config import env_raw
 from evaluatorq.common.messages import content_part_text
-from evaluatorq.common.orq_client import orq_server_url
+from evaluatorq.common.orq_client import orq_server_url, resolve_orq_client
+from evaluatorq.common.orq_traces import (
+    MAX_SPANS_PER_TRACE,
+    SPAN_PAGE_SIZE,
+    OrqTraceReader,
+    PageCursor,
+    PageTokenError,
+    TracePageError,
+    collect_span_summaries,
+    plain_json,
+)
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
 from evaluatorq.openresponses.otel_messages import (
@@ -24,11 +36,13 @@ from evaluatorq.openresponses.otel_messages import (
 from evaluatorq.types import Trace, TraceInput
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Sequence
+
+    from orq_ai_sdk import Orq
 
 _SPAN_FETCH_CONCURRENCY = 5
 _SPAN_DETAIL_CONCURRENCY = 10
-_API_PAGE_LIMIT = 200
+_API_PAGE_LIMIT = SPAN_PAGE_SIZE
 _MESSAGE_FORMAT = Literal['chat_completions', 'responses', 'otel_genai']
 _TRACE_MESSAGE_FORMAT = Literal['chat_completions', 'responses', 'otel_genai', 'mixed']
 _ROLE = Literal['user', 'assistant', 'tool', 'system', 'developer']
@@ -621,8 +635,32 @@ def _trace_from_spans(
             trace_id,
             'no non-evaluator span on the latest span path contains input or output messages.',
         )
-    message_span_id = selected_id
-    message_span = selected_span
+    return _assemble_trace(
+        trace_id,
+        spans=spans,
+        message_span=selected_span,
+        message_span_id=selected_id,
+        message_format=message_format,
+        input_messages=input_messages,
+        output_messages=output_messages,
+        requested_span_id=requested_span_id,
+        trace_metadata=trace_metadata,
+    )
+
+
+def _assemble_trace(
+    trace_id: str,
+    *,
+    spans: list[dict[str, Any]],
+    message_span: dict[str, Any],
+    message_span_id: str | None,
+    message_format: _TRACE_MESSAGE_FORMAT | None,
+    input_messages: list[Message],
+    output_messages: list[Message],
+    requested_span_id: str | None,
+    trace_metadata: dict[str, Any] | None,
+) -> Trace:
+    """Build a trace from its chosen exchange; metadata comes from ``message_span`` and the ``spans`` read."""
     tools_called = [
         call.function.name
         for message in [*input_messages, *output_messages]
@@ -673,107 +711,174 @@ def _trace_from_spans(
     )
 
 
-_EARLIEST_TRACE_TIME = '2000-01-01T00:00:00Z'
+_EARLIEST_TRACE_TIME = datetime(2000, 1, 1, tzinfo=timezone.utc)
 """The search window's start when `TraceInput` names none: the API requires a bound, the caller asked for none.
 
 Not the Unix epoch: ``/v3/traces/search`` answers a ``from`` of 1970-01-01 with no rows.
 """
 
+_REQUEST_TIMEOUT_MS = 60_000
 
-def _search_window(source: TraceInput) -> tuple[str, str]:
+
+def _search_window(source: TraceInput) -> tuple[datetime, datetime]:
     """The ``from``/``to`` bounds for ``/v3/traces/search``, which requires both.
 
     ``TraceInput`` normalizes naive datetimes to UTC, so the same query means the
     same window on every host. An open end means "up to now".
     """
-    start = source.start_time.isoformat() if source.start_time is not None else _EARLIEST_TRACE_TIME
-    end = (source.end_time or datetime.now(timezone.utc)).isoformat()
-    return start, end
+    return source.start_time or _EARLIEST_TRACE_TIME, source.end_time or datetime.now(timezone.utc)
 
 
-async def _request_json(
-    client: httpx.AsyncClient,
-    *,
-    url: str,
-    headers: dict[str, str],
-    method: Literal['GET', 'POST'],
-    label: str,
-    json_body: dict[str, Any] | None = None,
-    params: dict[str, Any] | None = None,
-) -> Any:
-    """One retried Orq trace API call."""
-
-    async def call() -> Any:
-        response = await client.request(method, url, headers=headers, json=json_body, params=params)
-        response.raise_for_status()
-        return response.json()
-
-    return await with_retry(call, label=label)
+class _TraceReadError(Exception):
+    """A trace's conversation or spans could not be read; the message names why."""
 
 
-class _PageTokenError(Exception):
-    """The API said more pages follow but gave no usable token for them."""
+def _orq_error_types() -> tuple[type[BaseException], ...]:
+    from orq_ai_sdk.models import OrqError
+
+    return (OrqError, httpx.HTTPError, json.JSONDecodeError, ValidationError)
 
 
-def _next_page_token(payload: dict[str, Any], seen: set[str]) -> str | None:
-    """The token for the page after ``payload``, or None on the last page.
+def _status_of(exc: BaseException) -> int | None:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code
+    status = getattr(exc, 'status_code', None)
+    return status if isinstance(status, int) else None
 
-    Raises `_PageTokenError` on a missing or repeated token, so a server stuck on
-    one token cannot be paged forever. Each caller picks its own policy for that.
+
+def _describe_error(exc: BaseException) -> str:
+    """An Orq request error as text that names its HTTP status; the SDK's own message often leaves it out."""
+    status = _status_of(exc)
+    message = str(exc).strip() or type(exc).__name__
+    return f'HTTP {status}: {message}' if isinstance(status, int) and str(status) not in message else message
+
+
+class _TraceApi:
+    """The Orq trace routes one import reads, through one SDK client.
+
+    Every read returns the route's raw JSON (see `common.orq_traces`). Retry is
+    `common.retry.with_retry` alone: each SDK call passes ``retries=None`` so the
+    SDK adds no layer of its own, and ``with_retry`` retries the SDK's 429 and
+    5xx errors and transport failures.
     """
-    if not payload.get('data') or not payload.get('has_more'):
-        return None
-    token = payload.get('next_page_token') or None
-    if token is None:
-        raise _PageTokenError('reports more pages but returns no page token')
-    if token in seen:
-        raise _PageTokenError(f'repeated page token {token!r}')
-    seen.add(token)
-    return token
+
+    def __init__(self, client: Orq, *, transport: httpx.AsyncClient, api_key: str, host: str) -> None:
+        self.client = client
+        self._transport = transport
+        self.reader = OrqTraceReader(client)
+        self._api_key = api_key
+        self._host = host
+
+    async def _read(self, call: Callable[[], Awaitable[Any]], *, path: str, label: str) -> Any:
+        async def attempt() -> Any:
+            response, raw = await self.reader.raw_call(call, path=path, raw_over_model=True)
+            return raw if raw is not None else plain_json(response)
+
+        return await with_retry(attempt, label=label)
+
+    async def search_page(self, source: TraceInput, *, limit: int, page_token: str | None) -> Any:
+        start, end = _search_window(source)
+        return await self._read(
+            lambda: self.client.traces.search_async(
+                from_=start,
+                to=end,
+                filters=cast('Any', source.filters),
+                filter_operator='and',
+                query=source.search or None,
+                limit=limit,
+                page_token=page_token,
+                retries=None,
+                timeout_ms=_REQUEST_TIMEOUT_MS,
+            ),
+            path='/traces/search',
+            label='Orq trace list',
+        )
+
+    async def span_page(self, trace_id: str, page_token: str | None) -> Any:
+        payload = await self._read(
+            lambda: self.client.traces.list_spans_async(
+                trace_id=trace_id,
+                limit=SPAN_PAGE_SIZE,
+                page_token=page_token,
+                retries=None,
+                timeout_ms=_REQUEST_TIMEOUT_MS,
+            ),
+            path=f'/traces/{trace_id}/spans',
+            label=f'Orq trace {trace_id} spans',
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get('data'), list):
+            raise _TraceReadError(f'its span list is {type(payload).__name__}, not an object with a data list.')
+        if not all(isinstance(span, dict) for span in payload['data']):
+            # One non-object element would raise inside asyncio.gather and take the whole batch with it.
+            raise _TraceReadError('its span list contains a non-object span.')
+        return payload
+
+    async def span_detail(self, trace_id: str, span_id: str) -> dict[str, Any]:
+        payload = await self._read(
+            lambda: self.client.traces.get_span_async(
+                trace_id=trace_id, span_id=span_id, retries=None, timeout_ms=_REQUEST_TIMEOUT_MS
+            ),
+            path=f'/traces/{trace_id}/spans/{span_id}',
+            label=f'Orq trace {trace_id} span {span_id}',
+        )
+        detail = payload.get('span') if isinstance(payload, dict) else None
+        if not isinstance(detail, dict):
+            raise _TraceReadError(f'span {span_id!r} detail is not an object with a span field.')
+        return detail
+
+    async def conversation(self, trace_id: str, span_id: str | None) -> Any:
+        """``GET /v3/traces/{id}/conversation``: the selected span's ordered Responses items.
+
+        orq-ai-sdk gained ``traces.get_conversation`` in 4.17, above this
+        package's 4.14 floor. On an older SDK this is one raw GET on the SDK
+        client's own transport and credentials, retried by the same
+        ``with_retry`` layer as every SDK call.
+        """
+        get_conversation = getattr(self.client.traces, 'get_conversation_async', None)
+        label = f'Orq trace {trace_id} conversation'
+        if callable(get_conversation):
+            return await self._read(
+                lambda: get_conversation(
+                    trace_id=trace_id, span_id=span_id, retries=None, timeout_ms=_REQUEST_TIMEOUT_MS
+                ),
+                path=f'/traces/{trace_id}/conversation',
+                label=label,
+            )
+
+        async def raw_get() -> Any:
+            response = await self._transport.get(
+                f'{self._host}/v3/traces/{trace_id}/conversation',
+                params={'span_id': span_id} if span_id else None,
+                headers={'Authorization': f'Bearer {self._api_key}'},
+                timeout=_REQUEST_TIMEOUT_MS / 1000,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        return await with_retry(raw_get, label=label)
 
 
-async def _list_trace_rows(
-    client: httpx.AsyncClient,
-    source: TraceInput,
-    *,
-    host: str,
-    headers: dict[str, str],
-) -> list[dict[str, Any]]:
+async def _list_trace_rows(api: _TraceApi, source: TraceInput) -> list[dict[str, Any]]:
     """Page through ``/v3/traces/search`` until the query limit is reached.
 
     A page that is not a JSON object, or that carries no usable trace ID, stops
     pagination with a warning rather than raising: the caller still gets the rows
-    it already has, and the reason is in the log.
+    it already has, and the reason is in the log. A failed request raises
+    `RuntimeError`.
     """
     rows: list[dict[str, Any]] = []
-    page_token: str | None = None
-    seen_tokens: set[str] = set()
     query_limit = source.query_limit
-    start, end = _search_window(source)
+    # Every page either adds a row or stops the loop, so the row limit also bounds the pages.
+    cursor = PageCursor(max_pages=query_limit)
     while len(rows) < query_limit:
         before = len(rows)
-        body: dict[str, Any] = {
-            'from': start,
-            'to': end,
-            'filters': source.filters,
-            'filter_operator': 'and',
-            'limit': min(query_limit - len(rows), _API_PAGE_LIMIT),
-        }
-        if source.search:
-            body['query'] = source.search
-        if page_token:
-            body['page_token'] = page_token
+        cursor.start_page()
         try:
-            payload = await _request_json(
-                client,
-                method='POST',
-                url=f'{host}/v3/traces/search',
-                headers=headers,
-                label='Orq trace list',
-                json_body=body,
+            payload = await api.search_page(
+                source, limit=min(query_limit - len(rows), _API_PAGE_LIMIT), page_token=cursor.token
             )
-        except (httpx.HTTPError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f'Failed to list Orq traces: {exc}') from exc
+        except _orq_error_types() as exc:
+            raise RuntimeError(f'Failed to list Orq traces: {_describe_error(exc)}') from exc
         if not isinstance(payload, dict):
             logger.warning('Orq trace list returned a {}, not an object; stopping pagination.', type(payload).__name__)
             break
@@ -785,11 +890,13 @@ async def _list_trace_rows(
             break
         rows.extend(row for row in data if isinstance(row, dict) and row.get('trace_id'))
         try:
-            page_token = _next_page_token(payload, seen_tokens)
-        except _PageTokenError as exc:
+            more = bool(data) and cursor.advance(
+                has_more=payload.get('has_more'), next_token=payload.get('next_page_token')
+            )
+        except PageTokenError as exc:
             logger.warning('Orq trace list {}; stopping pagination at {} traces.', exc, len(rows))
             break
-        if page_token is None:
+        if not more:
             break
         if len(rows) == before:
             logger.warning('Stopped paginating traces: a page contained no usable trace IDs.')
@@ -797,81 +904,186 @@ async def _list_trace_rows(
     return rows
 
 
-class _SpanFetchError(Exception):
-    """A trace's spans could not be read; the message names why."""
+def _merged_span(summary: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]:
+    # The summary given wins: the detail's own summary reports has_children=False and level=0 for every span.
+    return {**summary, **{key: value for key, value in detail.items() if key != 'summary'}}
 
 
-async def _fetch_trace_spans(
-    client: httpx.AsyncClient,
-    trace_id: str,
-    *,
-    host: str,
-    headers: dict[str, str],
-    detail_semaphore: asyncio.Semaphore,
-) -> list[dict[str, Any]]:
+async def _all_spans(api: _TraceApi, trace_id: str, *, detail_semaphore: asyncio.Semaphore) -> list[dict[str, Any]]:
     """Every span of one trace, each with its ``attributes``.
 
-    ``GET /v3/traces/{id}/spans`` pages span summaries without content, so each
-    span's attributes come from ``GET /v3/traces/{id}/spans/{span_id}``. The
-    returned dicts are the summary fields with the detail's fields laid over
-    them, which is the shape `_trace_from_spans` reads.
+    ``GET /v3/traces/{id}/spans`` pages span summaries without content (through
+    `common.orq_traces.collect_span_summaries`, the pager the trace finder
+    uses), and each span's attributes come from
+    ``GET /v3/traces/{id}/spans/{span_id}``. A failed detail call fails the
+    whole read and cancels the trace's other detail calls.
     """
-    summaries: list[dict[str, Any]] = []
-    page_token: str | None = None
-    seen_tokens: set[str] = set()
-    while True:
-        params: dict[str, Any] = {'limit': _API_PAGE_LIMIT}
-        if page_token:
-            params['page_token'] = page_token
-        payload = await _request_json(
-            client,
-            method='GET',
-            url=f'{host}/v3/traces/{trace_id}/spans',
-            headers=headers,
-            label=f'Orq trace {trace_id} spans',
-            params=params,
+    try:
+        summaries = await collect_span_summaries(
+            lambda page_token: api.span_page(trace_id, page_token), trace_id=trace_id
         )
-        if not isinstance(payload, dict) or not isinstance(payload.get('data'), list):
-            raise _SpanFetchError(f'its span list is {type(payload).__name__}, not an object with a data list.')
-        page = payload['data']
-        if not all(isinstance(span, dict) for span in page):
-            # One non-object element would raise inside asyncio.gather and take the whole batch with it.
-            raise _SpanFetchError('its span list contains a non-object span.')
-        summaries.extend(page)
-        try:
-            page_token = _next_page_token(payload, seen_tokens)
-        except _PageTokenError as exc:
-            raise _SpanFetchError(f'its span list {exc}.') from exc
-        if page_token is None:
-            break
+    except TracePageError as exc:
+        raise _TraceReadError(f'its span list {exc}.') from exc
 
     async def with_detail(summary: dict[str, Any]) -> dict[str, Any]:
         span_id = summary.get('span_id')
         if not span_id:
             return summary
         async with detail_semaphore:
-            payload = await _request_json(
-                client,
-                method='GET',
-                url=f'{host}/v3/traces/{trace_id}/spans/{span_id}',
-                headers=headers,
-                label=f'Orq trace {trace_id} span {span_id}',
-            )
-        detail = payload.get('span') if isinstance(payload, dict) else None
-        if not isinstance(detail, dict):
-            raise _SpanFetchError(f'span {span_id!r} detail is not an object with a span field.')
-        # The list summary wins: the detail's summary reports has_children=False and level=0 for every span.
-        return {**summary, **{key: value for key, value in detail.items() if key != 'summary'}}
+            detail = await api.span_detail(trace_id, str(span_id))
+        return _merged_span(summary, detail)
 
     tasks = [asyncio.ensure_future(with_detail(summary)) for summary in summaries]
     try:
         return list(await asyncio.gather(*tasks))
     except BaseException:
-        # The trace has already failed; stop its other detail calls retrying and holding detail slots.
+        # The read has already failed; stop its other detail calls retrying and holding detail slots.
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
+
+
+async def _span_path(api: _TraceApi, trace_id: str, span_id: str) -> list[dict[str, Any]]:
+    """The span ``span_id`` and its ancestors, root first, each read from its detail route.
+
+    These are the only spans the importer reads attributes from, so a trace
+    costs one detail call per level of the conversation span's depth rather than
+    one per span. A detail's parent link matches the span list's.
+    """
+    path: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    current: str | None = span_id
+    while current and current not in seen:
+        if len(seen) >= MAX_SPANS_PER_TRACE:
+            raise _TraceReadError(f'span {span_id!r} has more than {MAX_SPANS_PER_TRACE} ancestors.')
+        seen.add(current)
+        detail = await api.span_detail(trace_id, current)
+        summary = detail.get('summary')
+        span = _merged_span(summary if isinstance(summary, dict) else {'span_id': current}, detail)
+        path.append(span)
+        current = parent_span_id_of(span)
+    return path[::-1]
+
+
+_INPUT_ONLY_ROLES = frozenset({'user', 'system', 'developer'})
+
+
+def _split_conversation(items: list[Any]) -> tuple[list[Any], list[Any]]:
+    """Split a span's Responses items into its request input and its response output.
+
+    The route returns the span's input followed by its output. The output is the
+    trailing run of items the model produced, which starts after the last item
+    only a request can carry: a user, system or developer message, or a tool
+    result (``*_output``).
+    """
+    boundary = -1
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get('type') or 'message')
+        role = item.get('role')
+        if (item_type == 'message' and role in _INPUT_ONLY_ROLES) or item_type.endswith('_output'):
+            boundary = index
+    return items[: boundary + 1], items[boundary + 1 :]
+
+
+def _trace_from_conversation(
+    trace_id: str,
+    conversation: Any,
+    path: list[dict[str, Any]],
+    *,
+    requested_span_id: str | None,
+    trace_metadata: dict[str, Any] | None,
+) -> Trace:
+    """Build one trace from its conversation route answer and the conversation span's ancestor path."""
+    items = conversation.get('items')
+    input_items, output_items = _split_conversation(items)
+    input_messages, _ = parse_messages(input_items, hinted='responses', default_role='user')
+    output_messages, _ = parse_messages(output_items, hinted='responses', default_role='assistant')
+    message_span = path[-1]
+    if not input_messages and not output_messages:
+        return _failed_trace(
+            trace_id,
+            f'span {span_id_of(message_span, 0)!r} has no input or output messages.',
+            requested_span_id=requested_span_id,
+        )
+    return _assemble_trace(
+        trace_id,
+        spans=path,
+        message_span=message_span,
+        message_span_id=span_id_of(message_span, 0),
+        message_format='responses',
+        input_messages=input_messages,
+        output_messages=output_messages,
+        requested_span_id=requested_span_id,
+        trace_metadata=trace_metadata,
+    )
+
+
+async def _import_trace(api: _TraceApi, row: dict[str, Any], *, requested_span_id: str | None) -> Trace:
+    """Read one trace: its conversation, then the details of the conversation span's ancestor path."""
+    trace_id = str(row['trace_id'])
+    try:
+        conversation = await api.conversation(trace_id, requested_span_id)
+    except _orq_error_types() as exc:
+        if _status_of(exc) != 404:
+            return _failed_trace(
+                trace_id, f'could not fetch it: {_describe_error(exc)}', requested_span_id=requested_span_id
+            )
+        # The route answers 404 for an unknown trace and for a span ID that is not in the trace.
+        if requested_span_id is not None and 'span' in str(exc).lower():
+            return _failed_trace(
+                trace_id, f'requested span {requested_span_id!r} was not found.', requested_span_id=requested_span_id
+            )
+        return _failed_trace(trace_id, 'the trace was not found.', requested_span_id=requested_span_id)
+    try:
+        if not isinstance(conversation, dict) or not isinstance(conversation.get('items'), list):
+            raise _TraceReadError(
+                f'its conversation is {type(conversation).__name__}, not an object with an items list.'
+            )
+        span_id = conversation.get('span_id') or requested_span_id
+        if not conversation['items'] or not span_id:
+            if requested_span_id is not None:
+                return _failed_trace(
+                    trace_id,
+                    f'requested span {requested_span_id!r} has no input or output messages.',
+                    requested_span_id=requested_span_id,
+                )
+            return _failed_trace(trace_id, 'Orq found no non-evaluator span with input or output messages.')
+        path = await _span_path(api, trace_id, str(span_id))
+    except _TraceReadError as exc:
+        return _failed_trace(trace_id, str(exc), requested_span_id=requested_span_id)
+    except _orq_error_types() as exc:
+        return _failed_trace(
+            trace_id, f'could not fetch it: {_describe_error(exc)}', requested_span_id=requested_span_id
+        )
+    if any(_is_evaluator(span) for span in path):
+        label = 'requested span' if requested_span_id is not None else 'its conversation span'
+        return _failed_trace(
+            trace_id,
+            f'{label} {span_id!r} belongs to an evaluator span or its subtree.',
+            requested_span_id=requested_span_id,
+        )
+    return _trace_from_conversation(
+        trace_id, conversation, path, requested_span_id=requested_span_id, trace_metadata=row
+    )
+
+
+@asynccontextmanager
+async def _trace_api(
+    api_key: str | None, base_url: str | None, http_client: httpx.AsyncClient | None
+) -> AsyncGenerator[_TraceApi, None]:
+    key, host = _resolve_orq_credentials(api_key, base_url)
+    owned = http_client is None
+    transport = http_client or httpx.AsyncClient(follow_redirects=True)
+    api = _TraceApi(resolve_orq_client(key, host, async_client=transport), transport=transport, api_key=key, host=host)
+    try:
+        yield api
+    finally:
+        api.reader.close()
+        if owned:
+            await transport.aclose()
 
 
 async def fetch_traces(
@@ -888,46 +1100,21 @@ async def fetch_traces(
     Partition the result with `partition_traces` rather than filtering by hand —
     every surface is meant to report import failures the same way.
 
-    The HTTP calls retry through `common.retry.with_retry` — including the 429s
-    and 5xx that ``raise_for_status`` raises as ``httpx.HTTPStatusError`` — and the
-    shared ``httpx.AsyncClient`` adds no retry layer of its own. The routes are
-    ``POST /v3/traces/search`` for query mode, then ``GET /v3/traces/{id}/spans``
-    and one ``GET /v3/traces/{id}/spans/{span_id}`` per span for its attributes.
-    Raw httpx, as before the ``/v3`` move, to keep that fix small. The SDK has had
-    these routes since 4.14, and ``trace_finder/orq_source.py`` reads them through
-    it; sharing one client is follow-up work, not a technical constraint.
+    The reads go through the Orq SDK client (``http_client``, when given, is its
+    transport). Query mode lists traces with ``POST /v3/traces/search``. Each
+    trace's messages come from ``GET /v3/traces/{id}/conversation``, which picks
+    the span to read; the importer then reads that span and its ancestors from
+    ``GET /v3/traces/{id}/spans/{span_id}`` for the metadata the conversation
+    does not carry. Retries are `common.retry.with_retry` alone, including 429s
+    and 5xx; the SDK's own retries are off for these calls.
     """
-    key, host = _resolve_orq_credentials(api_key, base_url)
-    headers = {'Authorization': f'Bearer {key}'}
-    owned = http_client is None
-    client = http_client or httpx.AsyncClient(timeout=60.0)
-    try:
-        rows = (
-            [{'trace_id': source.trace_id}]
-            if source.trace_id is not None
-            else await _list_trace_rows(client, source, host=host, headers=headers)
-        )
-
+    async with _trace_api(api_key, base_url, http_client) as api:
+        rows = [{'trace_id': source.trace_id}] if source.trace_id is not None else await _list_trace_rows(api, source)
         semaphore = asyncio.Semaphore(_SPAN_FETCH_CONCURRENCY)
-        detail_semaphore = asyncio.Semaphore(_SPAN_DETAIL_CONCURRENCY)
 
         async def fetch_one(row: dict[str, Any]) -> Trace:
-            trace_id = str(row['trace_id'])
             async with semaphore:
-                try:
-                    spans = await _fetch_trace_spans(
-                        client, trace_id, host=host, headers=headers, detail_semaphore=detail_semaphore
-                    )
-                except (httpx.HTTPError, json.JSONDecodeError) as exc:
-                    return _failed_trace(trace_id, f'could not fetch its spans: {exc}')
-                except _SpanFetchError as exc:
-                    return _failed_trace(trace_id, str(exc))
-            return _trace_from_spans(
-                trace_id,
-                spans,
-                requested_span_id=source.span_id,
-                trace_metadata=row,
-            )
+                return await _import_trace(api, row, requested_span_id=source.span_id)
 
         selected_rows = rows if source.trace_id is not None else rows[: source.query_limit]
         if not selected_rows and source.trace_id is None:
@@ -941,9 +1128,33 @@ async def fetch_traces(
                 source.end_time,
             )
         return await asyncio.gather(*(fetch_one(row) for row in selected_rows if row.get('trace_id')))
-    finally:
-        if owned:
-            await client.aclose()
+
+
+async def fetch_trace_spans(
+    trace_id: str,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    http_client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """Every span of one Orq trace, each with its ``attributes``, in the API's order.
+
+    This is the span list ``OtelTrace.from_orq`` takes. It reads every page of
+    ``GET /v3/traces/{id}/spans`` (up to 2000 spans) and one
+    ``GET /v3/traces/{id}/spans/{span_id}`` per span, with the same client and
+    retry policy as `fetch_traces`.
+
+    Raises:
+        RuntimeError: a request failed, or the span list could not be read to its end.
+        ValueError: no API key was passed and ``ORQ_API_KEY`` is unset.
+    """
+    async with _trace_api(api_key, base_url, http_client) as api:
+        try:
+            return await _all_spans(api, trace_id, detail_semaphore=asyncio.Semaphore(_SPAN_DETAIL_CONCURRENCY))
+        except _TraceReadError as exc:
+            raise RuntimeError(f'Could not read the spans of Orq trace {trace_id}: {exc}') from exc
+        except _orq_error_types() as exc:
+            raise RuntimeError(f'Could not read the spans of Orq trace {trace_id}: {_describe_error(exc)}') from exc
 
 
 def partition_traces(traces: Sequence[Trace], *, caller: str) -> tuple[list[Trace], list[Trace]]:
@@ -994,4 +1205,4 @@ async def load_traces(
     return TraceBatch(traces, usable, failed)
 
 
-__all__ = ['TraceBatch', 'fetch_traces', 'load_traces', 'partition_traces']
+__all__ = ['TraceBatch', 'fetch_trace_spans', 'fetch_traces', 'load_traces', 'partition_traces']

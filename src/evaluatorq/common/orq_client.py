@@ -27,6 +27,7 @@ from loguru import logger
 from evaluatorq.common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
 
 if TYPE_CHECKING:
+    import httpx
     from orq_ai_sdk import Orq
 
 _INSTALL_HINT = (
@@ -40,12 +41,15 @@ def orq_server_url() -> str:
     return env_raw('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
 
 
-def resolve_orq_client(api_key: str | None = None, base_url: str | None = None) -> Orq:
+def resolve_orq_client(
+    api_key: str | None = None, base_url: str | None = None, *, async_client: httpx.AsyncClient | None = None
+) -> Orq:
     """Build an Orq SDK client from ``api_key`` or ``ORQ_API_KEY``.
 
     ``base_url`` overrides ``ORQ_BASE_URL`` for one client, so a caller holding a
     self-hosted host in a variable does not have to set an environment variable
-    to reach it.
+    to reach it. ``async_client`` is the transport for the SDK's async calls; the
+    caller keeps owning it, and the SDK does not close it.
 
     Raises:
         ImportError: the optional ``orq-ai-sdk`` dependency is not installed.
@@ -60,6 +64,8 @@ def resolve_orq_client(api_key: str | None = None, base_url: str | None = None) 
     except ModuleNotFoundError as e:  # pragma: no cover - extra not installed
         raise ImportError(_INSTALL_HINT) from e
 
+    if async_client is not None:
+        return Orq(api_key=key, server_url=base_url or orq_server_url(), async_client=async_client)
     return Orq(api_key=key, server_url=base_url or orq_server_url())
 
 

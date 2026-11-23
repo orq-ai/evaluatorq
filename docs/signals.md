@@ -46,18 +46,26 @@ print(report.results['tool_error_count'].preconditions)
 print(report.results['assistant_message_count'].evidence)
 ```
 
-The example uses a local span fixture with the same shape as an Orq export, so it runs without credentials. To measure a recorded run, get its trace ID from the Orq trace URL, set `ORQ_API_KEY`, and fetch the spans. The span list carries no message content, so the loop reads each span's detail and merges its `attributes` into the summary. It needs `jq`, and reads the first 200 spans of the trace:
+The example uses a local span fixture with the same shape as an Orq export, so it runs without credentials. To measure a recorded run, get its trace ID from the Orq trace URL, set `ORQ_API_KEY`, and fetch its spans with `fetch_trace_spans()`. It returns every span of the trace with its `attributes` merged into the summary, which is the list `OtelTrace.from_orq()` takes:
 
-```bash
-TRACE_ID=trace_123
-SPANS="${ORQ_BASE_URL:-https://my.orq.ai}/v3/traces/${TRACE_ID}/spans"
-AUTH="Authorization: Bearer ${ORQ_API_KEY}"
-curl -fsS "${SPANS}?limit=200" -H "${AUTH}" | jq -r '.data[].span_id' | while read -r SPAN_ID; do
-  curl -fsS "${SPANS}/${SPAN_ID}" -H "${AUTH}" | jq '.span.summary + {attributes: .span.attributes}'
-done | jq -s . > spans.json
+```python
+import asyncio
+
+from evaluatorq import fetch_trace_spans
+from evaluatorq.formats.otel import OtelTrace
+from evaluatorq.signals import compute_signals
+
+
+async def main() -> None:
+    raw_spans = await fetch_trace_spans('8e00b00fdd6f72f6850e2850bc444d0e')  # Your trace ID.
+    trajectory = OtelTrace.from_orq(raw_spans).to_atif(agent_name='support-agent')
+    print(compute_signals(trajectory).values())
+
+
+asyncio.run(main())
 ```
 
-Replace the fixture's `raw_spans` list with `json.loads(Path('spans.json').read_text(encoding='utf-8'))` after importing `json`. `SignalsConfig.from_file()` accepts a JSON object containing any subset of config fields; omitted fields keep their defaults, and unknown fields raise a validation error.
+It reads up to 2000 spans. A trace with more, or a span request that still fails after retries, raises `RuntimeError` rather than returning part of the trace, because signals computed over half a run look like a complete run. `SignalsConfig.from_file()` accepts a JSON object containing any subset of config fields; omitted fields keep their defaults, and unknown fields raise a validation error.
 
 You can run one signal by passing `only=['tool_error_count']` to `compute_signals()`. Group D tags load their metric dependencies automatically. `report.values()` returns only signals with a basis; inspect `report.results[name]` for evidence, preconditions, the approximation flag, or a `no_basis` explanation.
 

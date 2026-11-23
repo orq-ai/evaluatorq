@@ -11,9 +11,9 @@ from typing import Any, Literal
 import httpx
 import pytest
 
-from evaluatorq import Trace, TraceInput, fetch_traces
+from evaluatorq import Trace, TraceInput, fetch_trace_spans, fetch_traces
+from evaluatorq.common import retry as retry_module
 from evaluatorq.common.trace_input import (
-    _fetch_trace_spans,
     _message_candidates,
     _trace_from_spans,
     detect_message_format,
@@ -21,7 +21,7 @@ from evaluatorq.common.trace_input import (
     partition_traces,
 )
 from evaluatorq.contracts import Message
-from tests.common.orq_trace_api import SEARCH_PATH, search_page, serve_spans
+from tests.common.orq_trace_api import SEARCH_PATH, message_item, search_page, serve_spans
 
 
 @pytest.mark.parametrize(
@@ -572,13 +572,10 @@ async def test_fetch_supports_explicit_trace_and_search() -> None:
 
     spans_by_trace = {
         trace_id: [
-            _span(
-                f'span-{trace_id}',
-                parent_id=None,
-                started_at='2026-01-01T00:00:00Z',
-                input_={'messages': [{'role': 'user', 'content': 'q'}]},
-                output={'role': 'assistant', 'content': 'a'},
-            )
+            {
+                **_span(f'span-{trace_id}', parent_id=None, started_at='2026-01-01T00:00:00Z'),
+                'conversation': [message_item('user', 'q'), message_item('assistant', 'a')],
+            }
         ]
         for trace_id in ('explicit', 'searched')
     }
@@ -610,8 +607,8 @@ async def test_fetch_supports_explicit_trace_and_search() -> None:
     assert [row.input_messages[0].content for row in explicit + searched] == ['q', 'q']
     assert seen_search_body['query'] == 'agent'
     assert seen_search_body['filter_operator'] == 'and'
-    assert seen_search_body['from'] == '2026-01-01T00:00:00+00:00'
-    assert seen_search_body['to'] == '2026-01-02T00:00:00+00:00'
+    assert seen_search_body['from'] == '2026-01-01T00:00:00Z'
+    assert seen_search_body['to'] == '2026-01-02T00:00:00Z'
 
 
 def test_evaluatorq_own_run_attribute_is_not_an_evaluator_span() -> None:
@@ -756,20 +753,17 @@ def test_mixed_timezone_awareness_does_not_raise_typeerror() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_non_object_span_fails_only_its_own_trace() -> None:
-    """One malformed spans payload must not abort the whole gather."""
+async def test_a_malformed_conversation_fails_only_its_own_trace() -> None:
+    """One malformed conversation payload must not abort the whole gather."""
 
     spans_by_trace: dict[str, Any] = {
         'good': [
-            _span(
-                's1',
-                parent_id=None,
-                started_at='2026-01-01T00:00:00Z',
-                input_={'messages': [{'role': 'user', 'content': 'hi'}]},
-                output={'messages': [{'role': 'assistant', 'content': 'hello'}]},
-            )
+            {
+                **_span('s1', parent_id=None, started_at='2026-01-01T00:00:00Z'),
+                'conversation': [message_item('user', 'hi'), message_item('assistant', 'hello')],
+            }
         ],
-        'bad': [None],
+        'bad': {'items': 'not a list'},
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -783,7 +777,7 @@ async def test_a_non_object_span_fails_only_its_own_trace() -> None:
     by_id = {trace.trace_id: trace for trace in traces}
     assert by_id['good'].import_error is None
     assert by_id['bad'].import_error is not None
-    assert 'non-object span' in by_id['bad'].import_error
+    assert 'not an object with an items list' in by_id['bad'].import_error
 
 
 @pytest.mark.asyncio
@@ -867,26 +861,274 @@ def test_orq_router_agent_output_role_is_imported_as_assistant() -> None:
 
 
 @pytest.mark.asyncio
-async def test_span_content_comes_from_each_span_detail_across_list_pages() -> None:
+async def test_open_query_window_still_sends_the_required_bounds() -> None:
+    """``/v3/traces/search`` requires ``from``/``to``; a query without bounds asks for everything up to now.
+
+    The start is not the Unix epoch: the API answers a ``from`` of 1970-01-01 with no rows.
+    """
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return search_page([])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await fetch_traces(TraceInput(limit=3), api_key='k', http_client=client)
+
+    [body] = bodies
+    assert body['from'] == '2000-01-01T00:00:00Z'
+    assert datetime.fromisoformat(body['to']) <= datetime.now(timezone.utc)
+    assert 'query' not in body
+
+
+@pytest.mark.asyncio
+async def test_search_that_repeats_its_page_token_stops_with_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        if request.url.path == SEARCH_PATH:
+            calls += 1
+            return search_page([f't{calls}'], next_page_token='same')
+        return serve_spans(request, {}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with caplog.at_level(logging.WARNING):
+            traces = await fetch_traces(TraceInput(limit=10), api_key='k', http_client=client)
+
+    assert calls == 2
+    assert [trace.trace_id for trace in traces] == ['t1', 't2']
+    assert any("repeated page token 'same'" in record.message for record in caplog.records)
+
+
+def _gen_ai_attributes(question: str, answer: str) -> dict[str, Any]:
+    return {
+        'gen_ai': {
+            'input': {'messages': [{'role': 'user', 'parts': [{'type': 'text', 'content': question}]}]},
+            'output': {'messages': [{'role': 'assistant', 'parts': [{'type': 'text', 'content': answer}]}]},
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_messages_come_from_the_conversation_route_and_metadata_from_its_span_path() -> None:
+    """One conversation call per trace, then one detail call per level of the conversation span's path."""
+    spans = [
+        _span('root', parent_id=None, started_at='2026-01-01T00:00:00Z', attributes={'session_id': 'session-1'}),
+        {
+            **_span(
+                'llm',
+                parent_id='root',
+                started_at='2026-01-01T00:00:01Z',
+                span_type='span.responses',
+                attributes={'retrievals': ['doc-1'], 'thread_id': 'thread-1'},
+            ),
+            'name': 'chat',
+            'model': 'gpt-5.4-mini',
+            'conversation': [
+                message_item('system', 'Be brief.'),
+                message_item('user', 'Is the sky blue?'),
+                {'type': 'reasoning', 'summary': []},
+                {'type': 'function_call', 'call_id': 'call_1', 'name': 'look_up', 'arguments': '{}'},
+                {'type': 'function_call_output', 'call_id': 'call_1', 'output': 'blue'},
+                message_item('assistant', 'Yes.'),
+            ],
+        },
+        _span('sibling', parent_id='root', started_at='2026-01-01T00:00:02Z', attributes={'actor_id': 'off-path'}),
+    ]
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return serve_spans(request, {'t1': spans}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
+
+    assert paths == ['/v3/traces/t1/conversation', '/v3/traces/t1/spans/llm', '/v3/traces/t1/spans/root']
+    assert trace.import_error is None
+    assert trace.message_span_id == 'llm'
+    assert trace.message_format == 'responses'
+    assert [(message.role, message.content) for message in trace.input_messages] == [
+        ('system', 'Be brief.'),
+        ('user', 'Is the sky blue?'),
+        ('assistant', None),
+        ('tool', 'blue'),
+    ]
+    assert trace.input_messages[2].tool_calls is not None
+    assert [(message.role, message.content) for message in trace.output_messages] == [('assistant', 'Yes.')]
+    assert trace.tools_called == ['look_up']
+    assert trace.retrievals == ['doc-1']
+    assert trace.session_id == 'session-1'
+    assert trace.thread_id == 'thread-1'
+    # The sibling is off the conversation span's path, so its attributes are never read.
+    assert trace.actor_id is None
+    assert trace.metadata['span_name'] == 'chat'
+    assert trace.metadata['model'] == 'gpt-5.4-mini'
+
+
+@pytest.mark.asyncio
+async def test_a_trace_with_an_empty_conversation_is_a_failed_trace() -> None:
+    spans = [_span('root', parent_id=None, started_at='2026-01-01T00:00:00Z')]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return serve_spans(request, {'t1': spans}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
+
+    assert trace.import_error == 'Orq found no non-evaluator span with input or output messages.'
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_trace_id_is_a_failed_trace() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return serve_spans(request, {}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [trace] = await fetch_traces(TraceInput(trace_id='nope'), api_key='k', http_client=client)
+
+    assert trace.import_error == 'the trace was not found.'
+
+
+@pytest.mark.asyncio
+async def test_a_requested_span_is_read_by_id_and_a_missing_one_fails_its_trace() -> None:
+    spans = [
+        {
+            **_span('root', parent_id=None, started_at='2026-01-01T00:00:00Z'),
+            'conversation': [message_item('user', 'first'), message_item('assistant', 'one')],
+        },
+        {
+            **_span('later', parent_id='root', started_at='2026-01-01T00:00:01Z'),
+            'conversation': [message_item('user', 'second'), message_item('assistant', 'two')],
+        },
+    ]
+    requested: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith('/conversation'):
+            requested.append(request.url.params.get('span_id'))
+        return serve_spans(request, {'t1': spans}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [found] = await fetch_traces(TraceInput(trace_id='t1', span_id='root'), api_key='k', http_client=client)
+        [missing] = await fetch_traces(TraceInput(trace_id='t1', span_id='nope'), api_key='k', http_client=client)
+
+    assert requested == ['root', 'nope']
+    assert found.message_span_id == 'root'
+    assert found.requested_span_id == 'root'
+    assert [message.content for message in found.messages] == ['first', 'one']
+    assert missing.import_error == "requested span 'nope' was not found."
+    assert missing.requested_span_id == 'nope'
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_span_under_an_evaluator_fails_its_trace() -> None:
+    spans = [
+        _span('judge', parent_id=None, started_at='2026-01-01T00:00:00Z', span_type='span.evaluator'),
+        {
+            **_span('llm', parent_id='judge', started_at='2026-01-01T00:00:01Z'),
+            'conversation': [message_item('user', 'grade this'), message_item('assistant', 'pass')],
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return serve_spans(request, {'t1': spans}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [trace] = await fetch_traces(TraceInput(trace_id='t1', span_id='llm'), api_key='k', http_client=client)
+
+    assert trace.import_error == "requested span 'llm' belongs to an evaluator span or its subtree."
+
+
+@pytest.mark.asyncio
+async def test_a_failed_path_detail_fails_the_trace() -> None:
+    spans = [
+        _span('root', parent_id=None, started_at='2026-01-01T00:00:00Z'),
+        {
+            **_span('llm', parent_id='root', started_at='2026-01-01T00:00:01Z'),
+            'conversation': [message_item('user', 'q'), message_item('assistant', 'a')],
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/v3/traces/t1/spans/root':
+            return httpx.Response(404, json={'message': 'trace span not found'})
+        return serve_spans(request, {'t1': spans}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
+
+    assert trace.import_error == 'could not fetch it: HTTP 404: trace span not found'
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_conversation_is_retried_once_by_with_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The SDK's own retries are off, so ``with_retry`` is the only layer and a 429 costs one extra request."""
+    sleeps: list[float] = []
+
+    async def no_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(retry_module.asyncio, 'sleep', no_sleep)
+    spans = [
+        {
+            **_span('root', parent_id=None, started_at='2026-01-01T00:00:00Z'),
+            'conversation': [message_item('user', 'q'), message_item('assistant', 'a')],
+        }
+    ]
+    conversation_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal conversation_calls
+        if request.url.path.endswith('/conversation'):
+            conversation_calls += 1
+            if conversation_calls == 1:
+                return httpx.Response(429, json={'message': 'slow down'})
+        return serve_spans(request, {'t1': spans}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
+
+    assert trace.import_error is None
+    assert conversation_calls == 2
+    assert len(sleeps) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_sdk_without_get_conversation_reads_the_route_directly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """orq-ai-sdk 4.14 to 4.16 has no ``traces.get_conversation``; the importer then makes one raw GET."""
+    from orq_ai_sdk.traces import Traces
+
+    monkeypatch.delattr(Traces, 'get_conversation_async')
+    spans = [
+        {
+            **_span('root', parent_id=None, started_at='2026-01-01T00:00:00Z'),
+            'conversation': [message_item('user', 'q'), message_item('assistant', 'a')],
+        }
+    ]
+    auth: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith('/conversation'):
+            auth.append(request.headers.get('Authorization'))
+        return serve_spans(request, {'t1': spans}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [found] = await fetch_traces(
+            TraceInput(trace_id='t1', span_id='root'), api_key='k', base_url='https://orq.test', http_client=client
+        )
+
+    assert auth == ['Bearer k']
+    assert [message.content for message in found.messages] == ['q', 'a']
+
+
+@pytest.mark.asyncio
+async def test_fetch_trace_spans_reads_every_list_page_and_every_span_detail() -> None:
     """The span list carries no content and pages by token; every span's attributes come from its detail route."""
     spans = [
-        _span(
-            'root',
-            parent_id=None,
-            started_at='2026-01-01T00:00:00Z',
-            attributes={'gen_ai': {'input': {'messages': [{'role': 'user', 'parts': [{'type': 'text', 'content': 'q'}]}]}}},
-        ),
-        _span(
-            'leaf',
-            parent_id='root',
-            started_at='2026-01-01T00:00:01Z',
-            attributes={
-                'gen_ai': {
-                    'input': {'messages': [{'role': 'user', 'parts': [{'type': 'text', 'content': 'q'}]}]},
-                    'output': {'messages': [{'role': 'assistant', 'parts': [{'type': 'text', 'content': 'a'}]}]},
-                }
-            },
-        ),
+        _span('root', parent_id=None, started_at='2026-01-01T00:00:00Z', attributes=_gen_ai_attributes('q', 'r')),
+        _span('leaf', parent_id='root', started_at='2026-01-01T00:00:01Z', attributes=_gen_ai_attributes('q', 'a')),
     ]
     list_tokens: list[str | None] = []
     detail_paths: list[str] = []
@@ -910,39 +1152,33 @@ async def test_span_content_comes_from_each_span_detail_across_list_pages() -> N
         return serve_spans(request, {'t1': spans}) or httpx.Response(404)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
+        merged = await fetch_trace_spans('t1', api_key='k', http_client=client)
 
     assert list_tokens == [None, 'next']
     assert sorted(detail_paths) == ['/v3/traces/t1/spans/leaf', '/v3/traces/t1/spans/root']
-    assert trace.import_error is None
-    assert trace.message_span_id == 'leaf'
-    assert [message.content for message in trace.input_messages + trace.output_messages] == ['q', 'a']
+    assert merged == spans
 
 
 @pytest.mark.asyncio
-async def test_open_query_window_still_sends_the_required_bounds() -> None:
-    """``/v3/traces/search`` requires ``from``/``to``; a query without bounds asks for everything up to now.
+async def test_fetch_trace_spans_feeds_otel_trace_from_orq() -> None:
+    """The helper returns exactly the span list ``OtelTrace.from_orq`` takes."""
+    from evaluatorq.formats.otel import OtelTrace
 
-    The start is not the Unix epoch: the API answers a ``from`` of 1970-01-01 with no rows.
-    """
-    bodies: list[dict[str, Any]] = []
+    spans = [_span('root', parent_id=None, started_at='2026-01-01T00:00:00Z', attributes=_gen_ai_attributes('q', 'a'))]
 
     def handler(request: httpx.Request) -> httpx.Response:
-        bodies.append(json.loads(request.content))
-        return search_page([])
+        return serve_spans(request, {'t1': spans}) or httpx.Response(404)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await fetch_traces(TraceInput(limit=3), api_key='k', http_client=client)
+        merged = await fetch_trace_spans('t1', api_key='k', http_client=client)
 
-    [body] = bodies
-    assert body['from'] == '2000-01-01T00:00:00Z'
-    assert datetime.fromisoformat(body['to']) <= datetime.now(timezone.utc)
-    assert 'query' not in body
+    trace = OtelTrace.from_orq(merged)
+    assert [span.span_id for span in trace.spans] == ['root']
 
 
 @pytest.mark.asyncio
-async def test_failed_span_detail_fails_the_trace_and_cancels_its_other_detail_calls() -> None:
-    """One unreadable span fails the whole trace, so the trace's other detail calls must not keep running."""
+async def test_a_failed_span_detail_fails_fetch_trace_spans_and_cancels_its_other_detail_calls() -> None:
+    """One unreadable span fails the whole read, so the other detail calls must not keep running."""
     spans = [
         _span('broken', parent_id=None, started_at='2026-01-01T00:00:00Z'),
         _span('slow', parent_id='broken', started_at='2026-01-01T00:00:01Z'),
@@ -961,16 +1197,15 @@ async def test_failed_span_detail_fails_the_trace_and_cancels_its_other_detail_c
         return serve_spans(request, {'t1': spans}) or httpx.Response(404)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
+        with pytest.raises(RuntimeError, match='404'):
+            await fetch_trace_spans('t1', api_key='k', http_client=client)
 
-    assert trace.import_error is not None
-    assert '404' in trace.import_error
     assert slow_cancelled.is_set()
 
 
 @pytest.mark.asyncio
-async def test_span_list_that_repeats_its_page_token_fails_the_trace() -> None:
-    """A server stuck on one page token would otherwise be paged forever."""
+async def test_a_span_list_that_repeats_its_page_token_is_never_returned_partially() -> None:
+    """A server stuck on one page token would otherwise be paged forever, or cut short."""
     calls = 0
 
     def stuck_handler(request: httpx.Request) -> httpx.Response:
@@ -980,51 +1215,47 @@ async def test_span_list_that_repeats_its_page_token_fails_the_trace() -> None:
         return httpx.Response(200, json={'object': 'list', 'data': [summary], 'has_more': True, 'next_page_token': 'same'})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(stuck_handler)) as client:
-        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
+        with pytest.raises(RuntimeError, match="repeated page token 'same'"):
+            await fetch_trace_spans('t1', api_key='k', http_client=client)
 
-    assert trace.import_error is not None
-    assert "repeated page token 'same'" in trace.import_error
     assert calls == 2
 
 
 @pytest.mark.asyncio
-async def test_span_list_that_promises_more_pages_without_a_token_fails_the_trace() -> None:
-    """Stopping quietly would import the trace with spans missing."""
-
+async def test_a_span_list_that_promises_more_pages_without_a_token_raises() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         summary = {'span_id': 'root', 'parent_span_id': None}
         return httpx.Response(200, json={'object': 'list', 'data': [summary], 'has_more': True, 'next_page_token': ''})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
-
-    assert trace.import_error is not None
-    assert 'returns no page token' in trace.import_error
+        with pytest.raises(RuntimeError, match='returns no page token'):
+            await fetch_trace_spans('t1', api_key='k', http_client=client)
 
 
 @pytest.mark.asyncio
-async def test_search_that_repeats_its_page_token_stops_with_a_warning(caplog: pytest.LogCaptureFixture) -> None:
-    calls = 0
+async def test_a_span_list_past_the_page_cap_raises() -> None:
+    pages = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        if request.url.path == SEARCH_PATH:
-            calls += 1
-            return search_page([f't{calls}'], next_page_token='same')
-        return serve_spans(request, {}) or httpx.Response(404)
+        nonlocal pages
+        pages += 1
+        return httpx.Response(
+            200, json={'object': 'list', 'data': [], 'has_more': True, 'next_page_token': f'page-{pages}'}
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        with caplog.at_level(logging.WARNING):
-            traces = await fetch_traces(TraceInput(limit=10), api_key='k', http_client=client)
+        with pytest.raises(RuntimeError, match='exceeded 10 pages'):
+            await fetch_trace_spans('t1', api_key='k', http_client=client)
 
-    assert calls == 2
-    assert [trace.trace_id for trace in traces] == ['t1', 't2']
-    assert any("repeated page token 'same'" in record.message for record in caplog.records)
+    assert pages == 10
 
 
 @pytest.mark.asyncio
 async def test_list_summary_wins_over_the_detail_summary() -> None:
-    """The detail route reports every span as a childless root; only the list knows the tree position."""
+    """The detail route reports every span as a childless root; only the list knows the tree position.
+
+    ``level`` and ``has_children`` are not on orq-ai-sdk 4.14's span model, so this also proves the raw body is read.
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/v3/traces/t1/spans':
@@ -1034,8 +1265,6 @@ async def test_list_summary_wins_over_the_detail_summary() -> None:
         return httpx.Response(200, json={'span': {'summary': detail_summary, 'attributes': {'k': 'v'}}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        [span] = await _fetch_trace_spans(
-            client, 't1', host='http://orq', headers={}, detail_semaphore=asyncio.Semaphore(1)
-        )
+        [span] = await fetch_trace_spans('t1', api_key='k', http_client=client)
 
     assert span == {'span_id': 'child', 'parent_span_id': 'root', 'has_children': True, 'level': 1, 'attributes': {'k': 'v'}}

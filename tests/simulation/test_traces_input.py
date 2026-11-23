@@ -25,7 +25,7 @@ from evaluatorq.simulation.traces import (
 )
 from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 from evaluatorq.types import Trace, TraceInput
-from tests.common.orq_trace_api import SEARCH_PATH, search_page, serve_spans
+from tests.common.orq_trace_api import SEARCH_PATH, message_item, search_page, serve_spans
 
 
 def _make_persona(name: str = "Test Persona") -> Persona:
@@ -115,14 +115,14 @@ async def test_fetch_trace_conversations() -> None:
     spans_by_trace = {
         "t1": [
             {
-                "parent_id": None,
+                "span_id": "s1",
+                "parent_span_id": None,
                 "type": "Trace",
-                "input": {"messages": [{"role": "user", "content": "hello"}]},
-                "output": {"role": "assistant", "content": "hi"},
+                "conversation": [message_item("user", "hello"), message_item("assistant", "hi")],
             }
         ],
         # No user message -> skipped.
-        "t2": [{"parent_id": None, "type": "Trace", "input": {}, "output": {}}],
+        "t2": [{"span_id": "s2", "parent_span_id": None, "type": "Trace", "conversation": []}],
     }
     async with _mock_client(spans_by_trace) as client:
         conversations = await fetch_trace_conversations(
@@ -549,17 +549,17 @@ async def test_fetch_survives_malformed_span_body() -> None:
 
     good = [
         {
-            "parent_id": None,
+            "span_id": "s1",
+            "parent_span_id": None,
             "type": "Trace",
-            "input": {"messages": [{"role": "user", "content": "hello"}]},
-            "output": {"role": "assistant", "content": "hi"},
+            "conversation": [message_item("user", "hello"), message_item("assistant", "hi")],
         }
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == SEARCH_PATH:
             return search_page(["bad", "good"])
-        if request.url.path == "/v3/traces/bad/spans":
+        if request.url.path == "/v3/traces/bad/conversation":
             # What the retired /v2 span route did: the web app's HTML page with a 200.
             return httpx.Response(200, text="<html>not json</html>")
         return serve_spans(request, {"good": good}) or httpx.Response(404, json={"message": "not found"})
@@ -572,15 +572,15 @@ async def test_fetch_survives_malformed_span_body() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_skips_non_list_spans_payload() -> None:
-    """An error-envelope spans payload ({"message": ...}) drops the trace, not the batch."""
+    """An error-envelope conversation payload ({"message": ...}) drops the trace, not the batch."""
     spans_by_trace: dict[str, Any] = {
         "wrapped": {"message": "internal"},
         "good": [
             {
-                "parent_id": None,
+                "span_id": "s1",
+                "parent_span_id": None,
                 "type": "Trace",
-                "input": {"messages": [{"role": "user", "content": "hello"}]},
-                "output": {"role": "assistant", "content": "hi"},
+                "conversation": [message_item("user", "hello"), message_item("assistant", "hi")],
             }
         ],
     }

@@ -67,6 +67,13 @@ def without_client_retries(client: AsyncOpenAI) -> AsyncOpenAI:
     return client.with_options(max_retries=0)
 
 
+def _orq_status_error() -> tuple[type[BaseException], ...]:
+    """The Orq SDK's HTTP status error class, imported on first use to keep the SDK off import time."""
+    from orq_ai_sdk.models import OrqError
+
+    return (OrqError,)
+
+
 def _is_retryable_status(
     status: int | None,
     retry_statuses: set[int] | None = None,
@@ -98,11 +105,15 @@ def _is_retryable_error(
     if isinstance(err, CONNECTION_ERRORS):
         return True
 
-    # A raw httpx call (the Orq trace endpoints, which have no SDK method) raises
-    # HTTPStatusError from raise_for_status() — not an SDK class, so without this
-    # branch a 429 or a 503 mid-import ended the run on the first attempt.
+    # A raw httpx call raises HTTPStatusError from raise_for_status(): not an SDK
+    # class, so without this branch a 429 or a 503 ended the call on the first attempt.
     if isinstance(err, httpx.HTTPStatusError):
         return _is_retryable_status(err.response.status_code, retry_statuses)
+
+    # The Orq SDK raises OrqError for a 4XX/5XX answer. Its trace reads run with the
+    # SDK's own retries off (common.trace_input), so this layer is the only one.
+    if isinstance(err, _orq_status_error()):
+        return _is_retryable_status(getattr(err, 'status_code', None), retry_statuses)
 
     # Defensive fallback for a raw httpx error raised outside the SDK: match the
     # connection-error class names directly, or through a single __cause__ hop.

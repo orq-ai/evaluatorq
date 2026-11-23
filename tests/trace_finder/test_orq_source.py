@@ -16,15 +16,15 @@ from evaluatorq.signals import compute_signals
 from evaluatorq.trace_finder import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.models import Snapshot
 from evaluatorq.trace_finder.orq_source import (
-    MAX_SPAN_PAGES,
     OrqSpanMismatchError,
     OrqSourceError,
     OrqTraceSource,
     _conversation_messages,
-    _RawResponseCapture,
     _selected_span_signal_data,
     build_oql,
 )
+from evaluatorq.common.orq_traces import MAX_SPAN_PAGES
+from evaluatorq.common.orq_traces import RawResponseCapture as _RawResponseCapture
 from evaluatorq.trace_finder.rows import TraceRow
 
 UTC = timezone.utc
@@ -1263,7 +1263,7 @@ def test_raw_response_capture_retains_only_supported_operations() -> None:
     )
 
     capture.after_success(namespace(operation_id='TracesQueryOql'), response)
-    capture.after_success(namespace(operation_id='TracesSearch'), response)
+    capture.after_success(namespace(operation_id='TracesGet'), response)
 
     assert capture.pop('/traces/query') == {'search': {'data': [{'trace_id': 'trace'}]}}
     assert capture.pop('/traces/query') is None
@@ -1283,7 +1283,7 @@ def test_raw_response_capture_ignores_the_api_version_segment() -> None:
 
 @pytest.mark.asyncio
 async def test_raw_response_capture_correlates_interleaved_requests() -> None:
-    from evaluatorq.trace_finder.orq_source import _CAPTURE_REQUEST
+    from evaluatorq.common.orq_traces import CAPTURE_REQUEST as _CAPTURE_REQUEST
 
     capture = _RawResponseCapture()
     ready = asyncio.Event()
