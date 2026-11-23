@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 from typing import Any
@@ -80,7 +81,7 @@ class _FakeDatasets:
         self.appended: tuple[str, list[Any]] | None = None
 
     def create(self, *, display_name: str, path: str) -> Any:
-        # Mirrors the orq-ai-sdk >= 4.18 signature; the 4.15 `request=` form no longer exists.
+        # Mirrors the orq-ai-sdk >= 4.16 signature; 4.14 and 4.15 take one `request=` dict.
         self.created = {'display_name': display_name, 'path': path}
         return type('DS', (), {'id': 'ds_new'})()
 
@@ -142,3 +143,44 @@ def test_write_datapoints_dataset_format(tmp_path: Path) -> None:
 def test_simulate_requires_exactly_one_source(args: list[str]) -> None:
     result = runner.invoke(app, ['simulate', *args])
     assert result.exit_code != 0
+
+
+class _LegacyDatasets(_FakeDatasets):
+    def create(self, *, request: dict[str, Any]) -> Any:  # ty: ignore[incompatible-method-override]
+        # The orq-ai-sdk 4.14 and 4.15 signature.
+        self.created = request
+        return type('DS', (), {'id': 'ds_legacy'})()
+
+
+def test_upload_dataset_still_creates_on_a_pre_4_16_sdk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ds = _LegacyDatasets()
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setattr('evaluatorq.fetch_data.setup_orq_client', lambda _key: type('Client', (), {'datasets': ds})())
+    dp_file = tmp_path / 'dp.jsonl'
+    _write_raw(dp_file)
+
+    with pytest.warns(FutureWarning, match=r'orq-ai-sdk older than 4\.16 is deprecated'):
+        result = runner.invoke(app, ['upload-dataset', '-i', str(dp_file), '-n', 'My Set'])
+
+    assert result.exit_code == 0, result.output
+    assert ds.created == {'display_name': 'My Set', 'path': 'Default'}
+    assert ds.appended is not None and ds.appended[0] == 'ds_legacy'
+
+
+def test_upload_dataset_on_a_current_sdk_does_not_warn(
+    tmp_path: Path, fake_client: _FakeDatasets, recwarn: pytest.WarningsRecorder
+) -> None:
+    dp_file = tmp_path / 'dp.jsonl'
+    _write_raw(dp_file)
+    result = runner.invoke(app, ['upload-dataset', '-i', str(dp_file), '-n', 'My Set'])
+    assert result.exit_code == 0, result.output
+    assert not [w for w in recwarn if issubclass(w.category, FutureWarning)]
+
+
+def test_installed_sdk_exposes_the_signature_the_upload_reads() -> None:
+    """The fakes above stand in for the SDK; this pins that the real method's signature is readable, not hidden behind a wrapper."""
+    orq_ai_sdk = pytest.importorskip('orq_ai_sdk')
+    datasets = orq_ai_sdk.Orq(api_key='k').datasets
+    parameters = inspect.signature(datasets.create).parameters
+    assert 'display_name' in parameters
+    assert 'request' not in parameters

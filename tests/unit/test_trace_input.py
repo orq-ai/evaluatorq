@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ import pytest
 
 from evaluatorq import Trace, TraceInput, fetch_traces
 from evaluatorq.common.trace_input import (
+    _fetch_trace_spans,
     _message_candidates,
     _trace_from_spans,
     detect_message_format,
@@ -936,3 +938,104 @@ async def test_open_query_window_still_sends_the_required_bounds() -> None:
     assert body['from'] == '2000-01-01T00:00:00Z'
     assert datetime.fromisoformat(body['to']) <= datetime.now(timezone.utc)
     assert 'query' not in body
+
+
+@pytest.mark.asyncio
+async def test_failed_span_detail_fails_the_trace_and_cancels_its_other_detail_calls() -> None:
+    """One unreadable span fails the whole trace, so the trace's other detail calls must not keep running."""
+    spans = [
+        _span('broken', parent_id=None, started_at='2026-01-01T00:00:00Z'),
+        _span('slow', parent_id='broken', started_at='2026-01-01T00:00:01Z'),
+    ]
+    slow_cancelled = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/v3/traces/t1/spans/broken':
+            return httpx.Response(404, json={'message': 'span not found'})
+        if request.url.path == '/v3/traces/t1/spans/slow':
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                slow_cancelled.set()
+                raise
+        return serve_spans(request, {'t1': spans}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
+
+    assert trace.import_error is not None
+    assert '404' in trace.import_error
+    assert slow_cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_span_list_that_repeats_its_page_token_fails_the_trace() -> None:
+    """A server stuck on one page token would otherwise be paged forever."""
+    calls = 0
+
+    def stuck_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        summary = {'span_id': f's{calls}', 'parent_span_id': None}
+        return httpx.Response(200, json={'object': 'list', 'data': [summary], 'has_more': True, 'next_page_token': 'same'})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(stuck_handler)) as client:
+        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
+
+    assert trace.import_error is not None
+    assert "repeated page token 'same'" in trace.import_error
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_span_list_that_promises_more_pages_without_a_token_fails_the_trace() -> None:
+    """Stopping quietly would import the trace with spans missing."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        summary = {'span_id': 'root', 'parent_span_id': None}
+        return httpx.Response(200, json={'object': 'list', 'data': [summary], 'has_more': True, 'next_page_token': ''})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [trace] = await fetch_traces(TraceInput(trace_id='t1'), api_key='k', http_client=client)
+
+    assert trace.import_error is not None
+    assert 'returns no page token' in trace.import_error
+
+
+@pytest.mark.asyncio
+async def test_search_that_repeats_its_page_token_stops_with_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        if request.url.path == SEARCH_PATH:
+            calls += 1
+            return search_page([f't{calls}'], next_page_token='same')
+        return serve_spans(request, {}) or httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with caplog.at_level(logging.WARNING):
+            traces = await fetch_traces(TraceInput(limit=10), api_key='k', http_client=client)
+
+    assert calls == 2
+    assert [trace.trace_id for trace in traces] == ['t1', 't2']
+    assert any("repeated page token 'same'" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_list_summary_wins_over_the_detail_summary() -> None:
+    """The detail route reports every span as a childless root; only the list knows the tree position."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/v3/traces/t1/spans':
+            summary = {'span_id': 'child', 'parent_span_id': 'root', 'has_children': True, 'level': 1}
+            return httpx.Response(200, json={'object': 'list', 'data': [summary], 'has_more': False})
+        detail_summary = {'span_id': 'child', 'parent_span_id': 'root', 'has_children': False, 'level': 0}
+        return httpx.Response(200, json={'span': {'summary': detail_summary, 'attributes': {'k': 'v'}}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        [span] = await _fetch_trace_spans(
+            client, 't1', host='http://orq', headers={}, detail_semaphore=asyncio.Semaphore(1)
+        )
+
+    assert span == {'span_id': 'child', 'parent_span_id': 'root', 'has_children': True, 'level': 1, 'attributes': {'k': 'v'}}

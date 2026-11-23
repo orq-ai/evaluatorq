@@ -696,21 +696,40 @@ async def _request_json(
     *,
     url: str,
     headers: dict[str, str],
+    method: Literal['GET', 'POST'],
     label: str,
     json_body: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
 ) -> Any:
-    """One retried Orq trace API call: a POST when ``json_body`` is given, a GET otherwise."""
+    """One retried Orq trace API call."""
 
     async def call() -> Any:
-        if json_body is not None:
-            response = await client.post(url, headers=headers, json=json_body)
-        else:
-            response = await client.get(url, headers=headers, params=params)
+        response = await client.request(method, url, headers=headers, json=json_body, params=params)
         response.raise_for_status()
         return response.json()
 
     return await with_retry(call, label=label)
+
+
+class _PageTokenError(Exception):
+    """The API said more pages follow but gave no usable token for them."""
+
+
+def _next_page_token(payload: dict[str, Any], seen: set[str]) -> str | None:
+    """The token for the page after ``payload``, or None on the last page.
+
+    Raises `_PageTokenError` on a missing or repeated token, so a server stuck on
+    one token cannot be paged forever. Each caller picks its own policy for that.
+    """
+    if not payload.get('data') or not payload.get('has_more'):
+        return None
+    token = payload.get('next_page_token') or None
+    if token is None:
+        raise _PageTokenError('reports more pages but returns no page token')
+    if token in seen:
+        raise _PageTokenError(f'repeated page token {token!r}')
+    seen.add(token)
+    return token
 
 
 async def _list_trace_rows(
@@ -728,6 +747,7 @@ async def _list_trace_rows(
     """
     rows: list[dict[str, Any]] = []
     page_token: str | None = None
+    seen_tokens: set[str] = set()
     query_limit = source.query_limit
     start, end = _search_window(source)
     while len(rows) < query_limit:
@@ -745,7 +765,12 @@ async def _list_trace_rows(
             body['page_token'] = page_token
         try:
             payload = await _request_json(
-                client, url=f'{host}/v3/traces/search', headers=headers, label='Orq trace list', json_body=body
+                client,
+                method='POST',
+                url=f'{host}/v3/traces/search',
+                headers=headers,
+                label='Orq trace list',
+                json_body=body,
             )
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
             raise RuntimeError(f'Failed to list Orq traces: {exc}') from exc
@@ -759,8 +784,12 @@ async def _list_trace_rows(
             )
             break
         rows.extend(row for row in data if isinstance(row, dict) and row.get('trace_id'))
-        page_token = payload.get('next_page_token') or None
-        if not data or not payload.get('has_more') or page_token is None:
+        try:
+            page_token = _next_page_token(payload, seen_tokens)
+        except _PageTokenError as exc:
+            logger.warning('Orq trace list {}; stopping pagination at {} traces.', exc, len(rows))
+            break
+        if page_token is None:
             break
         if len(rows) == before:
             logger.warning('Stopped paginating traces: a page contained no usable trace IDs.')
@@ -789,12 +818,14 @@ async def _fetch_trace_spans(
     """
     summaries: list[dict[str, Any]] = []
     page_token: str | None = None
+    seen_tokens: set[str] = set()
     while True:
         params: dict[str, Any] = {'limit': _API_PAGE_LIMIT}
         if page_token:
             params['page_token'] = page_token
         payload = await _request_json(
             client,
+            method='GET',
             url=f'{host}/v3/traces/{trace_id}/spans',
             headers=headers,
             label=f'Orq trace {trace_id} spans',
@@ -807,8 +838,11 @@ async def _fetch_trace_spans(
             # One non-object element would raise inside asyncio.gather and take the whole batch with it.
             raise _SpanFetchError('its span list contains a non-object span.')
         summaries.extend(page)
-        page_token = payload.get('next_page_token') or None
-        if not page or not payload.get('has_more') or page_token is None:
+        try:
+            page_token = _next_page_token(payload, seen_tokens)
+        except _PageTokenError as exc:
+            raise _SpanFetchError(f'its span list {exc}.') from exc
+        if page_token is None:
             break
 
     async def with_detail(summary: dict[str, Any]) -> dict[str, Any]:
@@ -818,6 +852,7 @@ async def _fetch_trace_spans(
         async with detail_semaphore:
             payload = await _request_json(
                 client,
+                method='GET',
                 url=f'{host}/v3/traces/{trace_id}/spans/{span_id}',
                 headers=headers,
                 label=f'Orq trace {trace_id} span {span_id}',
@@ -825,9 +860,18 @@ async def _fetch_trace_spans(
         detail = payload.get('span') if isinstance(payload, dict) else None
         if not isinstance(detail, dict):
             raise _SpanFetchError(f'span {span_id!r} detail is not an object with a span field.')
+        # The list summary wins: the detail's summary reports has_children=False and level=0 for every span.
         return {**summary, **{key: value for key, value in detail.items() if key != 'summary'}}
 
-    return list(await asyncio.gather(*(with_detail(summary) for summary in summaries)))
+    tasks = [asyncio.ensure_future(with_detail(summary)) for summary in summaries]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        # The trace has already failed; stop its other detail calls retrying and holding detail slots.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 async def fetch_traces(
@@ -849,8 +893,9 @@ async def fetch_traces(
     shared ``httpx.AsyncClient`` adds no retry layer of its own. The routes are
     ``POST /v3/traces/search`` for query mode, then ``GET /v3/traces/{id}/spans``
     and one ``GET /v3/traces/{id}/spans/{span_id}`` per span for its attributes.
-    Raw httpx rather than the Orq SDK because the span parser reads the API's JSON
-    dicts, and the SDK's span models would need a second parser.
+    Raw httpx, as before the ``/v3`` move, to keep that fix small. The SDK has had
+    these routes since 4.14, and ``trace_finder/orq_source.py`` reads them through
+    it; sharing one client is follow-up work, not a technical constraint.
     """
     key, host = _resolve_orq_credentials(api_key, base_url)
     headers = {'Authorization': f'Bearer {key}'}

@@ -27,10 +27,12 @@ evaluatorq sim runs
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
 import sys
+import warnings
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn, cast
@@ -2097,6 +2099,29 @@ def validate_dataset(
 # ---------------------------------------------------------------------------
 
 
+def _create_orq_dataset(datasets: Any, *, display_name: str, path: str) -> Any:
+    """Create an Orq dataset on any supported orq-ai-sdk.
+
+    4.16 and later take ``display_name`` and ``path`` keywords; 4.14 and 4.15 take
+    one ``request`` dict. Read off the signature rather than catching the
+    ``TypeError``, which would also swallow a real error from the call. Only a
+    visible ``request`` parameter selects the old form, so a signature hidden
+    behind a wrapper gets the current one. The old
+    form warns with ``FutureWarning``, not ``DeprecationWarning``, because Python
+    hides the latter by default and a CLI user would never see it. The old
+    form goes away in RES-1944.
+    """
+    if 'request' not in inspect.signature(datasets.create).parameters:
+        return datasets.create(display_name=display_name, path=path)
+    warnings.warn(
+        'Support for orq-ai-sdk older than 4.16 is deprecated and will be removed in a future release. '
+        "Upgrade with: pip install -U 'orq-ai-sdk>=4.16'",
+        FutureWarning,
+        stacklevel=2,
+    )
+    return datasets.create(request={'display_name': display_name, 'path': path})
+
+
 @app.command('upload-dataset', no_args_is_help=True, epilog=_UPLOAD_DATASET_EPILOG)
 def upload_dataset(
     input_path: Annotated[
@@ -2146,7 +2171,7 @@ def upload_dataset(
 
     if dataset_id is None:
         # name is guaranteed non-None here (validated above).
-        created = client.datasets.create(display_name=name or '', path=path)
+        created = _create_orq_dataset(client.datasets, display_name=name or '', path=path)
         dataset_id = created.id
         typer.echo(f'Created dataset {dataset_id} ("{name}")', err=True)
 
