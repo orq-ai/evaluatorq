@@ -208,10 +208,18 @@ class TestPareto:
         assert [e.router_id for e in result.excluded] == ['e/free']
 
     def test_pareto_score_is_score_per_dollar(self) -> None:
-        point = next(p for p in pareto([MID], mix='list').points)
+        point = next(p for p in pareto([MID], mix='list', min_score=0).points)
         assert point.pareto_score == pytest.approx(40.0 / 2.0)
         # The default blend: no cache rate on MID, so reads bill at input: (7*1 + 2*1 + 1*5) / 10 = 1.4.
-        assert pareto([MID]).points[0].pareto_score == pytest.approx(40.0 / 1.4)
+        assert pareto([MID], min_score=0).points[0].pareto_score == pytest.approx(40.0 / 1.4)
+
+    def test_pareto_score_subtracts_the_floor(self) -> None:
+        point = next(p for p in pareto([MID], mix='list', min_score=10).points)
+        assert point.pareto_score == pytest.approx((40.0 - 10) / 2.0)
+
+    def test_pareto_score_is_zero_at_the_floor(self) -> None:
+        point = next(p for p in pareto([MID], mix='list', min_score=40.0).points)
+        assert point.pareto_score == 0.0
 
     def test_nearest_dominator_is_the_cheapest_frontier_model_at_least_as_smart(self) -> None:
         weak = model('z/weak', 10.0, 10.0, 10.0)
@@ -485,7 +493,7 @@ class TestSummary:
             assert key in row
         assert 'model' not in row
         assert row['price'] == MID.price
-        assert row['pareto_score'] == pytest.approx(20.0)
+        assert row['pareto_score'] == pytest.approx((40.0 - 10) / 2.0)
         json.dumps(row)
 
 

@@ -96,7 +96,7 @@ class ParetoPoint(BaseModel):
     x: float = Field(description='The x value in its own unit (USD per 1M tokens, tokens/s or seconds).')
     pareto_score: float | None = Field(
         default=None,
-        description="Score per blended USD per 1M tokens (under the result's mix), higher is better. Set only when x is price.",
+        description="Points above the minimum score (0 when there is none) per blended USD per 1M tokens (under the result's mix), higher is better. Set only when x is price.",
     )
     cache_read_source: CacheSource | None = Field(
         default=None,
@@ -263,6 +263,7 @@ def pareto(
         for model, point in plotted
     ]
     frontier_ids = {id(model) for (model, _), beaters in zip(plotted, beaten_by, strict=True) if not beaters}
+    floor = min_score if min_score is not None else 0.0
     points: list[ParetoPoint] = []
     for (model, (score, xv)), beaters in zip(plotted, beaten_by, strict=True):
         # Every dominated model is dominated by a frontier one (dominance is transitive), so this is set whenever beaters is.
@@ -273,7 +274,7 @@ def pareto(
                 model=model,
                 score=score,
                 x=xv,
-                pareto_score=score / xv if x == 'price' and xv > 0 else None,
+                pareto_score=(score - floor) / xv if x == 'price' and xv > 0 else None,
                 cache_read_source=read_source,
                 cache_read_rate=model.cache_read_rate()[0] if read_source else None,
                 cache_write_source=write_source,

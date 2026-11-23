@@ -39,14 +39,16 @@ $ eq models pareto
 ╭───────────────────────────┬───────┬───────────────────────────┬─────────────┬─────────────────┬──────┬──────────╮
 │ Model                     │ Score │ Price $/1M (7:2:1 cached) │ Score per $ │ Cache read $/1M │ Est. │ Frontier │
 ├───────────────────────────┼───────┼───────────────────────────┼─────────────┼─────────────────┼──────┼──────────┤
-│ anthropic/claude-opus-5-5 │  51.2 │                     2.940 │        17.4 │           0.200 │      │ yes      │
-│ openai/gpt-6.1-sol        │  47.8 │                     1.470 │        32.5 │           0.100 │      │ yes      │
-│ zai/glm-5.3-flash         │  41.8 │                     0.051 │       827.7 │           0.015 │      │ yes      │
+│ anthropic/claude-opus-5-5 │  51.2 │                     2.940 │        14.0 │           0.200 │      │ yes      │
+│ openai/gpt-6.1-sol        │  47.8 │                     1.470 │        25.7 │           0.100 │      │ yes      │
+│ zai/glm-5.3-flash         │  41.8 │                     0.051 │       629.7 │           0.015 │      │ yes      │
 ╰───────────────────────────┴───────┴───────────────────────────┴─────────────┴─────────────────┴──────┴──────────╯
 Price blends the rates per 1M tokens as 7:0:2:1 (cache read : cache write : fresh input : output). Pass --mix list for the 3:1 input/output list blend.
 7 model(s) hidden for scoring below --min-score 10. Pass --min-score 0 to show every model.
 5 model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.
 ```
+
+`Score per $` counts only the points above the minimum score: it is `(score - min_score) / price`, with `min_score` taken as 0 when you pass `--min-score 0`. A model at the floor gets 0, so the column rewards what a model adds beyond the cheapest usable one.
 
 Read the table from the top down: each row is cheaper than the one above it and scores lower. Price is the `agentic` blend, which assumes most input tokens are cache reads, as in an agent loop. As a `--mix` ratio it is `7:0:2:1`, because the ratio has a cache-write slot second; [The price axis](#the-price-axis) explains the blend and how to switch to the 3:1 list blend. `Cache read $/1M` is the cache-read rate the blend used. Pick from these rows: a dominated model is never the better choice on these two axes, and `--dominated` lists each one with the frontier model that beats it. `Est.` marks a score that Orq estimated from an older benchmark version instead of measuring.
 
@@ -120,7 +122,7 @@ $ eq models pareto --model claude-sonnet-5-5
 ╭─────────────────────────────┬───────┬───────────────────────────┬─────────────┬─────────────────┬──────┬────────────────────╮
 │ Model                       │ Score │ Price $/1M (7:2:1 cached) │ Score per $ │ Cache read $/1M │ Est. │ Dominated by       │
 ├─────────────────────────────┼───────┼───────────────────────────┼─────────────┼─────────────────┼──────┼────────────────────┤
-│ anthropic/claude-sonnet-5-5 │  46.8 │                     1.470 │        31.8 │           0.100 │      │ openai/gpt-6.1-sol │
+│ anthropic/claude-sonnet-5-5 │  46.8 │                     1.470 │        25.0 │           0.100 │      │ openai/gpt-6.1-sol │
 ╰─────────────────────────────┴───────┴───────────────────────────┴─────────────┴─────────────────┴──────┴────────────────────╯
 Price blends the rates per 1M tokens as 7:0:2:1 (cache read : cache write : fresh input : output). Pass --mix list for the 3:1 input/output list blend.
 7 model(s) hidden for scoring below --min-score 10. Pass --min-score 0 to show every model.
@@ -149,7 +151,7 @@ $ eq models pareto --model claude-sonnet-5-5 --index legal --json 2>/dev/null
       "router_id": "anthropic/claude-sonnet-5-5",
       "score": 48.7,
       "x": 1.47,
-      "pareto_score": 33.12925170068027,
+      "pareto_score": 26.326530612244902,
       "on_frontier": false,
       "dominated_by": "google-ai/gemini-3.8-flash",
       "dominators": ["google-ai/gemini-3.8-flash", "openai/gpt-6.1-sol"],
@@ -235,9 +237,9 @@ $ eq models pareto --mix 7:1:1:1
 ╭───────────────────────────┬───────┬──────────────────────┬─────────────┬─────────────────┬──────────────────┬──────┬──────────╮
 │ Model                     │ Score │ Price $/1M (7:1:1:1) │ Score per $ │ Cache read $/1M │ Cache write $/1M │ Est. │ Frontier │
 ├───────────────────────────┼───────┼──────────────────────┼─────────────┼─────────────────┼──────────────────┼──────┼──────────┤
-│ anthropic/claude-opus-5-5 │  51.2 │                3.040 │        16.8 │           0.200 │            5.000 │      │ yes      │
-│ openai/gpt-6.1-sol        │  47.8 │                1.520 │        31.4 │           0.100 │            2.500 │      │ yes      │
-│ zai/glm-5.3-flash         │  41.8 │                0.051 │       827.7 │           0.015 │    0.075 (input) │      │ yes      │
+│ anthropic/claude-opus-5-5 │  51.2 │                3.040 │        13.6 │           0.200 │            5.000 │      │ yes      │
+│ openai/gpt-6.1-sol        │  47.8 │                1.520 │        24.9 │           0.100 │            2.500 │      │ yes      │
+│ zai/glm-5.3-flash         │  41.8 │                0.051 │       629.7 │           0.015 │    0.075 (input) │      │ yes      │
 ╰───────────────────────────┴───────┴──────────────────────┴─────────────┴─────────────────┴──────────────────┴──────┴──────────╯
 Price blends the rates per 1M tokens as 7:1:1:1 (cache read : cache write : fresh input : output). Pass --mix list for the 3:1 input/output list blend.
 1 shown model(s) price a cache rate their host does not list: (AA) is the Artificial Analysis price on the same card, (input) bills those tokens at the input rate.
@@ -319,6 +321,6 @@ A blended price is not what a task costs you. A reasoning model that writes four
 
 ## In code
 
-Every name used above imports from `evaluatorq.models`. `pareto()` returns a `ParetoResult` with the blend in `mix` and the axis labels in `x_spec`, whose `points` carry the score, the x value, `pareto_score` (score per dollar, `None` off the price axis), `cache_read_source` and `cache_write_source`, `on_frontier`, the nearest frontier model in `dominated_by`, and every model that beats it in `dominators`. `dominates(a, b)` answers the question for a single pair. `dominates`, `pareto_frontier` and `x_of` default to the `list` blend, because that is what evaluatorq's preset choice ranks on; pass `mix="agentic"` to match `pareto()`. The full list is in the [API reference](reference/evaluatorq/models.md).
+Every name used above imports from `evaluatorq.models`. `pareto()` returns a `ParetoResult` with the blend in `mix` and the axis labels in `x_spec`, whose `points` carry the score, the x value, `pareto_score` (score above `min_score` per dollar, `None` off the price axis), `cache_read_source` and `cache_write_source`, `on_frontier`, the nearest frontier model in `dominated_by`, and every model that beats it in `dominators`. `dominates(a, b)` answers the question for a single pair. `dominates`, `pareto_frontier` and `x_of` default to the `list` blend, because that is what evaluatorq's preset choice ranks on; pass `mix="agentic"` to match `pareto()`. The full list is in the [API reference](reference/evaluatorq/models.md).
 
 For the CLI flags in one table, see [`eq models`](cli-reference/models.md).
