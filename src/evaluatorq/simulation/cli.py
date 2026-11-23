@@ -2145,8 +2145,8 @@ def upload_dataset(
     client = setup_orq_client(env_raw('ORQ_API_KEY') or '')
 
     if dataset_id is None:
-        # name is guaranteed non-None here (validated above); SDK expects a TypedDict.
-        created = client.datasets.create(request={'display_name': name or '', 'path': path})
+        # name is guaranteed non-None here (validated above).
+        created = client.datasets.create(display_name=name or '', path=path)
         dataset_id = created.id
         typer.echo(f'Created dataset {dataset_id} ("{name}")', err=True)
 

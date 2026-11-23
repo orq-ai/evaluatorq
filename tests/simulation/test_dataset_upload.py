@@ -79,8 +79,9 @@ class _FakeDatasets:
         self.created: dict[str, Any] | None = None
         self.appended: tuple[str, list[Any]] | None = None
 
-    def create(self, *, request: dict[str, Any]) -> Any:
-        self.created = request
+    def create(self, *, display_name: str, path: str) -> Any:
+        # Mirrors the orq-ai-sdk >= 4.18 signature; the 4.15 `request=` form no longer exists.
+        self.created = {'display_name': display_name, 'path': path}
         return type('DS', (), {'id': 'ds_new'})()
 
     def create_datapoint(self, *, dataset_id: str, request_body: list[Any]) -> None:

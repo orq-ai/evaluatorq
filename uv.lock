@@ -1166,11 +1166,11 @@ requires-dist = [
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-semantic-conventions", marker = "extra == 'all'", specifier = ">=0.41b0" },
     { name = "opentelemetry-semantic-conventions", marker = "extra == 'otel'", specifier = ">=0.41b0" },
-    { name = "orq-ai-sdk", specifier = ">=4.14" },
-    { name = "orq-ai-sdk", marker = "extra == 'all'", specifier = ">=4.14" },
-    { name = "orq-ai-sdk", marker = "extra == 'insights'", specifier = ">=4.14" },
-    { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.14" },
-    { name = "orq-ai-sdk", marker = "extra == 'simulation'", specifier = ">=4.14" },
+    { name = "orq-ai-sdk", specifier = ">=4.18" },
+    { name = "orq-ai-sdk", marker = "extra == 'all'", specifier = ">=4.18" },
+    { name = "orq-ai-sdk", marker = "extra == 'insights'", specifier = ">=4.18" },
+    { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.18" },
+    { name = "orq-ai-sdk", marker = "extra == 'simulation'", specifier = ">=4.18" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'pydantic-ai'", specifier = ">=1.0.0" },
@@ -1203,7 +1203,7 @@ dev = [
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
-    { name = "orq-ai-sdk", specifier = ">=4.14" },
+    { name = "orq-ai-sdk", specifier = ">=4.18" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
@@ -3587,7 +3587,7 @@ wheels = [
 
 [[package]]
 name = "orq-ai-sdk"
-version = "4.15.9"
+version = "4.18.18"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpcore" },
@@ -3595,9 +3595,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0b/4f/4d8e062d6f70756456f8e48a5a8c39621ebfee819bfca995687a87ad66ac/orq_ai_sdk-4.15.9.tar.gz", hash = "sha256:3891ed6f83fac9e9caecab0866416fa38a53cbad612e8dfc1e362e61d1c3b79e", size = 970897, upload-time = "2026-09-21T14:38:20.564Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d2/36/2b2de8c460d917cd94b3b39e48158ab16bde2dff67ff8300293a34bd2727/orq_ai_sdk-4.18.18.tar.gz", hash = "sha256:5f4c999258cea9d3e11d1925390b19c2c33b2252820d6c5a3f22a375a5e8b756", size = 1126558, upload-time = "2026-11-18T21:58:00.791Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/ac/ebe04dfdfee92a5b19cbe3e8df7dc129f75026b598bca9f1a676c333df4c/orq_ai_sdk-4.15.9-py3-none-any.whl", hash = "sha256:b549976605193cca3c3684a691365c5d3d37bb272c440f0a66c62fcca36b2632", size = 1516395, upload-time = "2026-09-21T14:38:18.445Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/1f/aa1cec382cf6f6794d470abed78bae2b30255698e0f8a9710b1c12102250/orq_ai_sdk-4.18.18-py3-none-any.whl", hash = "sha256:24835a76d7cdcf9bc505993a6ddd0db699c3adf970338960c30fe0768757e30e", size = 1891084, upload-time = "2026-11-18T21:57:57.374Z" },
 ]
 
 [[package]]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 import httpx
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
 _SPAN_FETCH_CONCURRENCY = 5
+_SPAN_DETAIL_CONCURRENCY = 10
 _API_PAGE_LIMIT = 200
 _MESSAGE_FORMAT = Literal['chat_completions', 'responses', 'otel_genai']
 _TRACE_MESSAGE_FORMAT = Literal['chat_completions', 'responses', 'otel_genai', 'mixed']
@@ -672,14 +673,44 @@ def _trace_from_spans(
     )
 
 
-def _datetime_ms(value: datetime | None) -> int | None:
-    """Epoch milliseconds for an Orq query bound.
+_EARLIEST_TRACE_TIME = '2000-01-01T00:00:00Z'
+"""The search window's start when `TraceInput` names none: the API requires a bound, the caller asked for none.
 
-    ``TraceInput`` normalizes naive datetimes to UTC, so this conversion no
-    longer depends on the host's local timezone — the same query used to shift
-    by the offset of whichever machine ran it.
+Not the Unix epoch: ``/v3/traces/search`` answers a ``from`` of 1970-01-01 with no rows.
+"""
+
+
+def _search_window(source: TraceInput) -> tuple[str, str]:
+    """The ``from``/``to`` bounds for ``/v3/traces/search``, which requires both.
+
+    ``TraceInput`` normalizes naive datetimes to UTC, so the same query means the
+    same window on every host. An open end means "up to now".
     """
-    return int(value.timestamp() * 1000) if value is not None else None
+    start = source.start_time.isoformat() if source.start_time is not None else _EARLIEST_TRACE_TIME
+    end = (source.end_time or datetime.now(timezone.utc)).isoformat()
+    return start, end
+
+
+async def _request_json(
+    client: httpx.AsyncClient,
+    *,
+    url: str,
+    headers: dict[str, str],
+    label: str,
+    json_body: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+) -> Any:
+    """One retried Orq trace API call: a POST when ``json_body`` is given, a GET otherwise."""
+
+    async def call() -> Any:
+        if json_body is not None:
+            response = await client.post(url, headers=headers, json=json_body)
+        else:
+            response = await client.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        return response.json()
+
+    return await with_retry(call, label=label)
 
 
 async def _list_trace_rows(
@@ -689,35 +720,33 @@ async def _list_trace_rows(
     host: str,
     headers: dict[str, str],
 ) -> list[dict[str, Any]]:
-    """Page through the trace-list endpoint until the query limit is reached.
+    """Page through ``/v3/traces/search`` until the query limit is reached.
 
     A page that is not a JSON object, or that carries no usable trace ID, stops
     pagination with a warning rather than raising: the caller still gets the rows
     it already has, and the reason is in the log.
     """
     rows: list[dict[str, Any]] = []
-    page = 1
+    page_token: str | None = None
     query_limit = source.query_limit
+    start, end = _search_window(source)
     while len(rows) < query_limit:
         before = len(rows)
         body: dict[str, Any] = {
-            'filters': {'operator': 'and', 'filters': source.filters, 'search': source.search},
+            'from': start,
+            'to': end,
+            'filters': source.filters,
+            'filter_operator': 'and',
             'limit': min(query_limit - len(rows), _API_PAGE_LIMIT),
-            'page': page,
-            'fields': [],
         }
-        if (start_date := _datetime_ms(source.start_time)) is not None:
-            body['start_date'] = start_date
-        if (end_date := _datetime_ms(source.end_time)) is not None:
-            body['end_date'] = end_date
+        if source.search:
+            body['query'] = source.search
+        if page_token:
+            body['page_token'] = page_token
         try:
-
-            async def list_page(body: dict[str, Any] = body) -> Any:
-                response = await client.post(f'{host}/v2/traces/v3oql', headers=headers, json=body)
-                response.raise_for_status()
-                return response.json()
-
-            payload = await with_retry(list_page, label='Orq trace list')
+            payload = await _request_json(
+                client, url=f'{host}/v3/traces/search', headers=headers, label='Orq trace list', json_body=body
+            )
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
             raise RuntimeError(f'Failed to list Orq traces: {exc}') from exc
         if not isinstance(payload, dict):
@@ -730,13 +759,75 @@ async def _list_trace_rows(
             )
             break
         rows.extend(row for row in data if isinstance(row, dict) and row.get('trace_id'))
-        if not data or not payload.get('has_more'):
+        page_token = payload.get('next_page_token') or None
+        if not data or not payload.get('has_more') or page_token is None:
             break
         if len(rows) == before:
             logger.warning('Stopped paginating traces: a page contained no usable trace IDs.')
             break
-        page += 1
     return rows
+
+
+class _SpanFetchError(Exception):
+    """A trace's spans could not be read; the message names why."""
+
+
+async def _fetch_trace_spans(
+    client: httpx.AsyncClient,
+    trace_id: str,
+    *,
+    host: str,
+    headers: dict[str, str],
+    detail_semaphore: asyncio.Semaphore,
+) -> list[dict[str, Any]]:
+    """Every span of one trace, each with its ``attributes``.
+
+    ``GET /v3/traces/{id}/spans`` pages span summaries without content, so each
+    span's attributes come from ``GET /v3/traces/{id}/spans/{span_id}``. The
+    returned dicts are the summary fields with the detail's fields laid over
+    them, which is the shape `_trace_from_spans` reads.
+    """
+    summaries: list[dict[str, Any]] = []
+    page_token: str | None = None
+    while True:
+        params: dict[str, Any] = {'limit': _API_PAGE_LIMIT}
+        if page_token:
+            params['page_token'] = page_token
+        payload = await _request_json(
+            client,
+            url=f'{host}/v3/traces/{trace_id}/spans',
+            headers=headers,
+            label=f'Orq trace {trace_id} spans',
+            params=params,
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get('data'), list):
+            raise _SpanFetchError(f'its span list is {type(payload).__name__}, not an object with a data list.')
+        page = payload['data']
+        if not all(isinstance(span, dict) for span in page):
+            # One non-object element would raise inside asyncio.gather and take the whole batch with it.
+            raise _SpanFetchError('its span list contains a non-object span.')
+        summaries.extend(page)
+        page_token = payload.get('next_page_token') or None
+        if not page or not payload.get('has_more') or page_token is None:
+            break
+
+    async def with_detail(summary: dict[str, Any]) -> dict[str, Any]:
+        span_id = summary.get('span_id')
+        if not span_id:
+            return summary
+        async with detail_semaphore:
+            payload = await _request_json(
+                client,
+                url=f'{host}/v3/traces/{trace_id}/spans/{span_id}',
+                headers=headers,
+                label=f'Orq trace {trace_id} span {span_id}',
+            )
+        detail = payload.get('span') if isinstance(payload, dict) else None
+        if not isinstance(detail, dict):
+            raise _SpanFetchError(f'span {span_id!r} detail is not an object with a span field.')
+        return {**summary, **{key: value for key, value in detail.items() if key != 'summary'}}
+
+    return list(await asyncio.gather(*(with_detail(summary) for summary in summaries)))
 
 
 async def fetch_traces(
@@ -755,9 +846,11 @@ async def fetch_traces(
 
     The HTTP calls retry through `common.retry.with_retry` — including the 429s
     and 5xx that ``raise_for_status`` raises as ``httpx.HTTPStatusError`` — and the
-    shared ``httpx.AsyncClient`` adds no retry layer of its own. Raw httpx rather
-    than the Orq SDK because ``traces.search`` requires a ``from_``/``to`` window
-    that ``TraceInput`` does not, and its span models would need a second parser.
+    shared ``httpx.AsyncClient`` adds no retry layer of its own. The routes are
+    ``POST /v3/traces/search`` for query mode, then ``GET /v3/traces/{id}/spans``
+    and one ``GET /v3/traces/{id}/spans/{span_id}`` per span for its attributes.
+    Raw httpx rather than the Orq SDK because the span parser reads the API's JSON
+    dicts, and the SDK's span models would need a second parser.
     """
     key, host = _resolve_orq_credentials(api_key, base_url)
     headers = {'Authorization': f'Bearer {key}'}
@@ -771,25 +864,19 @@ async def fetch_traces(
         )
 
         semaphore = asyncio.Semaphore(_SPAN_FETCH_CONCURRENCY)
+        detail_semaphore = asyncio.Semaphore(_SPAN_DETAIL_CONCURRENCY)
 
         async def fetch_one(row: dict[str, Any]) -> Trace:
             trace_id = str(row['trace_id'])
             async with semaphore:
-
-                async def fetch_spans(trace_id: str = trace_id) -> Any:
-                    response = await client.get(f'{host}/v2/traces/{trace_id}/v3spans', headers=headers)
-                    response.raise_for_status()
-                    return response.json()
-
                 try:
-                    spans = await with_retry(fetch_spans, label=f'Orq trace {trace_id} spans')
+                    spans = await _fetch_trace_spans(
+                        client, trace_id, host=host, headers=headers, detail_semaphore=detail_semaphore
+                    )
                 except (httpx.HTTPError, json.JSONDecodeError) as exc:
                     return _failed_trace(trace_id, f'could not fetch its spans: {exc}')
-            if not isinstance(spans, list):
-                return _failed_trace(trace_id, f'its spans payload is {type(spans).__name__}, not a list.')
-            if not all(isinstance(span, dict) for span in spans):
-                # One non-object element would raise inside asyncio.gather and take the whole batch with it.
-                return _failed_trace(trace_id, 'its spans payload contains a non-object span.')
+                except _SpanFetchError as exc:
+                    return _failed_trace(trace_id, str(exc))
             return _trace_from_spans(
                 trace_id,
                 spans,
