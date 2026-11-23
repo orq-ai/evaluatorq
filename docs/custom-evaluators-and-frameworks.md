@@ -20,8 +20,6 @@ To fill the file in by hand instead, write a template with the two required fiel
 eq redteam new-vulnerability refund_promises --no-input
 ```
 
-Add `--edit` to open the file in your `$VISUAL` or `$EDITOR` right after it is written.
-
 The smallest valid definition is two lines:
 
 ```yaml
