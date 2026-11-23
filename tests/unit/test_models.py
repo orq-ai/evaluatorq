@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from typing import Any, get_args
 
 import pytest
@@ -526,9 +527,12 @@ def fake_catalogue(monkeypatch: pytest.MonkeyPatch) -> list[ScoredModel]:
     return pool
 
 
+_ANSI = re.compile(r'\x1b\[[0-9;]*m')
+
+
 def _flat(output: str) -> str:
-    """Rich wraps a usage error inside a box; read it as one line."""
-    return ' '.join(output.replace('│', ' ').split())
+    """Rich wraps a usage error inside a box and colours it on CI; read it as one plain line."""
+    return ' '.join(_ANSI.sub('', output).replace('│', ' ').split())
 
 
 class TestCli:
