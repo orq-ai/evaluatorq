@@ -5,13 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-import re
 import time
-import weakref
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from contextlib import suppress
-from contextvars import ContextVar
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from datetime import datetime, timedelta, timezone
@@ -21,6 +17,16 @@ from typing import TYPE_CHECKING, Any, Literal
 from loguru import logger
 
 from evaluatorq.common.messages import content_part_text
+from evaluatorq.common.orq_traces import SPAN_PAGE_SIZE as PAGE_SIZE
+from evaluatorq.common.orq_traces import (
+    CaptureRegistration,
+    OrqTraceReader,
+    PageCursor,
+    PageLimitError,
+    PageTokenError,
+    TracePageError,
+    collect_span_summaries,
+)
 from evaluatorq.common.trace_input import detect_message_format, parse_messages
 from evaluatorq.formats._shared import join_text
 from evaluatorq.openresponses.otel_messages import is_responses_item
@@ -46,9 +52,6 @@ FACET_OQL_FIELDS: Mapping[str, str] = MappingProxyType({
     'tool_name': 'tool_name',
 })
 MAX_LIVE_TRACES = 5000
-PAGE_SIZE = 200
-MAX_SPAN_PAGES = 10
-MAX_SPANS_PER_TRACE = PAGE_SIZE * MAX_SPAN_PAGES
 SDK_TIMEOUT_MS = 30_000
 TARGET_RELOAD_PAGE_BUDGET_SECONDS = 30
 DEFAULT_LOOKBACK = timedelta(days=7)
@@ -59,9 +62,6 @@ CONVERSATION_SPAN_TYPES = frozenset({
     'span.responses',
 })
 EVALUATOR_SPAN_TYPES = frozenset({'span.evaluation_engine', 'span.evaluator'})
-_MAX_CAPTURED_RESPONSES = 128
-_CAPTURE_REGISTRATION_ATTR = '_evaluatorq_trace_finder_capture_registration'
-_CAPTURE_REQUEST: ContextVar[object | None] = ContextVar('trace_finder_capture_request', default=None)
 
 
 class _TargetDeadlineExceeded(asyncio.TimeoutError):
@@ -174,81 +174,6 @@ class _HydrationIssues:
             )
 
 
-_API_VERSION = re.compile(r'^/v\d+(?=/)')
-
-
-class _RawResponseCapture:
-    """Retain raw trace payloads whose generated SDK models discard attributes."""
-
-    _OPERATIONS = frozenset({'TracesGetSpan', 'TracesQueryOql'})
-
-    def __init__(self) -> None:
-        self._responses: dict[tuple[str, object | None], deque[dict[str, Any]]] = defaultdict(
-            lambda: deque(maxlen=_MAX_CAPTURED_RESPONSES)
-        )
-
-    @staticmethod
-    def key(path: str) -> str:
-        """Capture key for a request path: the API version segment is dropped so SDK upgrades keep matching."""
-
-        return _API_VERSION.sub('', path, count=1)
-
-    def after_success(self, hook_context: Any, response: Any) -> Any:
-        """Capture supported JSON responses while leaving the SDK response unchanged."""
-
-        if getattr(hook_context, 'operation_id', None) not in self._OPERATIONS:
-            return response
-        try:
-            payload = response.json()
-        except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
-            return response
-        path = getattr(getattr(getattr(response, 'request', None), 'url', None), 'path', None)
-        if isinstance(payload, dict) and isinstance(path, str):
-            self._responses[self.key(path), _CAPTURE_REQUEST.get()].append(payload)
-        return response
-
-    def pop(self, path: str) -> dict[str, Any] | None:
-        """Return the oldest captured response for ``path`` (any API version)."""
-
-        key = (self.key(path), _CAPTURE_REQUEST.get())
-        responses = self._responses.get(key)
-        if responses:
-            payload = responses.popleft()
-            if not responses:
-                del self._responses[key]
-            return payload
-        return None
-
-    def clear(self) -> None:
-        """Discard all captured responses."""
-
-        self._responses.clear()
-
-
-class _CaptureRegistration:
-    """Share raw capture state and per-event-loop locks across client sources.
-
-    An asyncio lock is tied to the event loop that first waits on it, so locks
-    are kept per running loop while the response queue remains shared per SDK
-    client.
-    """
-
-    def __init__(self) -> None:
-        self.capture = _RawResponseCapture()
-        self.sources = 0
-        self.registered = False
-        self.locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
-
-    def lock_for(self, loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
-        """Return the capture lock associated with ``loop``."""
-
-        lock = self.locks.get(loop)
-        if lock is None:
-            lock = asyncio.Lock()
-            self.locks[loop] = lock
-        return lock
-
-
 class OrqTraceSource:
     """Load recent live traces once, returning the immutable local snapshot contract.
 
@@ -262,50 +187,14 @@ class OrqTraceSource:
         self._client = client
         self._hydration_concurrency = hydration_concurrency
         self._owns_client = owns_client
-        self._capture = _RawResponseCapture()
-        self._hooks: Any | None = None
-        self._registration: _CaptureRegistration | None = None
-        self._closed = False
-        configuration = getattr(client, 'sdk_configuration', None)
-        hooks = getattr(configuration, '_hooks', None)
-        register = getattr(hooks, 'register_after_success_hook', None)
-        if callable(register):
-            registration = getattr(hooks, _CAPTURE_REGISTRATION_ATTR, None)
-            if not isinstance(registration, _CaptureRegistration):
-                registration = _CaptureRegistration()
-                try:
-                    setattr(hooks, _CAPTURE_REGISTRATION_ATTR, registration)
-                except (AttributeError, TypeError):
-                    registration = None
-            if registration is not None:
-                if not registration.registered:
-                    register(registration.capture)
-                    registration.registered = True
-                registration.sources += 1
-                self._capture = registration.capture
-                self._hooks = hooks
-                self._registration = registration
+        self._reader = OrqTraceReader(client)
+        self._capture = self._reader.capture
+        self._registration: CaptureRegistration | None = self._reader.registration
 
     def close(self) -> None:
         """Release this source's capture registration without closing the caller's client."""
 
-        if self._closed:
-            return
-        self._closed = True
-        registration = self._registration
-        if registration is None:
-            self._capture.clear()
-            return
-        registration.sources = max(0, registration.sources - 1)
-        if registration.sources:
-            return
-        self._capture.clear()
-        unregister = getattr(self._hooks, 'unregister_after_success_hook', None)
-        if callable(unregister):
-            unregister(self._capture)
-            registration.registered = False
-            with suppress(AttributeError):
-                delattr(self._hooks, _CAPTURE_REGISTRATION_ATTR)
+        self._reader.close()
 
     async def aclose(self) -> None:
         """Async alias for ``close`` for callers that manage async SDK resources."""
@@ -506,36 +395,19 @@ class OrqTraceSource:
         *,
         deadline: float | None = None,
     ) -> tuple[Any, Any]:
-        registration = self._registration
-        marker = _CAPTURE_REQUEST.set(object()) if registration is not None else None
-        try:
+        async def query() -> Any:
+            return await self._client.traces.query_async(
+                from_=start,
+                to=end,
+                oql=oql,
+                limit=page_limit,
+                page_token=page_token,
+                timeout_ms=_request_timeout_ms(deadline),
+            )
 
-            async def query() -> tuple[Any, Any]:
-                if registration is None:
-                    response = await self._client.traces.query_async(
-                        from_=start,
-                        to=end,
-                        oql=oql,
-                        limit=page_limit,
-                        page_token=page_token,
-                        timeout_ms=_request_timeout_ms(deadline),
-                    )
-                    return response, self._capture.pop('/traces/query')
-                async with registration.lock_for(asyncio.get_running_loop()):
-                    response = await self._client.traces.query_async(
-                        from_=start,
-                        to=end,
-                        oql=oql,
-                        limit=page_limit,
-                        page_token=page_token,
-                        timeout_ms=_request_timeout_ms(deadline),
-                    )
-                    return response, self._capture.pop('/traces/query')
-
-            return await _await_target_deadline(query(), deadline)
-        finally:
-            if marker is not None:
-                _CAPTURE_REQUEST.reset(marker)
+        return await _await_target_deadline(
+            self._reader.raw_call(query, path='/traces/query', serialize=True), deadline
+        )
 
     async def _pages(
         self,
@@ -556,31 +428,27 @@ class OrqTraceSource:
             Unique summaries for one page after project and target filtering.
         """
         seen_trace_ids: set[str] = set()
-        used_tokens: set[str] = set()
         max_scanned = MAX_LIVE_TRACES if target_ids is not None else max(PAGE_SIZE, limit * 5)
-        max_pages = max(20, (max_scanned + PAGE_SIZE - 1) // PAGE_SIZE * 2)
-        pages_scanned = 0
-        page_token: str | None = None
+        cursor = PageCursor(max_pages=max(20, (max_scanned + PAGE_SIZE - 1) // PAGE_SIZE * 2))
         while remaining() > 0:
             if deadline is not None and time.monotonic() >= deadline:
                 raise _TargetDeadlineExceeded
-            if scan.scanned >= max_scanned or pages_scanned >= max_pages:
+            try:
+                if scan.scanned >= max_scanned:
+                    raise PageLimitError(f'scanned {scan.scanned} summaries')
+                cursor.start_page()
+            except PageLimitError:
                 logger.warning(
                     'stopped trace search after scanning {} summaries across {} pages for {} usable traces',
                     scan.scanned,
-                    pages_scanned,
+                    cursor.pages,
                     limit,
                 )
                 if target_ids is not None:
                     scan.incomplete_reason = 'scan_limit'
                 return
-            pages_scanned += 1
-            if page_token is not None:
-                if page_token in used_tokens:
-                    raise OrqSourceError(f'repeated OQL page token {page_token!r}')
-                used_tokens.add(page_token)
             page_limit = PAGE_SIZE if target_ids is not None else min(PAGE_SIZE, remaining())
-            response, raw_page = await self._query_page(start, end, oql, page_limit, page_token, deadline=deadline)
+            response, raw_page = await self._query_page(start, end, oql, page_limit, cursor.token, deadline=deadline)
             search = _field(response, 'search') or response
             summaries = _as_list(_field(search, 'data'))
             scan.scanned += len(summaries)
@@ -598,14 +466,15 @@ class OrqTraceSource:
             yield selected
             if remaining() <= 0:
                 return
-            if not _field(search, 'has_more'):
-                return
-            next_token = _field(search, 'next_page_token')
-            if not next_token:
-                raise OrqSourceError('OQL response reported more pages without a page token')
-            if str(next_token) in used_tokens:
-                raise OrqSourceError(f'repeated OQL page token {next_token!r}')
-            page_token = str(next_token)
+            try:
+                if not cursor.advance(
+                    has_more=_field(search, 'has_more'), next_token=_field(search, 'next_page_token')
+                ):
+                    return
+            except PageTokenError as exc:
+                if exc.token is None:
+                    raise OrqSourceError('OQL response reported more pages without a page token') from exc
+                raise OrqSourceError(f'repeated OQL page token {exc.token!r}') from exc
 
     async def search(
         self,
@@ -831,21 +700,17 @@ class OrqTraceSource:
         self, trace_id: str, span_id: str, semaphore: asyncio.Semaphore, *, deadline: float | None = None
     ) -> tuple[Any, Any]:
         async with semaphore:
-            marker = _CAPTURE_REQUEST.set(object()) if self._registration is not None else None
-            try:
-                response = await _await_target_deadline(
+            return await self._reader.raw_call(
+                lambda: _await_target_deadline(
                     self._client.traces.get_span_async(
                         trace_id=trace_id,
                         span_id=span_id,
                         timeout_ms=_request_timeout_ms(deadline),
                     ),
                     deadline,
-                )
-                raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
-            finally:
-                if marker is not None:
-                    _CAPTURE_REQUEST.reset(marker)
-        return response, raw_response
+                ),
+                path=f'/traces/{trace_id}/spans/{span_id}',
+            )
 
     async def _with_system_prompt(
         self,
@@ -886,34 +751,28 @@ class OrqTraceSource:
     async def _list_spans(
         self, trace_id: str, semaphore: asyncio.Semaphore, *, deadline: float | None = None
     ) -> list[Any]:
-        spans: list[Any] = []
-        page_token: str | None = None
-        used_tokens: set[str] = set()
-        pages = 0
-        while True:
-            if pages >= MAX_SPAN_PAGES:
-                raise OrqSourceError(f'span pagination exceeded {MAX_SPAN_PAGES} pages for trace {trace_id!r}')
-            pages += 1
+        async def fetch_page(page_token: str | None) -> Any:
             async with semaphore:
-                response = await _await_target_deadline(
-                    self._client.traces.list_spans_async(
-                        trace_id=trace_id,
-                        limit=PAGE_SIZE,
-                        page_token=page_token,
-                        timeout_ms=_request_timeout_ms(deadline),
+                response, _raw = await self._reader.raw_call(
+                    lambda: _await_target_deadline(
+                        self._client.traces.list_spans_async(
+                            trace_id=trace_id,
+                            limit=PAGE_SIZE,
+                            page_token=page_token,
+                            timeout_ms=_request_timeout_ms(deadline),
+                        ),
+                        deadline,
                     ),
-                    deadline,
+                    path=f'/traces/{trace_id}/spans',
                 )
-            spans.extend(_as_list(_field(response, 'data')))
-            if len(spans) > MAX_SPANS_PER_TRACE:
-                raise OrqSourceError(f'span pagination exceeded {MAX_SPANS_PER_TRACE} spans for trace {trace_id!r}')
-            if not _field(response, 'has_more'):
-                return spans
-            next_token = _field(response, 'next_page_token')
-            if not next_token or str(next_token) in used_tokens:
-                raise OrqSourceError(f'repeated span page token for trace {trace_id!r}')
-            used_tokens.add(str(next_token))
-            page_token = str(next_token)
+            return response
+
+        try:
+            return await collect_span_summaries(fetch_page, trace_id=trace_id)
+        except PageTokenError as exc:
+            raise OrqSourceError(f'repeated span page token for trace {trace_id!r}') from exc
+        except TracePageError as exc:
+            raise OrqSourceError(str(exc)) from exc
 
     async def list_spans(self, trace_id: str) -> list[Any]:
         """Load every bounded span summary for one trace using the canonical pager."""
@@ -1065,17 +924,14 @@ class OrqTraceSource:
         if not failed_span_id:
             return None
 
-        async with asyncio.Semaphore(self._hydration_concurrency):
-            marker = _CAPTURE_REQUEST.set(object())
-            try:
-                await self._client.traces.get_span_async(
-                    trace_id=trace_id,
-                    span_id=failed_span_id,
-                    timeout_ms=SDK_TIMEOUT_MS,
-                )
-                raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{failed_span_id}')
-            finally:
-                _CAPTURE_REQUEST.reset(marker)
+        _response, raw_response = await self._reader.raw_call(
+            lambda: self._client.traces.get_span_async(
+                trace_id=trace_id,
+                span_id=failed_span_id,
+                timeout_ms=SDK_TIMEOUT_MS,
+            ),
+            path=f'/traces/{trace_id}/spans/{failed_span_id}',
+        )
         raw_span = _field(raw_response, 'span') if raw_response else None
         attributes = _field(raw_span, 'attributes')
         for path in (('otlp', 'status', 'message'), ('otel', 'status_description')):
@@ -1920,8 +1776,8 @@ def _check_window(start: datetime | None, end: datetime | None, limit: int) -> t
     return resolved_start, resolved_end
 
 
-def _raw_trace_summaries(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not payload:
+def _raw_trace_summaries(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, Mapping):
         return []
     search = payload.get('search') if isinstance(payload.get('search'), Mapping) else payload
     data = search.get('data') if isinstance(search, Mapping) else None

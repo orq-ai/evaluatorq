@@ -18,9 +18,10 @@ to each as ``summaries=`` — otherwise every conversation is summarized twice.
 ``TraceAnalysisConfig`` holds the limits: how long a summary should be, how many
 reach the profile call, whether to redact, and the completion budgets.
 
-Traces are fetched from the Orq traces API (``POST /v3/traces/search`` for the
-trace list, ``GET /v3/traces/{trace_id}/spans`` and one span detail call per
-span for span content).
+Traces are fetched through `common.trace_input.fetch_traces` (``POST
+/v3/traces/search`` for the trace list, ``GET /v3/traces/{trace_id}/conversation``
+for the messages, and one span detail call per span on the conversation span's
+path for its metadata).
 """
 
 from __future__ import annotations

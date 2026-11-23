@@ -76,7 +76,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`filters` takes a list of field conditions that evaluatorq also passes through untouched, so the accepted fields and operators are the Orq trace API's vocabulary rather than anything this library defines or validates. A condition the API does not accept comes back as a `RuntimeError` wrapping the HTTP status, not as an empty result, so a filter is worth running on a small `limit` before you build a job on it.
+`filters` takes a list of field conditions, each `{'field': ..., 'op': ..., 'values': [...]}` with the values as strings. The accepted fields and operators are the Orq trace API's vocabulary rather than anything this library defines. A value that is not a string is rejected by the Orq SDK before the request is sent. A condition the API does not accept comes back as a `RuntimeError` wrapping the HTTP status, not as an empty result, so a filter is worth running on a small `limit` before you build a job on it.
 
 ```python
 import asyncio
@@ -177,26 +177,25 @@ Loguru filters at log time, so the call works wherever you put it relative to th
 
 | `import_error` says | What happened |
 |---|---|
-| `the trace has no spans.` | The span list came back empty — also what an unknown or mistyped trace ID looks like |
-| `no non-evaluator span on the latest span path contains input or output messages.` | Spans exist, but the latest non-evaluator span and its parent chain carry none. An earlier sibling span holding messages is never examined |
-| `every span belongs to an evaluator span or its subtree.` | The trace records only evaluator activity, which is excluded on purpose |
+| `the trace was not found.` | Orq has no trace with this ID — usually a mistyped trace ID |
+| `Orq found no non-evaluator span with input or output messages.` | Orq's conversation route found no span in the trace carrying an exchange |
 | `requested span '<id>' was not found.` | You passed a `span_id` that is not in this trace |
 | `requested span '<id>' has no input or output messages.` | The exact span you named carries no exchange |
 | `requested span '<id>' belongs to an evaluator span or its subtree.` | The span you named is inside evaluator activity |
-| `could not fetch its spans: <error>` | That trace's span request failed after its retries |
-| `its spans payload is <type>, not a list.` | The span response was not a list |
-| `its spans payload contains a non-object span.` | One element of the span list was not an object |
+| `its conversation span '<id>' belongs to an evaluator span or its subtree.` | The span Orq picked is inside evaluator activity, which is excluded on purpose |
+| `could not fetch it: <error>` | A request for that trace failed after its retries; the message names the HTTP status |
+| `its conversation is <type>, not an object with an items list.` | The conversation response was malformed |
 
-One unreadable trace does not cost you the others: a span fetch that fails becomes an `import_error` on that trace alone. The trace *list* request is the exception — if it fails, there is nothing to partition and `fetch_traces()` raises `RuntimeError: Failed to list Orq traces: ...` for the whole call.
+The messages come from Orq's conversation route (`GET /v3/traces/{id}/conversation`), which picks the span to read, and the session, actor and thread IDs, retrievals and span metadata come from that span and its ancestors. A request costs one conversation call and one span detail call per level of that span's depth. One unreadable trace does not cost you the others: a request that fails becomes an `import_error` on that trace alone. The trace *list* request is the exception — if it fails, there is nothing to partition and `fetch_traces()` raises `RuntimeError: Failed to list Orq traces: ...` for the whole call.
 
 ## What a `Trace` carries
 
 | Field | What it holds |
 |---|---|
 | `trace_id` | The Orq trace ID |
-| `input_messages` / `output_messages` | The exchange, with its source-side boundaries kept |
+| `input_messages` / `output_messages` | The exchange, with its source-side boundaries kept. The input starts with the system instructions when the span recorded them |
 | `messages` | Input followed by output as one transcript, with the largest exact overlap removed |
-| `message_format` | `chat_completions`, `responses`, `otel_genai`, or `mixed` |
+| `message_format` | `responses` for every trace `fetch_traces()` imports, since the conversation route returns Responses items. `Trace` also accepts `chat_completions`, `otel_genai` or `mixed` for traces you build yourself |
 | `tools_called` | Names of the tools called in the exchange |
 | `retrievals` | Retrieved context, as recorded on the span |
 | `query` | The text of the last user turn in the exchange |
@@ -294,9 +293,30 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Set the timeout yourself when you pass a client. The one `fetch_traces()` builds uses 60 seconds; httpx's own default is 5, which a slow trace with many spans will exceed.
+The client is the transport for the Orq SDK's calls, and `fetch_traces()` does not close a client you pass. Every request sets its own 60-second timeout, so the client's timeout does not apply.
 
-Retries belong to `fetch_traces()` — the trace list and span requests retry internally, including the 429s and 5xx responses. Do not add a retrying client on top; the two layers multiply.
+Retries belong to `fetch_traces()` — the trace list, conversation and span requests retry internally, including the 429s and 5xx responses, and the SDK's own retries are off for them. Do not add a retrying client on top; the two layers multiply.
+
+## Every span of one trace
+
+`fetch_traces()` reads only the spans it takes metadata from. When you need the whole trace — every span with its attributes, to convert with `OtelTrace.from_orq()` or to compute [signals](signals.md) — call `fetch_trace_spans()` with the trace ID:
+
+```python
+import asyncio
+
+from evaluatorq import fetch_trace_spans
+
+
+async def main() -> None:
+    spans = await fetch_trace_spans('8e00b00fdd6f72f6850e2850bc444d0e')  # Your trace ID.
+    for span in spans:
+        print(span['span_id'], span.get('parent_span_id'), span.get('name'), sorted(span.get('attributes', {})))
+
+
+asyncio.run(main())
+```
+
+It costs one span-list request per 200 spans and one detail request per span, with the same client, credentials and retries as `fetch_traces()`. Unlike `fetch_traces()` it raises `RuntimeError` when a request fails or the trace has more than 2000 spans, because a span list with gaps would convert into a run that looks complete.
 
 ## Failure modes
 

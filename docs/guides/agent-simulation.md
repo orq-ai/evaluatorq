@@ -942,8 +942,8 @@ Both modes summarize unconditionally: every conversation gets exactly one summar
 
 ```mermaid
 flowchart TD
-    A["POST /v3/traces/search<br/>paged listing"] --> B["GET /v3/traces/{id}/spans<br/>plus one detail call per span,<br/>5 traces at a time"]
-    B --> C["Reconstruct conversation<br/>root span first, then any span<br/>with messages; gen_ai attributes<br/>JSON-decoded"]
+    A["POST /v3/traces/search<br/>paged listing"] --> B["GET /v3/traces/{id}/conversation<br/>plus one detail call per span<br/>on its path, 5 traces at a time"]
+    B --> C["Reconstruct conversation<br/>from the Responses items"]
     C --> D{"Has a usable<br/>user message?"}
     D -- "no" --> E["Dropped, counted in a warning"]
     D -- "yes" --> F["TraceConversation"]

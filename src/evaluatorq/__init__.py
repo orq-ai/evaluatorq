@@ -32,7 +32,7 @@ except importlib.metadata.PackageNotFoundError:  # ponytail: source checkout, no
 
 from .common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, run_classify
 from .common.llm_limit import llm_concurrency_limit, llm_slot
-from .common.trace_input import fetch_traces
+from .common.trace_input import fetch_trace_spans, fetch_traces
 from .contracts import AgentResponse
 from .deployment import (
     DeploymentResponse,
@@ -143,6 +143,7 @@ __all__ = [
     # Main function
     'evaluatorq',
     'exact_match_evaluator',
+    'fetch_trace_spans',
     'fetch_traces',
     'fit_bt',
     'get_preset',
