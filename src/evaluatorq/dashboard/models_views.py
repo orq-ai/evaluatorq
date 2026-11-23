@@ -303,9 +303,9 @@ _MAX_GUIDES = 4
 
 def _guide_ks(lo: float, hi: float) -> list[float]:
     """The 1-2-5 steps strictly inside (lo, hi), at most four spread across it: every other step when more fit."""
-    if hi <= 0 or hi <= lo:
+    if lo <= 0 or hi <= lo:
         return []
-    decade = 10.0 ** math.floor(math.log10(max(lo, hi * 1e-6)))
+    decade = 10.0 ** math.floor(math.log10(lo))
     ks: list[float] = []
     while decade <= hi:
         ks += [s * decade for s in (1, 2, 5) if lo < s * decade < hi]
@@ -317,6 +317,11 @@ def _guide_ks(lo: float, hi: float) -> list[float]:
     return ks
 
 
+def _guide_label(k: float) -> str:
+    """A 1-2-5 step as plain text, never in exponent form: 1,000 and 0.05, not 1e+03 and 5e-02."""
+    return f'{k:,.0f}' if k >= 1 else f'{k:f}'.rstrip('0')
+
+
 def _guide_rows(result: ParetoResult, floor: float) -> list[dict[str, Any]]:
     """Samples of the curves `score = floor + k * x` the chart draws as Score per $ guides; none off the price axis.
 
@@ -325,16 +330,17 @@ def _guide_rows(result: ParetoResult, floor: float) -> list[dict[str, Any]]:
     """
     if result.x != 'price':
         return []
-    values = [p.pareto_score for p in result.points if p.pareto_score is not None]
+    # A model scoring exactly at the floor has Score per $ 0; it would stretch the steps down to flat lines on the floor.
+    values = [p.pareto_score for p in result.points if p.pareto_score is not None and p.pareto_score > 0]
     xs = [p.x for p in result.points if p.x > 0]
     if not values or not xs:
         return []
     lo_x, hi_x = min(xs), max(xs)
     lo_s, hi_s = min(p.score for p in result.points), max(p.score for p in result.points)
     step = math.log(hi_x / lo_x) / (_GUIDE_SAMPLES - 1)
-    samples = [lo_x * math.exp(i * step) for i in range(_GUIDE_SAMPLES)]
+    samples = [lo_x * math.exp(i * step) for i in range(_GUIDE_SAMPLES - 1)] + [hi_x]
     return [
-        {'x': x, 'score': score, 'k': f'{k:,g}'}
+        {'x': x, 'score': score, 'k': _guide_label(k)}
         for k in _guide_ks(min(values), max(values))
         for x in samples
         if lo_s <= (score := floor + k * x) <= hi_s

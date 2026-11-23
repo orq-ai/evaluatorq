@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import random
 import re
-from typing import Any, get_args
+from typing import Any, cast, get_args
 
 import pytest
 from typer.testing import CliRunner
@@ -852,8 +852,44 @@ class TestDashboardPage:
         assert sorted({r['k'] for r in rows}, key=float) == ['10', '20']
         for r in rows:
             assert r['score'] == pytest.approx(10.0 + float(r['k']) * r['x'], abs=1e-9)
-            assert min(xs) <= r['x'] <= max(xs)
+            assert min(xs) - 1e-9 <= r['x'] <= max(xs) + 1e-9
             assert min(scores) <= r['score'] <= max(scores)
+
+    @pytest.mark.parametrize(
+        ('points', 'floor'),
+        [
+            pytest.param([(1.0, 30.0)], 10.0, id='single-point'),
+            pytest.param([(1.0, 30.0), (2.0, 50.0)], 10.0, id='equal-score-per-dollar'),
+            pytest.param([(0.5, 50.0), (2.0, 90.0)], 50.0, id='a-point-at-the-floor'),
+            pytest.param([(0.1, 30.0), (4.0, 60.0)], 0.0, id='floor-zero'),
+        ],
+    )
+    def test_guide_rows_edge_cases(self, points: list[tuple[float, float]], floor: float) -> None:
+        from types import SimpleNamespace
+
+        from evaluatorq.dashboard.models_views import _guide_rows
+
+        stubs = [SimpleNamespace(x=x, score=s, pareto_score=(s - floor) / x) for x, s in points]
+        rows = _guide_rows(cast(Any, SimpleNamespace(x='price', points=stubs)), floor)
+        positive = [p.pareto_score for p in stubs if p.pareto_score > 0]
+        for r in rows:
+            assert 'e' not in r['k']
+            assert float(r['k'].replace(',', '')) > min(positive)
+
+    def test_a_model_at_the_floor_does_not_stretch_the_guides(self) -> None:
+        from types import SimpleNamespace
+
+        from evaluatorq.dashboard.models_views import _guide_rows
+
+        # Score per $ 0 (at the floor of 50), 5 and 20. Counting the 0 stretched the steps down six decades, to flat
+        # lines on the floor labelled 1e-05 per $; only 10 lies strictly inside the positive range.
+        stubs = [
+            SimpleNamespace(x=1.0, score=50.0, pareto_score=0.0),
+            SimpleNamespace(x=0.5, score=52.5, pareto_score=5.0),
+            SimpleNamespace(x=2.0, score=90.0, pareto_score=20.0),
+        ]
+        rows = _guide_rows(cast(Any, SimpleNamespace(x='price', points=stubs)), 50.0)
+        assert {r['k'] for r in rows} == {'10'}
 
     def test_no_guides_off_the_price_axis(self, fake_catalogue: list[ScoredModel]) -> None:
         from evaluatorq.dashboard.models_views import _guide_rows
