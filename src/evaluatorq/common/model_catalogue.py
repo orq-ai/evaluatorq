@@ -487,6 +487,8 @@ def _parse_pricing(provider: str, model_id: str, metadata: dict[str, object]) ->
 
 _DATED_CLAUSE = re.compile(r'request_unix\s*>=\s*(\d+)')
 _IDENTIFIER = re.compile(r'[A-Za-z_]\w*')
+# The UTC second of the day, which every peak-hour window compares against.
+_SECOND_OF_DAY = re.compile(r'request_unix\s*%\s*86400\b')
 # Rate dimensions this reader fills, mapped to the variant keys that carry them (first one wins).
 _VARIANT_DIMENSIONS: dict[str, tuple[str, ...]] = {
     'input': ('input',),
@@ -552,6 +554,8 @@ _TIME_OF_DAY_PRICE_OVERRIDES: dict[str, _TimeOfDayOverride] = {
 
 def _and_clauses(expr: str) -> list[str] | None:
     """The top-level ``&&`` clauses of a CEL expression, outer parentheses removed; ``None`` if unbalanced."""
+    # Unwrap first: `(a && b)` has no top-level `&&` until its outer pair is gone.
+    expr = _strip_parens(expr.strip())
     clauses: list[str] = []
     depth, begin = 0, 0
     for i, char in enumerate(expr):
@@ -604,15 +608,21 @@ def _time_variant(variant: object) -> _TimeVariant | None:
     clauses = _and_clauses(when) if isinstance(when, str) else None
     if not clauses:
         return None
-    start, peak = 0, False
+    start, calendar, hour_window = 0, False, False
     for clause in clauses:
         dated = _DATED_CLAUSE.fullmatch(clause)
         if dated:
             start = max(start, int(dated.group(1)))
         elif '%' in clause and set(_IDENTIFIER.findall(clause)) == {'request_unix'}:
-            peak = True
+            calendar = True
+            hour_window = hour_window or bool(_SECOND_OF_DAY.search(clause))
         else:
             return None
+    # A modulo condition counts as a peak window only alongside a UTC hour-of-day bound;
+    # anything else (`request_unix % 2 == 0`) is not a time-of-day price.
+    if calendar and not hour_window:
+        return None
+    peak = hour_window
     rates = {
         dim: next((r for key in keys if (r := _variant_rate_per_1k(variant.get(key))) is not None), None)
         for dim, keys in _VARIANT_DIMENSIONS.items()
@@ -675,7 +685,7 @@ def _card_rates(entry: dict[str, object], *, now: float | None = None) -> tuple[
             pricing, cache_read=rates['cache_read'], cache_write=rates['cache_write'], time_of_day_average=split
         )
         return rates['input'], rates['output'], pricing
-    if override is None or not split:
+    if override is None:
         return inp, out, pricing
     if override.dated_set_start != current:
         logger.warning(
@@ -685,6 +695,8 @@ def _card_rates(entry: dict[str, object], *, now: float | None = None) -> tuple[
             override.dated_set_start,
             current,
         )
+        return inp, out, pricing
+    if not split:
         return inp, out, pricing
     cache_read = None if override.cache_read is None else override.cache_read / 1000
     return (

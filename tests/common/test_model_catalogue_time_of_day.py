@@ -123,6 +123,17 @@ def test_stale_override_is_not_applied_and_warns(logs: list[tuple[str, str]]):
     assert 'stale' in warnings[0]
 
 
+def test_stale_override_warns_even_when_the_new_set_has_no_peak_variant(logs: list[tuple[str, str]]):
+    card = _card('deepseek-v4-pro')
+    card['metadata']['pricing']['variants'] = [{'when': f'request_unix >= {NOW - 86400}'}]
+    info = _parse(card)
+    assert info.input_cost_per_1k == pytest.approx(0.000435)
+    assert info.pricing.time_of_day_average is False
+    warnings = [message for level, message in logs if level == 'WARNING']
+    assert len(warnings) == 1
+    assert 'stale' in warnings[0]
+
+
 def test_override_waits_for_its_dated_set_to_start():
     info = _parse(_card('deepseek-v4-pro'), now=V4_PRO_START - 1)
     assert info.input_cost_per_1k == pytest.approx(0.000435)
@@ -221,6 +232,35 @@ def test_card_without_variants_is_unchanged():
 def test_malformed_conditions_are_ignored(when: str):
     info = _parse(_priced_card([_variant(when, input=5.0, output=5.0)], model_id='other-model'))
     assert info.input_cost_per_1k == pytest.approx(0.000435)
+
+
+def test_parenthesised_dated_peak_variant_keeps_its_date():
+    # Wrapped in one outer pair, the peak variant must still read as dated, not as an undated peak.
+    card = _priced_card(
+        [
+            _variant(f'request_unix >= {V4_PRO_START}', input=0.66, output=1.98),
+            _variant(f'(request_unix >= {V4_PRO_START} && {PEAK_HOURS})', input=1.32, output=3.96),
+        ],
+        model_id='other-model',
+    )
+    assert _parse(card).input_cost_per_1k == pytest.approx(0.99 / 1000)
+    # Before the set starts neither variant applies, so the card prices flat.
+    earlier = _parse(card, now=V4_PRO_START - 1)
+    assert earlier.input_cost_per_1k == pytest.approx(0.000435)
+    assert earlier.pricing.time_of_day_average is False
+
+
+def test_modulo_condition_without_an_hour_window_is_not_a_peak():
+    card = _priced_card(
+        [
+            _variant(f'request_unix >= {V4_PRO_START}', input=0.66, output=1.98),
+            _variant(f'request_unix >= {V4_PRO_START} && request_unix % 2 == 0', input=9.0, output=9.0),
+        ],
+        model_id='other-model',
+    )
+    info = _parse(card)
+    assert info.input_cost_per_1k == pytest.approx(0.66 / 1000)
+    assert info.pricing.time_of_day_average is False
 
 
 # --- the Pareto view reads the same rates -----------------------------------------------------
