@@ -400,6 +400,42 @@ async def test_an_insights_run_that_only_clusters_still_checks_the_model_that_me
     assert not (tmp_path / 'runs').exists(), 'nothing was written for a run that never started'
 
 
+@pytest.mark.parametrize(
+    ('population_arguments', 'run_arguments'),
+    [({'query': 'refund complaints'}, {}), ({}, {'coding_analysis': True})],
+    ids=['a query population', 'coding'],
+)
+@pytest.mark.asyncio
+async def test_a_run_that_clusters_and_also_labels_names_the_model_as_the_label_model(
+    population_arguments: dict[str, Any], run_arguments: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """A dimension next to a query or coding: the model also labels, so the error must not say it only merges clusters."""
+    from evaluatorq.insights import pipeline
+    from evaluatorq.insights.models import InsightsPopulation
+
+    fake = RawAnthropic()
+    for name in ('resolve_population', 'label_traces', 'summarize_traces', '_build_dimension'):
+        monkeypatch.setattr(pipeline, name, _fail_if_reached(name))
+    monkeypatch.setattr(pipeline, 'resolve_orq_client', lambda: pytest.fail('resolved an Orq client'))
+
+    with pytest.raises(ModelClientMismatchError) as info:
+        await pipeline.insights(
+            InsightsPopulation(**population_arguments),
+            dimensions=('intent',),
+            labels=(),
+            summary_model='claude-sonnet-5-5',
+            runs_dir=tmp_path / 'runs',
+            llm_client=cast('Any', fake),
+            embedding_client=cast('Any', object()),
+            **run_arguments,
+        )
+
+    message = str(info.value)
+    assert '(insights.labels)=' in message
+    assert 'used to merge clusters' not in message
+    assert fake.messages.calls == []
+
+
 @pytest.mark.asyncio
 async def test_insights_left_to_an_anthropic_only_environment_stops_the_same_way(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
