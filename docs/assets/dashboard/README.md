@@ -39,7 +39,7 @@ Older screenshots use `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 
 
 ## Models — `models-*.png`
 
-Captured on 2026-11-23 against the live Orq catalogue (72 models after keeping one listing per model), 1440×1250 viewport, top of the page, light theme, headless Chromium, with `eq dashboard` on the branch's defaults: agentic price mix (7:2:1 cached), minimum score 15.
+Captured on 2026-11-23 against the live Orq catalogue (72 models after keeping one listing per model), 1440×1250 viewport, top of the page, light theme, headless Chromium, with `eq dashboard` on the branch's defaults: agentic price mix (7:2:1 cached), minimum score 10.
 
 | File | Page |
 |---|---|

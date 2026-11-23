@@ -477,7 +477,7 @@ Download links respect the currently active filter state — the CSV/JSON export
 
 The **Models** page plots every model in the Orq catalogue as one dot, score against a blended price, and joins the models nothing beats with an orange line: the Pareto frontier. It reads the live catalogue, so it needs the same Orq account as trace search. Without one, the sidebar item is greyed out and the page says how to connect.
 
-![Models page on the default agentic price mix and minimum score of 15: three models on the frontier](assets/dashboard/models-01-frontier.png)
+![Models page on the default agentic price mix and minimum score of 10: three models on the frontier](assets/dashboard/models-01-frontier.png)
 
 The controls above the chart:
 
@@ -488,7 +488,7 @@ The controls above the chart:
 | **X axis** | Price, output speed or time to first token. | Price |
 | **Price mix** | **Agentic: 7:2:1 cached** (7 parts cache read, 2 parts fresh input, 1 part output) or **List: 3:1 input/output**. Greyed out on the other x axes. | Agentic |
 | **Developer** | Plots one developer's models. | All developers |
-| **Minimum score** | Hides models scoring below it on the chosen score; `0` plots every model. | 15 |
+| **Minimum score** | Hides models scoring below it on the chosen score; `0` plots every model. | 10 |
 | **Include disabled models** | Adds models switched off in the workspace. | Off |
 | **Hide estimated scores** | Drops the hollow dots, which are scores Orq estimated rather than measured. | Off |
 

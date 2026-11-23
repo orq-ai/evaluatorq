@@ -44,7 +44,7 @@ $ eq models pareto
 │ zai/glm-5.3-flash         │  41.8 │                     0.051 │       827.7 │           0.015 │      │ yes      │
 ╰───────────────────────────┴───────┴───────────────────────────┴─────────────┴─────────────────┴──────┴──────────╯
 Price blends the rates per 1M tokens as 7:0:2:1 (cache read : cache write : fresh input : output). Pass --mix list for the 3:1 input/output list blend.
-16 model(s) hidden for scoring below --min-score 15. Pass --min-score 0 to show every model.
+7 model(s) hidden for scoring below --min-score 10. Pass --min-score 0 to show every model.
 5 model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.
 ```
 
@@ -52,7 +52,7 @@ Read the table from the top down: each row is cheaper than the one above it and 
 
 ## The quality floor
 
-Models scoring below 15 are left out before the frontier is drawn. Without the floor, the cheap end of the frontier can hold models that are there only because nothing is cheaper: on 2026-11-23, with the floor off and the 3:1 list blend, the frontier adds `tensorix/qwen/qwen3-coder-30b-a3b-instruct` at a score of 9.6 and $0.107 per 1M tokens. On the default blend the same day, the frontier was the same three models with or without the floor, so there the floor only removed dominated models from `--dominated`, `--json` and the dashboard chart. 15 is the same floor evaluatorq uses when it picks default models for its own roles, `MIN_SEAT_INDEX`.
+Models scoring below 10 are left out before the frontier is drawn. Without the floor, the cheap end of the frontier can hold models that are there only because nothing is cheaper: on 2026-11-23, with the floor off and the 3:1 list blend, the frontier adds `tensorix/qwen/qwen3-coder-30b-a3b-instruct` at a score of 9.6 and $0.107 per 1M tokens. On the default blend the same day, the frontier was the same three models with or without the floor, so there the floor only removed dominated models from `--dominated`, `--json` and the dashboard chart. 10 is the same floor evaluatorq uses when it picks default models for its own roles, `MIN_SEAT_INDEX`.
 
 Set the floor with `--min-score` or `min_score=`. `--min-score 0` or `min_score=None` shows every model:
 
@@ -87,7 +87,7 @@ $ eq models pareto --min-score 0 --mix list
 5 model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.
 ```
 
-The floor applies to whichever score you put on the y axis, so with `--index legal` it compares legal scores against 15. The domain indices use the same 0 to 100 scale, but AA scores fewer and mostly stronger models on them, so the floor removes fewer: on 2026-11-23, after one listing per model, it left out 3 of the 38 models with a legal score and a price, against 16 of the 67 with an intelligence score and a price. The floor does not change which of the remaining models are on the frontier, because a model that beats another one scores at least as high and so clears the floor too.
+The floor applies to whichever score you put on the y axis, so with `--index legal` it compares legal scores against 10. The domain indices use the same 0 to 100 scale, but AA scores fewer and mostly stronger models on them, so the floor removes fewer: on 2026-11-23, after one listing per model, it left out 1 of the 38 models with a legal score and a price, against 7 of the 67 with an intelligence score and a price. The floor does not change which of the remaining models are on the frontier, because a model that beats another one scores at least as high and so clears the floor too.
 
 ## Is my model dominated?
 
@@ -123,7 +123,7 @@ $ eq models pareto --model claude-sonnet-5-5
 │ anthropic/claude-sonnet-5-5 │  46.8 │                     1.470 │        31.8 │           0.100 │      │ openai/gpt-6.1-sol │
 ╰─────────────────────────────┴───────┴───────────────────────────┴─────────────┴─────────────────┴──────┴────────────────────╯
 Price blends the rates per 1M tokens as 7:0:2:1 (cache read : cache write : fresh input : output). Pass --mix list for the 3:1 input/output list blend.
-16 model(s) hidden for scoring below --min-score 15. Pass --min-score 0 to show every model.
+7 model(s) hidden for scoring below --min-score 10. Pass --min-score 0 to show every model.
 5 model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.
 ```
 
@@ -143,7 +143,7 @@ $ eq models pareto --model claude-sonnet-5-5 --index legal --json 2>/dev/null
   "x": "price",
   "x_label": "Price, USD per 1M tokens (7:2:1 cached)",
   "mix": {"read": 7.0, "write": 0.0, "fresh": 2.0, "output": 1.0, "name": "agentic", "tag": "7:2:1 cached"},
-  "min_score": 15.0,
+  "min_score": 10.0,
   "points": [
     {
       "router_id": "anthropic/claude-sonnet-5-5",
@@ -159,7 +159,7 @@ $ eq models pareto --model claude-sonnet-5-5 --index legal --json 2>/dev/null
   ],
   "excluded": [
     {"router_id": "alibaba/qwen3.5-27b", "reason": "no legal score", "below_min_score": false},
-    {"router_id": "cerebras/gpt-oss-120b", "reason": "score 11.3 is below min_score 15", "below_min_score": true}
+    {"router_id": "groq/openai/gpt-oss-20b", "reason": "score 7.3 is below min_score 10", "below_min_score": true}
   ],
   "left_out_by_provider": 0
 }
@@ -167,7 +167,7 @@ $ eq models pareto --model claude-sonnet-5-5 --index legal --json 2>/dev/null
 
 Read `x` for the blended price. Each point also carries a `price` field, and `price` is always the 3:1 list blend whatever `mix` says. The output above is trimmed: each point also carries every `ScoredModel` field (prices including `cache_read_price` and `aa_cache_read_price`, developer, effort ladder, domain scores, speed and latency), and `excluded` lists every model left out, with `below_min_score` set on the ones the quality floor removed. The JSON lists only the models you asked for; `dominators` names the winners but does not carry their scores. Run without `--model` to see the winner's row. Log lines go to stderr, so `2>/dev/null` leaves clean JSON on stdout.
 
-A model below the floor is not compared, so `--model` with it prints `<id> is not plotted: score <n> is below min_score 15.` on stderr and `No models on the frontier for these filters.` on stdout; add `--min-score 0` to compare it. `dominated_by()` in Python applies no floor.
+A model below the floor is not compared, so `--model` with it prints `<id> is not plotted: score <n> is below min_score 10.` on stderr and `No models on the frontier for these filters.` on stdout; add `--min-score 0` to compare it. `dominated_by()` in Python applies no floor.
 
 A bare id such as `gpt-6.1-sol` must match exactly one model; otherwise the CLI exits `2` and `find_model` returns `None`. A bare id works only for a two-part id such as `openai/gpt-6.1-sol`: for a three-part id such as `tensorix/qwen/qwen3-coder-30b-a3b-instruct`, pass the full id. `--model` only sees the one listing kept per model (see [One dot per model](#one-dot-per-model)), so the full id of a host that was not kept also exits `2`. Comparing a specific host is Python-only, through `load_models(all_hosts=True)`.
 
@@ -241,7 +241,7 @@ $ eq models pareto --mix 7:1:1:1
 ╰───────────────────────────┴───────┴──────────────────────┴─────────────┴─────────────────┴──────────────────┴──────┴──────────╯
 Price blends the rates per 1M tokens as 7:1:1:1 (cache read : cache write : fresh input : output). Pass --mix list for the 3:1 input/output list blend.
 1 shown model(s) price a cache rate their host does not list: (AA) is the Artificial Analysis price on the same card, (input) bills those tokens at the input rate.
-16 model(s) hidden for scoring below --min-score 15. Pass --min-score 0 to show every model.
+7 model(s) hidden for scoring below --min-score 10. Pass --min-score 0 to show every model.
 5 model(s) not compared: no value on one of the axes, or filtered out. Use --json for the reason per model.
 ```
 
@@ -272,7 +272,7 @@ Price blends the rates per 1M tokens as 7:0:2:1 (cache read : cache write : fres
 70 model(s) from other providers left out by --provider.
 ```
 
-On 2026-11-23, across every host, 108 of the 119 listings with a price and an intelligence score list their own cache-read rate, 6 fall back to the Artificial Analysis price and 5 to the input rate. With one listing per model and the default floor, 4 of the 51 compared models fall back on the cache-read rate, all to the input rate, and all of them Qwen models; the CLI footer counts only the rows it prints, while the dashboard summary counts every plotted model. A missing rate is often a catalogue gap rather than a real price: Azure OpenAI does discount cached input, but its cards list no cache rate.
+On 2026-11-23, across every host, 108 of the 119 listings with a price and an intelligence score list their own cache-read rate, 6 fall back to the Artificial Analysis price and 5 to the input rate. With one listing per model and the default floor, 5 of the 60 compared models fall back on the cache-read rate: four Qwen models to the input rate and `azure/gpt-4.1` to the Artificial Analysis price; the CLI footer counts only the rows it prints, while the dashboard summary counts every plotted model. A missing rate is often a catalogue gap rather than a real price: Azure OpenAI does discount cached input, but its cards list no cache rate.
 
 ### What the blend cannot see
 
@@ -303,7 +303,7 @@ A model is left out of the comparison, and listed under `excluded` in `--json` a
 | `free (no list price)` | a free model would beat everything on price |
 | `no output speed data`, `no time to first token data` | AA has no speed or latency measurement for the model |
 | `estimated score` | only with `--no-estimate` / `exclude_estimated=True`; estimated scores are compared by default |
-| `score 2.7 is below min_score 15` | the score is under `--min-score` / `min_score=` (see [The quality floor](#the-quality-floor)) |
+| `score 7.3 is below min_score 10` | the score is under `--min-score` / `min_score=` (see [The quality floor](#the-quality-floor)) |
 
 A left-out model is not dominated. It simply was not compared.
 
