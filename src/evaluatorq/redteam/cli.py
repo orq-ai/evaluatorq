@@ -914,6 +914,12 @@ def new_vulnerability(
         bool,
         typer.Option('--no-input', help='Append a template to fill in by hand instead of asking questions.'),
     ] = False,
+    edit: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--edit', help='Open the file in $VISUAL or $EDITOR after writing it. Skipped without a terminal.'
+        ),
+    ] = False,
 ) -> None:
     """Add a custom vulnerability to a definitions file, asking for the rule step by step."""
     from evaluatorq.redteam.custom import (
@@ -951,6 +957,8 @@ def new_vulnerability(
         append_definition(file, definition_yaml(definition))
         typer.echo(f'Added {definition.id} to {file}. Run it with:')
     typer.echo(f'  eq redteam run --target agent:<key> --custom {shell_path(file)}')
+    if edit and not should_skip_confirm(yes=False):
+        typer.edit(filename=str(file))
 
 
 judge_app = typer.Typer(help='Inspect the judges that score each vulnerability.', context_settings=CONTEXT_SETTINGS)

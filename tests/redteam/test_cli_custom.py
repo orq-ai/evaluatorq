@@ -6,6 +6,8 @@ import json
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from typer.testing import CliRunner
 
 from evaluatorq.redteam.cli import app
@@ -98,6 +100,20 @@ def test_no_input_appends_template_and_keeps_comments(tmp_path: Path) -> None:
         assert 'tone_rule' in str(e)
     else:
         raise AssertionError('a TODO description must not load')
+
+
+def test_edit_opens_the_file_only_in_a_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr('typer.edit', lambda filename: opened.append(filename))
+    rules = tmp_path / 'rules.yaml'
+    args = ['new-vulnerability', 'tone_rule', '--no-input', '--edit', '--file', str(rules)]
+    monkeypatch.setattr('evaluatorq.redteam.cli.should_skip_confirm', lambda yes: True)
+    assert runner.invoke(app, args).exit_code == 0
+    assert opened == []
+    monkeypatch.setattr('evaluatorq.redteam.cli.should_skip_confirm', lambda yes: False)
+    rules.unlink()
+    assert runner.invoke(app, args).exit_code == 0
+    assert opened == [str(rules)]
 
 
 def test_no_input_rejects_existing_id(tmp_path: Path) -> None:
