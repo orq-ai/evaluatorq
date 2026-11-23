@@ -302,9 +302,9 @@ CHEAP_AGGREGATE = JuryPreset(
     # superseded by a newer version of itself (model_frontier.rank_cheapest_top).
     # test_cheap_aggregate_matches_the_live_derivation fails with a readable
     # diff when the live ranking moves; a change here is a deliberate edit.
-    # Ranked 2026-11-10, with headline fallback for cards unscored at their
-    # default: glm-5.3-flash 41.8, gemini-3.8-flash 39.8, deepseek-v4.1-flash
-    # 39.5 (headline); mistral-large-4 38.4 (headline) is next.
+    # Ranked 2026-11-23 from the live catalogue: glm-5.3-flash 41.8,
+    # deepseek-v4.1-flash-1017 32.6, gemini-3.8-flash 30.1; mistral-large-4
+    # 26.1 is next.
     judges=(
         # Default effort max; the live card has no ladder, so 41.8 is the AA
         # API value for the same slug (AA_FILLS). PRICE HOLD: the card says
@@ -312,16 +312,16 @@ CHEAP_AGGREGATE = JuryPreset(
         # billed at $0.15/$0.50 ($0.2375 blend), twice the card. The live card
         # leads here and the estimate uses it; at the billed rate this seat
         # costs $0.475 per 1k instead of $0.2375 and the panel estimate is
-        # $4.53 instead of $4.29. Replace the registry rate the day Zai billing
+        # $4.35 instead of $4.11. Replace the registry rate the day Zai billing
         # is confirmed.
         'zai/glm-5.3-flash',
+        'particle/deepseek-v4.1-flash-1017',
         'google-ai/gemini-3.8-flash',
-        'baseten/deepseek-v4.1-flash',
     ),
     # Next-ranked family under the ceiling.
     reserve_judges=('mistral/mistral-large-4',),
     use_when='High volume regression eval, nightly reruns, HITL triage feeders.',
-    estimated_cost_per_1k=4.29,
+    estimated_cost_per_1k=4.11,
 )
 
 OPEN_WEIGHT_PORTABLE = JuryPreset(
@@ -331,11 +331,11 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
         # review, 2026-08-24), then deepseek-v4-pro; reseated 2026-11-10 to
         # v4.1 Flash, as on balanced-trio.
         'baseten/deepseek-v4.1-flash',
-        # Back on Baseten at its max default (measured 43.6) from 2026-11-10.
-        # The 2026-10-05 move to Wafer at an unbenchmarked `none` default was
-        # bought with a $12.75 output rate; Wafer now bills $15.00 like
-        # Baseten, so the trade kept the unmeasured default and lost the price.
-        'baseten/kimi-k3',
+        # Reseated 2026-11-23 from baseten/kimi-k3: Kimi's primary announcement
+        # calls K3.1 Pro a new K3.1 series and a post-trained K3, and Wafer is the
+        # cheapest reviewed route at the same 46.5 index. (verified 2026-11-23:
+        # https://www.kimi.ai/blog/kimi-k3-1-pro)
+        'wafer/Kimi-K3.1-Pro',
         # Reseated 2026-11-10 from glm-5.2 (33.7, $2.15 blend), which
         # SUPERSEDED already retired: 41.8 at max on the card rate. Same
         # billing hold as cheap-aggregate's seat.
@@ -343,7 +343,7 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
     ),
     reserve_judges=('greenpt/qwen3.6-35b-a3b',),
     use_when='No dependence on a closed frontier vendor; migration path to self-hosting.',
-    estimated_cost_per_1k=13.29,
+    estimated_cost_per_1k=9.29,
 )
 
 EU_REGION = JuryPreset(
@@ -430,16 +430,7 @@ MAX_SEAT_AGE_DAYS = 180
 #
 # Age here is time since first listing in the garden, taken across every host
 # of the same weights, so a second host relisting a model does not reset it.
-STALE_SEAT_WAIVERS: dict[str, str] = {
-    'claude-haiku-4-5-20251001': (
-        'Listed 2025-10, held only by the derived Anthropic Only pool, and only '
-        'on a project-scoped key: anthropic/claude-haiku-5-5 is in the public '
-        "catalogue but not in this project's /v2/models, and the pool "
-        'derivation reads /v2/models alone, so it still reaches for 4.5. '
-        'Retire this entry once the drift suite runs on a workspace key; '
-        'test_stale_seat_waivers_are_dropped_once_the_seat_is_young_again says when.'
-    ),
-}
+STALE_SEAT_WAIVERS: dict[str, str] = {}
 
 # A seat whose router id has no score in the garden is one the upgrade check
 # cannot look at, so the freshness suite fails on it. This register is the
@@ -447,18 +438,7 @@ STALE_SEAT_WAIVERS: dict[str, str] = {
 # whose job does not depend on rank (a reserve that runs when a main judge
 # fails). A card that later gains a score makes its entry pointless, and the
 # freshness suite says so.
-UNSCORED_SEAT_WAIVERS: dict[str, str] = {
-    'deepseek/deepseek-flash': (
-        'balanced-trio reserve, kept for cost. The public catalogue card '
-        '(DeepSeek-V4.1-Flash-1017, 2026-10-17) is absent from /v2/models and has no '
-        'Artificial Analysis score; the same model on tencent/deepseek/deepseek-flash '
-        'and baseten/deepseek-v4.1-flash is 39.5, but a score read from another host '
-        'is not this card, and seating it would let cheap-aggregate swap onto an '
-        'inferred number. Priced at $0.15/$0.60 per 1M off-peak and $0.30/$1.20 in '
-        "weekday peak windows on the card's price variants (public catalogue "
-        '2026-11-12). Retire once the card carries its own score.'
-    ),
-}
+UNSCORED_SEAT_WAIVERS: dict[str, str] = {}
 
 # Successors already looked at and deliberately not seated. A model reaching the
 # garden is not a reason to put it in front of customers, but it is a reason to
@@ -484,14 +464,7 @@ _ALIBABA_RESERVE = (
     'cheaper reserve. Public catalogue 2026-11-10.'
 )
 
-DOMINANCE_EXEMPTIONS: dict[str, str] = {
-    'openai/gpt-6.1-sol': (
-        'openai/gpt-6.1-terra ranks on a 51.0 headline that is AA v5.0.1 max, '
-        'not the v4.3 index every other card carries, so its "upgrade" over '
-        'Sol (v4.3 medium 47.8) compares two scales. Drop once Terra has a '
-        'v4.3 score or the garden moves to v5. 2026-11-10.'
-    ),
-}
+DOMINANCE_EXEMPTIONS: dict[str, str] = {}
 """Seats knowingly kept despite a computed in-family upgrade.
 
 Same disposition-register contract as REVIEWED_SUCCESSORS: seat it or write down
@@ -500,6 +473,19 @@ why not. An empty register means the arithmetic and the shipped presets agree.
 
 
 REVIEWED_SUCCESSORS: dict[str, str] = {
+    'gpt-6.2-astra': (
+        'OpenAI documents GPT-6.2 Astra as its flagship model, so this is a new '
+        'generation rather than a relisting. Keep it out because the current '
+        'presets deliberately retain the cheaper Sol/Luna trade-offs; revisit with '
+        'a replacement decision when the score scales are comparable. (verified '
+        '2026-11-23: https://platform.openai.com/docs/models/gpt-6.2-astra)'
+    ),
+    'gpt-6.2-sol': (
+        'OpenAI documents GPT-6.2 Sol as a new go-to model, not a serving variant '
+        'of the seated GPT-6.1 Sol. Keep it out pending a deliberate cost and '
+        'benchmark comparison with the current seats. (verified 2026-11-23: '
+        'https://platform.openai.com/docs/models/gpt-6.2-sol)'
+    ),
     'qwen3.7-flash': (
         'alibaba/qwen3.7-flash is europe-pinned and unscored in the live catalogue (2026-10-26); the Portable reserve cannot take a region-pinned or unscored seat.'
     ),

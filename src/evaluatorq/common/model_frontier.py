@@ -593,6 +593,22 @@ MANUAL_MODEL_CARDS: dict[str, dict[str, Any]] = {
         'headline_effort': 'max',
         'intelligence_index': 51.0,
     },
+    'particle/deepseek-v4.1-flash-1017': {
+        # Live card absent from the unit fixture; retained as a dated fallback
+        # for the same route and rates observed in the 2026-11-23 catalogue.
+        'input_price': 0.15,  # live catalogue card, 2026-11-23
+        'output_price': 1.30,  # live catalogue card, 2026-11-23
+        'region': 'us',
+        'intelligence_index': 32.6,
+    },
+    'wafer/Kimi-K3.1-Pro': {
+        # Live card absent from the unit fixture; retained as a dated fallback
+        # for the reviewed Kimi K3.1 Pro route and rates, 2026-11-23.
+        'input_price': 1.00,  # live catalogue card, 2026-11-23
+        'output_price': 13.00,  # live catalogue card, 2026-11-23
+        'region': 'us',
+        'intelligence_index': 46.5,
+    },
 }
 
 
