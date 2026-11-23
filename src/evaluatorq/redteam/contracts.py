@@ -9,7 +9,7 @@ Semantic convention:
     ``passed=False`` → the agent is VULNERABLE (attack succeeded)
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias
@@ -37,6 +37,7 @@ from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import RunSummary, StrEnum
+from evaluatorq.redteam.registry_scope import ScopedDict
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -386,7 +387,9 @@ class RegisteredValue(str):  # noqa: FURB189 - must hash and compare as its str,
 
 
 _OPEN_SETS = ('Vulnerability', 'AttackTechnique', 'VulnerabilityDomain', 'Framework', 'AgentCapability')
-_REGISTERED_VALUES: dict[str, dict[str, RegisteredValue]] = {name: {} for name in _OPEN_SETS}
+_REGISTERED_VALUES: ScopedDict[str, dict[str, RegisteredValue]] = ScopedDict(
+    'open_values', {name: {} for name in _OPEN_SETS}
+)
 
 
 def _open_set_store(enum_cls: type[StrEnum]) -> dict[str, RegisteredValue]:
@@ -2583,15 +2586,3 @@ def __getattr__(name: str):
             )
         return AttackEvaluationResult
     raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
-
-
-def snapshot_registered_values() -> Callable[[], None]:
-    """Copy the registered open values; the returned function puts that copy back."""
-    saved = {name: dict(store) for name, store in _REGISTERED_VALUES.items()}
-
-    def restore() -> None:
-        for name, store in _REGISTERED_VALUES.items():
-            store.clear()
-            store.update(saved.get(name, {}))
-
-    return restore

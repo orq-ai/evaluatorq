@@ -126,7 +126,7 @@ Generated attacks need the dynamic pipeline. In `dynamic` mode custom rules work
 
 ## Python API
 
-The file loader uses the same registration functions you can call directly. Registrations are process-local: they last until the process exits, and a separate `eq redteam run` process does not see them, which is why the CLI takes `--custom`. Registering an identical definition twice is a no-op, so re-running a notebook cell works; a different definition under the same id raises.
+The file loader uses the same registration functions you can call directly. A registration made outside a run is global: it lasts until the process exits, every later run sees it, and a separate `eq redteam run` process does not, which is why the CLI takes `--custom`. Definitions passed to `red_team(custom=...)` instead exist only for that run, so two runs in one process can use different rules, even at the same time. Registering an identical definition twice is a no-op, so re-running a notebook cell works; a different definition under the same id raises.
 
 ```python
 from evaluatorq.redteam import register_vulnerability

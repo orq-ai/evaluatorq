@@ -49,6 +49,7 @@ from evaluatorq.redteam.frameworks.owasp.models import (
     LlmEvaluatorEntity,
     LlmEvaluatorOutputFormat,
 )
+from evaluatorq.redteam.registry_scope import ScopedDict, snapshot
 from evaluatorq.redteam.vulnerability_registry import clear_custom_vulnerabilities
 from evaluatorq.redteam.vulnerability_registry import register_vulnerability_def as _register_def
 
@@ -77,7 +78,7 @@ __all__ = [
 CUSTOM_TECHNIQUE = 'custom'
 _ID_PATTERN = re.compile(r'^[a-z][a-z0-9_]*$')
 _JUDGE_PLACEHOLDERS = ('{{output.response}}', '{{input.all_messages}}')
-_DEFINITIONS: dict[str, CustomVulnerability] = {}
+_DEFINITIONS: ScopedDict[str, CustomVulnerability] = ScopedDict('custom_definitions')
 
 
 def register_technique(name: str) -> AttackTechnique | RegisteredValue:
@@ -117,30 +118,12 @@ def clear_custom_registrations() -> None:
 
 @contextmanager
 def restore_registrations(*, on_error_only: bool = False) -> Generator[None]:
-    """Put every custom registry back to its state at entry when the block exits.
+    """Put every registry in the current scope back to its state at entry when the block exits.
 
-    `red_team` uses it so a run's custom rules and strategy objects do not leak into
-    later runs in the same process, and `register_custom` uses it on failure so a file
-    is registered completely or not at all (*on_error_only*).
+    `register_custom` uses it on failure (*on_error_only*), so a file is registered
+    completely or not at all.
     """
-    from evaluatorq.redteam.adaptive.strategy_registry import snapshot_custom_strategies
-    from evaluatorq.redteam.contracts import snapshot_registered_values
-    from evaluatorq.redteam.frameworks.owasp.evaluators import snapshot_evaluator_registries
-    from evaluatorq.redteam.vulnerability_registry import snapshot_custom_vulnerabilities
-
-    restorers = [
-        snapshot_registered_values(),
-        snapshot_custom_vulnerabilities(),
-        snapshot_custom_strategies(),
-        snapshot_evaluator_registries(),
-    ]
-    definitions = dict(_DEFINITIONS)
-
-    def restore() -> None:
-        for restorer in restorers:
-            restorer()
-        _DEFINITIONS.clear()
-        _DEFINITIONS.update(definitions)
+    restore = snapshot()
 
     try:
         yield

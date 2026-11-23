@@ -50,6 +50,7 @@ from evaluatorq.redteam.frameworks.owasp.llm_evaluators import (
     get_llm09_misinformation_evaluator,
 )
 from evaluatorq.redteam.frameworks.owasp.models import LlmEvaluatorEntity
+from evaluatorq.redteam.registry_scope import ScopedDict
 from evaluatorq.redteam.vulnerability_registry import (
     CANONICAL_EVALUATOR_METADATA,
     CATEGORY_TO_VULNERABILITY,
@@ -86,18 +87,21 @@ _LLM_REGISTRY: dict[str, EvaluatorGetter] = {
 }
 
 # Unified registry supporting 'ASI01', 'OWASP-ASI01', 'LLM01', 'OWASP-LLM01' formats
-OWASP_EVALUATOR_REGISTRY: dict[str, EvaluatorGetter] = {
-    **_ASI_REGISTRY,
-    **{f'OWASP-{k}': v for k, v in _ASI_REGISTRY.items()},
-    **_LLM_REGISTRY,
-    **{f'OWASP-{k}': v for k, v in _LLM_REGISTRY.items()},
-}
+OWASP_EVALUATOR_REGISTRY: ScopedDict[str, EvaluatorGetter] = ScopedDict(
+    'owasp_evaluators',
+    {
+        **_ASI_REGISTRY,
+        **{f'OWASP-{k}': v for k, v in _ASI_REGISTRY.items()},
+        **_LLM_REGISTRY,
+        **{f'OWASP-{k}': v for k, v in _LLM_REGISTRY.items()},
+    },
+)
 
 # Backwards compatibility alias
-OWASP_EVALUATOR_REGISTRY_FULL: dict[str, EvaluatorGetter] = OWASP_EVALUATOR_REGISTRY.copy()
+OWASP_EVALUATOR_REGISTRY_FULL: dict[str, EvaluatorGetter] = dict(OWASP_EVALUATOR_REGISTRY)
 
 # Primary registry keyed by vulnerability
-VULNERABILITY_EVALUATOR_REGISTRY: dict[AnyVulnerability, EvaluatorGetter] = {}
+VULNERABILITY_EVALUATOR_REGISTRY: ScopedDict[AnyVulnerability, EvaluatorGetter] = ScopedDict('vulnerability_evaluators')
 for _cat, _getter in _ASI_REGISTRY.items():
     _vuln = CATEGORY_TO_VULNERABILITY.get(_cat)
     if _vuln is not None:
@@ -107,7 +111,7 @@ for _cat, _getter in _LLM_REGISTRY.items():
     if _vuln is not None:
         VULNERABILITY_EVALUATOR_REGISTRY[_vuln] = _getter
 
-_custom_judges: dict[AnyVulnerability, list[str]] = {}
+_custom_judges: ScopedDict[AnyVulnerability, list[str]] = ScopedDict('custom_judges')
 
 
 def register_judge(vuln: AnyVulnerability, judge: LlmEvaluatorEntity | EvaluatorGetter) -> None:
@@ -260,20 +264,3 @@ def list_available_categories() -> list[str]:
         List of category codes (ASI01-ASI10, LLM01-LLM09)
     """
     return list(OWASP_EVALUATOR_REGISTRY.keys())
-
-
-def snapshot_evaluator_registries() -> Callable[[], None]:
-    """Copy the evaluator registries and custom judges; the returned function puts that copy back."""
-    by_vuln = dict(VULNERABILITY_EVALUATOR_REGISTRY)
-    by_code = dict(OWASP_EVALUATOR_REGISTRY)
-    judges = dict(_custom_judges)
-
-    def restore() -> None:
-        VULNERABILITY_EVALUATOR_REGISTRY.clear()
-        VULNERABILITY_EVALUATOR_REGISTRY.update(by_vuln)
-        OWASP_EVALUATOR_REGISTRY.clear()
-        OWASP_EVALUATOR_REGISTRY.update(by_code)
-        _custom_judges.clear()
-        _custom_judges.update(judges)
-
-    return restore

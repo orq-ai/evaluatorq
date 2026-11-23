@@ -100,7 +100,7 @@ from evaluatorq.redteam.contracts import (
     parse_target,
     resolve_open_value,
 )
-from evaluatorq.redteam.custom import CustomSource, register_custom, restore_registrations
+from evaluatorq.redteam.custom import CustomSource, register_custom
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str, resolve_delivery_methods
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import (
@@ -110,6 +110,7 @@ from evaluatorq.redteam.hooks import (
     ManifestStageHooks,
     PipelineHooks,
 )
+from evaluatorq.redteam.registry_scope import run_scope
 from evaluatorq.redteam.replay import DATAPOINTS_KEY as REPLAY_DATAPOINTS_KEY
 from evaluatorq.redteam.replay import RUN_CONFIG_KEY as REPLAY_RUN_CONFIG_KEY
 from evaluatorq.redteam.replay import RedTeamReplay, load_redteam_replay
@@ -643,7 +644,7 @@ def _resolve_save_mode(*, save: SaveMode | bool) -> SaveMode:
         warnings.warn(
             'Passing save=True/False is deprecated. Use SaveMode.FINAL / SaveMode.NONE instead.',
             DeprecationWarning,
-            # 4: this helper, red_team, and the registry-restoring wrapper sit
+            # 4: this helper, red_team, and the run-scope wrapper sit
             # between the warning and the user's call site.
             stacklevel=4,
         )
@@ -1394,12 +1395,12 @@ _R = TypeVar('_R')
 
 
 def _run_scoped_registrations(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
-    """Undo the run's `custom` and `strategies` registrations when `red_team` returns,
-    so they do not leak into later runs in the same process."""
+    """Run `red_team` in its own registry scope: it sees the built-ins and the global
+    registrations, and its `custom` and `strategies` definitions stay inside the run."""
 
     @functools.wraps(func)
     async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-        with restore_registrations():
+        with run_scope():
             return await func(*args, **kwargs)
 
     return wrapper
@@ -1568,6 +1569,8 @@ async def red_team(
             path (YAML or JSON), a `CustomVulnerability`, a dict of its fields, or a list
             of these. Registered rules join the default selection and can be picked with
             ``vulnerabilities=[<id>]``. Every entry is validated before any LLM call.
+            They exist only for this run, as do ``AttackStrategy`` objects in
+            ``strategies``: concurrent and later runs do not see them.
         verbosity: Verbosity level (0=silent, 1=summary progress bar,
             2=per-attack progress bars). Defaults to ``0``.
         save: What to persist to disk. ``'none'`` writes nothing. ``'final'``
