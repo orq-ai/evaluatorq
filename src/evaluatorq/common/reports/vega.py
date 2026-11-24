@@ -372,6 +372,10 @@ def vl_line(
     }
 
 
+# A unit circle with a hole: the outer arc runs one way and the inner the other, so the nonzero fill skips the hole.
+_RING = 'M-1,0A1,1 0 1,0 1,0A1,1 0 1,0 -1,0ZM-0.62,0A0.62,0.62 0 1,1 0.62,0A0.62,0.62 0 1,1 -0.62,0Z'
+
+
 def vl_frontier_scatter(
     *,
     rows: list[dict[str, Any]],
@@ -385,9 +389,8 @@ def vl_frontier_scatter(
     """Score against a ratio quantity, with the Pareto frontier joined by a step line and labelled.
 
     Each row carries ``x``, ``score``, ``status`` (``Frontier`` or ``Dominated``), ``estimated``
-    (``estimated`` draws hollow) and ``label``, the text beside a frontier point, empty to leave it to the
-    tooltip. The x axis is logarithmic: price, speed
-    and latency all span orders of magnitude, and a linear axis spends most of the plot on one outlier. Its
+    (``estimated`` draws as a ring, named in a second legend) and ``label``, the text beside a frontier point,
+    empty to leave it to the tooltip. The x axis is logarithmic: price, speed and latency all span orders of magnitude, and a linear axis spends most of the plot on one outlier. Its
     tick labels are formatted with the d3 `x_format` and thinned to 1-2-5 steps at any range.
 
     `guides` rows (``x``, ``score``, ``k``) draw one faint dashed curve per ``k``, labelled ``<k> per $`` at its
@@ -415,12 +418,23 @@ def vl_frontier_scatter(
         'legend': {'title': None, 'orient': 'top'},
     }
 
-    def points(*, estimated: bool) -> dict[str, Any]:
-        return {
-            'transform': [{'filter': f"datum.estimated === '{'estimated' if estimated else 'measured'}'"}],
-            'mark': {'type': 'point', 'filled': not estimated, 'size': 90, 'strokeWidth': 2, 'opacity': 0.9},
-            'encoding': {'x': x_enc, 'y': y_enc, 'color': color, 'tooltip': tooltip},
-        }
+    # Estimated scores draw as a ring: a path shape, because Vega-Lite gives no legend for fill opacity.
+    shape = {
+        'field': 'estimated',
+        'type': 'nominal',
+        'scale': {'domain': ['measured', 'estimated'], 'range': ['circle', _RING]},
+        'legend': {
+            'title': None,
+            'orient': 'top',
+            'labelExpr': "datum.label === 'estimated' ? 'Estimated score' : 'Measured score'",
+            'symbolFillColor': COLORS['ink_300'],
+            'symbolStrokeWidth': 0,
+        },
+    }
+    dots = {
+        'mark': {'type': 'point', 'filled': True, 'size': 90, 'opacity': 0.9},
+        'encoding': {'x': x_enc, 'y': y_enc, 'color': color, 'shape': shape, 'tooltip': tooltip},
+    }
 
     layers: list[dict[str, Any]] = []
     if guides:
@@ -465,8 +479,7 @@ def vl_frontier_scatter(
                 },
                 'encoding': {'x': x_enc, 'y': y_enc, 'order': {'field': 'x', 'type': 'quantitative'}},
             },
-            points(estimated=False),
-            points(estimated=True),
+            dots,
             {
                 'data': {'values': [r for r in rows if r.get('label')]},
                 'mark': {'type': 'text', 'align': 'left', 'dx': 8, 'dy': -6, 'fontSize': 11, 'limit': 160},

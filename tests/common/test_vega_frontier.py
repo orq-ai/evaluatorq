@@ -34,3 +34,12 @@ def test_guides_layer_only_when_given() -> None:
         assert inner['mark']['tooltip'] is None
         assert 'color' not in inner['encoding'] and 'tooltip' not in inner['encoding']
     assert any("' per $'" in t.get('as', '') or "' per $'" in t.get('calculate', '') for t in label['transform'])
+
+
+def test_estimated_scores_draw_as_a_ring_with_a_legend() -> None:
+    dots = next(layer for layer in _spec(None)['layer'] if 'shape' in layer.get('encoding', {}))
+    shape = dots['encoding']['shape']
+    assert shape['field'] == 'estimated'
+    assert shape['scale']['domain'] == ['measured', 'estimated']
+    assert shape['scale']['range'][0] == 'circle' and shape['scale']['range'][1].startswith('M')
+    assert shape['legend'] is not None and 'Estimated score' in shape['legend']['labelExpr']

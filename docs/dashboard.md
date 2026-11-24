@@ -488,9 +488,9 @@ Answer cards above the chart give the three quick answers, each for the models o
 
 **Score per $** is the points a model scores above the minimum score, divided by its blended price: `(score - minimum score) / price`. A model exactly at the minimum score gets 0, and with the minimum score at `0` it is the plain score per dollar. It is the same number as the `Score per $` column of `eq models pareto` (see [Model Pareto frontier](model-pareto.md#the-frontier-in-one-command)).
 
-![Pareto Frontier page on the default agentic price mix and minimum score of 10: the Best score and Best score per $ cards above three models on the frontier, with dashed Score per $ guide curves](assets/dashboard/models-01-frontier.png)
+![Pareto Frontier page on the default agentic price mix and minimum score of 10: the Best score, Best score per $ and Balanced cards above the chart, with estimated scores drawn as rings](assets/dashboard/models-01-frontier.png)
 
-On the price axis the chart draws faint dashed guide curves, each labelled with its Score per $, such as **50 per $**. Every model on one curve has the same Score per $, so a dot above a curve gives more score per dollar than the curve's label. The page draws every round value (1, 2, 5, 10, 20, 50 and so on) inside the range of the plotted models, up to eight; on a wider range it thins them to eight spread across it. The other x axes have no guides, because Score per $ is defined only against price.
+Filled dots are measured scores and rings are scores Orq estimated; the legend above the chart names both. Tick **Score per $ lines** in **More filters** to draw faint dashed guide curves on the price axis, each labelled with its Score per $, such as **50 per $**. Every model on one curve has the same Score per $, so a dot above a curve gives more score per dollar than the curve's label. The page draws every round value (1, 2, 5, 10, 20, 50 and so on) inside the range of the plotted models, up to eight; on a wider range it thins them to eight spread across it. The other x axes have no guides, because Score per $ is defined only against price.
 
 The controls above the chart:
 
@@ -505,7 +505,8 @@ The controls above the chart:
 | **Minimum score** | In **More filters**, a slider from 0 to 100. Hides models scoring below it on the chosen score; `0` plots every model. It is also the floor that Score per $ counts from. | 10 |
 | **Frontier only** | In **More filters**. Trims the table to the frontier models. | Off |
 | **Include disabled models** | In **More filters**. Adds models switched off in the workspace. | Off |
-| **Hide estimated scores** | In **More filters**. Drops the hollow dots, which are scores Orq estimated rather than measured. | Off |
+| **Hide estimated scores** | In **More filters**. Drops the rings, which are scores Orq estimated rather than measured. | Off |
+| **Score per $ lines** | In **More filters**, on the price axis only. Draws the dashed Score per $ guide curves. | Off |
 
 For your own price ratio, add `?mix=7:1:1:1` (cache read : cache write : fresh input : output) to the page address; it appears in the **Price mix** picker as **Custom**. A value the page cannot read, in `?mix=` or `?min_score=`, silently falls back to the default, so check that the axis title names the blend you asked for. The axis title and the table header always name the blend in use.
 
@@ -517,7 +518,7 @@ The table below the chart lists every plotted model with its prices and, for a d
 
 On a domain index such as legal, Artificial Analysis has scored fewer models, so the chart is sparser:
 
-![Pareto Frontier page on the legal index: fewer models carry a legal score, so about half are not plotted](assets/dashboard/models-02-legal.png)
+![Pareto Frontier page on the legal index: fewer models carry a legal score, so most models are not plotted](assets/dashboard/models-02-legal.png)
 
 The page and `eq models pareto` compute the same thing. What the frontier means, how the blend works and where it misleads is in [Model Pareto frontier](model-pareto.md#the-price-axis).
 

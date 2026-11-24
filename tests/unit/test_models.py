@@ -863,6 +863,12 @@ class TestDashboardPage:
         assert 'per $' not in text
         assert 'Fastest' in text
 
+    def test_guides_are_off_until_the_toggle_is_ticked(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        assert 'guide_label' not in self._models_text(client, monkeypatch, fake_catalogue, '/models')
+        assert 'guide_label' in self._models_text(client, monkeypatch, fake_catalogue, '/models?guides=1')
+
     def test_guide_rows_follow_score_equals_floor_plus_k_x(self, fake_catalogue: list[ScoredModel]) -> None:
         from evaluatorq.dashboard.models_views import _guide_rows
 

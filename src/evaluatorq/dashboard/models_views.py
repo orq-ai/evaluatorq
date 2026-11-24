@@ -3,7 +3,7 @@
 One dot per model: Artificial Analysis score (y) against blended price (a
 cache-aware blend by default, the 3:1 list blend on request), output speed or
 time to first token (x). Frontier models are joined by a step
-line, dominated ones draw grey, estimated scores draw hollow. The table under the
+line, dominated ones draw grey, estimated scores draw as rings. The table under the
 chart names, for each dominated model, the nearest frontier model that beats it.
 """
 
@@ -138,12 +138,22 @@ def _field(label: str, name: str, control: str, *, off: str = '', title: str = '
 
 
 # The More filters toggles: query name and chip label. Each submits `1` when on.
-_TOGGLES = {'frontier': 'Frontier only', 'disabled': 'Include disabled models', 'no_estimate': 'Hide estimated scores'}
+_TOGGLES = {
+    'frontier': 'Frontier only',
+    'disabled': 'Include disabled models',
+    'no_estimate': 'Hide estimated scores',
+    'guides': 'Score per $ lines',
+}
+
+
+def _toggles(st: _State) -> dict[str, str]:
+    """The toggles that apply: Score per $ lines only on the price axis, the one axis they draw on."""
+    return {k: v for k, v in _TOGGLES.items() if k != 'guides' or st.x == 'price'}
 
 
 def _more_active(q: dict[str, str], st: _State) -> int:
     """How many filters inside More filters differ from the page's defaults, for the badge on its closed trigger."""
-    return sum((bool(st.effort), st.min_score != MIN_SEAT_INDEX, *(bool(q.get(k)) for k in _TOGGLES)))
+    return sum((bool(st.effort), st.min_score != MIN_SEAT_INDEX, *(bool(q.get(k)) for k in _toggles(st))))
 
 
 def _filters_html(q: dict[str, str], st: _State) -> str:
@@ -174,7 +184,7 @@ def _filters_html(q: dict[str, str], st: _State) -> str:
         + '</div><div class="filter-chip-row">'
         + ''.join(
             chip(name, '1', checked=bool(q.get(name)), dot_cls='chip-dot-jade', label=label)
-            for name, label in _TOGGLES.items()
+            for name, label in _toggles(st).items()
         )
         + '</div>'
     )
@@ -360,7 +370,8 @@ def _guide_rows(result: ParetoResult, floor: float) -> list[dict[str, Any]]:
     ]
 
 
-def _chart(result: ParetoResult, by_id: dict[str, ParetoPoint], floor: float) -> str:
+def _chart(result: ParetoResult, by_id: dict[str, ParetoPoint], floor: float | None) -> str:
+    """The frontier chart; `floor` draws the Score per $ guides against it, `None` leaves them off."""
     spec = result.x_spec
     axis = _AXIS_TEXT[result.x]
     rows = [
@@ -397,7 +408,7 @@ def _chart(result: ParetoResult, by_id: dict[str, ParetoPoint], floor: float) ->
         lower_is_better=spec.lower_is_better,
         tooltip=tooltip,
         x_format=axis.chart_format,
-        guides=_guide_rows(result, floor),
+        guides=_guide_rows(result, floor) if floor is not None else None,
     )
     return render_embed(chart, 'models-pareto') if chart else ''
 
@@ -825,7 +836,7 @@ def _summary(result: ParetoResult, state: _State) -> str:
         f'{len(result.frontier)} on the frontier',
         f'{len(result.dominated)} dominated',
         _excluded(result, state.min_score),
-        f'{estimated} estimated {"score" if estimated == 1 else "scores"} (hollow dots)' if estimated else '',
+        f'{estimated} estimated {"score" if estimated == 1 else "scores"} (rings)' if estimated else '',
         f'{fallbacks} priced with a cache rate their host does not list' if fallbacks else '',
         f'Unknown x axis "{esc(state.unknown_x)}", showing price' if state.unknown_x else '',
     ]
@@ -874,7 +885,7 @@ async def models_page(req: Request) -> HTMLResponse:
     return _shell(
         f'{_answer_cards(result, state.min_score)}{_intro(result.x_spec.short_label)}'
         f'{_filters_html(q, state)}{_summary(result, state)}'
-        f'<div class="models-chart">{_chart(result, by_id, state.min_score)}</div>'
+        f'<div class="models-chart">{_chart(result, by_id, state.min_score if q.get("guides") else None)}</div>'
         f'{_price_caption(mix) if x == "price" else ""}'
         f'{_table(result, q, by_id, mix, {m.router_id: m for m in pool}, state.labs)}'
     )
