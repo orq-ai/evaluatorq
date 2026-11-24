@@ -628,6 +628,66 @@ def test_set_evaluation_attributes_string_score_is_its_own_label() -> None:
     }
 
 
+@pytest.mark.parametrize(('score', 'label'), [(True, 'pass'), (False, 'fail')])
+def test_set_evaluation_attributes_bool_score_without_pass_is_a_verdict(score: bool, label: str) -> None:  # noqa: FBT001
+    """Orq types an evaluation as boolean from gen_ai.evaluation.passed, so a bool score
+    with no pass_ sends its own value as the verdict, the way Orq's graders do."""
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span, job_span = MagicMock(), MagicMock()
+    set_evaluation_attributes(span, score, evaluator_name='is_short', evaluator_type='python_eval', evaluated_span=job_span)
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['orq.evaluator.output_type'] == 'boolean'
+    assert attrs['gen_ai.evaluation.passed'] is score
+    assert attrs['gen_ai.evaluation.score.value'] == float(score)
+    assert attrs['gen_ai.evaluation.score.label'] == label
+    assert attrs['orq.evaluator.score.label'] == label
+    assert job_span.add_event.call_args.kwargs['attributes'] == {
+        'gen_ai.evaluation.name': 'is_short',
+        'gen_ai.evaluation.score.value': float(score),
+        'gen_ai.evaluation.score.label': label,
+    }
+    # orq.pass mirrors only an explicit pass_; the Output panel shows the same verdict as the span.
+    assert 'orq.pass' not in attrs
+    assert json.loads(attrs['orq.evaluation.output'])['passed'] is score
+
+
+@pytest.mark.parametrize('pass_', [True, False])
+def test_set_evaluation_attributes_string_score_with_pass_keeps_the_word(pass_: bool) -> None:  # noqa: FBT001
+    """Orq's string graders label the result with the string and carry the verdict in
+    gen_ai.evaluation.passed, so the word is not replaced by pass/fail."""
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span, job_span = MagicMock(), MagicMock()
+    set_evaluation_attributes(
+        span, 'positive', pass_=pass_, evaluator_name='tone', evaluator_type='python_eval', evaluated_span=job_span
+    )
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['orq.evaluator.output_type'] == 'string'
+    assert attrs['gen_ai.evaluation.score.label'] == 'positive'
+    assert attrs['orq.evaluator.score.label'] == 'positive'
+    assert attrs['gen_ai.evaluation.passed'] is pass_
+    # A score.value would make Orq type the row as a number and drop the word.
+    assert 'gen_ai.evaluation.score.value' not in attrs
+    assert job_span.add_event.call_args.kwargs['attributes'] == {
+        'gen_ai.evaluation.name': 'tone',
+        'gen_ai.evaluation.score.label': 'positive',
+    }
+
+
+def test_set_evaluation_attributes_empty_string_score_with_pass_labels_the_verdict() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span = MagicMock()
+    set_evaluation_attributes(span, '', pass_=False, evaluator_name='e', evaluator_type='python_eval')
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['gen_ai.evaluation.score.label'] == 'fail'
+    assert attrs['gen_ai.evaluation.passed'] is False
+
+
 def test_set_evaluation_attributes_cuts_long_string_label_with_warning() -> None:
     """The conventions want a low-cardinality label; a long string verdict is cut
     on the span, with a warning, while orq.evaluation.output keeps the full value."""
