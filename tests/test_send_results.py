@@ -803,7 +803,7 @@ class TestUploadDiagnostics:
 
 
 class TestSendResultsTimeoutAndRetry:
-    """BACK-2363 / RES-1959: configurable upload timeout (120 s default), retries only where no run can exist yet."""
+    """Configurable upload timeout (120 s default); retries only where no run can exist yet."""
 
     @pytest.fixture(autouse=True)
     def _no_timeout_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -850,6 +850,17 @@ class TestSendResultsTimeoutAndRetry:
         assert seen[0].timeout.read == 120.0
 
     @pytest.mark.asyncio
+    async def test_connect_keeps_a_fixed_limit_while_send_and_reply_follow_the_env_var(
+        self, monkeypatch: pytest.MonkeyPatch, build_results
+    ):
+        monkeypatch.setenv("EVALUATORQ_UPLOAD_TIMEOUT_S", "300")
+        seen: list[httpx.AsyncClient] = []
+        self._scripted_post(monkeypatch, [200], seen)
+
+        assert await self._upload(build_results) is not None
+        assert (seen[0].timeout.connect, seen[0].timeout.write, seen[0].timeout.read) == (10.0, 300.0, 300.0)
+
+    @pytest.mark.asyncio
     async def test_env_var_sets_the_timeout(self, monkeypatch: pytest.MonkeyPatch, build_results):
         monkeypatch.setenv("EVALUATORQ_UPLOAD_TIMEOUT_S", "300")
         seen: list[httpx.AsyncClient] = []
@@ -857,15 +868,6 @@ class TestSendResultsTimeoutAndRetry:
 
         assert await self._upload(build_results) is not None
         assert seen[0].timeout.read == 300.0
-
-    @pytest.mark.asyncio
-    async def test_timeout_argument_beats_the_env_var(self, monkeypatch: pytest.MonkeyPatch, build_results):
-        monkeypatch.setenv("EVALUATORQ_UPLOAD_TIMEOUT_S", "300")
-        seen: list[httpx.AsyncClient] = []
-        self._scripted_post(monkeypatch, [200], seen)
-
-        assert await self._upload(build_results, timeout_s=600.0) is not None
-        assert seen[0].timeout.read == 600.0
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bad", ["0", "", "abc", "nan", "inf"])
@@ -880,19 +882,7 @@ class TestSendResultsTimeoutAndRetry:
         assert seen[0].timeout.read == 120.0
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("bad", [0.0, 0.5, -5.0, float("nan"), float("inf")])
-    async def test_out_of_range_timeout_argument_raises_even_when_best_effort(
-        self, monkeypatch: pytest.MonkeyPatch, build_results, bad: float
-    ):
-        seen: list[httpx.AsyncClient] = []
-        self._scripted_post(monkeypatch, [200], seen)
-
-        with pytest.raises(ValueError, match="timeout_s"):
-            await self._upload(build_results, timeout_s=bad)
-        assert seen == []
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("first", [httpx.ConnectError, httpx.ConnectTimeout, 429])
+    @pytest.mark.parametrize("first", [httpx.ConnectError, httpx.ConnectTimeout, httpx.WriteTimeout, 429])
     async def test_retries_failures_that_never_reached_the_handler(
         self, monkeypatch: pytest.MonkeyPatch, build_results, first: Any
     ):
@@ -938,11 +928,12 @@ class TestSendResultsTimeoutAndRetry:
     async def test_read_timeout_message_names_the_configured_timeout(
         self, monkeypatch: pytest.MonkeyPatch, build_results
     ):
+        monkeypatch.setenv("EVALUATORQ_UPLOAD_TIMEOUT_S", "45")
         seen: list[httpx.AsyncClient] = []
         self._scripted_post(monkeypatch, [httpx.ReadTimeout], seen)
 
         with pytest.raises(SendResultsError, match="timed out after 45s"):
-            await self._upload(build_results, timeout_s=45.0, raise_on_error=True)
+            await self._upload(build_results, raise_on_error=True)
 
     @pytest.mark.asyncio
     async def test_read_timeout_raises_with_raise_on_error(self, monkeypatch: pytest.MonkeyPatch, build_results):

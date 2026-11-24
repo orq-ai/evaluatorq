@@ -479,13 +479,13 @@ await evaluatorq(
 
 ### Giving a large upload more time
 
-When a run finishes with `ORQ_API_KEY` set, evaluatorq uploads its results to Orq in one request and waits up to 120 seconds for each phase of it: connecting, sending the body, and waiting for the reply. A failed connect or send is retried, up to 3 attempts, so a stuck upload can take about three times the limit before it gives up. The largest upload reported so far, 27 MB, took about 58 seconds. Raise the limit with `EVALUATORQ_UPLOAD_TIMEOUT_S`:
+When a run finishes with `ORQ_API_KEY` set, evaluatorq uploads its results to Orq in one request and waits up to 120 seconds to send the body and up to 120 seconds more for the reply. Connecting has its own fixed 10-second limit. The largest upload reported so far, 27 MB, took about 58 seconds. Raise the limit with `EVALUATORQ_UPLOAD_TIMEOUT_S`:
 
 ```bash
 EVALUATORQ_UPLOAD_TIMEOUT_S=300 uv run python my_eval.py
 ```
 
-The environment variable is the only way to set it for `evaluatorq()`, `simulate()`, `red_team()` and every `eq` command. None of them takes a timeout argument. Only code that calls `send_results_to_orq()` directly can pass `timeout_s=`, which wins over the variable. A bad value logs a `WARNING` and the upload uses 120 seconds; see [When a value is wrong](configuration.md#when-a-value-is-wrong).
+The environment variable is the only way to set it for `evaluatorq()`, `simulate()`, `red_team()` and every `eq` command. None of them takes a timeout argument, and neither does `send_results_to_orq()`. A bad value logs a `WARNING` and the upload uses 120 seconds; see [When a value is wrong](configuration.md#when-a-value-is-wrong).
 
 **An upload that times out waiting for the reply is not retried, and the run does not fail.** evaluatorq logs `Orq results upload timed out after 120s`, and `evaluatorq()` still returns its results, without an Experiment URL. Orq may still finish processing the request and create the Experiment, and it does not merge a second upload of the same results into it. Check the workspace for the Experiment before running again, or the retry adds a duplicate.
 

@@ -218,18 +218,13 @@ def _parse(row: EnvVar, raw: str) -> tuple[int | float | bool | None, str | None
         number = int(value) if row.kind == 'int' else float(value)
     except ValueError:
         return None, f'is not {"an integer" if row.kind == "int" else "a number"} ({value!r})'
-    problem = _range_problem(row, number)
-    return (None, problem) if problem is not None else (number, None)
-
-
-def _range_problem(row: EnvVar, number: float) -> str | None:
     if not math.isfinite(number):  # float() accepts nan/inf; a knob is never one of those
-        return f'is not a finite number ({number!r})'
+        return None, f'is not a finite number ({value!r})'
     if row.min_value is not None and number < row.min_value:
-        return f'must be >= {row.min_value} (got {number})'
+        return None, f'must be >= {row.min_value} (got {number})'
     if row.max_value is not None and number > row.max_value:
-        return f'must be <= {row.max_value} (got {number})'
-    return None
+        return None, f'must be <= {row.max_value} (got {number})'
+    return number, None
 
 
 def _read(row: EnvVar, default: float) -> int | float | bool:
@@ -253,18 +248,6 @@ def env_float(name: str) -> float:
     """Read a float override. Unset -> default; empty/invalid/out-of-range -> WARNING + default."""
     row = _row(name, 'float')
     return float(_read(row, float(cast('float', row.default))))
-
-
-def check_float_override(name: str, *, value: float, argument: str) -> float:
-    """Validate a keyword argument that overrides a ``float`` row, with the row's own bounds.
-
-    An argument is caller code, so a bad value raises ``ValueError`` instead of
-    falling back the way a bad environment value does.
-    """
-    problem = _range_problem(_row(name, 'float'), value)
-    if problem is not None:
-        raise ValueError(f'{argument} {problem}')
-    return value
 
 
 def env_bool(name: str) -> bool:
