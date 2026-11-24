@@ -439,10 +439,14 @@ async def is_workspace_admin(server_url: str) -> bool:
     return me is not None and ADMIN_ROLE_ID in (me.get('roles') or ())
 
 
-async def enable_workspace_model(server_url: str, model_id: str) -> None:
-    """Enable *model_id* for the active workspace (`POST /v2/workspace-models`); raises `OrqCLIError` on failure."""
+async def set_workspace_model(server_url: str, model_id: str, *, enabled: bool) -> None:
+    """Enable or disable a model, by its catalogue UUID, for the active workspace; raises `OrqCLIError` on failure."""
     cli = _CLI(server_url=server_url, workspace=None, project=None)
-    await cli.call(['models', 'enable'], {'model_id': model_id}, ignore_output=True)
+    if enabled:
+        await cli.call(['models', 'enable'], {'model_id': model_id}, ignore_output=True)
+    else:
+        # The CLI asks before a disable; --force is the non-interactive yes.
+        await cli.call(['models', 'disable', model_id, '--force'], ignore_output=True)
 
 
 SessionStatus = Literal['valid', 'signed-out', 'unknown', 'unreadable']

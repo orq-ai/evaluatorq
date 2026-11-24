@@ -114,6 +114,8 @@ class ScoredModel(BaseModel):
     # False means the workspace has the model switched off: listed, scored,
     # not servable.
     enabled: bool | None = None
+    # The card's own `id` (a UUID): the key `/v2/workspace-models` enables and disables a model by.
+    catalogue_id: str | None = None
     display_name: str | None = None
     developer: str | None = Field(
         default=None, description="The card's `model_developer`, e.g. `openai` for a GPT model served by Azure."
@@ -900,7 +902,7 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
     )
     effort_parameter, default_effort = _catalogue_effort(card)
     region = metadata.get('region')
-    enabled = card.get('enabled')
+    enabled, card_id = card.get('enabled'), card.get('id')
     display_name, developer, slug = card.get('display_name'), card.get('model_developer'), v2.get('aa_slug')
     return ScoredModel(
         router_id=f'{card["provider"]}/{card["model_id"]}',
@@ -917,6 +919,7 @@ def scored_model_from_card(card: dict[str, object]) -> ScoredModel | None:
         effort_parameter=effort_parameter,
         default_effort=default_effort,
         enabled=enabled if isinstance(enabled, bool) else None,
+        catalogue_id=card_id if isinstance(card_id, str) else None,
         display_name=display_name if isinstance(display_name, str) else None,
         developer=developer if isinstance(developer, str) else None,
         aa_slug=slug if isinstance(slug, str) else None,

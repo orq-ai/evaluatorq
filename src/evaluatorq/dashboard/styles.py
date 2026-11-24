@@ -4265,12 +4265,13 @@ _MODELS_CSS = """
 .models-card .stat-sub { margin-top: 2px; }
 .models-group th { padding: 14px 10px 6px; font-size: 12px; font-weight: 600; color: var(--text-strong); background: none; text-align: left; border-bottom: 1px solid var(--border-subtle); text-transform: none; letter-spacing: 0; }
 .models-row.is-excluded td { color: var(--text-faint); }
-.models-enable { display: inline; margin: 0 0 0 6px; }
-.models-enable-btn { font: inherit; font-size: 11px; padding: 1px 8px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--surface-card); color: var(--text-strong); cursor: pointer; }
-.models-enable-btn:hover { border-color: var(--border-strong); }
-.models-enable-result { margin-left: 6px; font-size: 11px; }
-.models-enable-result.is-ok { color: var(--green-600); }
-.models-enable-result.is-err { color: var(--red-700); }
+.models-toggle { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; }
+.models-toggle form { display: inline; margin: 0; }
+.models-toggle-btn { font: inherit; font-size: 11px; padding: 1px 8px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--surface-card); color: var(--text-strong); cursor: pointer; }
+.models-toggle-btn:hover { border-color: var(--border-strong); }
+.models-toggle-note { font-size: 11px; }
+.models-toggle-note.is-ok { color: var(--green-600); }
+.models-toggle-note.is-err { color: var(--red-700); }
 .models-alert { padding: 12px 14px; border: 1px solid var(--red-100); border-radius: 8px; background: var(--red-50); color: var(--red-700); font-size: 13px; }
 .models-alert p { margin: 0 0 4px; }
 /* One toolbar line built from the shared filter controls; More filters opens a panel under its trigger. */

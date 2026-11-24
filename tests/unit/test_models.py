@@ -42,7 +42,14 @@ from tests.common.garden_fakes import card
 
 
 def model(
-    router_id: str, index: float, input_price: float, output_price: float, *, enabled: bool = True, **fields: Any
+    router_id: str,
+    index: float,
+    input_price: float,
+    output_price: float,
+    *,
+    enabled: bool = True,
+    catalogue_id: str | None = None,
+    **fields: Any,
 ) -> ScoredModel:
     return ScoredModel(
         router_id=router_id,
@@ -51,6 +58,7 @@ def model(
         output_price=output_price,
         provider=router_id.split('/')[0],
         enabled=enabled,
+        catalogue_id=catalogue_id or f'id-{router_id}',
         **fields,
     )
 
@@ -79,9 +87,10 @@ class TestCardParsing:
             'aa_median_time_to_first_token_seconds': 0.8,
         }
         parsed = scored_model_from_card(
-            card('openai', 'm', model_developer='openai', display_name='M', metadata={'autorouter': {'v2': v2}})
+            card('openai', 'm', id='uuid-1', model_developer='openai', display_name='M', metadata={'autorouter': {'v2': v2}})
         )
         assert parsed is not None
+        assert parsed.catalogue_id == 'uuid-1'
         assert parsed.category_indices == {'legal': 33.5}
         assert parsed.is_estimated is True
         assert parsed.output_tokens_per_second == 120.0
@@ -813,70 +822,76 @@ class TestDashboardPage:
         monkeypatch.setattr(models_views, 'load_models', fake_load)
         return client.get(path).text
 
-    def _as_admin(self, monkeypatch: pytest.MonkeyPatch, *, admin: bool) -> list[str]:
-        """Sign the page in as a CLI OAuth user who is (or is not) an admin; returns the model ids enabled."""
+    def _as_admin(self, monkeypatch: pytest.MonkeyPatch, *, admin: bool) -> list[tuple[str, bool]]:
+        """Sign the page in as someone who may (or may not) manage models; returns the switches made."""
         from types import SimpleNamespace
 
         from evaluatorq.dashboard import models_views
 
-        enabled: list[str] = []
+        calls: list[tuple[str, bool]] = []
 
-        async def fake_admin(server_url: str) -> bool:
-            del server_url
+        async def fake_can(auth: object) -> bool:
+            del auth
             return admin
 
-        async def fake_enable(server_url: str, model_id: str) -> None:
-            del server_url
-            enabled.append(model_id)
+        async def fake_set(auth: object, model_id: str, *, enabled: bool) -> None:
+            del auth
+            calls.append((model_id, enabled))
 
-        monkeypatch.setattr(models_views, '_admin_auth', lambda req: SimpleNamespace(base_url='https://my.orq.ai'))
-        monkeypatch.setattr(models_views, 'is_workspace_admin', fake_admin)
-        monkeypatch.setattr(models_views, 'enable_workspace_model', fake_enable)
-        return enabled
+        monkeypatch.setattr(models_views, '_auth', lambda req: SimpleNamespace(method='cli_oauth'))
+        monkeypatch.setattr(models_views, 'can_manage_models', fake_can)
+        monkeypatch.setattr(models_views, 'set_model_enabled', fake_set)
+        return calls
 
-    def test_admins_get_an_enable_button_on_disabled_models(
+    def test_admins_get_enable_and_disable_buttons(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
         self._as_admin(monkeypatch, admin=True)
-        off = model('f/off', 45.0, 1.5, 6.0, enabled=False)
+        off = model('f/off', 45.0, 1.5, 6.0, enabled=False, catalogue_id='uuid-off')
         text = self._models_text(client, monkeypatch, [*fake_catalogue, off], '/models?disabled=1')
-        assert text.count('class="models-enable"') == 1
-        assert 'name="model_id" value="f/off"' in text
+        assert text.count('>Enable</button>') == 1
+        assert '>Disable</button>' in text
+        assert 'name="model_id" value="uuid-off"' in text
 
-    def test_non_admins_see_disabled_models_without_a_button(
+    def test_buttons_need_admin_and_the_disabled_toggle(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
         self._as_admin(monkeypatch, admin=False)
-        off = model('f/off', 45.0, 1.5, 6.0, enabled=False)
+        off = model('f/off', 45.0, 1.5, 6.0, enabled=False, catalogue_id='uuid-off')
         text = self._models_text(client, monkeypatch, [*fake_catalogue, off], '/models?disabled=1')
-        assert '>disabled<' in text and 'class="models-enable"' not in text
+        assert '>disabled<' in text and 'models-toggle-btn' not in text
+        self._as_admin(monkeypatch, admin=True)
+        assert 'models-toggle-btn' not in self._models_text(client, monkeypatch, fake_catalogue, '/models')
 
-    def test_enable_route_enables_for_admins_only(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_toggle_route_switches_for_admins_only(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         from evaluatorq.dashboard.security import CSRF_FIELD, csrf_token
 
-        form = {'model_id': 'f/off', CSRF_FIELD: csrf_token()}
-        enabled = self._as_admin(monkeypatch, admin=False)
-        assert 'Only workspace admins' in client.post('/models/enable', data=form).text
-        assert not enabled
-        enabled = self._as_admin(monkeypatch, admin=True)
-        assert 'Stale or missing form token' in client.post('/models/enable', data={'model_id': 'f/off'}).text
-        assert not enabled
-        response = client.post('/models/enable', data=form)
-        assert 'models-enable-result is-ok' in response.text and enabled == ['f/off']
+        enable = {'model_id': 'f/off', 'enable': '1', CSRF_FIELD: csrf_token()}
+        calls = self._as_admin(monkeypatch, admin=False)
+        assert 'Only workspace admins' in client.post('/models/toggle', data=enable).text
+        assert not calls
+        calls = self._as_admin(monkeypatch, admin=True)
+        assert 'Stale or missing form token' in client.post('/models/toggle', data={'model_id': 'f/off'}).text
+        assert not calls
+        text = client.post('/models/toggle', data=enable).text
+        assert 'is-ok">Enabled<' in text and '>Disable</button>' in text
+        text = client.post('/models/toggle', data={'model_id': 'f/off', CSRF_FIELD: csrf_token()}).text
+        assert 'is-ok">Disabled<' in text and '>Enable</button>' in text
+        assert calls == [('f/off', True), ('f/off', False)]
 
-    def test_enable_route_shows_why_orq_refused(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-        from evaluatorq.common.cli_oauth import OrqCLIError
+    def test_toggle_route_shows_why_orq_refused(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         from evaluatorq.dashboard import models_views
         from evaluatorq.dashboard.security import CSRF_FIELD, csrf_token
+        from evaluatorq.dashboard.workspace_models import WorkspaceModelError
 
         self._as_admin(monkeypatch, admin=True)
 
-        async def refuse(server_url: str, model_id: str) -> None:
-            raise OrqCLIError('HTTP 404 Not Found: Model not found')
+        async def refuse(auth: object, model_id: str, *, enabled: bool) -> None:
+            raise WorkspaceModelError('HTTP 404 Not Found: Model not found')
 
-        monkeypatch.setattr(models_views, 'enable_workspace_model', refuse)
-        text = client.post('/models/enable', data={'model_id': 'x/y', CSRF_FIELD: csrf_token()}).text
-        assert 'is-err' in text and 'Model not found' in text
+        monkeypatch.setattr(models_views, 'set_model_enabled', refuse)
+        text = client.post('/models/toggle', data={'model_id': 'x/y', 'enable': '1', CSRF_FIELD: csrf_token()}).text
+        assert 'is-err' in text and 'Model not found' in text and '>Enable</button>' in text
 
     def test_cards_name_the_best_score_and_the_best_score_per_dollar(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
@@ -1201,6 +1216,7 @@ class TestDashboardPage:
     ) -> None:
         from evaluatorq.dashboard import models_views
 
+        self._as_admin(monkeypatch, admin=False)
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
         hidden = model('z/off', 45.0, 0.1, 0.1)
 
@@ -1330,3 +1346,58 @@ class TestWorkspaceAdmin:
         monkeypatch.setattr(cli_oauth.shutil, 'which', lambda name: '/bin/orq')
         monkeypatch.setattr(cli_oauth._CLI, 'call', refuse)
         assert asyncio.run(cli_oauth.is_workspace_admin('https://my.orq.ai')) is False
+
+
+class TestManagementKey:
+    """An API key may manage models when Orq lets it; the probe is an empty enable that changes nothing."""
+
+    def _auth(self) -> Any:
+        from evaluatorq.dashboard.auth import DashboardAuth
+
+        return DashboardAuth(method='environment', api_key='mk', base_url='https://my.orq.ai')
+
+    @pytest.mark.parametrize(('status', 'expected'), [(400, True), (403, False), (401, False)])
+    def test_probe_reads_the_permission_check(
+        self, monkeypatch: pytest.MonkeyPatch, status: int, *, expected: bool
+    ) -> None:
+        import asyncio
+
+        import httpx
+
+        from evaluatorq.dashboard import workspace_models
+
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(status)
+
+        real = httpx.AsyncClient
+        monkeypatch.setattr(
+            workspace_models.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
+        )
+        assert asyncio.run(workspace_models.can_manage_models(self._auth())) is expected
+        assert seen[0].method == 'POST' and seen[0].url.path == '/v2/workspace-models'
+        assert seen[0].content == b'{"model_id":""}'
+
+    def test_disable_deletes_the_encoded_model_id_and_surfaces_refusals(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import asyncio
+
+        import httpx
+
+        from evaluatorq.dashboard import workspace_models
+
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(204 if request.method == 'DELETE' else 403, text='requires permission')
+
+        real = httpx.AsyncClient
+        monkeypatch.setattr(
+            workspace_models.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
+        )
+        asyncio.run(workspace_models.set_model_enabled(self._auth(), 'openai/gpt-4o', enabled=False))
+        assert seen[0].method == 'DELETE' and seen[0].url.raw_path == b'/v2/workspace-models/openai%2Fgpt-4o'
+        with pytest.raises(workspace_models.WorkspaceModelError, match='403'):
+            asyncio.run(workspace_models.set_model_enabled(self._auth(), 'openai/gpt-4o', enabled=True))
