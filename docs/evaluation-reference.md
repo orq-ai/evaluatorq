@@ -477,6 +477,20 @@ await evaluatorq(
 
 `path` groups runs in the Orq dashboard — e.g. `"Team/Sprint-42/Feature-X"`.
 
+### Giving a large upload more time
+
+When a run finishes with `ORQ_API_KEY` set, evaluatorq uploads its results to Orq in one request and waits up to 120 seconds for each phase of it: connecting, sending the body, and waiting for the reply. The largest upload reported so far, 27 MB, took about 58 seconds. Raise the limit with `EVALUATORQ_UPLOAD_TIMEOUT_S`:
+
+```bash
+EVALUATORQ_UPLOAD_TIMEOUT_S=300 uv run python my_eval.py
+```
+
+The environment variable is the only way to set it for `evaluatorq()`, `simulate()`, `red_team()` and every `eq` command. None of them takes a timeout argument. Only code that calls `send_results_to_orq()` directly can pass `timeout_s=`, which wins over the variable. The variable is read on every upload, so it also works when set from Python before the run, with `os.environ["EVALUATORQ_UPLOAD_TIMEOUT_S"] = "300"`.
+
+A value below `1`, or one that is not a number, logs a `WARNING` and the upload uses 120 seconds. See [When a value is wrong](configuration.md#when-a-value-is-wrong).
+
+**A timed-out upload is not retried, and the run does not fail.** evaluatorq logs `Orq results upload timed out after 120s`, and `evaluatorq()` still returns its results, without an Experiment URL. Orq may still finish processing the request and create the Experiment, and it does not merge a second upload of the same results into it. Check the workspace for the Experiment before running again, or the retry adds a duplicate.
+
 ### Documenting a run
 
 ```python
