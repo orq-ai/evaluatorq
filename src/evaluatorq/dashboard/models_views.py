@@ -110,7 +110,7 @@ class _State:
     x: str
     mix: PriceMix
     min_score: float
-    developers: list[str]
+    labs: list[str]
     unknown_x: str
     indices: list[str]
     efforts: list[str]
@@ -210,7 +210,7 @@ def _filters_html(q: dict[str, str], st: _State) -> str:
             title='How the price axis blends token prices, as cache read : cache write : fresh input : output. Add '
             '?mix=READ:WRITE:FRESH:OUTPUT to the address for your own ratio.',
         )
-        + dropdown('developer', 'Developer', st.vendors, st.developers, searchable=True)
+        + dropdown('lab', 'Lab', st.vendors, st.labs, searchable=True)
         + more
         + '<noscript><button type="submit">Apply</button></noscript></form>'
     )
@@ -311,11 +311,11 @@ def _winner(point: ParetoPoint, by_id: dict[str, ParetoPoint]) -> ParetoPoint | 
 
 
 _GUIDE_SAMPLES = 40
-_MAX_GUIDES = 4
+_MAX_GUIDES = 8
 
 
 def _guide_ks(lo: float, hi: float) -> list[float]:
-    """The 1-2-5 steps strictly inside (lo, hi), at most four spread across it: every other step when more fit."""
+    """The 1-2-5 steps strictly inside (lo, hi), at most eight spread across it: every other step when more fit."""
     if lo <= 0 or hi <= lo:
         return []
     decade = 10.0 ** math.floor(math.log10(lo))
@@ -512,12 +512,12 @@ _COLUMNS = (
 )
 
 
-def _link_params(params: dict[str, str], developers: list[str]) -> list[tuple[str, str]]:
-    """A link's query pairs: the non-empty single values, then one `developer` pair per chosen developer."""
-    return [(k, v) for k, v in params.items() if v and k != 'developer'] + [('developer', d) for d in developers]
+def _link_params(params: dict[str, str], labs: list[str]) -> list[tuple[str, str]]:
+    """A link's query pairs: the non-empty single values, then one `lab` pair per chosen lab."""
+    return [(k, v) for k, v in params.items() if v and k != 'lab'] + [('lab', d) for d in labs]
 
 
-def _head(columns: list[_Col], q: dict[str, str], result: ParetoResult, mix: PriceMix, developers: list[str]) -> str:
+def _head(columns: list[_Col], q: dict[str, str], result: ParetoResult, mix: PriceMix, labs: list[str]) -> str:
     """The sortable header row: each link sorts by its column, and clicking the active one reverses the order."""
     spec = result.x_spec
     sort = q.get('sort', 'score')
@@ -535,7 +535,7 @@ def _head(columns: list[_Col], q: dict[str, str], result: ParetoResult, mix: Pri
         cells.append(
             sortable_th(
                 labels.get(col.key, col.label),
-                control=f'href="{ROUTE}?{esc(urlencode(_link_params(params, developers)))}"',
+                control=f'href="{ROUTE}?{esc(urlencode(_link_params(params, labs)))}"',
                 active=active,
                 direction=flipped(natural) if reverse else natural,
                 numeric=col.numeric,
@@ -556,7 +556,7 @@ def _row(
 ) -> str:
     m = p.model
     host = m.router_id.split('/', 1)[0]
-    via = tag(f'via {host}', small=True, title='Listed by a host, not its developer') if host != model_vendor(m) else ''
+    via = tag(f'via {host}', small=True, title='Listed by a host, not its lab') if host != model_vendor(m) else ''
     est = tag('est', small=True, title='Estimated from an older benchmark version') if m.is_estimated else ''
     cells = [
         (
@@ -619,7 +619,7 @@ def _table(
     by_id: dict[str, ParetoPoint],
     mix: PriceMix,
     pool: dict[str, ScoredModel],
-    developers: list[str],
+    labs: list[str],
 ) -> str:
     # `result.frontier` is strongest first, so the model one score step up sits just before each point.
     frontier = result.frontier
@@ -650,7 +650,7 @@ def _table(
     body += _group('Excluded', excluded, len(columns))
     return (
         '<div class="models-table-wrap"><table class="models-table no-stack">'
-        f'{_head(columns, q, result, mix, developers)}{body}</table></div>'
+        f'{_head(columns, q, result, mix, labs)}{body}</table></div>'
     )
 
 
@@ -704,7 +704,7 @@ async def _load(req: Request, *, include_disabled: bool) -> list[ScoredModel] | 
 
 def _intro(x_label: str) -> str:
     return (
-        '<p class="models-intro">Each dot is one model, at its developer\'s own listing when there is one, else at the cheapest '
+        '<p class="models-intro">Each dot is one model, at its lab\'s own listing when there is one, else at the cheapest '
         'listing, preferring one without a region. The '
         f'orange line joins the models no other model beats on both score and {esc(x_label)}; every other row names '
         'the model that does, and by how much.</p>'
@@ -751,8 +751,28 @@ def _x_text(p: ParetoPoint, result: ParetoResult) -> str:
     return f'{axis.fmt(p.x)}{axis.unit}'
 
 
+def _balanced(result: ParetoResult, best: ParetoPoint, value: ParetoPoint | None) -> ParetoPoint | None:
+    """The knee of the frontier between the best-value and best-score models, on the price axis.
+
+    On the chart (log price against score), draw the straight line from the best-value model to the best-score one;
+    the knee is the frontier model furthest above it: up to there more money buys a lot of score, after it little.
+    None when no frontier model sits above that line.
+    """
+    if value is None or value is best or result.x != 'price' or best.x <= 0 or value.x <= 0 or best.x == value.x:
+        return None
+    lo, hi = math.log(value.x), math.log(best.x)
+
+    def gap(p: ParetoPoint) -> float:
+        return p.score - (value.score + (best.score - value.score) * (math.log(p.x) - lo) / (hi - lo))
+
+    between = [p for p in result.frontier if p.pareto_score is not None and value.x < p.x < best.x]
+    knee = max(between, key=gap, default=None)
+    return knee if knee is not None and gap(knee) > 0 else None
+
+
 def _answer_cards(result: ParetoResult, min_score: float) -> str:
-    """Three quick answers: the best score, the best score per dollar (price axis) and the best x at the floor."""
+    """Three quick answers: the best score, the best score per dollar and, on the price axis, the knee of the
+    frontier between them; else the best x at the floor."""
     if not result.frontier:
         return ''
     best = max(result.frontier, key=lambda p: p.score)
@@ -772,6 +792,17 @@ def _answer_cards(result: ParetoResult, min_score: float) -> str:
                 sub=f'{_name(value.model)} · score {value.score:.1f} · {_x_text(value, result)}',
             )
         )
+    balanced = _balanced(result, best, value)
+    if balanced is not None:
+        cards.append(
+            stat_tile(
+                label='Balanced',
+                value=f'{balanced.score:.1f}',
+                sub=f'{_name(balanced.model)} · {_x_text(balanced, result)} · '
+                f'{cast("float", balanced.pareto_score):,.0f} per $',
+            )
+        )
+        return f'<div class="stat-band models-cards">{"".join(cards)}</div>'
     cheapest = min(result.frontier, key=lambda p: result.x_spec.best_first(p.x))
     # A card naming the same model as another one adds nothing: one frontier model would fill every card.
     if cheapest is not value and cheapest is not best:
@@ -813,23 +844,23 @@ async def models_page(req: Request) -> HTMLResponse:
     index = _choice(q.get('index'), tuple(indices), 'intelligence')
     efforts = available_efforts(models)
     vendors = sorted({model_vendor(m) for m in models} - {''})
-    # The developer list submits every ticked box, so all of them ticked is the same as no developer filter.
-    developers = [d for d in req.query_params.getlist('developer') if d]
-    if set(vendors) <= set(developers):
-        developers = []
+    # The lab list submits every ticked box, so all of them ticked is the same as no lab filter.
+    labs = [d for d in req.query_params.getlist('lab') if d]
+    if set(vendors) <= set(labs):
+        labs = []
     state = _State(
         index=index,
         effort=_choice(q.get('effort'), tuple(efforts), '') if index == 'intelligence' else '',
         x=x,
         mix=mix,
         min_score=_min_score(q.get('min_score')),
-        developers=developers,
+        labs=labs,
         unknown_x=q['x'] if q.get('x') and q['x'] not in X_AXES else '',
         indices=indices,
         efforts=efforts,
         vendors=vendors,
     )
-    pool = [m for m in models if not state.developers or matches_vendor(m, state.developers)]
+    pool = [m for m in models if not state.labs or matches_vendor(m, state.labs)]
     result = pareto(
         pool,
         index=cast('Index', index),
@@ -845,7 +876,7 @@ async def models_page(req: Request) -> HTMLResponse:
         f'{_filters_html(q, state)}{_summary(result, state)}'
         f'<div class="models-chart">{_chart(result, by_id, state.min_score)}</div>'
         f'{_price_caption(mix) if x == "price" else ""}'
-        f'{_table(result, q, by_id, mix, {m.router_id: m for m in pool}, state.developers)}'
+        f'{_table(result, q, by_id, mix, {m.router_id: m for m in pool}, state.labs)}'
     )
 
 

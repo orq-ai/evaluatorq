@@ -43,9 +43,9 @@ Captured on 2026-11-23 against the live Orq catalogue (72 models after keeping o
 
 | File | Page |
 |---|---|
-| `models-01-frontier.png` | Pareto Frontier (`/models`) — the Best score and Best score per $ answer cards, the Score, X axis, Price mix, Developer and More filters controls, intelligence index against the agentic blended price with the frontier line and dashed Score per $ guide curves, and the top of the table with its Score per $ column |
+| `models-01-frontier.png` | Pareto Frontier (`/models`) — the Best score and Best score per $ answer cards, the Score, X axis, Price mix, Lab and More filters controls, intelligence index against the agentic blended price with the frontier line and dashed Score per $ guide curves, and the top of the table with its Score per $ column |
 | `models-02-legal.png` | Pareto Frontier (`/models?index=legal`) — the legal index, where about half the models have no score and are not plotted |
-| `models-03-fallback.png` | Pareto Frontier (`/models?developer=alibaba`), scrolled to the table — four Qwen cache-read rates tagged **input**, billed at the input rate because their cards list no cache price |
+| `models-03-fallback.png` | Pareto Frontier (`/models?lab=alibaba`), scrolled to the table — four Qwen cache-read rates tagged **input**, billed at the input rate because their cards list no cache price |
 
 ## Pending re-shoot
 

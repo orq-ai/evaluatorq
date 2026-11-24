@@ -1080,8 +1080,8 @@
 })();
 
 // The Pareto Frontier toolbar (form.models-filters) opens its dropdowns as pop-overs over the chart, so a click
-// outside them or Escape closes them; the report rails keep their own behaviour. All developer boxes ticked is no
-// developer filter, so the request drops them: otherwise developers that appear later (Include disabled models)
+// outside them or Escape closes them; the report rails keep their own behaviour. All lab boxes ticked is no
+// lab filter, so the request drops them: otherwise labs that appear later (Include disabled models)
 // would be filtered out by the list the page sent.
 (function () {
   var OPEN = 'form.models-filters details.filter-dd[open]';
@@ -1101,8 +1101,8 @@
   document.body.addEventListener('htmx:configRequest', function (evt) {
     var form = evt.detail.elt;
     if (!form || !form.matches || !form.matches('form.models-filters')) return;
-    var boxes = Array.prototype.slice.call(form.querySelectorAll('input[type="checkbox"][name="developer"]'));
-    if (boxes.length && boxes.every(function (b) { return b.checked; })) delete evt.detail.parameters.developer;
+    var boxes = Array.prototype.slice.call(form.querySelectorAll('input[type="checkbox"][name="lab"]'));
+    if (boxes.length && boxes.every(function (b) { return b.checked; })) delete evt.detail.parameters.lab;
   });
 })();
 

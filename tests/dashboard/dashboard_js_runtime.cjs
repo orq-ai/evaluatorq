@@ -388,9 +388,9 @@ function paretoMenus() {
     querySelector(selector) { return selector === 'summary' ? summary : null; },
   });
   const more = menu('filter-dd-more');
-  const developer = menu('filter-dd-developer');
+  const lab = menu('filter-dd-lab');
   const rail = menu('filter-dd-persona', { models: false });
-  const all = [more, developer, rail];
+  const all = [more, lab, rail];
   const app = loadDashboard({
     pathname: '/models',
     queryAll(selector) {
@@ -398,12 +398,12 @@ function paretoMenus() {
       return [];
     },
   });
-  return { app, more, developer, rail, inside, outside, summary };
+  return { app, more, lab, rail, inside, outside, summary };
 }
 
 test('Pareto toolbar pop-overs close on a click outside them, not inside, and leave report rails alone', () => {
-  const { app, more, developer, rail, inside, outside } = paretoMenus();
-  developer.open = false;
+  const { app, more, lab, rail, inside, outside } = paretoMenus();
+  lab.open = false;
   click(app, inside);
   assert.equal(more.open, true, 'a click inside More filters keeps it open');
   click(app, outside, { stopBubbling: true });
@@ -412,32 +412,32 @@ test('Pareto toolbar pop-overs close on a click outside them, not inside, and le
 });
 
 test('Escape closes the open Pareto toolbar pop-overs and returns focus to the trigger', () => {
-  const { app, more, developer, rail, summary } = paretoMenus();
+  const { app, more, lab, rail, summary } = paretoMenus();
   app.documentEvents.emit('keydown', keyEvent('Escape'));
   assert.equal(more.open, false);
-  assert.equal(developer.open, false);
+  assert.equal(lab.open, false);
   assert.equal(rail.open, true);
   assert.equal(summary.focused, true);
 });
 
-test('the Pareto toolbar sends no developer values when every developer box is ticked', () => {
+test('the Pareto toolbar sends no lab values when every lab box is ticked', () => {
   const app = loadDashboard({ pathname: '/models' });
   const box = checked => ({ checked });
   const form = boxes => ({
     matches: selector => selector === 'form.models-filters',
-    querySelectorAll: selector => selector === 'input[type="checkbox"][name="developer"]' ? boxes : [],
+    querySelectorAll: selector => selector === 'input[type="checkbox"][name="lab"]' ? boxes : [],
   });
   const request = elt => {
-    const detail = { elt, parameters: { developer: ['a', 'b'], disabled: '1' } };
+    const detail = { elt, parameters: { lab: ['a', 'b'], disabled: '1' } };
     app.body.emit('htmx:configRequest', { detail });
     return detail.parameters;
   };
   const all = request(form([box(true), box(true)]));
-  assert.equal('developer' in all, false, 'all ticked is no filter, so developers that appear later stay shown');
+  assert.equal('lab' in all, false, 'all ticked is no filter, so labs that appear later stay shown');
   assert.equal(all.disabled, '1');
-  assert.deepEqual(request(form([box(true), box(false)])).developer, ['a', 'b']);
+  assert.deepEqual(request(form([box(true), box(false)])).lab, ['a', 'b']);
   const rail = { matches: () => false, querySelectorAll: () => [box(true)] };
-  assert.deepEqual(request(rail).developer, ['a', 'b'], 'other filter forms keep their parameters');
+  assert.deepEqual(request(rail).lab, ['a', 'b'], 'other filter forms keep their parameters');
 });
 
 for (const pathname of ['/traces', '/insights/new']) {

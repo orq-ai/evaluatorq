@@ -821,14 +821,35 @@ class TestDashboardPage:
         # c/cheap: (20 - 10) / $0.35 blended under the default mix = 28.6, shown as 29.
         assert 'per $' in text
         assert re.search(r'Best score per \$</div><div class="stat-value">29<span class="stat-unit"> per \$</span>', text)
-        assert 'Cheapest at score ≥ 10' in text and 'z/tiny' in text
+        # b/mid sits above the line from c/cheap to a/strong, so the third card is the knee, not the cheapest model.
+        cards = text.split('models-cards', 1)[1].split('models-intro', 1)[0]
+        assert 'Balanced' in cards and 'b/mid' in cards and 'Cheapest' not in cards
 
-    def test_cheapest_card_hidden_when_it_is_the_best_value(
+    def test_balanced_card_names_the_knee_when_the_cheapest_is_the_best_value(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
         text = self._models_text(client, monkeypatch, fake_catalogue, '/models')
-        assert text.count('class="stat-tile"') == 2
-        assert 'Cheapest' not in text.split('models-cards', 1)[1].split('models-intro', 1)[0]
+        cards = text.split('models-cards', 1)[1].split('models-intro', 1)[0]
+        assert cards.count('class="stat-tile"') == 3
+        assert 'Balanced' in cards and 'b/mid' in cards and 'Cheapest' not in cards
+
+    def test_balanced_is_the_frontier_model_furthest_above_the_line(self) -> None:
+        from types import SimpleNamespace
+
+        from evaluatorq.dashboard.models_views import _balanced
+
+        def pt(score: float, x: float) -> Any:
+            return SimpleNamespace(score=score, x=x, pareto_score=1.0)
+
+        value, best = pt(20, 0.1), pt(50, 10)
+        # On log price the line from value to best passes 35 at $1 and 42.5 at $3.16.
+        low, knee, flat = pt(30, 0.3), pt(45, 1.0), pt(47, 3.16)
+        result = cast(Any, SimpleNamespace(x='price', frontier=[value, low, knee, flat, best]))
+        assert _balanced(result, best, value) is knee
+        # A frontier that bends the other way has no knee, so the page shows the cheapest card instead.
+        sagging = cast(Any, SimpleNamespace(x='price', frontier=[value, pt(25, 1.0), best]))
+        assert _balanced(sagging, best, value) is None
+        assert _balanced(cast(Any, SimpleNamespace(x='output_speed', frontier=[value, knee, best])), best, value) is None
 
     def test_speed_axis_shows_no_score_per_dollar_card(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
@@ -1080,27 +1101,27 @@ class TestDashboardPage:
         assert '<span class="models-field-off" inert>' in off_price
         assert '<span class="models-field-off" inert>' not in text
 
-    def test_several_developers_narrow_to_their_union(
+    def test_several_labs_narrow_to_their_union(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
-        text = self._models_text(client, monkeypatch, fake_catalogue, '/models?developer=a&developer=b')
+        text = self._models_text(client, monkeypatch, fake_catalogue, '/models?lab=a&lab=b')
         assert '<span>2 on the frontier</span><span>0 dominated</span>' in text
         assert 'c/cheap' not in text and 'd/bad' not in text
         assert '<span class="filter-dd-value is-engaged">2 selected</span>' in text
-        # The sort links keep every chosen developer, not only the last one.
-        assert 'developer=a&amp;developer=b' in text
-        one = self._models_text(client, monkeypatch, fake_catalogue, '/models?developer=a')
+        # The sort links keep every chosen lab, not only the last one.
+        assert 'lab=a&amp;lab=b' in text
+        one = self._models_text(client, monkeypatch, fake_catalogue, '/models?lab=a')
         assert '<span>1 on the frontier</span><span>0 dominated</span>' in one
         every = self._models_text(client, monkeypatch, fake_catalogue, '/models')
         assert '<span class="filter-dd-value">All</span>' in every
-        # Every box ticked is the same as no developer filter, so the sort links do not carry the whole list.
-        ticked = '&'.join(f'developer={v}' for v in 'abcde')
+        # Every box ticked is the same as no lab filter, so the sort links do not carry the whole list.
+        ticked = '&'.join(f'lab={v}' for v in 'abcde')
         all_ticked = self._models_text(client, monkeypatch, fake_catalogue, f'/models?{ticked}')
         assert '<span class="filter-dd-value">All</span>' in all_ticked
-        assert 'developer=a' not in all_ticked
-        assert 'class="facet-search"' in every  # the developer list is searchable
+        assert 'lab=a' not in all_ticked
+        assert 'class="facet-search"' in every  # the lab list is searchable
 
-    def test_including_disabled_models_with_every_developer_ticked_keeps_the_new_developers(
+    def test_including_disabled_models_with_every_lab_ticked_keeps_the_new_labs(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
         from evaluatorq.dashboard import models_views
@@ -1113,12 +1134,12 @@ class TestDashboardPage:
             return [*fake_catalogue, hidden] if include_disabled else fake_catalogue
 
         monkeypatch.setattr(models_views, 'load_models', fake_load)
-        # The toolbar drops the developer values when every box is ticked (dashboard.js), so the request carries none.
+        # The toolbar drops the lab values when every box is ticked (dashboard.js), so the request carries none.
         text = client.get('/models?disabled=1').text
         assert 'value="z" checked' in text and 'z/off' in text
         assert '<span class="filter-dd-value">All</span>' in text
         js = (Path(models_views.__file__).parent / 'static' / 'dashboard.js').read_text()
-        assert "delete evt.detail.parameters.developer" in js
+        assert "delete evt.detail.parameters.lab" in js
 
     def test_min_score_readout_is_plain_at_the_page_default(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
@@ -1162,13 +1183,19 @@ class TestDashboardPage:
         assert declarations.get('text-transform') == 'none'
         assert declarations.get('letter-spacing') == '0'
 
-    def test_guide_steps_fall_back_to_four_evenly_spaced(self) -> None:
+    def test_guide_steps_keep_every_1_2_5_step_on_a_real_range(self) -> None:
         from evaluatorq.dashboard.models_views import _guide_ks
 
-        # 0.002 to 500,000 holds 26 1-2-5 steps; every other step still leaves 13 (0.002 to 200,000), so four are picked
+        # The live catalogue's Score per $ runs from about 1.5 to 630: every step shows, 20 and 50 included.
+        assert _guide_ks(1.5, 630) == pytest.approx([2, 5, 10, 20, 50, 100, 200, 500])
+
+    def test_guide_steps_fall_back_to_eight_evenly_spaced(self) -> None:
+        from evaluatorq.dashboard.models_views import _guide_ks
+
+        # 0.002 to 500,000 holds 26 1-2-5 steps; every other step still leaves 13 (0.002 to 200,000), so eight are picked
         # evenly across those, ends included.
         ks = _guide_ks(0.0011, 1e6)
-        assert len(ks) == 4
+        assert len(ks) == 8
         assert ks == sorted(ks)
         assert ks[0] == pytest.approx(0.002) and ks[-1] == pytest.approx(200_000)
         assert all(0.0011 < k < 1e6 for k in ks)

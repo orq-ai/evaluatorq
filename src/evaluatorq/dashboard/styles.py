@@ -4237,8 +4237,8 @@ _PAIRWISE_COMPARE_CSS = """
 _MODELS_CSS = """
 /* ---- /models: Pareto view over the model catalogue ---- */
 .nav-item.nav-item-needs-auth { opacity: .45; }
-.models-page { display: flex; flex-direction: column; gap: 14px; }
-.models-intro, .models-summary { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; max-width: 900px; }
+.models-page { display: flex; flex-direction: column; gap: 14px; width: 100%; max-width: 1120px; margin: 0 auto; }
+.models-intro, .models-summary { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
 .models-summary { display: flex; flex-wrap: wrap; align-items: baseline; color: var(--text-muted); font-size: 12px; }
 .models-summary > span + span::before { content: '·'; margin: 0 8px; color: var(--text-faint); }
 .models-caption { margin: -6px 0 0; color: var(--text-muted); font-size: 12px; }
@@ -4249,7 +4249,7 @@ _MODELS_CSS = """
 .models-pop p:last-child { margin: 0; }
 /* Anchored under its button where supported; elsewhere the popover keeps the browser's centred default. */
 @supports (position-area: bottom) { .models-pop { inset: auto; margin: 6px 0 0; position-area: bottom span-right; position-try-fallbacks: flip-block, flip-inline; } }
-.models-cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); max-width: 900px; }
+.models-cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 .models-group th { padding: 14px 10px 6px; font-size: 12px; font-weight: 600; color: var(--text-strong); background: none; text-align: left; border-bottom: 1px solid var(--border-subtle); text-transform: none; letter-spacing: 0; }
 .models-row.is-excluded td { color: var(--text-faint); }
 .models-alert { padding: 12px 14px; border: 1px solid var(--red-100); border-radius: 8px; background: var(--red-50); color: var(--red-700); font-size: 13px; }
@@ -4266,6 +4266,7 @@ _MODELS_CSS = """
 .models-filters .rich-pick .finder-facets .facet-list { width: max-content; min-width: 180px; max-width: 340px; }
 .models-filters .filter-dd-menu { left: 0; right: auto; }
 .models-filters .filter-dd-trigger { padding: 5px 9px; }
+.models-filters .model-pick-btn strong, .models-filters .filter-dd-value, .models-filters .filter-dd-value.is-engaged { font-weight: 400; }
 .models-filters .filter-dd-more .filter-dd-trigger { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
 .models-filters .filter-dd-more-body { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: 300px; margin: 0; padding: 12px; gap: 12px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); }
 .models-filters .filter-dd-more-body .models-field { justify-content: space-between; }
