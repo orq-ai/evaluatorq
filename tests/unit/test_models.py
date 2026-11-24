@@ -41,14 +41,16 @@ from evaluatorq.models import (
 from tests.common.garden_fakes import card
 
 
-def model(router_id: str, index: float, input_price: float, output_price: float, **fields: Any) -> ScoredModel:
+def model(
+    router_id: str, index: float, input_price: float, output_price: float, *, enabled: bool = True, **fields: Any
+) -> ScoredModel:
     return ScoredModel(
         router_id=router_id,
         intelligence_index=index,
         input_price=input_price,
         output_price=output_price,
         provider=router_id.split('/')[0],
-        enabled=True,
+        enabled=enabled,
         **fields,
     )
 
@@ -811,6 +813,71 @@ class TestDashboardPage:
         monkeypatch.setattr(models_views, 'load_models', fake_load)
         return client.get(path).text
 
+    def _as_admin(self, monkeypatch: pytest.MonkeyPatch, *, admin: bool) -> list[str]:
+        """Sign the page in as a CLI OAuth user who is (or is not) an admin; returns the model ids enabled."""
+        from types import SimpleNamespace
+
+        from evaluatorq.dashboard import models_views
+
+        enabled: list[str] = []
+
+        async def fake_admin(server_url: str) -> bool:
+            del server_url
+            return admin
+
+        async def fake_enable(server_url: str, model_id: str) -> None:
+            del server_url
+            enabled.append(model_id)
+
+        monkeypatch.setattr(models_views, '_admin_auth', lambda req: SimpleNamespace(base_url='https://my.orq.ai'))
+        monkeypatch.setattr(models_views, 'is_workspace_admin', fake_admin)
+        monkeypatch.setattr(models_views, 'enable_workspace_model', fake_enable)
+        return enabled
+
+    def test_admins_get_an_enable_button_on_disabled_models(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        self._as_admin(monkeypatch, admin=True)
+        off = model('f/off', 45.0, 1.5, 6.0, enabled=False)
+        text = self._models_text(client, monkeypatch, [*fake_catalogue, off], '/models?disabled=1')
+        assert text.count('class="models-enable"') == 1
+        assert 'name="model_id" value="f/off"' in text
+
+    def test_non_admins_see_disabled_models_without_a_button(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        self._as_admin(monkeypatch, admin=False)
+        off = model('f/off', 45.0, 1.5, 6.0, enabled=False)
+        text = self._models_text(client, monkeypatch, [*fake_catalogue, off], '/models?disabled=1')
+        assert '>disabled<' in text and 'class="models-enable"' not in text
+
+    def test_enable_route_enables_for_admins_only(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        from evaluatorq.dashboard.security import CSRF_FIELD, csrf_token
+
+        form = {'model_id': 'f/off', CSRF_FIELD: csrf_token()}
+        enabled = self._as_admin(monkeypatch, admin=False)
+        assert 'Only workspace admins' in client.post('/models/enable', data=form).text
+        assert not enabled
+        enabled = self._as_admin(monkeypatch, admin=True)
+        assert 'Stale or missing form token' in client.post('/models/enable', data={'model_id': 'f/off'}).text
+        assert not enabled
+        response = client.post('/models/enable', data=form)
+        assert 'models-enable-result is-ok' in response.text and enabled == ['f/off']
+
+    def test_enable_route_shows_why_orq_refused(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        from evaluatorq.common.cli_oauth import OrqCLIError
+        from evaluatorq.dashboard import models_views
+        from evaluatorq.dashboard.security import CSRF_FIELD, csrf_token
+
+        self._as_admin(monkeypatch, admin=True)
+
+        async def refuse(server_url: str, model_id: str) -> None:
+            raise OrqCLIError('HTTP 404 Not Found: Model not found')
+
+        monkeypatch.setattr(models_views, 'enable_workspace_model', refuse)
+        text = client.post('/models/enable', data={'model_id': 'x/y', CSRF_FIELD: csrf_token()}).text
+        assert 'is-err' in text and 'Model not found' in text
+
     def test_cards_name_the_best_score_and_the_best_score_per_dollar(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
@@ -1224,3 +1291,42 @@ class TestDashboardPage:
         # A search box fires a bubbling `change` on blur; submitting then would swap the page and lose the text.
         text = self._models_text(client, monkeypatch, fake_catalogue, '/models')
         assert 'onchange="if (!event.target.matches(\'.facet-search\')) this.requestSubmit()"' in text
+
+
+class TestWorkspaceAdmin:
+    """`is_workspace_admin` maps the signed-in account to its workspace roles."""
+
+    @pytest.mark.parametrize(
+        ('roles', 'expected'), [(['01J3HZ9VGNP5867SAGRPS8JT4X'], True), (['01J3HZA12M14T6Z82BZ35B170K'], False)]
+    )
+    def test_admin_role_on_the_signed_in_account(
+        self, monkeypatch: pytest.MonkeyPatch, roles: list[str], *, expected: bool
+    ) -> None:
+        import asyncio
+
+        from evaluatorq.common import cli_oauth
+
+        monkeypatch.setattr(cli_oauth, 'oauth_subject', lambda server_url: {'user_id': 'acct-1'})
+        users = {'users': [{'id': 'wsu-1', 'account_id': 'acct-1', 'roles': roles}, {'account_id': 'other', 'roles': []}]}
+
+        async def fake_call(self: object, args: list[str], *a: object, **k: object) -> object:
+            assert args == ['users', 'list']
+            return users
+
+        monkeypatch.setattr(cli_oauth.shutil, 'which', lambda name: '/bin/orq')
+        monkeypatch.setattr(cli_oauth._CLI, 'call', fake_call)
+        assert asyncio.run(cli_oauth.is_workspace_admin('https://my.orq.ai')) is expected
+
+    def test_a_refused_users_list_is_not_an_admin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import asyncio
+
+        from evaluatorq.common import cli_oauth
+
+        monkeypatch.setattr(cli_oauth, 'oauth_subject', lambda server_url: {'user_id': 'acct-1'})
+
+        async def refuse(self: object, args: list[str], *a: object, **k: object) -> object:
+            raise cli_oauth.OrqCLIError('HTTP 403 Forbidden')
+
+        monkeypatch.setattr(cli_oauth.shutil, 'which', lambda name: '/bin/orq')
+        monkeypatch.setattr(cli_oauth._CLI, 'call', refuse)
+        assert asyncio.run(cli_oauth.is_workspace_admin('https://my.orq.ai')) is False

@@ -504,7 +504,7 @@ The controls above the chart:
 | **Reasoning level** | In **More filters**. Scores intelligence at one reasoning effort. Greyed out on a domain index. | Each model's default |
 | **Minimum score** | In **More filters**, a slider from 0 to 100. Hides models scoring below it on the chosen score; `0` plots every model. It is also the floor that Score per $ counts from. | 10 |
 | **Frontier only** | In **More filters**. Trims the table to the frontier models. | Off |
-| **Include disabled models** | In **More filters**. Adds models switched off in the workspace. | Off |
+| **Include disabled models** | In **More filters**. Adds models switched off in the workspace, tagged **disabled** in the table. When the dashboard is signed in through the Orq CLI (`orq auth login`) as a workspace admin, each one also gets an **Enable** button that switches it on for the whole workspace with one click; switch it off again in Orq. If Orq refuses, the row says why. An API key does not name a person, so with one the buttons never show. | Off |
 | **Hide estimated scores** | In **More filters**. Drops the rings, which are scores Orq estimated rather than measured. | Off |
 | **Score per $ lines** | In **More filters**, on the price axis only. Draws the dashed Score per $ guide curves. | Off |
 

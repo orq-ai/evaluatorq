@@ -9,6 +9,7 @@ chart names, for each dominated model, the nearest frontier model that beats it.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from dataclasses import dataclass
 from operator import itemgetter
@@ -20,6 +21,7 @@ from loguru import logger
 from starlette.responses import HTMLResponse
 from starlette.routing import Route
 
+from evaluatorq.common.cli_oauth import OrqCLIError, enable_workspace_model, is_workspace_admin
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.common.model_frontier import (
     INDEX_AXES,
@@ -39,6 +41,7 @@ from evaluatorq.dashboard import model_choices
 from evaluatorq.dashboard.auth import auth_or_reason
 from evaluatorq.dashboard.controls import FILTER_CHEVRON, chip, dropdown, pick_row, range_control, rich_pick
 from evaluatorq.dashboard.report_kit import tag
+from evaluatorq.dashboard.security import csrf_field, request_rejected
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.tables import flipped, sortable_th
 from evaluatorq.models import X_AXES, ModelCatalogueError, PriceMix, load_models, pareto, parse_mix
@@ -49,9 +52,11 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
     from evaluatorq.common.model_frontier import AxisSpec
+    from evaluatorq.dashboard.auth import DashboardAuth
     from evaluatorq.models import Index, ParetoPoint, ParetoResult, ScoredModel, XAxis
 
 ROUTE = '/models'
+ENABLE_ROUTE = '/models/enable'
 
 
 def _query(req: Request) -> dict[str, str]:
@@ -564,14 +569,20 @@ def _row(
     *,
     mix: PriceMix,
     hidden: set[str],
+    admin: bool = False,
 ) -> str:
     m = p.model
     host = m.router_id.split('/', 1)[0]
     via = tag(f'via {host}', small=True, title='Listed by a host, not its lab') if host != model_vendor(m) else ''
     est = tag('est', small=True, title='Estimated from an older benchmark version') if m.is_estimated else ''
+    off = (
+        tag('disabled', small=True, title='Not enabled in this workspace') + (_enable_form(m) if admin else '')
+        if m.enabled is False
+        else ''
+    )
     cells = [
         (
-            f'<td><span class="models-name">{esc(_name(m))}{via}</span>'
+            f'<td><span class="models-name">{esc(_name(m))}{via}{off}</span>'
             f'<span class="models-id" title="{esc(m.router_id)}">{esc(m.router_id)}</span></td>'
         ),
         f'<td class="num">{p.score:.1f}{est}</td>',
@@ -590,6 +601,16 @@ def _row(
         *(['is-frontier'] if p.on_frontier else []),
     ]
     return f'<tr class="{" ".join(cls)}">{"".join(cells)}</tr>'
+
+
+def _enable_form(m: ScoredModel) -> str:
+    """An Enable button that swaps itself for the result; only rendered for workspace admins."""
+    return (
+        f'<form class="models-enable" hx-post="{ENABLE_ROUTE}" hx-target="this" hx-swap="outerHTML" '
+        'hx-select=".models-enable-result" hx-push-url="false">'
+        f'<input type="hidden" name="model_id" value="{esc(m.router_id)}">{csrf_field()}'
+        '<button type="submit" class="models-enable-btn">Enable</button></form>'
+    )
 
 
 def _contributor_row(m: ScoredModel, reason: str, result: ParetoResult, *, mix: PriceMix, hidden: set[str]) -> str:
@@ -631,6 +652,8 @@ def _table(
     mix: PriceMix,
     pool: dict[str, ScoredModel],
     labs: list[str],
+    *,
+    admin: bool = False,
 ) -> str:
     # `result.frontier` is strongest first, so the model one score step up sits just before each point.
     frontier = result.frontier
@@ -644,7 +667,7 @@ def _table(
     columns = [c for c in _COLUMNS if c.key not in hidden]
 
     def rows(members: list[ParetoPoint]) -> list[str]:
-        return [_row(p, result, by_id, steps, mix=mix, hidden=hidden) for p in members]
+        return [_row(p, result, by_id, steps, mix=mix, hidden=hidden, admin=admin) for p in members]
 
     if 'sort' in q:
         body = f'<tbody>{"".join(rows(points))}</tbody>'
@@ -866,7 +889,9 @@ async def models_page(req: Request) -> HTMLResponse:
     q = _query(req)
     x = _choice(q.get('x'), X_AXES, 'price')
     mix = _mix(q.get('mix'))
-    models = await _load(req, include_disabled=bool(q.get('disabled')))
+    # Enable buttons only appear beside disabled models, so the admin check only runs when those are listed.
+    disabled = bool(q.get('disabled'))
+    models, admin = await asyncio.gather(_load(req, include_disabled=disabled), _is_admin(req, wanted=disabled))
     if isinstance(models, str):
         return _shell(f'{_intro(X_AXIS_SPECS[x].short_label)}{models}')
     indices = available_indices(models)
@@ -905,10 +930,48 @@ async def models_page(req: Request) -> HTMLResponse:
         f'{_filters_html(q, state)}{_summary(result, state)}'
         f'<div class="models-chart">{_chart(result, by_id, state.min_score if q.get("guides") else None)}</div>'
         f'{_price_caption(mix) if x == "price" else ""}'
-        f'{_table(result, q, by_id, mix, {m.router_id: m for m in pool}, state.labs)}'
+        f'{_table(result, q, by_id, mix, {m.router_id: m for m in pool}, state.labs, admin=admin)}'
     )
 
 
+def _admin_auth(req: Request) -> DashboardAuth | None:
+    """The dashboard's Orq sign-in when it can name a person (CLI OAuth); an API key never does."""
+    from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
+
+    auth, _ = auth_or_reason(lambda: selected_dashboard_auth(req.app))
+    return auth if auth is not None and auth.method == 'cli_oauth' else None
+
+
+async def _is_admin(req: Request, *, wanted: bool) -> bool:
+    """Whether the dashboard's sign-in is a workspace admin; skipped (False) when not `wanted`."""
+    auth = _admin_auth(req) if wanted else None
+    return auth is not None and await is_workspace_admin(auth.base_url)
+
+
+def _enable_result(text: str, *, ok: bool) -> HTMLResponse:
+    # Always 200: htmx does not swap an error status, and the row has to show why it was refused.
+    return HTMLResponse(f'<span class="models-enable-result {"is-ok" if ok else "is-err"}">{esc(text)}</span>')
+
+
+async def enable_model(req: Request) -> HTMLResponse:
+    """`POST /models/enable`: enable one model for the workspace, for admins only; answers with the row's new state."""
+    form = await req.form()
+    rejected = request_rejected(req, form)
+    if rejected:
+        return _enable_result(rejected, ok=False)
+    model_id = str(form.get('model_id') or '').strip()
+    auth = _admin_auth(req)
+    if not model_id or auth is None or not await is_workspace_admin(auth.base_url):
+        return _enable_result('Only workspace admins can enable models.', ok=False)
+    try:
+        await enable_workspace_model(auth.base_url, model_id)
+    except OrqCLIError as exc:
+        logger.warning('Enabling {} failed: {}', model_id, exc)
+        return _enable_result(f'Not enabled: {exc}', ok=False)
+    return _enable_result('Enabled', ok=True)
+
+
 def register_models_routes(app: Any) -> None:
-    """Register ``GET /models``."""
+    """Register ``GET /models`` and ``POST /models/enable``."""
     app.add_route(Route(ROUTE, endpoint=models_page, methods=['GET']))
+    app.add_route(Route(ENABLE_ROUTE, endpoint=enable_model, methods=['POST']))
