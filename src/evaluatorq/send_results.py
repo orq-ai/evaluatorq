@@ -6,7 +6,7 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from .common.env_config import DEFAULT_ORQ_BASE_URL, env_float, env_raw
+from .common.env_config import DEFAULT_ORQ_BASE_URL, check_float_override, env_float, env_raw
 from .common.retry import with_retry
 from .types import DataPointResult, EvaluatorqResult
 
@@ -86,8 +86,8 @@ async def _post_results(
     if response is None:
         message = (
             f'Orq results upload timed out after {timeout_s:g}s. The server may still finish and '
-            'create the run: check the experiment before uploading again. To wait longer, pass '
-            '`timeout_s` or set EVALUATORQ_UPLOAD_TIMEOUT_S.'
+            'create the run: check the experiment before uploading again. To wait longer, set '
+            'EVALUATORQ_UPLOAD_TIMEOUT_S.'
         )
         if raise_on_error:
             raise SendResultsError(message)
@@ -112,9 +112,8 @@ async def send_results_to_orq(
     """
     Send evaluation results to Orq platform.
 
-    The upload waits up to ``timeout_s`` seconds (default: the
-    ``EVALUATORQ_UPLOAD_TIMEOUT_S`` env var, else 120) and makes up to 3
-    attempts, retrying on connection errors and 429. A timed-out upload is not
+    The upload waits up to ``timeout_s`` seconds for each phase (connect,
+    send, response) and makes up to 3 attempts, retrying on connection errors and 429. A timed-out upload is not
     retried: the server may still finish and create the run, so a retry could
     add a second run.
 
@@ -133,10 +132,9 @@ async def send_results_to_orq(
               ``https://my.orq.ai``. Lets callers route results to the same
               server used for inference.
         raise_on_error: Raise upload errors instead of treating upload as best-effort.
-        timeout_s: Seconds to wait for the upload response. When omitted, falls
-              back to the ``EVALUATORQ_UPLOAD_TIMEOUT_S`` env var, then to 120.
-              The largest reported upload (27 MB) took about 58 s; raise this
-              for larger ones. Must be positive.
+        timeout_s: Per-phase upload timeout in seconds. When omitted, uses
+              ``EVALUATORQ_UPLOAD_TIMEOUT_S`` and its default. Must be finite
+              and at least that variable's minimum, or ``ValueError`` is raised.
 
     Returns:
         The full ``OrqResponse`` (``experiment_url``, ``rows_created``,
@@ -144,10 +142,11 @@ async def send_results_to_orq(
         upload failed. Callers that only need the URL read
         ``response.experiment_url``.
     """
-    if timeout_s is not None and not timeout_s > 0:
-        # Checked before the try: a bad argument is a caller bug, not an upload
-        # failure to swallow under raise_on_error=False.
-        raise ValueError(f'timeout_s must be positive, got {timeout_s!r}')
+    resolved_timeout_s = (
+        env_float('EVALUATORQ_UPLOAD_TIMEOUT_S')
+        if timeout_s is None
+        else check_float_override('EVALUATORQ_UPLOAD_TIMEOUT_S', value=timeout_s, argument='timeout_s')
+    )
     try:
         # Calculate duration in milliseconds
         duration_ms = int((end_time - start_time).total_seconds() * 1000)
@@ -198,7 +197,7 @@ async def send_results_to_orq(
             f'{resolved_base_url}{RESULTS_RECEIVE_PATH}',
             api_key,
             payload_dict,
-            timeout_s=timeout_s if timeout_s is not None else env_float('EVALUATORQ_UPLOAD_TIMEOUT_S'),
+            timeout_s=resolved_timeout_s,
             raise_on_error=raise_on_error,
         )
         if response is None:

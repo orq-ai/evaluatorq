@@ -807,7 +807,6 @@ class TestSendResultsTimeoutAndRetry:
 
     @pytest.fixture(autouse=True)
     def _no_timeout_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # A developer's shell override must not change the 120 s assertions below.
         monkeypatch.delenv("EVALUATORQ_UPLOAD_TIMEOUT_S", raising=False)
 
     @staticmethod
@@ -869,8 +868,11 @@ class TestSendResultsTimeoutAndRetry:
         assert seen[0].timeout.read == 600.0
 
     @pytest.mark.asyncio
-    async def test_invalid_env_var_falls_back_to_120s(self, monkeypatch: pytest.MonkeyPatch, build_results):
-        monkeypatch.setenv("EVALUATORQ_UPLOAD_TIMEOUT_S", "0")
+    @pytest.mark.parametrize("bad", ["0", "", "abc", "nan", "inf"])
+    async def test_invalid_env_var_falls_back_to_120s(
+        self, monkeypatch: pytest.MonkeyPatch, build_results, bad: str
+    ):
+        monkeypatch.setenv("EVALUATORQ_UPLOAD_TIMEOUT_S", bad)
         seen: list[httpx.AsyncClient] = []
         self._scripted_post(monkeypatch, [200], seen)
 
@@ -878,14 +880,14 @@ class TestSendResultsTimeoutAndRetry:
         assert seen[0].timeout.read == 120.0
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("bad", [0.0, -5.0, float("nan")])
-    async def test_non_positive_timeout_argument_raises_even_when_best_effort(
+    @pytest.mark.parametrize("bad", [0.0, 0.5, -5.0, float("nan"), float("inf")])
+    async def test_out_of_range_timeout_argument_raises_even_when_best_effort(
         self, monkeypatch: pytest.MonkeyPatch, build_results, bad: float
     ):
         seen: list[httpx.AsyncClient] = []
         self._scripted_post(monkeypatch, [200], seen)
 
-        with pytest.raises(ValueError, match="timeout_s must be positive"):
+        with pytest.raises(ValueError, match="timeout_s"):
             await self._upload(build_results, timeout_s=bad)
         assert seen == []
 
