@@ -1528,7 +1528,7 @@ def _content_reprs(source: str) -> list[int]:
     return lines
 
 # Inline suppressions of the rules review keeps catching. C901 was burned down to zero and then grew back inline.
-INLINE_NOQA_BUDGET = {'BLE001': 95, 'C901': 14, 'SLF001': 29}
+INLINE_NOQA_BUDGET = {'BLE001': 94, 'C901': 14, 'SLF001': 29}
 
 # A broad except or suppress(Exception) that neither re-raises nor logs at warning level: the silent-degradation
 # class, the most frequent review finding in the first 210 PRs. Count per file under src/evaluatorq/.

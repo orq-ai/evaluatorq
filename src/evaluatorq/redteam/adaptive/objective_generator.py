@@ -13,9 +13,12 @@ from loguru import logger
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.content_filter import is_content_filter_error, regenerate_on_content_filter
+from evaluatorq.common.content_filter import (
+    classify_finish_reason,
+    is_content_filter_error,
+    regenerate_on_content_filter,
+)
 from evaluatorq.common.llm_call import execute_chat_parse
-from evaluatorq.common.llm_errors import CONNECTION_ERRORS, STATUS_ERRORS
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
@@ -31,6 +34,7 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     attacker_model_for,
 )
+from evaluatorq.redteam.exceptions import StrategyGenerationError
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
 from evaluatorq.redteam.vulnerability_registry import (
@@ -207,6 +211,7 @@ async def _call_llm_for_objectives_single(
     ``prompt_template`` must contain a ``{count}`` placeholder.
     """
     cfg = cfg or PIPELINE_CONFIG
+    attempts = max(1, cfg.max_content_filter_retries + 1)
     try:
         prompt = prompt_template.replace('{count}', str(count))
         gen_messages: list[dict[str, Any]] = [{'role': 'user', 'content': prompt}]
@@ -250,30 +255,43 @@ async def _call_llm_for_objectives_single(
             # budget (max_content_filter_retries) instead of a private constant.
             response = await regenerate_on_content_filter(
                 _generate,
-                max_attempts=max(1, cfg.max_content_filter_retries + 1),
-                label=f'Objective generation for {log_label}',
+                max_attempts=attempts,
+                label=f'Objective generation for {log_label} on {model!r}',
             )
 
-            result = response.choices[0].message.parsed
+            choice = response.choices[0]
+            if classify_finish_reason(choice.finish_reason) is not None:
+                # Every attempt came back filtered in the 200 form.
+                raise _content_filtered(log_label=log_label, model=model, attempts=attempts)
+            result = choice.message.parsed
             if result is None:
                 raise ValueError('Objective generation returned no parsed content')
 
             logger.debug(f'Generated {len(result.objectives)} objectives for {log_label}')
             return result.objectives[:count]
 
-    except (asyncio.CancelledError, *CONNECTION_ERRORS, *STATUS_ERRORS) as e:
-        # A content filter that surfaced as an error survived the retries above — drop
-        # this vulnerability's objectives rather than failing the whole run. Other
-        # transport/status errors propagate to the caller's own retry/handling.
-        if is_content_filter_error(e):
-            logger.error(
-                f'Objective generation content-filtered after retries for {log_label!r}; returning no objectives'
-            )
-            return []
+    except (asyncio.CancelledError, StrategyGenerationError):
         raise
-    except Exception as e:  # noqa: BLE001
-        logger.error(f'Objective generation failed for {log_label!r} ({type(e).__name__}): {e}')
-        return []
+    except Exception as e:
+        # Raise rather than return no objectives: the strategy planner records the message as
+        # this vulnerability's `generation_error`, which is what the end-of-run warning reads
+        # and what stops the run when the vulnerability is left with no strategy at all.
+        if is_content_filter_error(e):
+            raise _content_filtered(log_label=log_label, model=model, attempts=attempts) from e
+        logger.error(f'Objective generation failed for {log_label!r} on model {model!r} ({type(e).__name__}): {e}')
+        msg = f'objective generation failed on attacker model {model!r} ({type(e).__name__}): {e}'
+        raise StrategyGenerationError(msg) from e
+
+
+def _content_filtered(*, log_label: str, model: str, attempts: int) -> StrategyGenerationError:
+    """Log and build the error for a content-filter block that survived every attempt."""
+    logger.error(
+        f'Objective generation for {log_label!r} was blocked by the content filter of attacker model '
+        f'{model!r} on all {attempts} attempt(s). Pick another attacker model or raise max_content_filter_retries.'
+    )
+    return StrategyGenerationError(
+        f'the content filter of attacker model {model!r} blocked objective generation on all {attempts} attempt(s)'
+    )
 
 
 async def _call_llm_for_objectives(
@@ -311,16 +329,26 @@ async def _call_llm_for_objectives(
 
     while remaining > 0:
         batch_size = min(remaining, max_per_call)
-        batch_objectives = await _call_llm_for_objectives_single(
-            prompt_template,
-            llm_client,
-            model,
-            batch_size,
-            {**span_attributes, 'orq.redteam.batch_index': batch_idx},
-            f'{log_label} (batch {batch_idx + 1})',
-            llm_kwargs,
-            cfg,
-        )
+        try:
+            batch_objectives = await _call_llm_for_objectives_single(
+                prompt_template,
+                llm_client,
+                model,
+                batch_size,
+                {**span_attributes, 'orq.redteam.batch_index': batch_idx},
+                f'{log_label} (batch {batch_idx + 1})',
+                llm_kwargs,
+                cfg,
+            )
+        except StrategyGenerationError as e:
+            if not all_objectives:
+                raise
+            # Earlier batches succeeded: keep their objectives rather than discard them.
+            logger.warning(
+                f'Batch {batch_idx + 1} failed for {log_label} ({e}); keeping the {len(all_objectives)} '
+                'objectives from earlier batches'
+            )
+            break
         if not batch_objectives:
             logger.warning(f'Batch {batch_idx + 1} returned no objectives for {log_label}; stopping early')
             break

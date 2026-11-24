@@ -31,6 +31,7 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     Vulnerability,
 )
+from evaluatorq.redteam.exceptions import StrategyGenerationError
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category
 
@@ -205,7 +206,7 @@ async def plan_strategies_for_vulnerabilities(
                     return vuln, generated, None
                 except Exception as e:  # noqa: BLE001
                     logger.error(
-                        f'Strategy generation failed for {vuln.value}, no strategies will be tested for this vulnerability: {e}'
+                        f'Strategy generation failed for {vuln.value}; only its hardcoded strategies, if any, will run: {e}'
                     )
                     return vuln, [], str(e)
 
@@ -263,7 +264,30 @@ async def plan_strategies_for_vulnerabilities(
             'generation_error': generation_errors.get(vuln),
         }
 
+    _raise_if_generation_left_nothing(all_vuln_strategies=all_vuln_strategies, generation_errors=generation_errors)
     return all_vuln_strategies, strategy_selection, agent_capabilities
+
+
+def _raise_if_generation_left_nothing(
+    *,
+    all_vuln_strategies: dict[AnyVulnerability, list[AttackStrategy]],
+    generation_errors: dict[AnyVulnerability, str | None],
+) -> None:
+    """Stop the run before any attack is sent when a failed generation left a vulnerability untested.
+
+    A vulnerability that still has hardcoded strategies runs with reduced coverage and is
+    reported by the end-of-run warnings. One with none would silently drop out of the report,
+    so a run that looks complete would not have tested it at all.
+    """
+    empty = {vuln: error for vuln, error in generation_errors.items() if error and not all_vuln_strategies.get(vuln)}
+    if not empty:
+        return
+    details = '; '.join(f'{vuln.value}: {error}' for vuln, error in empty.items())
+    msg = (
+        f'Strategy generation failed and left {len(empty)} vulnerabilit{"y" if len(empty) == 1 else "ies"} '
+        f'with no strategy to run, so the run was stopped before any attack was sent. {details}'
+    )
+    raise StrategyGenerationError(msg)
 
 
 async def plan_strategies_for_categories(

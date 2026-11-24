@@ -193,7 +193,7 @@ These bound evaluatorq's own LLM calls, not the target's.
 |---|---|---|
 | `LLMConfig.retry_count` / `--retry-count` | `3` (0–10) | Pipeline-owned LLM calls and Orq context/enrichment/cleanup |
 | `LLMConfig.retry_on_codes` | `[429, 500, 502, 503, 504]` | Which HTTP statuses count as retryable |
-| `LLMConfig.max_content_filter_retries` | `2` | Attacker turns the attack model content-filtered or self-censored |
+| `LLMConfig.max_content_filter_retries` | `2` | Attacker turns and strategy-generation calls the attack model content-filtered or self-censored |
 | `LLMConfig.max_consecutive_adversarial_timeouts` | `2` | Consecutive attacker-LLM timeouts before the orchestrator abandons the attack |
 | `EvaluatorConfig.retry_count` | `1` | Retries per judge call. `0` falls straight through to `replacement_judges` / `min_successful_judges` |
 | `LLMCallConfig.timeout_ms` | `90000` | Per-call timeout for a pipeline role |

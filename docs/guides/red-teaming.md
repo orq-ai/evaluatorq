@@ -348,6 +348,8 @@ The two tabs above are the two most common targets. For the full set — includi
 
 Every vulnerability has a judge written for it. Categories with a **curated strategy count** ship hand-written attack strategies; the rest are marked *generated* — in dynamic and hybrid mode the strategy planner writes strategies for them per run, against the target's actual tools, memory and system prompt. Pass `generate_strategies=False` to run curated strategies only.
 
+When the attacker model fails to write strategies for a vulnerability, for example because its provider's content filter blocks the request, the planner retries a filtered call up to `max_content_filter_retries` times and logs the attacker model by name. If the vulnerability still has curated strategies, the run goes on with those and the report carries a warning that names the failure. If it has none, the run raises `StrategyGenerationError` before any attack is sent, because a vulnerability that silently drops out would make the run look complete when it is not. Switch to an attacker model whose filter allows red-team prompts, or narrow the run to vulnerabilities with curated strategies.
+
 <!-- coverage-table -->
 
 See [Vulnerabilities & Frameworks](vulnerabilities-and-frameworks.md) for how these category codes map onto the vulnerabilities behind them, and how a vulnerability mapped into more than one framework is labelled in reports.
