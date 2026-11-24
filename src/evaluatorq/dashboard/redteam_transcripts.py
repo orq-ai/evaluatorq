@@ -13,7 +13,7 @@ All functions return raw HTML strings suitable for HTMX hx-swap.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote as _quote
 
 from evaluatorq.common.reports import esc
@@ -27,7 +27,7 @@ from evaluatorq.dashboard.redteam_charts import (
 from evaluatorq.dashboard.report_kit import short_model, tag
 from evaluatorq.dashboard.trace_links import single_trace_url, thread_trace_url, trace_link_button
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
-from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
+from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable, coerced_passes
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import JuryResult, JuryVote
@@ -59,10 +59,27 @@ def _jury_vote_label(vote: JuryVote) -> str:
     return str(vote.value)
 
 
+_COERCED_HINT = 'the judge abstained and also sent a verdict, so the verdict was not counted'
+
+
+def _judge_health(evaluation: Any) -> str:
+    """The health block of one result: the panel's when a jury ran, else a single judge's coerced verdict.
+
+    A single-judge result has no jury and nothing else to report, so it renders '' unless its verdict was coerced.
+    """
+    jury: JuryResult | None = evaluation.jury if evaluation is not None else None
+    if jury is not None:
+        return _jury_panel_health(jury)
+    if not coerced_passes(evaluation):
+        return ''
+    chip = f'<div class="rt-attack-tags">{tag("verdict coerced to abstention")}</div>'
+    return f'<div class="rt-jury" title="{esc(_COERCED_HINT)}"><span class="rt-verdict-label">Judge health</span>{chip}</div>'
+
+
 def _jury_panel_health(jury: JuryResult | None) -> str:
     """Per-result panel health: decisive votes over all attempted judges,
     replacement/tie/inconclusive flags, then each judge's vote (model, outcome,
-    and any stand-in/failed-repetition status or failure reason), mirroring the
+    and any stand-in/failed-repetition/coerced status or failure reason), mirroring the
     pairwise per-judge vote list (RES-1650).
 
     Returns '' for a single-judge result (no jury ran), the same way the fragment
@@ -91,6 +108,8 @@ def _jury_panel_health(jury: JuryResult | None) -> str:
                 vote_tags.append(tag('stand-in'))
             if v.repetitions_failed:
                 vote_tags.append(tag(f'{v.repetitions_failed} failed rep{"s" if v.repetitions_failed != 1 else ""}'))
+            if v.repetitions_coerced:
+                vote_tags.append(tag(f'{v.repetitions_coerced} coerced rep{"s" if v.repetitions_coerced != 1 else ""}'))
             head = f'<b>{esc(short_model(model=v.model))}</b> &rarr; {esc(_jury_vote_label(vote=v))}'
             error = f'<div class="rt-jury-error">{esc(v.error)}</div>' if v.error else ''
             items.append(f'<li class="rt-jury-vote">{head} {"".join(vote_tags)}{error}</li>')
@@ -154,7 +173,7 @@ def render_attack_fragment(r: RedTeamResult) -> str:
             '</div>'
         )
 
-    jury_html = _jury_panel_health(jury=r.evaluation.jury if r.evaluation else None)
+    jury_html = _judge_health(r.evaluation)
 
     transcript_html = render_message_list(r.messages, role_labels=_RT_ROLE_LABELS, class_prefix='rt')
     # Some older reports kept only the final response outside the message list.

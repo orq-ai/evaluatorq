@@ -19,6 +19,7 @@ from evaluatorq.redteam.contracts import (
     is_known_open_value,
     resolve_open_value,
 )
+from evaluatorq.redteam.reports.converters import sample_count, samples_with_coerced_verdict
 from evaluatorq.redteam.vulnerability_registry import VULNERABILITY_DEFS, Vulnerability
 
 if TYPE_CHECKING:
@@ -103,6 +104,11 @@ def _build_stats_table(report: RedTeamReport, summary: ReportSummary) -> Table:
             f'{clause}; {health.samples} multi-judge samples', style='green' if clause == 'clean' else 'yellow'
         )
         stats.add_row('Jury Health', value)
+
+    # A judge that abstains and still sends a verdict is read as abstaining. Shown for one judge or a panel.
+    coerced = samples_with_coerced_verdict(report)
+    if coerced:
+        stats.add_row('Coerced Verdicts', Text(sample_count(coerced), style='yellow'))
 
     # Datapoint breakdown (hybrid runs)
     breakdown = summary.datapoint_breakdown

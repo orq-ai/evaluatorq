@@ -12,7 +12,13 @@ from pydantic import ValidationError
 
 from evaluatorq.common.structured_output import sum_usage_coverage
 from evaluatorq.common.target_call import TargetCallResult, classify_error_type
-from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, AgentResponse, AgentResponseError, Message
+from evaluatorq.contracts import (
+    EVAL_ERROR_RAW_OUTPUT_KEY,
+    VERDICT_COERCED_RAW_OUTPUT_KEY,
+    AgentResponse,
+    AgentResponseError,
+    Message,
+)
 from evaluatorq.redteam.contracts import (
     JURY_RAW_OUTPUT_KEY,
     OWASP_CATEGORY_NAMES,
@@ -1019,6 +1025,38 @@ def _compute_jury_reliability(results: list[RedTeamResult]) -> JuryReliability |
     return JuryReliability(krippendorff_alpha=alpha, samples=samples)
 
 
+def coerced_passes(evaluation: Any) -> int:
+    """How many judge passes of one result were coerced from a verdict to an abstention.
+
+    A panel records it per judge (``JuryVote.repetitions_coerced``). The single-judge path builds no vote, so its
+    writers leave a ``verdict_coerced`` flag in ``raw_output``; that counts as one pass.
+    """
+    if evaluation is None:
+        return 0
+    jury = getattr(evaluation, 'jury', None)
+    if jury is not None:
+        return sum(vote.repetitions_coerced for vote in jury.votes)
+    raw_output = getattr(evaluation, 'raw_output', None)
+    return 1 if isinstance(raw_output, dict) and raw_output.get(VERDICT_COERCED_RAW_OUTPUT_KEY) is True else 0
+
+
+def samples_with_coerced_verdict(report: RedTeamReport) -> int:
+    """How many samples of a report had a coerced verdict, counted from its results.
+
+    The summary carries the same count, but only for a report converted since the count existed: an older saved
+    report loads it as 0 while its results still record the coerced passes. Counting here keeps the report's
+    headline and its per-attack panel in agreement. A report saved without results falls back to the summary.
+    """
+    if not report.results:
+        return report.summary.samples_with_coerced_verdict
+    return sum(1 for result in report.results if coerced_passes(result.evaluation))
+
+
+def sample_count(count: int) -> str:
+    """``1 sample`` or ``N samples``, for a count shown to a reader."""
+    return f'{count} sample' if count == 1 else f'{count} samples'
+
+
 def _compute_jury_health(results: list[RedTeamResult]) -> JuryHealth | None:
     """Roll per-sample jury panel health up into a run-level count (RES-1649).
 
@@ -1305,6 +1343,7 @@ def compute_report_summary(
         by_framework=by_framework,
         jury_reliability=_compute_jury_reliability(results),
         jury_health=_compute_jury_health(results),
+        samples_with_coerced_verdict=sum(1 for r in results if coerced_passes(r.evaluation)),
     )
 
 

@@ -289,3 +289,7 @@ async def test_static_single_judge_result_carries_the_coerced_flag(content: str,
         })
     assert result.raw_output is not None
     assert result.raw_output['verdict_coerced'] is coerced
+    # The report reads the flag this writer leaves, so a renamed key on either side fails here.
+    from evaluatorq.redteam.reports.converters import coerced_passes
+
+    assert coerced_passes(result) == int(coerced)
