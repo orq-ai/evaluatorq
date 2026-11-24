@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -207,7 +208,10 @@ def test_html_omits_model_row_when_unknown(make_result):
     r = make_result(goal_achieved=True)  # no target_model in metadata
     html = export_html([r], target='t')
     assert 'Model:</strong> unknown' not in html
-    assert '>unknown<' not in html  # no stray "unknown" model cell
+    # no stray "unknown" model cell; the target cost reads "unknown" in the header and the token table on purpose
+    without_cost = re.sub(r'<p class="report-hero-cost">.*?</p>', '', html, flags=re.S)
+    without_cost = without_cost.replace('Target Agent Cost</td><td data-label="Value">unknown<', '')
+    assert '>unknown<' not in without_cost
 
 
 def test_html_full_transcript_no_json_note(sample_results):

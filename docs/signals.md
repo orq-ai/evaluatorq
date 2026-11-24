@@ -6,7 +6,7 @@ Use signals when you need repeatable measurements of an agent run's structure, t
 
 ## Compute signals from a trace
 
-`compute_signals()` takes an `AtifTrajectory` and returns a `SignalReport`. Convert a trace's raw Orq span records to ATIF first with `OtelTrace.from_orq(...).to_atif()`. The raw span records are the `v3spans` list from Orq's trace endpoint; `evaluatorq.formats` converts records but does not fetch them.
+`compute_signals()` takes an `AtifTrajectory` and returns a `SignalReport`. Convert a trace's raw Orq span records to ATIF first with `OtelTrace.from_orq(...).to_atif()`. The raw span records are each span's summary from Orq's span list with that span's `attributes` merged in; `evaluatorq.formats` converts records but does not fetch them.
 
 Responses conversion preserves each response's tool definitions on its originating ATIF step. Schema checks use those definitions for that step, including an explicitly empty list, so a later response's schema does not change how an earlier call is checked. Unsupported custom, MCP, or builtin tool activity remains recorded as source data; signals that depend on complete tool activity return `no_basis`, and independent signals remain available. [Trace Insights](insights.md#trace-signals) computes these reports automatically and saves them with its trace results.
 
@@ -46,11 +46,15 @@ print(report.results['tool_error_count'].preconditions)
 print(report.results['assistant_message_count'].evidence)
 ```
 
-The example uses a local span fixture with the same shape as an Orq export, so it runs without credentials. To measure a recorded run, get its trace ID from the Orq trace URL, set `ORQ_API_KEY`, and fetch the span list:
+The example uses a local span fixture with the same shape as an Orq export, so it runs without credentials. To measure a recorded run, get its trace ID from the Orq trace URL, set `ORQ_API_KEY`, and fetch the spans. The span list carries no message content, so the loop reads each span's detail and merges its `attributes` into the summary. It needs `jq`, and reads the first 200 spans of the trace:
 
 ```bash
 TRACE_ID=trace_123
-curl -fsS "${ORQ_BASE_URL:-https://my.orq.ai}/v2/traces/${TRACE_ID}/v3spans" -H "Authorization: Bearer ${ORQ_API_KEY}" > spans.json
+SPANS="${ORQ_BASE_URL:-https://my.orq.ai}/v3/traces/${TRACE_ID}/spans"
+AUTH="Authorization: Bearer ${ORQ_API_KEY}"
+curl -fsS "${SPANS}?limit=200" -H "${AUTH}" | jq -r '.data[].span_id' | while read -r SPAN_ID; do
+  curl -fsS "${SPANS}/${SPAN_ID}" -H "${AUTH}" | jq '.span.summary + {attributes: .span.attributes}'
+done | jq -s . > spans.json
 ```
 
 Replace the fixture's `raw_spans` list with `json.loads(Path('spans.json').read_text(encoding='utf-8'))` after importing `json`. `SignalsConfig.from_file()` accepts a JSON object containing any subset of config fields; omitted fields keep their defaults, and unknown fields raise a validation error.

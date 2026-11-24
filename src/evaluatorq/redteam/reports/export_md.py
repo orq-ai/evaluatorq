@@ -31,7 +31,7 @@ from evaluatorq.common.reports import truncate as _truncate
 from evaluatorq.common.reports.html_helpers import pct as _pct
 from evaluatorq.redteam.contracts import JuryHealth
 from evaluatorq.redteam.reports.converters import sample_count
-from evaluatorq.redteam.reports.sections import build_report_sections
+from evaluatorq.redteam.reports.sections import build_report_sections, target_cost_text
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import ReportSection
@@ -672,6 +672,8 @@ def _render_token_usage_section(section: ReportSection) -> str:
             # Flag a lower-bound total: some calls in this run reported no cost.
             coverage = _cost_coverage(overall.get('priced_calls', 0), overall.get('calls', 0))
             metric_rows.append(['Total Cost', f'{_fmt_cost(total_cost)}{coverage}'])
+        if target := data.get('target'):
+            metric_rows.append(['Target Agent Cost', target_cost_text(target)])
         lines.extend((
             _md_table(['Metric', 'Value'], metric_rows, right_align={1}),
             '',

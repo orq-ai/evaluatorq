@@ -44,11 +44,13 @@ You cannot run the live check yourself: your key reaches the model router but no
 
 ## What to write when you are done
 
-Write `$DRIFT_SUMMARY` (a path in the environment) as Markdown with these sections, plain prose, no hard wrapping:
+The workflow opens the PR with a table generated from the code: every preset's seats before and after your edit, the cost change, a cost chart, and a checklist of the `needs_human` findings. Do not repeat seats, costs or that checklist. Your summary goes in a collapsed "Agent notes" section under it, for a reviewer checking your reasoning.
+
+Write `$DRIFT_SUMMARY` (a path in the environment) as Markdown with these sections, one short bullet per item, no hard wrapping:
 
 - `## Changed`: each edit and the finding it answers.
 - `## Verified on the web`: each claim with its source URL.
 - `## Not changed`: findings you left alone and why.
-- `## Needs human`: anything that requires a person's decision, with the options.
+- `## Needs human`: only what the checklist cannot say: a claim you could not verify (with the URL you tried), or a doubt about an option the arithmetic offered, such as a route that looks like a fine-tune or another host's relisting.
 
 End the file with exactly one line: `STATUS: fixed` if you believe your edits resolve every finding that was not `needs_human`, otherwise `STATUS: needs-human`. The workflow still re-runs the live check and downgrades the PR if it fails.

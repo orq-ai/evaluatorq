@@ -18,8 +18,9 @@ to each as ``summaries=`` — otherwise every conversation is summarized twice.
 ``TraceAnalysisConfig`` holds the limits: how long a summary should be, how many
 reach the profile call, whether to redact, and the completion budgets.
 
-Traces are fetched from the Orq traces API (``POST /v2/traces/v3oql`` for the
-trace list, ``GET /v2/traces/{trace_id}/v3spans`` for span content).
+Traces are fetched from the Orq traces API (``POST /v3/traces/search`` for the
+trace list, ``GET /v3/traces/{trace_id}/spans`` and one span detail call per
+span for span content).
 """
 
 from __future__ import annotations
@@ -389,7 +390,7 @@ async def fetch_trace_conversations(
 
     ``search`` is the traces free-text search; ``filters`` is passed through as
     the platform's advanced filter objects (same shape as the Traces UI /
-    ``/v2/traces/v3oql`` API). Traces without any extractable user message are
+    ``/v3/traces/search`` API). Traces without any extractable user message are
     skipped.
     """
     start_time = datetime.fromtimestamp(start_date_ms / 1000, tz=timezone.utc) if start_date_ms is not None else None

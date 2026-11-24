@@ -38,11 +38,12 @@ from typing import Any
 
 from loguru import logger
 
+from evaluatorq.common.reports import fmt_cost_coverage
 from evaluatorq.common.reports.palette import SEVERITY_RANK, SEVERITY_WEIGHTS
 from evaluatorq.contracts import ReportSection, TokenUsage
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, SEVERITY_DEFINITIONS, RedTeamReport, RedTeamResult
 from evaluatorq.redteam.reports._utils import extract_prompt, extract_response
-from evaluatorq.redteam.reports.converters import samples_with_coerced_verdict
+from evaluatorq.redteam.reports.converters import samples_with_coerced_verdict, target_token_usage_coverage
 from evaluatorq.redteam.reports.guidance import REMEDIATION_GUIDANCE
 
 # ---------------------------------------------------------------------------
@@ -854,13 +855,36 @@ def _build_token_usage_section(report: RedTeamReport) -> ReportSection | None:
         )
     ]
 
+    target = report.summary.token_usage_target
+    _, target_missing = target_token_usage_coverage(report.results)
     return ReportSection(
         kind='token_usage',
         title='Token Usage',
         data={
             'overall': overall_dict,
             'per_agent': per_agent,
+            # The target agent's own part of the overall figures; total_cost None reads as unknown.
+            'target': {
+                'total_cost': None if target is None else target.total_cost,
+                'calls': 0 if target is None else target.calls,
+                'priced_calls': 0 if target is None else target.priced_calls,
+                'attacks': len(report.results),
+                'missing': target_missing,
+            },
         },
+    )
+
+
+def target_cost_text(target: dict[str, Any]) -> str:
+    """The token-usage section's ``target`` entry as text: unknown, or the cost with its coverage labels."""
+    attacks = target.get('attacks', 0)
+    return fmt_cost_coverage(
+        target.get('total_cost'),
+        priced_calls=target.get('priced_calls', 0),
+        calls=target.get('calls', 0),
+        reported=attacks - target.get('missing', 0),
+        items=attacks,
+        noun='attacks',
     )
 
 

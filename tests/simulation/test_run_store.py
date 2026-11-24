@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -224,6 +225,14 @@ def test_auto_save_run_collision_gets_suffix(
         "evaluatorq.simulation.utils.run_store.get_sim_runs_dir",
         lambda: runs_dir,
     )
+
+    class _FrozenDatetime(datetime):
+        # Two real saves can straddle a second boundary and get distinct names.
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> _FrozenDatetime:
+            return cls(2026, 1, 1, 12, 0, 0, tzinfo=tz)
+
+    monkeypatch.setattr("evaluatorq.simulation.utils.run_store.datetime", _FrozenDatetime)
     run = build_simulation_run(
         run_name="collide",
         mode="run",
