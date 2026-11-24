@@ -2627,7 +2627,12 @@ def _rt_config(by_kind: dict[str, Any], report: RedTeamReport) -> str:
         coerced_html = (
             '<div class="rt-config-methodology-row">'
             '<span class="rt-config-methodology-label">JUDGE VERDICTS</span>'
-            + meta_grid([('Coerced verdicts', sample_count(coerced))])
+            + meta_grid([
+                (
+                    'Coerced verdicts',
+                    f'{sample_count(coerced)} (judge abstained and also sent a verdict; not counted under Abstentions)',
+                )
+            ])
             + '</div>'
         )
 

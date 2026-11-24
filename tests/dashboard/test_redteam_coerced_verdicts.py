@@ -94,7 +94,7 @@ def test_the_report_exports_show_the_count_and_stay_silent_at_zero() -> None:
     config = html.split('id="rttab-config"', 1)[1]
     assert 'JUDGE VERDICTS' in config
     assert 'Coerced verdicts' in config
-    assert '3 samples' in config
+    assert '3 samples (judge abstained and also sent a verdict; not counted under Abstentions)' in config
 
     quiet = _report(ReportSummary())
     for rendered in (export_markdown(quiet), export_html(quiet)):
@@ -146,7 +146,7 @@ def test_one_coerced_sample_reads_as_one_sample_everywhere() -> None:
 
     assert '| Coerced Verdicts | 1 sample (judge abstained and also sent a verdict) |' in export_markdown(single)
     config = export_html(single).split('id="rttab-config"', 1)[1]
-    assert '>1 sample<' in config
+    assert '>1 sample (judge abstained' in config
     console = Console(record=True, width=200)
     print_report_summary(single, console=console)
     shown = console.export_text()
@@ -177,7 +177,7 @@ def test_an_older_saved_report_counts_its_coerced_samples_from_the_results(rt_re
 
     assert samples_with_coerced_verdict(older) == 2
     assert '| Coerced Verdicts | 2 samples (judge abstained and also sent a verdict) |' in export_markdown(older)
-    assert '>2 samples<' in export_html(older).split('id="rttab-config"', 1)[1]
+    assert '>2 samples (judge abstained' in export_html(older).split('id="rttab-config"', 1)[1]
     console = Console(record=True, width=200)
     print_report_summary(older, console=console)
     assert '2 samples' in console.export_text()
