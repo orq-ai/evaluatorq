@@ -184,7 +184,7 @@ export ORQ_API_KEY=...          # or OPENAI_API_KEY, or ANTHROPIC_API_KEY with C
 !!! warning "A red-team run uploads an Experiment"
     With `ORQ_API_KEY` set, `red_team()` sends its results to your Orq workspace and prints the dashboard URL. There is no `upload_results=False` on `red_team()` the way there is on `simulate()`, so the only way to keep a run off a shared workspace is to point the key elsewhere. See [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded) for the simulation equivalent.
 
-    A large run can take longer than the default 120-second upload timeout. Raise it with `EVALUATORQ_UPLOAD_TIMEOUT_S`, the only way to set it for `red_team()` and `eq redteam`; see [Giving a large upload more time](../evaluation-reference.md#giving-a-large-upload-more-time). If the upload fails anyway, the red-team results are still saved locally.
+    If a large run's upload times out, see [Giving a large upload more time](../evaluation-reference.md#giving-a-large-upload-more-time). The red-team results are saved locally either way.
 
 ```python
 import asyncio

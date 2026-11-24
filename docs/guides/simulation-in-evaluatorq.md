@@ -315,7 +315,7 @@ INFO  Results sent to Orq: support-simulation (1 rows created)
 INFO  View your evaluation at: https://my.orq.ai/<workspace>/experiments/<experiment_id>?runId=<run_id>
 ```
 
-Which workspace that is depends on `ORQ_API_KEY` alone. `ORQ_WORKSPACE` does not route anything — it is a display setting the dashboard reads to build trace deep-links. A large run can take longer than the default 120-second upload timeout; [Giving a large upload more time](../evaluation-reference.md#giving-a-large-upload-more-time) covers `EVALUATORQ_UPLOAD_TIMEOUT_S`, the only way to raise it from `simulate()` or `evaluatorq()`.
+Which workspace that is depends on `ORQ_API_KEY` alone. `ORQ_WORKSPACE` does not route anything — it is a display setting the dashboard reads to build trace deep-links. If a large run's upload times out, see [Giving a large upload more time](../evaluation-reference.md#giving-a-large-upload-more-time).
 
 !!! warning "On this path there is no flag that turns the upload off"
 

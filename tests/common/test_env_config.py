@@ -327,6 +327,25 @@ def test_docs_list_exactly_the_declared_variables() -> None:
     )
 
 
+def test_docs_validated_variable_lists_match_the_validated_rows() -> None:
+    # "When a value is wrong" names the validated knobs by hand twice: in prose and in a
+    # shell loop. A numeric or boolean row missing from either is a silent docs gap.
+    text = _DOCS.read_text()
+    loop = re.search(r'^for v in (.+); do$', text, flags=re.MULTILINE)
+    prose = re.search(r'^\*\*Which variables this covers\.\*\*(.+)$', text, flags=re.MULTILINE)
+    assert loop is not None and prose is not None
+    validated = {
+        name
+        for name, row in ENV_VARS.items()
+        if row.kind != 'raw' and row.owner is None and not name.startswith('X_')
+    }
+    assert set(loop.group(1).split()) == validated
+    prose_names = set(re.findall(r'`([A-Z][A-Z0-9_]+)`', prose.group(1)))
+    if '`ORQ_OTEL_*`' in prose.group(1):
+        prose_names |= {name for name in validated if name.startswith('ORQ_OTEL_')}
+    assert prose_names == validated
+
+
 def test_docs_defaults_match_declared_defaults() -> None:
     for name, cell in _docs_rows().items():
         if name in _DOCUMENTED_EXEMPT or name in _PROSE_DEFAULTS:

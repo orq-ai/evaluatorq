@@ -113,9 +113,10 @@ async def send_results_to_orq(
     Send evaluation results to Orq platform.
 
     The upload waits up to ``timeout_s`` seconds for each phase (connect,
-    send, response) and makes up to 3 attempts, retrying on connection errors and 429. A timed-out upload is not
-    retried: the server may still finish and create the run, so a retry could
-    add a second run.
+    send, response) and makes up to 3 attempts, retrying on connection errors,
+    connect and send timeouts, and 429. A response timeout is not retried: the
+    server may still finish and create the run, so a retry could add a second
+    run.
 
     Args:
         api_key: Orq API key for authentication
@@ -134,7 +135,8 @@ async def send_results_to_orq(
         raise_on_error: Raise upload errors instead of treating upload as best-effort.
         timeout_s: Per-phase upload timeout in seconds. When omitted, uses
               ``EVALUATORQ_UPLOAD_TIMEOUT_S`` and its default. Must be finite
-              and at least that variable's minimum, or ``ValueError`` is raised.
+              and at least that variable's minimum; otherwise ``ValueError``
+              is raised before uploading, even with ``raise_on_error=False``.
 
     Returns:
         The full ``OrqResponse`` (``experiment_url``, ``rows_created``,
