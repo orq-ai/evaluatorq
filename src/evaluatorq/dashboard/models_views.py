@@ -37,7 +37,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.vega import render_embed, vl_frontier_scatter
 from evaluatorq.dashboard import model_choices
 from evaluatorq.dashboard.auth import auth_or_reason
-from evaluatorq.dashboard.controls import FILTER_CHEVRON, chip, dropdown, pick_row, range_control, rich_pick, stat_tile
+from evaluatorq.dashboard.controls import FILTER_CHEVRON, chip, dropdown, pick_row, range_control, rich_pick
 from evaluatorq.dashboard.report_kit import tag
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.tables import flipped, sortable_th
@@ -781,50 +781,68 @@ def _balanced(result: ParetoResult, best: ParetoPoint, value: ParetoPoint | None
     return knee if knee is not None and gap(knee) > 0 else None
 
 
+def _spark(result: ParetoResult, mark: ParetoPoint) -> str:
+    """A small sketch of the frontier with *mark* highlighted, on the chart's own axes (log price, linear speed)."""
+    pts = sorted(result.frontier, key=lambda p: p.x)
+    log = result.x == 'price' and all(p.x > 0 for p in pts)
+    xs = [math.log(p.x) if log else p.x for p in pts]
+    lo_x, hi_x = min(xs), max(xs)
+    lo_y, hi_y = min(p.score for p in pts), max(p.score for p in pts)
+    w, h, pad = 160.0, 56.0, 5.0
+
+    def at(x: float, y: float) -> tuple[float, float]:
+        fx = (x - lo_x) / (hi_x - lo_x) if hi_x > lo_x else 0.5
+        fy = (y - lo_y) / (hi_y - lo_y) if hi_y > lo_y else 0.5
+        return pad + fx * (w - 2 * pad), h - pad - fy * (h - 2 * pad)
+
+    coords = [at(x, p.score) for x, p in zip(xs, pts, strict=True)]
+    line = ' '.join(f'{x:.1f},{y:.1f}' for x, y in coords)
+    dots = ''.join(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2"/>' for x, y in coords)
+    mx, my = coords[pts.index(mark)]
+    return (
+        f'<svg class="models-card-spark" viewBox="0 0 {w:g} {h:g}" aria-hidden="true">'
+        f'<polyline points="{line}"/><g>{dots}</g>'
+        f'<circle class="is-mark" cx="{mx:.1f}" cy="{my:.1f}" r="4.5"/></svg>'
+    )
+
+
+def _card(kind: str, label: str, value: str, p: ParetoPoint, result: ParetoResult, sub: str, unit: str = '') -> str:
+    """One answer card: an accent stripe per kind, the value, the model by name and where it sits on the frontier."""
+    unit_html = f'<span class="stat-unit">{esc(unit)}</span>' if unit else ''
+    return (
+        f'<div class="stat-tile models-card is-{kind}"><div class="models-card-head">'
+        f'<div class="stat-label">{esc(label)}</div>{_spark(result, p)}</div>'
+        f'<div class="stat-value">{esc(value)}{unit_html}</div>'
+        f'<div class="models-card-model">{esc(_name(p.model))}</div><div class="stat-sub">{esc(sub)}</div></div>'
+    )
+
+
 def _answer_cards(result: ParetoResult, min_score: float) -> str:
     """Three quick answers: the best score, the best score per dollar and, on the price axis, the knee of the
     frontier between them; else the best x at the floor."""
     if not result.frontier:
         return ''
     best = max(result.frontier, key=lambda p: p.score)
-    cards = [
-        stat_tile(label='Best score', value=f'{best.score:.1f}', sub=f'{_name(best.model)} · {_x_text(best, result)}')
-    ]
+    cards = [_card('score', 'Best score', f'{best.score:.1f}', best, result, _x_text(best, result))]
     valued = [p for p in result.frontier if p.pareto_score is not None]
     value = max(valued, key=lambda p: cast('float', p.pareto_score), default=None)
     if value is not None:
         per_dollar = cast('float', value.pareto_score)
-        cards.append(
-            stat_tile(
-                label='Best score per $',
-                # Whole numbers would print a score per $ under 0.5 as 0, so small values keep one decimal.
-                value=f'{per_dollar:,.0f}' if per_dollar >= 10 else f'{per_dollar:.1f}',
-                unit=' per $',
-                sub=f'{_name(value.model)} · score {value.score:.1f} · {_x_text(value, result)}',
-            )
-        )
+        # Whole numbers would print a score per $ under 0.5 as 0, so small values keep one decimal.
+        shown = f'{per_dollar:,.0f}' if per_dollar >= 10 else f'{per_dollar:.1f}'
+        sub = f'score {value.score:.1f} · {_x_text(value, result)}'
+        cards.append(_card('value', 'Best score per $', shown, value, result, sub, unit=' per $'))
     balanced = _balanced(result, best, value)
     if balanced is not None:
-        cards.append(
-            stat_tile(
-                label='Balanced',
-                value=f'{balanced.score:.1f}',
-                sub=f'{_name(balanced.model)} · {_x_text(balanced, result)} · '
-                f'{cast("float", balanced.pareto_score):,.0f} per $',
-            )
-        )
+        sub = f'{_x_text(balanced, result)} · {cast("float", balanced.pareto_score):,.0f} per $'
+        cards.append(_card('balanced', 'Balanced', f'{balanced.score:.1f}', balanced, result, sub))
         return f'<div class="stat-band models-cards">{"".join(cards)}</div>'
     cheapest = min(result.frontier, key=lambda p: result.x_spec.best_first(p.x))
     # A card naming the same model as another one adds nothing: one frontier model would fill every card.
     if cheapest is not value and cheapest is not best:
         label = _AXIS_TEXT[result.x].best + (f' at score ≥ {min_score:g}' if min_score > 0 else '')
-        cards.append(
-            stat_tile(
-                label=label,
-                value=_x_text(cheapest, result),
-                sub=f'{_name(cheapest.model)} · score {cheapest.score:.1f}',
-            )
-        )
+        sub = f'score {cheapest.score:.1f}'
+        cards.append(_card('cheapest', label, _x_text(cheapest, result), cheapest, result, sub))
     return f'<div class="stat-band models-cards">{"".join(cards)}</div>'
 
 

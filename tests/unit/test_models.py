@@ -816,21 +816,23 @@ class TestDashboardPage:
     ) -> None:
         tiny = model('z/tiny', 10.5, 0.05, 0.05)
         text = self._models_text(client, monkeypatch, [*fake_catalogue, tiny], '/models')
-        assert text.count('class="stat-tile"') == 3
+        assert text.count('class="stat-tile models-card') == 3
         assert 'Best score' in text and '50.0' in text and 'a/strong' in text
         # c/cheap: (20 - 10) / $0.35 blended under the default mix = 28.6, shown as 29.
         assert 'per $' in text
-        assert re.search(r'Best score per \$</div><div class="stat-value">29<span class="stat-unit"> per \$</span>', text)
+        assert re.search(r'Best score per \$</div><svg[^>]*>.*?</svg></div><div class="stat-value">29<span class="stat-unit"> per \$</span>', text)
         # b/mid sits above the line from c/cheap to a/strong, so the third card is the knee, not the cheapest model.
         cards = text.split('models-cards', 1)[1].split('models-intro', 1)[0]
         assert 'Balanced' in cards and 'b/mid' in cards and 'Cheapest' not in cards
+        # Each card sketches the frontier and marks its own model once.
+        assert cards.count('models-card-spark') == 3 and cards.count('class="is-mark"') == 3
 
     def test_balanced_card_names_the_knee_when_the_cheapest_is_the_best_value(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
         text = self._models_text(client, monkeypatch, fake_catalogue, '/models')
         cards = text.split('models-cards', 1)[1].split('models-intro', 1)[0]
-        assert cards.count('class="stat-tile"') == 3
+        assert cards.count('class="stat-tile models-card') == 3
         assert 'Balanced' in cards and 'b/mid' in cards and 'Cheapest' not in cards
 
     def test_balanced_is_the_frontier_model_furthest_above_the_line(self) -> None:
@@ -1162,7 +1164,7 @@ class TestDashboardPage:
     ) -> None:
         only = model('a/only', 40.0, 1.0, 1.0, output_tokens_per_second=80.0)
         text = self._models_text(client, monkeypatch, [only], '/models?x=output_speed')
-        assert text.count('class="stat-tile"') == 1
+        assert text.count('class="stat-tile models-card') == 1
         assert 'Fastest' not in text.split('models-cards', 1)[1].split('models-intro', 1)[0]
 
     def test_score_per_dollar_card_keeps_a_decimal_below_ten(
@@ -1171,7 +1173,7 @@ class TestDashboardPage:
         # (10.4 - 10) / $1.00 = 0.4 per $; whole numbers would show it as 0.
         near_floor = model('a/near', 10.4, 1.0, 1.0)
         text = self._models_text(client, monkeypatch, [near_floor], '/models')
-        assert re.search(r'Best score per \$</div><div class="stat-value">0\.4<span class="stat-unit"> per \$</span>', text)
+        assert re.search(r'Best score per \$</div><svg[^>]*>.*?</svg></div><div class="stat-value">0\.4<span class="stat-unit"> per \$</span>', text)
 
     def test_more_filters_labels_match_the_toolbar_labels(self) -> None:
         import tinycss2

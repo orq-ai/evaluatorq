@@ -4250,6 +4250,19 @@ _MODELS_CSS = """
 /* Anchored under its button where supported; elsewhere the popover keeps the browser's centred default. */
 @supports (position-area: bottom) { .models-pop { inset: auto; margin: 6px 0 0; position-area: bottom span-right; position-try-fallbacks: flip-block, flip-inline; } }
 .models-cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.models-card { --c: var(--orange-500); position: relative; overflow: hidden; border-top: 3px solid var(--c); background: linear-gradient(180deg, color-mix(in srgb, var(--c) 9%, var(--surface-card)) 0%, var(--surface-card) 70%); }
+.models-card.is-value { --c: var(--teal-600); }
+.models-card.is-balanced { --c: var(--amber-600); }
+.models-card.is-cheapest { --c: var(--green-600); }
+.models-card .stat-label { color: var(--c); font-weight: 600; }
+.models-card .stat-value { font-size: 30px; margin-top: 2px; }
+.models-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.models-card-spark { position: absolute; right: 18px; bottom: 18px; width: 160px; height: 56px; overflow: visible; }
+.models-card-spark polyline { fill: none; stroke: var(--border-strong); stroke-width: 1.5; stroke-linejoin: round; }
+.models-card-spark g circle { fill: var(--border-strong); }
+.models-card-spark .is-mark { fill: var(--c); stroke: var(--surface-card); stroke-width: 1.5; }
+.models-card-model { margin-top: 6px; font-size: 13px; font-weight: 600; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.models-card .stat-sub { margin-top: 2px; }
 .models-group th { padding: 14px 10px 6px; font-size: 12px; font-weight: 600; color: var(--text-strong); background: none; text-align: left; border-bottom: 1px solid var(--border-subtle); text-transform: none; letter-spacing: 0; }
 .models-row.is-excluded td { color: var(--text-faint); }
 .models-alert { padding: 12px 14px; border: 1px solid var(--red-100); border-radius: 8px; background: var(--red-50); color: var(--red-700); font-size: 13px; }

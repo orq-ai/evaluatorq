@@ -39,13 +39,13 @@ Older screenshots use `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 
 
 ## Models — `models-*.png`
 
-Captured on 2026-11-23 against the live Orq catalogue (72 models after keeping one listing per model), 1400×1250 viewport, light theme, headless Chromium, with `eq dashboard` on the branch's defaults: agentic price mix (7:2:1 cached), minimum score 10. `models-01` and `models-02` show the top of the page; `models-03` is scrolled to the table.
+Captured on 2026-11-24 against the live Orq catalogue, 1400×1250 viewport, light theme, headless Chromium, with `eq dashboard` on the branch's defaults: agentic price mix (7:2:1 cached), minimum score 10. `models-01` and `models-02` show the top of the page; `models-03` is scrolled to the table.
 
 | File | Page |
 |---|---|
-| `models-01-frontier.png` | Pareto Frontier (`/models`) — the Best score, Best score per $ and Balanced answer cards, the Score, X axis, Price mix, Lab and More filters controls, intelligence index against the agentic blended price with the frontier line and the Measured score / Estimated score legend, and the top of the table with its Score per $ column |
+| `models-01-frontier.png` | Pareto Frontier (`/models`) — the Best score and Best score per $ answer cards, each with a small sketch of the frontier marking its model (a Balanced card joins them when a frontier model sits well above the line between those two), the Score, X axis, Price mix, Lab and More filters controls, intelligence index against the agentic blended price with the frontier line and the Measured score / Estimated score legend, and the top of the table with its Score per $ column |
 | `models-02-legal.png` | Pareto Frontier (`/models?index=legal`) — the legal index, where about half the models have no score and are not plotted |
-| `models-03-fallback.png` | Pareto Frontier (`/models?lab=alibaba`), scrolled to the table — four Qwen cache-read rates tagged **input**, billed at the input rate because their cards list no cache price |
+| `models-03-fallback.png` | Pareto Frontier (`/models?lab=alibaba`), scrolled to the table — two Qwen cache-read rates tagged **input**, billed at the input rate because their cards list no cache price |
 
 ## Pending re-shoot
 

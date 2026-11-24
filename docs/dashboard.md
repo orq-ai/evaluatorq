@@ -477,7 +477,7 @@ Download links respect the currently active filter state — the CSV/JSON export
 
 The **Pareto Frontier** page (`/models`) plots every model in the Orq catalogue as one dot, score against a blended price, and joins the models nothing beats with an orange line: the Pareto frontier. It reads the live catalogue, so it needs the same Orq account as trace search. Without one, the sidebar item is greyed out and the page says how to connect.
 
-Answer cards above the chart give the three quick answers, each for the models on the frontier:
+Answer cards above the chart give up to three quick answers, each for the models on the frontier. Each card names its model and carries a small sketch of the frontier with that model's dot marked in the card's colour:
 
 | Card | What it shows |
 |---|---|
@@ -488,7 +488,7 @@ Answer cards above the chart give the three quick answers, each for the models o
 
 **Score per $** is the points a model scores above the minimum score, divided by its blended price: `(score - minimum score) / price`. A model exactly at the minimum score gets 0, and with the minimum score at `0` it is the plain score per dollar. It is the same number as the `Score per $` column of `eq models pareto` (see [Model Pareto frontier](model-pareto.md#the-frontier-in-one-command)).
 
-![Pareto Frontier page on the default agentic price mix and minimum score of 10: the Best score, Best score per $ and Balanced cards above the chart, with estimated scores drawn as rings](assets/dashboard/models-01-frontier.png)
+![Pareto Frontier page on the default agentic price mix and minimum score of 10: the Best score and Best score per $ cards above the chart, each sketching the frontier with its model marked, and estimated scores drawn as rings](assets/dashboard/models-01-frontier.png)
 
 Filled dots are measured scores and rings are scores Orq estimated; the legend above the chart names both. Tick **Score per $ lines** in **More filters** to draw faint dashed guide curves on the price axis, each labelled with its Score per $, such as **50 per $**. Every model on one curve has the same Score per $, so a dot above a curve gives more score per dollar than the curve's label. The page draws every round value (1, 2, 5, 10, 20, 50 and so on) inside the range of the plotted models, up to eight; on a wider range it thins them to eight spread across it. The other x axes have no guides, because Score per $ is defined only against price.
 
