@@ -15,6 +15,7 @@ from loguru import logger
 
 from evaluatorq.common.run_manifest import MANIFESTS_DIR_NAME, iter_report_files
 from evaluatorq.contracts import RUN_SUMMARY_VERSION
+from evaluatorq.formats._shared import parse_iso
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -166,7 +167,7 @@ def _card(path: Path) -> ReportCard | None:
         return None
     created = data.get('created_at')
     try:
-        created_at = datetime.fromisoformat(str(created)) if created else datetime.now(tz=timezone.utc)
+        created_at = parse_iso(str(created)) if created else datetime.now(tz=timezone.utc)
     except (TypeError, ValueError):
         created_at = datetime.now(tz=timezone.utc)
     # Normalize naive timestamps (hand-edited / third-party JSON) to UTC so the
