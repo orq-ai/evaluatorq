@@ -6,13 +6,9 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from .common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
+from .common.env_config import DEFAULT_ORQ_BASE_URL, env_float, env_raw
 from .common.retry import with_retry
 from .types import DataPointResult, EvaluatorqResult
-
-# Fixed, not configurable: a longer wait than the proxy in front of the
-# endpoint allows fails anyway, and the largest reported upload (27 MB) took ~58 s.
-UPLOAD_TIMEOUT_S = 120.0
 
 # Experiments API route that receives evaluation results (Orq 4.18 and later).
 RESULTS_RECEIVE_PATH = '/v3/experiments/evaluations/receive'
@@ -53,6 +49,7 @@ async def _post_results(
     api_key: str,
     payload: dict[str, object],
     *,
+    timeout_s: float,
     raise_on_error: bool,
 ) -> httpx.Response | None:
     """POST the payload, retrying only failures that never reached the handler.
@@ -61,7 +58,7 @@ async def _post_results(
     ``SendResultsError`` under ``raise_on_error``); any other response,
     successful or not, is returned for the caller to inspect.
     """
-    async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT_S) as client:
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
 
         async def post() -> httpx.Response | None:
             try:
@@ -88,8 +85,9 @@ async def _post_results(
             return err.response
     if response is None:
         message = (
-            f'Orq results upload timed out after {UPLOAD_TIMEOUT_S:g}s. The server may still finish and '
-            'create the run: check the experiment before uploading again.'
+            f'Orq results upload timed out after {timeout_s:g}s. The server may still finish and '
+            'create the run: check the experiment before uploading again. To wait longer, pass '
+            '`timeout_s` or set EVALUATORQ_UPLOAD_TIMEOUT_S.'
         )
         if raise_on_error:
             raise SendResultsError(message)
@@ -109,11 +107,13 @@ async def send_results_to_orq(
     path: str | None = None,
     base_url: str | None = None,
     raise_on_error: bool = False,
+    timeout_s: float | None = None,
 ) -> OrqResponse | None:
     """
     Send evaluation results to Orq platform.
 
-    The upload waits up to ``UPLOAD_TIMEOUT_S`` (120 s) and makes up to 3
+    The upload waits up to ``timeout_s`` seconds (default: the
+    ``EVALUATORQ_UPLOAD_TIMEOUT_S`` env var, else 120) and makes up to 3
     attempts, retrying on connection errors and 429. A timed-out upload is not
     retried: the server may still finish and create the run, so a retry could
     add a second run.
@@ -133,6 +133,10 @@ async def send_results_to_orq(
               ``https://my.orq.ai``. Lets callers route results to the same
               server used for inference.
         raise_on_error: Raise upload errors instead of treating upload as best-effort.
+        timeout_s: Seconds to wait for the upload response. When omitted, falls
+              back to the ``EVALUATORQ_UPLOAD_TIMEOUT_S`` env var, then to 120.
+              The largest reported upload (27 MB) took about 58 s; raise this
+              for larger ones. Must be positive.
 
     Returns:
         The full ``OrqResponse`` (``experiment_url``, ``rows_created``,
@@ -140,6 +144,10 @@ async def send_results_to_orq(
         upload failed. Callers that only need the URL read
         ``response.experiment_url``.
     """
+    if timeout_s is not None and not timeout_s > 0:
+        # Checked before the try: a bad argument is a caller bug, not an upload
+        # failure to swallow under raise_on_error=False.
+        raise ValueError(f'timeout_s must be positive, got {timeout_s!r}')
     try:
         # Calculate duration in milliseconds
         duration_ms = int((end_time - start_time).total_seconds() * 1000)
@@ -190,6 +198,7 @@ async def send_results_to_orq(
             f'{resolved_base_url}{RESULTS_RECEIVE_PATH}',
             api_key,
             payload_dict,
+            timeout_s=timeout_s if timeout_s is not None else env_float('EVALUATORQ_UPLOAD_TIMEOUT_S'),
             raise_on_error=raise_on_error,
         )
         if response is None:
