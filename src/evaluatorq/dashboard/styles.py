@@ -4250,7 +4250,7 @@ _MODELS_CSS = """
 /* Anchored under its button where supported; elsewhere the popover keeps the browser's centred default. */
 @supports (position-area: bottom) { .models-pop { inset: auto; margin: 6px 0 0; position-area: bottom span-right; position-try-fallbacks: flip-block, flip-inline; } }
 .models-cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-.models-card { --c: var(--orange-500); position: relative; overflow: hidden; border-top: 3px solid var(--c); background: linear-gradient(180deg, color-mix(in srgb, var(--c) 9%, var(--surface-card)) 0%, var(--surface-card) 70%); }
+.models-card { --c: var(--orange-500); position: relative; overflow: hidden; background: linear-gradient(180deg, color-mix(in srgb, var(--c) 9%, var(--surface-card)) 0%, var(--surface-card) 70%); }
 .models-card.is-value { --c: var(--teal-600); }
 .models-card.is-balanced { --c: var(--amber-600); }
 .models-card.is-cheapest { --c: var(--green-600); }
