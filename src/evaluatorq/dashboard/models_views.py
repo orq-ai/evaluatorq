@@ -897,7 +897,7 @@ def _card(kind: str, label: str, value: str, p: ParetoPoint, result: ParetoResul
 
 
 def _answer_cards(result: ParetoResult, min_score: float) -> str:
-    """Three quick answers: the best score, the best score per dollar and, on the price axis, the knee of the
+    """Three quick answers: the best score, the highest score per dollar and, on the price axis, the knee of the
     frontier between them; else the best x at the floor."""
     if not result.frontier:
         return ''
@@ -910,7 +910,9 @@ def _answer_cards(result: ParetoResult, min_score: float) -> str:
         # Whole numbers would print a score per $ under 0.5 as 0, so small values keep one decimal.
         shown = f'{per_dollar:,.0f}' if per_dollar >= 10 else f'{per_dollar:.1f}'
         sub = f'score {value.score:.1f} · {_x_text(value, result)}'
-        cards.append(_card('value', 'Best score per $', shown, value, result, sub, unit=' per $'))
+        # Intelligence names itself; a domain index such as Legal needs "score" after it to read as one.
+        what = 'intelligence' if result.index == 'intelligence' else f'{INDEX_AXES[result.index].label} score'
+        cards.append(_card('value', f'Highest {what} per $', shown, value, result, sub, unit=' per $'))
     balanced = _balanced(result, best, value)
     if balanced is not None:
         sub = f'{_x_text(balanced, result)} · {cast("float", balanced.pareto_score):,.0f} per $'
