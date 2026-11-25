@@ -492,7 +492,7 @@ Answer cards above the chart give up to three quick answers, each for the models
 
 Filled dots are measured scores and rings are scores Orq estimated; the legend above the chart names both. Tick **Score per $ lines** in **More filters** to draw faint dashed guide curves on the price axis, each labelled with its Score per $, such as **50 per $**. Every model on one curve has the same Score per $, so a dot above a curve gives more score per dollar than the curve's label. The page draws every round value (1, 2, 5, 10, 20, 50 and so on) inside the range of the plotted models, up to eight; on a wider range it thins them to eight spread across it. The other x axes have no guides, because Score per $ is defined only against price.
 
-The controls above the chart:
+The controls above the chart. Every change is kept in the page address, and the browser remembers the last one: opening the page without settings in its address, from the sidebar for example, brings back the filters you used last. The memory is per browser, and setting a filter back to its default is how you clear it.
 
 | Control | What it does | Default |
 |---|---|---|

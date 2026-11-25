@@ -880,6 +880,14 @@ class TestDashboardPage:
         assert 'aria-checked="false"' in text and 'models-toggle-note' not in text
         assert calls == [('f/off', True), ('f/off', False)]
 
+    def test_page_remembers_its_filters_in_the_browser(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        text = self._models_text(client, monkeypatch, fake_catalogue, '/models')
+        assert 'localStorage.setItem(K,location.search)' in text and 'htmx:pushedIntoHistory' in text
+        # Outside the swapped root, so a filter change does not re-run it and bounce back to the saved query.
+        assert text.index('eq-models-query') > text.index('</div></div><script>')
+
     def test_catalogue_and_admin_answer_are_reused_until_a_switch(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:

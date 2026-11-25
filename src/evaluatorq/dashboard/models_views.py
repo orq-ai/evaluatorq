@@ -823,6 +823,17 @@ def _price_caption(mix: PriceMix) -> str:
     )
 
 
+# The filters live in the address, so remembering them is remembering the query string: every filter change pushes
+# one, and a visit with none (the sidebar link, a reload of /models) goes back to the last one this browser used.
+# ponytail: browser-local, per device; a server-side setting if filters should follow a person across machines.
+_REMEMBER_FILTERS_JS = (
+    "(function(){var K='eq-models-query';"
+    f"function save(){{try{{if(location.pathname==='{ROUTE}'&&location.search)localStorage.setItem(K,location.search);}}catch(e){{}}}}"
+    'try{var q=localStorage.getItem(K);if(!location.search&&q){location.replace(location.pathname+q);return;}}catch(e){}'
+    "save();document.addEventListener('htmx:pushedIntoHistory',save);})();"
+)
+
+
 def _shell(inner: str) -> HTMLResponse:
     """The page around `inner`: boost swaps `.models-page` inside the stable #models-root on a filter change.
 
@@ -832,6 +843,8 @@ def _shell(inner: str) -> HTMLResponse:
     body = (
         '<div id="models-root" hx-boost="true" hx-target="#models-root" hx-select=".models-page" '
         f'hx-swap="innerHTML" hx-push-url="true"><div class="models-page">{inner}</div></div>'
+        # Outside #models-root, so it runs once per full load rather than on every swap.
+        f'<script>{_REMEMBER_FILTERS_JS}</script>'
     )
     return HTMLResponse(page('Pareto Frontier', body, active_nav='models'))
 
