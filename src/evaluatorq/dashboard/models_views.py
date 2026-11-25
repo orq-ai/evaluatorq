@@ -491,7 +491,7 @@ def _beaten_by_cell(
     winner = _winner(point, by_id)
     if winner is None:
         step = steps.get(point.model.router_id, '')
-        return f'<td><span class="models-frontier">frontier</span><span class="models-gap">{esc(step)}</span></td>'
+        return f'<td class="models-beaten"><span class="models-frontier">frontier</span><span class="models-gap">{esc(step)}</span></td>'
     best = _best_dominator(point, by_id)
     rest = [w for w in _frontier_dominators(point, by_id) if w is not winner and w is not best]
     more = ''
@@ -504,7 +504,7 @@ def _beaten_by_cell(
         else ''
     )
     return (
-        f'<td><span class="models-name" title="{esc(winner.model.router_id)}">{esc(_name(winner.model))}</span>'
+        f'<td class="models-beaten"><span class="models-name" title="{esc(winner.model.router_id)}">{esc(_name(winner.model))}</span>'
         f'<span class="models-gap">{esc(_gap(winner, point, result))}{more}</span>{upgrade}</td>'
     )
 

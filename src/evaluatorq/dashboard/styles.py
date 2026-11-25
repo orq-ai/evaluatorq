@@ -4288,6 +4288,8 @@ _MODELS_CSS = """
 .models-filters .filter-dd-trigger { padding: 5px 9px; }
 .models-filters .model-pick-btn strong, .models-filters .filter-dd-value, .models-filters .filter-dd-value.is-engaged { font-weight: 400; }
 .models-filters .filter-dd-more .filter-dd-trigger { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
+.models-filters > .filter-chip { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
+.models-filters > .filter-chip.is-active { border-color: var(--teal-600); color: var(--text-strong); }
 .models-filters .filter-dd-more-body { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: 300px; margin: 0; padding: 12px; gap: 12px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); }
 .models-filters .filter-dd-more-body .models-field { justify-content: space-between; }
 /* The shared slider label is a mono caps heading on the report rails; here it matches the other toolbar labels. */
@@ -4297,12 +4299,15 @@ _MODELS_CSS = """
 @media (max-width: 640px) { .models-chart .vega-embed { min-width: 360px; } }
 .models-table-wrap { overflow-x: auto; }
 .models-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.models-table thead th { text-align: left; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; padding: 0; font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em; }
-.models-table thead .th-sort { padding: 8px 10px; text-decoration: none; font-weight: 600; color: var(--text-faint); }
+.models-table thead th { text-align: left; border-bottom: 1px solid var(--border-subtle); vertical-align: bottom; padding: 0; font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em; }
+/* Headers wrap: unwrapped, the long price labels alone pushed the table past a 1400px window. */
+.models-table thead .th-sort { white-space: normal; padding: 8px 10px; text-decoration: none; font-weight: 600; color: var(--text-faint); }
 .models-table .th-caret { visibility: hidden; }
 .models-table .th-caret-active, .models-table .th-sort:hover .th-caret, .models-table .th-sort:focus-visible .th-caret { visibility: visible; }
 .models-table td { padding: 8px 10px; border-top: 1px solid var(--border-subtle); vertical-align: top; }
-.models-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.models-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Wide enough that "next: <model>, +7.9 score, 31% pricier" takes two lines, not four. */
+.models-table td.models-beaten { min-width: 280px; }
 .models-table td.num-secondary { color: var(--text-muted); }
 .models-row.is-frontier td:first-child { box-shadow: inset 3px 0 0 var(--orange-500); }
 .models-name { display: block; font-weight: 600; color: var(--text-strong); }
