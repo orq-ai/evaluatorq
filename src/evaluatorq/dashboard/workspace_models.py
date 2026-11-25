@@ -12,11 +12,12 @@ from urllib.parse import quote
 import httpx
 
 from evaluatorq.common.cli_oauth import OrqCLIError, is_workspace_admin, set_workspace_model
+from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 
 if TYPE_CHECKING:
     from evaluatorq.dashboard.auth import DashboardAuth
 
-_TIMEOUT_S = 15.0
+_TIMEOUT_MS = 15_000
 
 
 class WorkspaceModelError(RuntimeError):
@@ -30,13 +31,17 @@ async def can_manage_models(auth: DashboardAuth) -> bool:
     if not auth.api_key:
         return False
     # Orq checks the permission before the body, so an empty enable is a probe that changes nothing:
-    # 403 means the key may not manage models, 400 (invalid body) means it may. Orq has no read-only way to ask
-    # (RES-1973).
+    # 403 means the key may not manage models, 400 (invalid body) means it may. Orq has no read-only way to ask: the
+    # profile endpoint `orq whoami` reads answers only a browser sign-in (RES-1973).
+    from orq_ai_sdk.models import OrqError
+
     try:
-        response = await _request(auth, 'POST', '/v2/workspace-models', json={'model_id': ''})
+        await _set(auth, '', enabled=True)
+    except OrqError as exc:
+        return exc.status_code == 400
     except httpx.HTTPError:
         return False
-    return response.status_code == 400
+    return True
 
 
 async def set_model_enabled(auth: DashboardAuth, model_id: str, *, enabled: bool) -> None:
@@ -47,19 +52,23 @@ async def set_model_enabled(auth: DashboardAuth, model_id: str, *, enabled: bool
         except OrqCLIError as exc:
             raise WorkspaceModelError(str(exc)) from exc
         return
+    from orq_ai_sdk.models import OrqError
+
     try:
-        if enabled:
-            response = await _request(auth, 'POST', '/v2/workspace-models', json={'model_id': model_id})
-        else:
-            response = await _request(auth, 'DELETE', f'/v2/workspace-models/{quote(model_id, safe="")}')
+        await _set(auth, model_id, enabled=enabled)
+    except OrqError as exc:
+        raise WorkspaceModelError(f'HTTP {exc.status_code}: {exc.body[:300]}') from exc
     except httpx.HTTPError as exc:
         raise WorkspaceModelError(f'Orq could not be reached: {exc}') from exc
-    if response.is_error:
-        raise WorkspaceModelError(f'HTTP {response.status_code}: {response.text[:300]}')
 
 
-async def _request(auth: DashboardAuth, method: str, path: str, **kwargs: object) -> httpx.Response:
-    async with httpx.AsyncClient(timeout=_TIMEOUT_S) as http:
-        return await http.request(
-            method, f'{auth.base_url.rstrip("/")}{path}', headers={'Authorization': f'Bearer {auth.api_key}'}, **kwargs
-        )
+async def _set(auth: DashboardAuth, model_id: str, *, enabled: bool) -> None:
+    client = resolve_orq_client(api_key=auth.api_key, base_url=auth.base_url)
+    try:
+        if enabled:
+            await client.models.enable_async(model_id=model_id, timeout_ms=_TIMEOUT_MS)
+        else:
+            # The SDK puts the id into the path unescaped, so a slash in it would end the path segment.
+            await client.models.disable_async(model_id=quote(model_id, safe=''), timeout_ms=_TIMEOUT_MS)
+    finally:
+        await close_orq_client(client)

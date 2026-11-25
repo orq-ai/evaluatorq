@@ -1470,9 +1470,16 @@ class TestManagementKey:
             seen.append(request)
             return httpx.Response(status)
 
-        real = httpx.AsyncClient
+        from orq_ai_sdk import Orq
+
         monkeypatch.setattr(
-            workspace_models.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
+            workspace_models,
+            'resolve_orq_client',
+            lambda *, api_key, base_url: Orq(
+                api_key=api_key,
+                server_url=base_url,
+                async_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            ),
         )
         assert asyncio.run(workspace_models.can_manage_models(self._auth())) is expected
         assert seen[0].method == 'POST' and seen[0].url.path == '/v2/workspace-models'
@@ -1491,9 +1498,16 @@ class TestManagementKey:
             seen.append(request)
             return httpx.Response(204 if request.method == 'DELETE' else 403, text='requires permission')
 
-        real = httpx.AsyncClient
+        from orq_ai_sdk import Orq
+
         monkeypatch.setattr(
-            workspace_models.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
+            workspace_models,
+            'resolve_orq_client',
+            lambda *, api_key, base_url: Orq(
+                api_key=api_key,
+                server_url=base_url,
+                async_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            ),
         )
         asyncio.run(workspace_models.set_model_enabled(self._auth(), 'openai/gpt-4o', enabled=False))
         assert seen[0].method == 'DELETE' and seen[0].url.raw_path == b'/v2/workspace-models/openai%2Fgpt-4o'
