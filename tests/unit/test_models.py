@@ -41,6 +41,18 @@ from evaluatorq.models import (
 from tests.common.garden_fakes import card
 
 
+@pytest.fixture(autouse=True)
+def _no_live_admin_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every /models page asks Orq whether the sign-in may switch models; a test that wants a yes says so."""
+    from evaluatorq.dashboard import models_views
+
+    async def not_admin(auth: object) -> bool:
+        del auth
+        return False
+
+    monkeypatch.setattr(models_views, 'can_manage_models', not_admin)
+
+
 def model(
     router_id: str,
     index: float,
@@ -853,15 +865,55 @@ class TestDashboardPage:
         assert '>disabled<' not in text  # the switch shows the state; no tag beside it
         assert 'name="model_id" value="uuid-off"' in text
 
-    def test_switches_need_admin_and_the_disabled_toggle(
+    def test_switches_need_admin(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
         self._as_admin(monkeypatch, admin=False)
         off = model('f/off', 45.0, 1.5, 6.0, enabled=False, catalogue_id='uuid-off')
         text = self._models_text(client, monkeypatch, [*fake_catalogue, off], '/models?disabled=1')
         assert '>disabled<' in text and 'models-switch' not in text
+        client.app.state.models_admin.clear()  # a new sign-in
         self._as_admin(monkeypatch, admin=True)
-        assert 'models-switch' not in self._models_text(client, monkeypatch, fake_catalogue, '/models')
+        on = model('f/on', 45.0, 1.5, 6.0, enabled=True, catalogue_id='uuid-on')
+        assert 'models-switch' in self._models_text(client, monkeypatch, [*fake_catalogue, on], '/models?x=price')
+
+    def test_a_failed_admin_check_hides_the_switches_instead_of_failing_the_page(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        from evaluatorq.dashboard import models_views
+
+        self._as_admin(monkeypatch, admin=True)
+
+        async def broken(auth: object) -> bool:
+            raise KeyError(auth)
+
+        monkeypatch.setattr(models_views, 'can_manage_models', broken)
+        on = model('f/on', 45.0, 1.5, 6.0, enabled=True, catalogue_id='uuid-on')
+        text = self._models_text(client, monkeypatch, [*fake_catalogue, on], '/models?x=price')
+        assert 'models-page' in text and 'models-switch' not in text
+
+    def test_a_switch_drops_the_process_catalogue_too(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An API-key sign-in also caches /v2/models for the process; a reload after a switch must refetch it."""
+        from evaluatorq.dashboard.security import CSRF_FIELD, csrf_token
+
+        self._as_admin(monkeypatch, admin=True)
+        forgotten: list[object] = []
+        monkeypatch.setattr('evaluatorq.dashboard.models_views.forget_catalogue', forgotten.append)
+        client.post('/models/toggle', data={'model_id': 'f/off', 'action': 'enable', CSRF_FIELD: csrf_token()})
+        assert len(forgotten) == 1
+
+    def test_forget_catalogue_drops_only_that_sign_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from evaluatorq.common import model_catalogue
+
+        source = ('https://my.orq.ai', 'mine')
+        monkeypatch.setattr(model_catalogue, '_catalogue_source', lambda client: (None, None, None, source))
+        other = ('https://my.orq.ai', 'other')
+        for key in (source, other):
+            monkeypatch.setitem(model_catalogue._raw_catalogues, key, ())
+            monkeypatch.setitem(model_catalogue._catalogues, key, {})
+        model_catalogue.forget_catalogue(None)
+        assert source not in model_catalogue._raw_catalogues and source not in model_catalogue._catalogues
+        assert other in model_catalogue._raw_catalogues
 
     def test_toggle_route_switches_for_admins_only(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         from evaluatorq.dashboard.security import CSRF_FIELD, csrf_token

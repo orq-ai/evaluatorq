@@ -25,6 +25,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
+from evaluatorq.common.model_catalogue import forget_catalogue
 from evaluatorq.common.model_frontier import (
     INDEX_AXES,
     MIN_SEAT_INDEX,
@@ -228,7 +229,7 @@ def _filters_html(q: dict[str, str], st: _State) -> str:
             '?mix=READ:WRITE:FRESH:OUTPUT to the address for your own ratio.',
         )
         + dropdown('lab', 'Lab', st.vendors, st.labs, searchable=True)
-        # On the toolbar, not in More filters: it is also how an admin reaches the on/off switches.
+        # On the toolbar, not in More filters: it is how an admin reaches a disabled model's switch.
         + chip(
             'disabled', '1', checked=bool(q.get('disabled')), dot_cls='chip-dot-jade', label='Include disabled models'
         )
@@ -762,7 +763,9 @@ async def _load(
 
 # ponytail: per-process dicts on app.state, no eviction; a dashboard sees one or two sign-ins in its lifetime.
 _CATALOGUE_TTL_S = 60.0
-# A sign-in's admin rights rarely change, so a yes is kept until restart; a no may be a failed probe, so it expires.
+# A sign-in's admin rights rarely change, so a yes is kept for half an hour; a no may be a failed probe, so it expires
+# sooner.
+_ADMIN_YES_TTL_S = 30 * 60.0
 _ADMIN_NO_TTL_S = 60.0
 
 
@@ -791,8 +794,12 @@ async def _may_manage(req: Request, auth: DashboardAuth) -> bool:
     hit = cache.get(key)
     if hit is not None and hit[0] > time.monotonic():
         return hit[1]
-    allowed = await can_manage_models(auth)
-    cache[key] = (math.inf if allowed else time.monotonic() + _ADMIN_NO_TTL_S, allowed)
+    try:
+        allowed = await can_manage_models(auth)
+    except (httpx.HTTPError, OSError, *_UNEXPECTED_LOAD_ERRORS):  # a failed check hides the switches, not the page
+        logger.exception('The admin check for /models failed')
+        allowed = False
+    cache[key] = (time.monotonic() + (_ADMIN_YES_TTL_S if allowed else _ADMIN_NO_TTL_S), allowed)
     return allowed
 
 
@@ -972,13 +979,9 @@ async def _render(req: Request) -> HTMLResponse:
     q = _query(req)
     x = _choice(q.get('x'), X_AXES, 'price')
     mix = _mix(q.get('mix'))
-    # The on/off switches show only with disabled models listed, so the admin check (one or two Orq calls)
-    # does not slow down the everyday view.
     disabled = bool(q.get('disabled'))
     auth, reason = _auth(req)
-    models, admin = await asyncio.gather(
-        _load(req, auth, reason, include_disabled=disabled), _is_admin(req, auth if disabled else None)
-    )
+    models, admin = await asyncio.gather(_load(req, auth, reason, include_disabled=disabled), _is_admin(req, auth))
     if isinstance(models, str):
         return _shell(f'{_intro(X_AXIS_SPECS[x].short_label)}{models}')
     indices = available_indices(models)
@@ -1068,6 +1071,8 @@ async def toggle_model(req: Request) -> HTMLResponse:
     cache, signed_in = _store(req, 'models_catalogue'), _auth_key(auth)
     for key in [k for k in cache if k[0] == signed_in]:
         del cache[key]
+    async with model_choices.catalogue_client(auth) as client:
+        forget_catalogue(client)
     switches = _switches(req)
     switches[signed_in] = switches.get(signed_in, 0) + 1
     return answer(enabled=enable)

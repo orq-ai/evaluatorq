@@ -251,6 +251,17 @@ async def _fetch_catalogue_payload(host: str, api_key: str | None, oauth_fetch: 
             ) from exc
 
 
+def forget_catalogue(client: AsyncOpenAI | None = None) -> None:
+    """Drop the cached catalogue *client* reads, so the next read refetches it.
+
+    For a caller that just changed the catalogue, such as enabling a model.
+    """
+    cache_key = _catalogue_source(client)[3]
+    _catalogues.pop(cache_key, None)
+    _raw_catalogues.pop(cache_key, None)
+    _failed_catalogues.discard(cache_key)
+
+
 def reset_catalogue_cache() -> None:
     """Clear the process-lifetime catalogues; exists for test isolation.
 

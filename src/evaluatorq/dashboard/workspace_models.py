@@ -30,7 +30,8 @@ async def can_manage_models(auth: DashboardAuth) -> bool:
     if not auth.api_key:
         return False
     # Orq checks the permission before the body, so an empty enable is a probe that changes nothing:
-    # 403 means the key may not manage models, 400 (invalid body) means it may.
+    # 403 means the key may not manage models, 400 (invalid body) means it may. Orq has no read-only way to ask
+    # (RES-1973).
     try:
         response = await _request(auth, 'POST', '/v2/workspace-models', json={'model_id': ''})
     except httpx.HTTPError:
