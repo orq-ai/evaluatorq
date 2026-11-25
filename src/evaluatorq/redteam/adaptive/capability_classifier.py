@@ -18,6 +18,7 @@ from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AgentCapability,
     AgentContext,
+    AnyAgentCapability,
     LLMConfig,
     attacker_model_for,
 )
@@ -72,7 +73,7 @@ class AgentCapabilities(BaseModel):
             result.update(c.value for c in caps)
         return result
 
-    def has_any(self, required: list[AgentCapability]) -> bool:
+    def has_any(self, required: list[AnyAgentCapability]) -> bool:
         """Check if agent has any of the required capabilities."""
         agent_caps = self.all_capabilities()
         return any(cap.value in agent_caps for cap in required)

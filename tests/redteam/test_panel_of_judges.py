@@ -1235,6 +1235,10 @@ def test_single_judge_result_carries_the_coerced_flag(content: str, coerced: boo
     result = evaluator._single_outcome_to_result(outcome, 'ev')
     assert result.raw_output is not None
     assert result.raw_output['verdict_coerced'] is coerced
+    # The report reads the flag this writer leaves, so a renamed key on either side fails here.
+    from evaluatorq.redteam.reports.converters import coerced_passes
+
+    assert coerced_passes(result) == int(coerced)
 
 
 @pytest.mark.parametrize(

@@ -53,7 +53,7 @@ The exception is pydantic's `ValidationError`, which subclasses `ValueError`; ca
 
 `limit` is optional and defaults to 20 traces. Read the resolved number off `TraceInput.query_limit` rather than the field, because the field stays `None` when you did not set it. A naive `start_time` or `end_time` is read as UTC, not as the host's local time, so one query means one window wherever it runs.
 
-Query mode bounds the *count* with `limit` and the *window* with the time fields. It requests no sort order, and there is no option that asks for one, so do not read "the 50 most recent" into `limit=50` — if you need a specific period, name it with `start_time` and `end_time`.
+Query mode bounds the *count* with `limit` and the *window* with the time fields. It requests no sort order, and there is no option that asks for one, so do not read "the 50 most recent" into `limit=50` — if you need a specific period, name it with `start_time` and `end_time`. The search route requires both bounds, so an unset `start_time` is sent as 2000-01-01 and an unset `end_time` as the moment the query runs.
 
 The two modes are not interchangeable in what they return. Trace mode has no list response behind it, so a trace fetched by ID carries no `trace_name`, none of your custom trace metadata, and no `expected_output`, even when the same trace fetched by query would have all three.
 

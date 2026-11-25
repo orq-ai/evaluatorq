@@ -116,8 +116,9 @@ class TestInferFramework:
     def test_owasp_prefixed(self) -> None:
         assert infer_framework('OWASP-ASI05') == 'OWASP-ASI'
 
-    def test_unknown(self) -> None:
-        assert infer_framework('CUSTOM01') == 'unknown'
+    def test_unmapped_code_goes_to_custom_framework(self) -> None:
+        # RES-1479: an unmapped code used to give 'unknown', which crashed report assembly.
+        assert infer_framework('CUSTOM01') == 'Custom'
 
 
 class TestNormalizeFramework:

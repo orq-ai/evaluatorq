@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,7 +18,7 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     default_vulnerabilities,
     strategy_needs,
 )
-from evaluatorq.redteam.contracts import AgentCapability, AgentContext, AttackStrategy, ToolInfo
+from evaluatorq.redteam.contracts import AgentCapability, AgentContext, AttackStrategy, OpenAgentCapability, ToolInfo
 from evaluatorq.redteam.vulnerability_registry import (
     CATEGORY_TO_VULNERABILITY,
     FRAMEWORK_TO_VULNERABILITIES,
@@ -51,9 +52,9 @@ def test_strategy_needs(requires_tools: bool, capabilities: list[AgentCapability
     assert strategy_needs(strategy) == expected
 
 
-def _runs(strategy: AttackStrategy, *, tools: bool, capabilities: list[AgentCapability]) -> bool:
+def _runs(strategy: AttackStrategy, *, tools: bool, capabilities: Sequence[OpenAgentCapability]) -> bool:
     context = AgentContext(key='agent', tools=[ToolInfo(name='tool')] if tools else [])
-    classified = AgentCapabilities(capabilities={'tool': capabilities})
+    classified = AgentCapabilities(capabilities={'tool': list(capabilities)})
     return bool(_filter_applicable_strategies([strategy], 'test', context, classified))
 
 

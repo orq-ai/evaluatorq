@@ -1021,6 +1021,10 @@ JURY_RAW_OUTPUT_KEY = 'jury'
 # being buried in one attack's explanation string.
 EVAL_ERROR_RAW_OUTPUT_KEY = 'evaluation_error'
 
+# The single-judge path builds no JuryVote, so its writers leave the coerced flag here and the
+# report reads it back. One name for both sides, so a rename cannot leave the reader behind.
+VERDICT_COERCED_RAW_OUTPUT_KEY = 'verdict_coerced'
+
 
 class JuryRepetition(BaseModel):
     """One raw pass of one judge, before that judge's passes collapse into a vote.
@@ -1098,7 +1102,7 @@ class JuryVote(BaseModel):
         default=0,
         ge=0,
         description='Count of repetitions flagged verdict_coerced. Also stamped on the orq.judge span as '
-        'judge.repetitions_coerced. No report renders it yet.',
+        'judge.repetitions_coerced. The red-team report and the dashboard show it.',
     )
 
     @model_validator(mode='after')

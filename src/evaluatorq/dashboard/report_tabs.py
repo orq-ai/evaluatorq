@@ -2618,10 +2618,30 @@ def _rt_config(by_kind: dict[str, Any], report: RedTeamReport) -> str:
                 f'<section class="rt-judge-failures"><h4>Judge failure reasons</h4><ul>{reasons}</ul></section>'
             )
 
+    # Coerced verdicts are counted for one judge and for a panel, so this row does not depend on jury health.
+    from evaluatorq.redteam.reports.converters import sample_count
+
+    coerced = summary_data.get('samples_with_coerced_verdict') or 0
+    coerced_html = ''
+    if coerced:
+        coerced_html = (
+            '<div class="rt-config-methodology-row">'
+            '<span class="rt-config-methodology-label">JUDGE VERDICTS</span>'
+            + meta_grid([
+                (
+                    'Coerced verdicts',
+                    f'{sample_count(coerced)} (judge abstained and also sent a verdict; not counted under Abstentions)',
+                )
+            ])
+            + '</div>'
+        )
+
     pipeline = method_data.get('pipeline', '')
     scoring = method_data.get('scoring_method', '')
     sub = f'{pipeline} pipeline · {scoring}' if pipeline or scoring else None
-    methodology_html = panel('Methodology', f'{tested_html}{untested_html}{jury_html}{health_html}', sub=sub)
+    methodology_html = panel(
+        'Methodology', f'{tested_html}{untested_html}{jury_html}{health_html}{coerced_html}', sub=sub
+    )
 
     kept = _render_sections(by_kind, _SECTION_RENDERERS, ('severity_definitions', 'error_analysis'))
     return f'{run_config_html}{methodology_html}{kept}' or '<p class="rk-empty">No config data available.</p>'

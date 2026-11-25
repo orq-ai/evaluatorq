@@ -17,12 +17,14 @@ from evaluatorq.redteam.adaptive.objective_generator import generate_strategies_
 from evaluatorq.redteam.adaptive.strategy_registry import (
     _filter_by_method,
     default_vulnerabilities,
+    generation_enabled,
     get_strategies_for_vulnerability,
     select_applicable_strategies,
     select_applicable_strategies_for_vulnerability,
 )
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
+    AnyVulnerability,
     AttackTechnique,
     DeliveryMethod,
     LLMConfig,
@@ -33,6 +35,8 @@ from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from openai import AsyncOpenAI
 
     from evaluatorq.redteam.contracts import AgentContext, AttackStrategy
@@ -43,9 +47,11 @@ if TYPE_CHECKING:
 _MULTI_AGENT_ONLY_VULNS = {Vulnerability.INTER_AGENT_COMMS, Vulnerability.CASCADING_FAILURES}
 
 
-def planned_vulnerabilities(vulnerabilities: list[Vulnerability], *, multi_agent: bool) -> list[Vulnerability]:
+def planned_vulnerabilities(
+    vulnerabilities: Sequence[AnyVulnerability], *, multi_agent: bool
+) -> list[AnyVulnerability]:
     """``vulnerabilities`` without `_MULTI_AGENT_ONLY_VULNS` unless the target is multi-agent."""
-    return vulnerabilities if multi_agent else [v for v in vulnerabilities if v not in _MULTI_AGENT_ONLY_VULNS]
+    return list(vulnerabilities) if multi_agent else [v for v in vulnerabilities if v not in _MULTI_AGENT_ONLY_VULNS]
 
 
 def full_sweep_attack_ceiling(*, multi_agent: bool, generated_per_vulnerability: int) -> int:
@@ -63,7 +69,7 @@ def full_sweep_attack_ceiling(*, multi_agent: bool, generated_per_vulnerability:
 async def plan_strategies_for_vulnerabilities(
     *,
     agent_context: AgentContext,
-    vulnerabilities: list[Vulnerability],
+    vulnerabilities: Sequence[AnyVulnerability],
     llm_client: AsyncOpenAI | None,
     attack_model: str,
     max_turns: int,
@@ -77,7 +83,7 @@ async def plan_strategies_for_vulnerabilities(
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
     attack_techniques: set[AttackTechnique] | None = None,
-) -> tuple[dict[Vulnerability, list[AttackStrategy]], dict[Vulnerability, dict[str, Any]], AgentCapabilities]:
+) -> tuple[dict[AnyVulnerability, list[AttackStrategy]], dict[AnyVulnerability, dict[str, Any]], AgentCapabilities]:
     """Build per-vulnerability strategy plans for dynamic red teaming.
 
     This is the primary planning function keyed by Vulnerability enum values.
@@ -137,8 +143,8 @@ async def plan_strategies_for_vulnerabilities(
         )
     vulnerabilities = planned
 
-    all_hardcoded_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {}
-    applicable_hardcoded_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {}
+    all_hardcoded_by_vuln: dict[AnyVulnerability, list[AttackStrategy]] = {}
+    applicable_hardcoded_by_vuln: dict[AnyVulnerability, list[AttackStrategy]] = {}
 
     # Pass the classified caps to filtering only when they reflect a real
     # classification result. An empty AgentCapabilities() means classification
@@ -163,10 +169,10 @@ async def plan_strategies_for_vulnerabilities(
             attack_techniques=attack_techniques,
         )
 
-    generated_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {vuln: [] for vuln in vulnerabilities}
-    generated_single_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {vuln: [] for vuln in vulnerabilities}
-    generated_multi_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {vuln: [] for vuln in vulnerabilities}
-    generation_errors: dict[Vulnerability, str | None] = {vuln: None for vuln in vulnerabilities}
+    generated_by_vuln: dict[AnyVulnerability, list[AttackStrategy]] = {vuln: [] for vuln in vulnerabilities}
+    generated_single_by_vuln: dict[AnyVulnerability, list[AttackStrategy]] = {vuln: [] for vuln in vulnerabilities}
+    generated_multi_by_vuln: dict[AnyVulnerability, list[AttackStrategy]] = {vuln: [] for vuln in vulnerabilities}
+    generation_errors: dict[AnyVulnerability, str | None] = {vuln: None for vuln in vulnerabilities}
 
     if generate_additional_strategies and llm_client is not None and generated_strategy_count > 0:
         async with with_redteam_span(
@@ -177,8 +183,8 @@ async def plan_strategies_for_vulnerabilities(
         ) as strat_span:
 
             async def _generate_for_vulnerability(
-                vuln: Vulnerability,
-            ) -> tuple[Vulnerability, list[AttackStrategy], str | None]:
+                vuln: AnyVulnerability,
+            ) -> tuple[AnyVulnerability, list[AttackStrategy], str | None]:
                 try:
                     generated = await generate_strategies_for_vulnerability(
                         vuln=vuln,
@@ -203,7 +209,9 @@ async def plan_strategies_for_vulnerabilities(
                     )
                     return vuln, [], str(e)
 
-            generation_results = await asyncio.gather(*(_generate_for_vulnerability(vuln) for vuln in vulnerabilities))
+            generation_results = await asyncio.gather(
+                *(_generate_for_vulnerability(vuln) for vuln in vulnerabilities if generation_enabled(vuln))
+            )
             for vuln, generated, generation_error in generation_results:
                 # Apply the same strategy-name / delivery-method filter to
                 # generated strategies, otherwise the LLM-side could silently
@@ -227,8 +235,8 @@ async def plan_strategies_for_vulnerabilities(
             total_generated = sum(len(v) for v in generated_by_vuln.values())
             set_span_attrs(strat_span, {'orq.redteam.generated_count': total_generated})
 
-    all_vuln_strategies: dict[Vulnerability, list[AttackStrategy]] = {}
-    strategy_selection: dict[Vulnerability, dict[str, Any]] = {}
+    all_vuln_strategies: dict[AnyVulnerability, list[AttackStrategy]] = {}
+    strategy_selection: dict[AnyVulnerability, dict[str, Any]] = {}
 
     for vuln in vulnerabilities:
         all_hardcoded = all_hardcoded_by_vuln[vuln]
@@ -292,7 +300,7 @@ async def plan_strategies_for_categories(
     """
     # Resolve each category to a Vulnerability, preserving order and mapping back
     # to original category strings for the return value.
-    category_to_vuln: dict[str, Vulnerability] = {}
+    category_to_vuln: dict[str, AnyVulnerability] = {}
     unresolved_categories: list[str] = []
 
     for category in categories:

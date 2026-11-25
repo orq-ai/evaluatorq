@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.replay import ReplayError, load_run_payload
-from evaluatorq.redteam.contracts import Pipeline, Vulnerability
+from evaluatorq.redteam.contracts import Pipeline, Vulnerability, is_known_open_value, known_open_values
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -76,11 +76,11 @@ def _validate_datapoint(inputs: dict[str, Any], index: int, run_name: str) -> No
     report conversion, so it is rejected here too.
     """
     vulnerability = inputs.get('vulnerability')
-    if vulnerability and vulnerability not in {v.value for v in Vulnerability}:
+    if vulnerability and not is_known_open_value(Vulnerability, vulnerability):
         raise ReplayError(
             f'Previous red team run {run_name}: datapoint {index} ({inputs.get("id", "unnamed")!r}) has '
             f'unknown vulnerability {vulnerability!r}, so it cannot be replayed. '
-            f'Valid vulnerabilities: {sorted(v.value for v in Vulnerability)}.'
+            f'Valid vulnerabilities: {sorted(known_open_values(Vulnerability))}.'
         )
     if 'strategy' in inputs or inputs.get('messages'):
         return

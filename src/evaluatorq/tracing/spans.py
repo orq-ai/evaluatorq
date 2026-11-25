@@ -285,10 +285,12 @@ def set_evaluation_attributes(
     if explanation is not None:
         span.set_attribute('gen_ai.evaluation.explanation', explanation)
     label = _score_label(score, pass_, evaluator_name)
-    if pass_ is not None:
+    # A bool score with no pass_ is its own verdict, as Orq's graders treat it.
+    passed = pass_ if pass_ is not None else score if isinstance(score, bool) else None
+    if passed is not None:
         # Not in the GenAI conventions, but Orq stores, alerts and scores
         # boolean verdicts from gen_ai.evaluation.passed with no fallback.
-        span.set_attribute('gen_ai.evaluation.passed', pass_)
+        span.set_attribute('gen_ai.evaluation.passed', passed)
     if label is not None:
         span.set_attribute('gen_ai.evaluation.score.label', label)
         span.set_attribute('orq.evaluator.score.label', label)
@@ -308,7 +310,7 @@ def set_evaluation_attributes(
     # Ingestion routes this key to blob storage rather than the 512-char-capped
     # typed attribute maps, so the untruncated explanation belongs here.
     verdict: dict[str, Any] = {
-        'passed': pass_,
+        'passed': passed,
         'value': score.model_dump() if isinstance(score, EvaluationResultCell) else score,
         'type': evaluator_type,
     }
@@ -382,14 +384,16 @@ def _score_label(
 ) -> str | None:
     """Return the gen_ai.evaluation.score.label for a verdict, or ``None``.
 
-    A pass/fail verdict maps to ``pass``/``fail``, as Orq's own graders emit.
-    Otherwise a non-empty string score is its own label, cut to
-    ``_SCORE_LABEL_MAX_CHARS`` with a warning so the cut is never silent.
+    Mirrors Orq's own graders (graders/client.go ``evaluationScore``): a non-empty string
+    score is its own label even when ``pass_`` is set, cut to ``_SCORE_LABEL_MAX_CHARS``
+    with a warning so the cut is never silent. Otherwise ``pass_``, or a bool score
+    without one, maps to ``pass``/``fail``.
     """
-    if pass_ is not None:
-        return 'pass' if pass_ else 'fail'
     if not isinstance(score, str) or not score:
-        return None
+        verdict = pass_ if pass_ is not None else score if isinstance(score, bool) else None
+        if verdict is None:
+            return None
+        return 'pass' if verdict else 'fail'
     if len(score) <= _SCORE_LABEL_MAX_CHARS:
         return score
     logger.warning(

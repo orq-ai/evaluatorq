@@ -74,6 +74,7 @@ _ROWS = (
     ),
     EnvVar('OPENAI_BASE_URL', 'raw', None, 'OpenAI-compatible host for the red teaming LLM client.'),
     EnvVar('EVALUATORQ_CATALOGUE_TIMEOUT_S', 'float', 30.0, 'Model catalogue fetch timeout, read at import.', 0.1),
+    EnvVar('EVALUATORQ_UPLOAD_TIMEOUT_S', 'float', 120.0, 'Orq results upload timeout, read per upload.', 1.0),
     # Model roles
     EnvVar('EVALUATORQ_FAST_MODEL', 'raw', 'openai/gpt-6-luna', 'Model for the fast role.', owner=_ROLE_OWNER),
     EnvVar('EVALUATORQ_SMART_MODEL', 'raw', 'openai/gpt-6-sol', 'Model for the smart role.', owner=_ROLE_OWNER),

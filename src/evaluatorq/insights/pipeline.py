@@ -446,19 +446,36 @@ async def _build_dimension(  # noqa: C901
     return result
 
 
+def _llm_filter_model(population: InsightsPopulation) -> str | None:
+    """The model that selects filters for a query population in ``llm`` mode; None when no LLM selects them.
+
+    `resolve_population` falls back to the same role default, so this names the model that call will use.
+    """
+    if population.query is None:
+        return None
+    from evaluatorq.trace_finder.settings import effective_settings, normalize_filter_selection
+
+    mode = normalize_filter_selection(population.filter_selection or effective_settings().filter_selection)
+    return role_model('fast', task='finder.filters') if mode == 'llm' else None
+
+
 def _require_insights_models_served(
     llm_client: Any,
     *,
     summary_model: str,
     label_model: str | None,
     query_models: tuple[str, str] | None,
+    filter_model: str | None = None,
+    label_model_only_merges: bool = False,
 ) -> None:
     """Stop before any work when the client that serves the run is Anthropic and a model the run will call is not a Claude id.
 
-    Checks what a run with at least one trace is sure to call: the summary model, the label model when labels or a
-    query are asked for, and the two query models for a query population. The embedding model is not checked here: it
-    goes to ``embedding_client``, which is never an Anthropic client. A classify-only model is checked as the fast
-    model it falls back to off the Orq router.
+    Checks the models the run may call: the summary model, the label model when labels, a dimension (its clusters are
+    merged with that model) or a query are asked for, the two query models for a query population, and the model that
+    selects filters when a query population selects them with an LLM. It is a check of the configuration, not of the
+    traces: a dimension with too few traces never reaches the merge step, and its model is checked all the same. The
+    embedding model is not checked here: it goes to ``embedding_client``, which is never an Anthropic client. A
+    classify-only model is checked as the fast model it falls back to off the Orq router.
 
     Raises:
         ModelClientMismatchError: The serving side is Anthropic and at least one of those models is not served by it.
@@ -473,13 +490,18 @@ def _require_insights_models_served(
 
     models = dict([named(summary_model, 'smart', 'insights.summary', 'summary_model')])
     if label_model is not None:
-        models.update([named(label_model, 'classifier', 'insights.labels', 'classifier_model')])
+        source, model = named(label_model, 'classifier', 'insights.labels', 'classifier_model')
+        # With no labels asked for, the only call this model gets is the cluster merge; say so, or the error points
+        # a user who asked for no labels at a labelling step.
+        models[f'{source}, used to merge clusters' if label_model_only_merges else source] = model
     if query_models is not None:
         compiler, finder_classifier = query_models
         models.update([
             named(compiler, 'fast', 'finder.compiler', 'compiler_model'),
             named(finder_classifier, 'classifier', 'finder.classifier', 'classifier_model'),
         ])
+    if filter_model is not None:
+        models.update([named(filter_model, 'fast', 'finder.filters', 'fast_filter_model')])
     require_models_served(models_called_off_router(models), client=llm_client)
 
 
@@ -569,11 +591,15 @@ async def insights(  # noqa: C901
     classifier_model = resolved['classifier']
     summary_model = resolved['summary']
     embedding_model = resolved['embedding']
+    labels_run = bool(specs or coding_enabled or population.query is not None)
     _require_insights_models_served(
         llm_client,
         summary_model=summary_model,
-        label_model=classifier_model if specs or coding_enabled or population.query is not None else None,
+        # Clustering sends the classifier model to the merge step, so any dimension needs it, labels or not.
+        label_model=classifier_model if labels_run or dimensions else None,
+        label_model_only_merges=not labels_run,
         query_models=(compiler_model, finder_classifier_model) if population.query is not None else None,
+        filter_model=_llm_filter_model(population),
     )
     if trace_input_chars is None:
         from evaluatorq.trace_finder.settings import effective_settings
