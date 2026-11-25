@@ -196,13 +196,6 @@ class TestObjectiveGenerationRetry:
         assert client.chat.completions.parse.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_exhausted_200_filter_raises_naming_the_model(self):
-        client = self._client([_resp('content_filter'), _resp('content_filter'), _resp('content_filter')])
-        with pytest.raises(StrategyGenerationError, match=r"content filter of attacker model 'openai/gpt-4o-mini'.*3 attempt"):
-            await self._call(client, retries=2)
-        assert client.chat.completions.parse.call_count == 3
-
-    @pytest.mark.asyncio
     async def test_error_form_filter_raises_naming_the_model(self):
         client = self._client(_cf_error())
         with pytest.raises(StrategyGenerationError, match="'openai/gpt-4o-mini'"):
@@ -225,9 +218,8 @@ class TestObjectiveGenerationRetry:
         assert client.chat.completions.parse.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_non_filter_status_error_is_not_retried_and_names_the_model(self):
+    async def test_non_filter_status_error_is_not_retried_and_propagates(self):
         client = self._client(_cf_error('rate_limit'))
-        with pytest.raises(StrategyGenerationError, match="'openai/gpt-4o-mini'") as info:
+        with pytest.raises(APIStatusError):
             await self._call(client)
-        assert isinstance(info.value.__cause__, APIStatusError)
         assert client.chat.completions.parse.call_count == 1

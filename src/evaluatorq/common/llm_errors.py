@@ -24,10 +24,7 @@ CONNECTION_ERRORS: tuple[type[BaseException], ...] = (openai.APIConnectionError,
 TIMEOUT_ERRORS: tuple[type[BaseException], ...] = (openai.APITimeoutError,)
 BAD_REQUEST_ERRORS: tuple[type[BaseException], ...] = (openai.BadRequestError,)
 SDK_ERRORS: tuple[type[BaseException], ...] = (openai.OpenAIError,)
-# Raised client-side by ``.parse()`` when the provider ends a reply with
-# ``finish_reason='content_filter'``. OpenAI-only: an Anthropic client reaches
-# ``.parse()`` through openai's own parser (``anthropic/convert.py``), so it
-# raises this same class.
+# Raised client-side by ``.parse()`` for a reply with ``finish_reason='content_filter'``.
 CONTENT_FILTER_FINISH_ERRORS: tuple[type[BaseException], ...] = (openai.ContentFilterFinishReasonError,)
 
 # Gate on installation, not importability: an installed but broken anthropic fails loudly here.

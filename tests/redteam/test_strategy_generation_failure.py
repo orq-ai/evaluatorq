@@ -1,4 +1,4 @@
-"""A failed strategy generation is recorded, and stops the run when it leaves a vulnerability untested.
+"""A failed strategy generation is recorded; a vulnerability it leaves empty is skipped, and the run stops only when none has a strategy.
 
 The objective generator used to swallow its own failures and return no objectives, so the
 planner never recorded a ``generation_error`` and a vulnerability could run with fewer
@@ -156,11 +156,12 @@ def _response() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_a_later_batch_failure_keeps_the_objectives_of_earlier_batches():
+async def test_a_later_batch_failure_keeps_earlier_objectives_and_records_the_shortfall():
     client = MagicMock()
     client.base_url = 'https://api.openai.com/v1'
     # Batch 1 succeeds; batch 2 is filtered on every attempt.
     client.chat.completions.parse = AsyncMock(side_effect=[_response(), *[openai.ContentFilterFinishReasonError()] * 3])
+    failures: list[str] = []
 
     with patch('evaluatorq.redteam.adaptive.objective_generator.with_llm_span') as span:
         span.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
@@ -172,7 +173,57 @@ async def test_a_later_batch_failure_keeps_the_objectives_of_earlier_batches():
             model=_MODEL,
             count=2,
             pipeline_config=LLMConfig(max_objectives_per_llm_call=1, max_content_filter_retries=2),
+            failures=failures,
         )
 
     assert len(objectives) == 1
     assert client.chat.completions.parse.call_count == 4
+    assert len(failures) == 1
+    assert 'generated 1 of 2' in failures[0]
+    assert repr(_MODEL) in failures[0]
+
+
+@pytest.mark.asyncio
+async def test_a_shortfall_reaches_generation_error_with_the_partial_strategies(monkeypatch):
+    partial = strategy_planner.get_strategies_for_vulnerability(Vulnerability.GOAL_HIJACKING)[:1]
+
+    async def _short(**kwargs: Any) -> list[AttackStrategy]:
+        kwargs['failures'].append(f'generated 1 of 2 objectives: blocked on {kwargs["model"]!r}')
+        return partial
+
+    monkeypatch.setattr(strategy_planner, 'generate_strategies_for_vulnerability', _short)
+    monkeypatch.setattr(strategy_planner, 'select_applicable_strategies_for_vulnerability', lambda **_: [])
+    strategies, selection, _ = await strategy_planner.plan_strategies_for_vulnerabilities(
+        agent_context=AgentContext(key='test-agent'),
+        vulnerabilities=[Vulnerability.GOAL_HIJACKING],
+        llm_client=cast(Any, object()),
+        attack_model=_MODEL,
+        max_turns=5,
+        max_per_category=None,
+        generate_additional_strategies=True,
+        generated_strategy_count=2,
+    )
+
+    assert strategies[Vulnerability.GOAL_HIJACKING] == partial
+    assert 'generated 1 of 2' in selection[Vulnerability.GOAL_HIJACKING]['generation_error']
+
+
+@pytest.mark.asyncio
+async def test_a_failure_that_is_not_a_block_stops_the_run(monkeypatch):
+    """A bad key or unknown model is a setup error, not a content-filter block: it must not be skipped."""
+    monkeypatch.setattr(
+        strategy_planner, 'generate_strategies_for_vulnerability', AsyncMock(side_effect=RuntimeError('401 bad key'))
+    )
+    monkeypatch.setattr(strategy_planner, 'select_applicable_strategies_for_vulnerability', lambda **_: [])
+
+    with pytest.raises(RuntimeError, match='401 bad key'):
+        await strategy_planner.plan_strategies_for_vulnerabilities(
+            agent_context=AgentContext(key='test-agent'),
+            vulnerabilities=[Vulnerability.GOAL_HIJACKING],
+            llm_client=cast(Any, object()),
+            attack_model=_MODEL,
+            max_turns=5,
+            max_per_category=None,
+            generate_additional_strategies=True,
+            generated_strategy_count=2,
+        )

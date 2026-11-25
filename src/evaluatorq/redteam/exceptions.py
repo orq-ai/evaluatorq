@@ -24,9 +24,7 @@ class CancelledError(RedTeamError):
 class StrategyGenerationError(RedTeamError):
     """The attacker model produced no attack strategies for a vulnerability.
 
-    Raised by objective generation when the call fails (a content-filter block that
-    survived its retries, a transport error, an unparseable reply), and by the strategy
-    planner when failed generation leaves no vulnerability with a strategy to run. A single
-    vulnerability left empty is skipped and reported, not raised.
-    The message names the attacker model, since that is the setting to change.
+    Raised by objective generation when the attacker model's content filter blocks every
+    attempt, and by the strategy planner when failed generation leaves no vulnerability with
+    a strategy to run. The message names the attacker model, since that is the setting to change.
     """

@@ -186,6 +186,7 @@ async def plan_strategies_for_vulnerabilities(
             async def _generate_for_vulnerability(
                 vuln: AnyVulnerability,
             ) -> tuple[AnyVulnerability, list[AttackStrategy], str | None]:
+                failures: list[str] = []
                 try:
                     generated = await generate_strategies_for_vulnerability(
                         vuln=vuln,
@@ -202,13 +203,18 @@ async def plan_strategies_for_vulnerabilities(
                         attacker_instructions=attacker_instructions,
                         llm_kwargs=llm_kwargs,
                         pipeline_config=cfg,
+                        failures=failures,
                     )
-                    return vuln, generated, None
-                except Exception as e:  # noqa: BLE001
+                except StrategyGenerationError as e:
+                    # Only a block by the attacker model skips the vulnerability; any other
+                    # failure (auth, unknown model, transport, a bug) propagates and stops the run.
                     logger.error(
                         f'Strategy generation failed for {vuln.value}; only its hardcoded strategies, if any, will run: {e}'
                     )
                     return vuln, [], str(e)
+                if failures:
+                    logger.warning(f'Strategy generation for {vuln.value} fell short: {"; ".join(failures)}')
+                return vuln, generated, '; '.join(failures) or None
 
             generation_results = await asyncio.gather(
                 *(_generate_for_vulnerability(vuln) for vuln in vulnerabilities if generation_enabled(vuln))
@@ -264,28 +270,24 @@ async def plan_strategies_for_vulnerabilities(
             'generation_error': generation_errors.get(vuln),
         }
 
-    _raise_if_generation_left_nothing(all_vuln_strategies=all_vuln_strategies, generation_errors=generation_errors)
+    _stop_if_no_vulnerability_has_a_strategy(
+        all_vuln_strategies=all_vuln_strategies, generation_errors=generation_errors
+    )
     return all_vuln_strategies, strategy_selection, agent_capabilities
 
 
-def _raise_if_generation_left_nothing(
+def _stop_if_no_vulnerability_has_a_strategy(
     *,
     all_vuln_strategies: dict[AnyVulnerability, list[AttackStrategy]],
     generation_errors: dict[AnyVulnerability, str | None],
 ) -> None:
-    """Skip a vulnerability a failed generation left untested; stop only when nothing is left to run.
+    """Raise when failed generation left no vulnerability with a strategy to run.
 
-    Red-team prompts are often blocked by the attacker model's content filter, so one blocked
-    vulnerability must not end a run for every other one. It is logged here and reported by the
-    end-of-run warnings (`_collect_filter_warnings` in the runner) as not tested. When failed
-    generation leaves no vulnerability with a strategy, there is nothing to run, so the run is
-    stopped before any attack is sent.
+    A single vulnerability left empty is skipped, not raised: red-team prompts are often blocked
+    by the attacker model's content filter, and the runner's end-of-run warnings report it as
+    not tested.
     """
     empty = {vuln: error for vuln, error in generation_errors.items() if error and not all_vuln_strategies.get(vuln)}
-    for vuln, error in empty.items():
-        logger.warning(
-            f'{vuln.value} will NOT be tested: strategy generation failed and it has no other strategy ({error})'
-        )
     if not empty or any(all_vuln_strategies.values()):
         return
     details = '; '.join(f'{vuln.value}: {error}' for vuln, error in empty.items())

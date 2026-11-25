@@ -4323,10 +4323,11 @@ def _collect_filter_warnings(*, prepared_targets: list[PreparedTarget]) -> list[
                     f'Category {cat_key!r}: zero strategies selected — no applicable strategies found for this agent.'
                 )
             elif gen_error:
-                # Hardcoded strategies still ran, so coverage is reduced rather than absent.
+                # Some strategies still ran, so coverage is reduced rather than absent.
+                generated = cat_meta.get('generated_count', 0)
                 filter_warnings.append(
                     f'Category {cat_key!r}: strategy generation failed ({gen_error}); '
-                    f'ran {selected} hardcoded strateg{"y" if selected == 1 else "ies"} only'
+                    f'ran {selected} strateg{"y" if selected == 1 else "ies"} ({generated} generated)'
                 )
 
     return filter_warnings

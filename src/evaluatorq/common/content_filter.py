@@ -81,8 +81,9 @@ async def regenerate_on_content_filter(
             response = await call(attempt)
         except CONNECTION_ERRORS + STATUS_ERRORS + CONTENT_FILTER_FINISH_ERRORS as e:
             if is_content_filter_error(e) and attempt < attempts - 1:
-                form = 'finish_reason' if isinstance(e, CONTENT_FILTER_FINISH_ERRORS) else 'error form'
-                logger.warning(f'{label} content-filtered ({form}); regenerating ({attempt + 1}/{attempts - 1})')
+                logger.warning(
+                    f'{label} content-filtered ({type(e).__name__}); regenerating ({attempt + 1}/{attempts - 1})'
+                )
                 continue
             raise
         choices = getattr(response, 'choices', None) or []

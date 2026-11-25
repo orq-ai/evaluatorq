@@ -127,12 +127,12 @@ class TestCollectFilterWarnings:
 
     def test_generation_error_with_hardcoded_fallback_is_still_reported(self):
         warnings = _collect_filter_warnings(
-            prepared_targets=[_prepared('t', {'ASI01': {'total_selected': 3, 'generation_error': 'HTTP 429'}})]
+            prepared_targets=[
+                _prepared('t', {'ASI01': {'total_selected': 3, 'generated_count': 1, 'generation_error': 'HTTP 429'}})
+            ]
         )
 
-        assert warnings == [
-            "Category 'ASI01': strategy generation failed (HTTP 429); ran 3 hardcoded strategies only"
-        ]
+        assert warnings == ["Category 'ASI01': strategy generation failed (HTTP 429); ran 3 strategies (1 generated)"]
 
     def test_nonzero_selection_and_missing_metadata_warn_about_nothing(self):
         warnings = _collect_filter_warnings(
