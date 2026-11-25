@@ -241,3 +241,13 @@ def test_html_export_from_bare_results_carries_target_cost_into_the_header() -> 
     line = re.search(r'<p class="report-hero-cost">(.*?)</p>', page, re.S)
     assert line is not None
     assert 'Target cost $0.0100' in ' '.join(html.unescape(re.sub(r'<[^>]+>', ' ', line.group(1))).split())
+
+
+def test_coverage_can_count_entries_without_a_cost_as_missing() -> None:
+    from evaluatorq.common.structured_output import sum_usage_coverage
+
+    priced = TokenUsage(total_tokens=4, total_cost=0.01, calls=1, priced_calls=1)
+    unpriced = TokenUsage(total_tokens=4, calls=1)
+
+    assert sum_usage_coverage([priced, unpriced, None]) == (priced + unpriced, 1)
+    assert sum_usage_coverage([priced, unpriced, None], require_cost=True) == (priced + unpriced, 2)

@@ -578,7 +578,7 @@ def compare_pick_form(surface: str) -> str:
     """The runs list's "Compare selected" form. Row checkboxes join it through
     ``form="cmp-pick"``; ``dashboard.js`` enables the button at exactly two."""
     return (
-        f'<form id="cmp-pick" class="cmp-pick" action="/compare/{esc(surface)}" method="get">'
+        f'<form id="cmp-pick" class="cmp-pick" action="/compare/{esc(surface)}/pick" method="get">'
         '<button type="submit" class="btn-secondary" disabled>Compare selected</button></form>'
     )
 
@@ -586,7 +586,7 @@ def compare_pick_form(surface: str) -> str:
 def _compare_pick_row(row_html: str, rid: str, name: str, *, pickable: bool) -> str:
     """*row_html* (a row link) with its compare checkbox beside it, never inside the link."""
     box = (
-        f'<label class="run-pick"><input type="checkbox" form="cmp-pick" value="{esc(rid)}"'
+        f'<label class="run-pick"><input type="checkbox" form="cmp-pick" name="r" value="{esc(rid)}"'
         f' aria-label="Select {esc(name)} to compare"></label>'
         if pickable
         else '<span class="run-pick"></span>'
@@ -679,18 +679,18 @@ def _fmt_compact(n: int) -> str:
 
 
 def run_compare_control(rid: str, choices: list[CompareCandidate], action: str) -> str:
-    """Render the on-report compare control: this run is A, pick B from the
-    other runs of its surface in the shared rich picker (name, then date and
-    headline, searchable). ``action`` is that surface's compare URL. Empty
+    """The "any other run" form inside `compare_menu`: pick a second run of this
+    surface in the shared rich picker (name, then date and headline, searchable).
+    ``action`` is that surface's pick URL, which makes the older run A. Empty
     when there is no other run to compare against."""
     others = [c for c in choices if c.rid != rid]
     if not others:
         return ''
     rows = [(c.rid, _pick_row(c.name, f'{c.when:%Y-%m-%d} · {c.headline}')) for c in others]
-    picker = _rich_pick('b', others[0].rid, rows, filterable=True)
+    picker = _rich_pick('r', others[0].rid, rows, filterable=True)
     return (
         f'<form class="cmp-bar" action="{esc(action)}" method="get">'
-        f'<input type="hidden" name="a" value="{esc(rid)}">'
+        f'<input type="hidden" name="r" value="{esc(rid)}">'
         f'{picker}<button type="submit" class="btn-secondary">Compare</button></form>'
     )
 
@@ -702,7 +702,7 @@ def compare_menu(rid: str, suggestions: list[CompareCandidate], choices: list[Co
     if not picker:
         return ''
     items = ''.join(
-        f'<a class="cmp-menu-item" href="{esc(action)}?{esc(urlencode({"a": rid, "b": c.rid}))}">'
+        f'<a class="cmp-menu-item" href="{esc(action)}?{esc(urlencode([("r", rid), ("r", c.rid)]))}">'
         f'<span class="cmp-menu-name">{esc(c.name)}</span>'
         f'<span class="cmp-menu-meta">{c.when:%Y-%m-%d} · {esc(c.headline)}</span></a>'
         for c in suggestions

@@ -635,20 +635,6 @@ def cost_figure(
     )
 
 
-def known_cost_coverage(usages: Sequence[Usage | None]) -> tuple[Usage | None, int]:
-    """Sum per-item *usages* for a cost, and count the items that carried no cost.
-
-    The fallback for a report saved without a whole-run total: the runs list sums
-    the per-item costs it can read, so the report header shows that same sum and
-    names it a lower bound over the items that reported a cost. An item whose
-    usage is ``None`` or has no ``total_cost`` counts as missing.
-    """
-    from evaluatorq.common.structured_output import sum_structured_usage
-
-    missing = sum(1 for usage in usages if usage is None or usage.total_cost is None)
-    return sum_structured_usage(usages), missing
-
-
 def hero_cost_line(
     total: Usage | None,
     *,

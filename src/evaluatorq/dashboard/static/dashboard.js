@@ -332,17 +332,15 @@
 
   document.addEventListener('DOMContentLoaded', function () { initInsightsMaps(document); });
 
-  // Runs-list compare: exactly two ticked rows enable "Compare selected". Rows
-  // are newest first, so the first ticked run is A and the second is B.
-  document.body.addEventListener('change', function (evt) {
-    if (!evt.target.matches('input[form="cmp-pick"]')) return;
-    const boxes = Array.from(document.querySelectorAll('input[form="cmp-pick"]'));
-    const picked = boxes.filter(function (box) { return box.checked; });
-    const ready = picked.length === 2;
-    boxes.forEach(function (box) { box.name = ready && picked.indexOf(box) >= 0 ? (box === picked[0] ? 'a' : 'b') : ''; });
+  // Runs-list compare: the button works at exactly two ticks; the server orders the pair.
+  // Also on pageshow: a back-forward restore re-ticks the boxes without firing change.
+  function syncComparePicks() {
+    const ticked = document.querySelectorAll('input[form="cmp-pick"]:checked').length;
     const button = document.querySelector('#cmp-pick button');
-    if (button) button.disabled = !ready;
-  });
+    if (button) button.disabled = ticked !== 2;
+  }
+  document.body.addEventListener('change', function (evt) { if (evt.target.matches('input[form="cmp-pick"]')) syncComparePicks(); });
+  window.addEventListener('pageshow', syncComparePicks);
 
   // Report compare menu (<details>): close on a click outside it, and on Escape
   // with focus back on its button.
@@ -353,6 +351,7 @@
   document.addEventListener('keydown', function (evt) {
     if (evt.key !== 'Escape') return;
     document.querySelectorAll('details.cmp-menu[open]').forEach(function (menu) {
+      if (menu.querySelector('.finder-facets.open')) return;  // this Escape closes the run picker inside it
       menu.open = false;
       const summary = menu.querySelector('summary');
       if (summary) summary.focus();

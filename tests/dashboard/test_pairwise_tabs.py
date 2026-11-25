@@ -174,7 +174,7 @@ def test_extremely_small_nonzero_cost_does_not_display_as_zero() -> None:
 def test_run_name_and_labels_are_escaped() -> None:
     r = new_run(run_name='<script>alert(1)</script>', label_a='<script>a</script>', label_b='b', judges=JUDGES)
     r.add(_comparison(['A'] * 3, 'A'), question='q', response_a='a', response_b='b')
-    html = pairwise_report_tabs('rid', r, hero_actions_html='<a>go</a>')
+    html = pairwise_report_tabs('rid', r, compare_html='<a>go</a>')
     assert '<script>' not in html
     assert '&lt;script&gt;alert(1)&lt;/script&gt;' in html
     assert '<a>go</a></header>' in html
@@ -331,7 +331,7 @@ def test_filter_keeps_the_compare_control(run: PairwiseRun, tmp_path: Path) -> N
     run.save(runs_dir / 'two.json')
     c = TestClient(build_app(roots=[runs_dir]))
     html = c.post(f'/r/{rid}/filter', data={}).text
-    assert 'action="/compare/pairwise"' in html and '<details class="cmp-menu"' in html
+    assert 'action="/compare/pairwise/pick"' in html and '<details class="cmp-menu"' in html
 
 
 def test_report_page_has_the_comparisons_list(client: tuple[TestClient, str]) -> None:
@@ -354,7 +354,7 @@ def test_compare_control_needs_a_second_pairwise_run(run: PairwiseRun, tmp_path:
     runs_dir.mkdir()
     rid = report_id(run.save(runs_dir / 'one.json'))
     c = TestClient(build_app(roots=[runs_dir]))
-    assert 'action="/compare/pairwise"' not in c.get(f'/r/{rid}').text
+    assert 'action="/compare/pairwise/pick"' not in c.get(f'/r/{rid}').text
     run.save(runs_dir / 'two.json')
     c = TestClient(build_app(roots=[runs_dir]))
-    assert 'action="/compare/pairwise"' in c.get(f'/r/{rid}').text
+    assert 'action="/compare/pairwise/pick"' in c.get(f'/r/{rid}').text

@@ -177,7 +177,7 @@ def test_control_is_the_shared_rich_picker_with_date_and_headline() -> None:
     html = run_compare_control('r1', [_cand('r1', 'one'), _cand('r2', 'two'), _cand('r3', 'three')], '/compare/sim')
     assert 'action="/compare/sim"' in html
     assert '<select' not in html and 'class="model-pick rich-pick' in html
-    assert '<input type="hidden" name="b" value="r2">' in html  # first other run preselected
+    assert '<input type="hidden" name="r" value="r2">' in html  # first other run preselected
     assert '<strong>two</strong><span class="config-note">2026-11-18 · goal 74% · 40 conversations</span>' in html
     assert 'class="facet-search"' in html
 
@@ -260,7 +260,7 @@ def test_compare_menu_lists_suggestions_then_any_run() -> None:
     html = compare_menu('r1', [_cand('r2', 'agent v2'), _cand('r3', 'agent v1')], choices, '/compare/sim')
     assert '<details class="cmp-menu"' in html and '⇄ Compare' in html
     assert 'Earlier runs' in html and '2026-11-18 · goal 74% · 40 conversations' in html
-    first, second = html.index('/compare/sim?a=r1&amp;b=r2'), html.index('/compare/sim?a=r1&amp;b=r3')
+    first, second = html.index('/compare/sim?r=r1&amp;r=r2'), html.index('/compare/sim?r=r1&amp;r=r3')
     assert first < second < html.index('class="cmp-bar"')
 
 
@@ -292,5 +292,21 @@ def test_pairwise_runs_list_offers_compare_picks_only_with_two_runs(tmp_path: Pa
     assert 'cmp-pick' not in html
     second = report_id(_run('beta', [('q', 'B')]).save(d / 'b.json'))
     html = TestClient(build_app(roots=[d])).get('/?surface=pairwise').text
-    assert 'action="/compare/pairwise"' in html
-    assert f'form="cmp-pick" value="{first}"' in html and f'form="cmp-pick" value="{second}"' in html
+    assert 'action="/compare/pairwise/pick"' in html
+    assert f'form="cmp-pick" name="r" value="{first}"' in html and f'form="cmp-pick" name="r" value="{second}"' in html
+
+
+def test_pick_route_makes_the_older_run_a_whatever_the_order(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
+    d = tmp_path / 'runs'
+    d.mkdir()
+    old, new = _run('alpha', [('q', 'A')]), _run('beta', [('q', 'B')])
+    old.created_at = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    new.created_at = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    rid_old, rid_new = report_id(old.save(d / 'a.json')), report_id(new.save(d / 'b.json'))
+    client = TestClient(build_app(roots=[d]))
+    res = client.get(f'/compare/pairwise/pick?r={rid_new}&r={rid_old}', follow_redirects=False)
+    assert res.status_code == 303
+    assert res.headers['location'] == f'/compare/pairwise?a={rid_old}&b={rid_new}'
+    assert client.get(f'/compare/pairwise/pick?r={rid_old}').status_code == 400

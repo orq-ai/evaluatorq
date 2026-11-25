@@ -31,6 +31,9 @@ def cand(rid: str, name: str, day: int, target: str | None = None) -> CompareCan
         ('v2', ''),
         ('checkout agent 2', 'checkout agent'),
         ('agent-gpt4', 'agent-gpt4'),  # a number glued to the name is part of it, not a version
+        ('gpt-4', 'gpt-4'),  # after - or . a bare number names a model, not a run
+        ('gpt-3.5', 'gpt-3.5'),
+        ('claude-3', 'claude-3'),
     ],
 )
 def test_name_key(raw: str, key: str) -> None:
@@ -174,3 +177,18 @@ def test_pairwise_report_deleted_mid_scan_is_skipped(tmp_path: Path, monkeypatch
     monkeypatch.setattr(library, 'scan', scan_then_delete)
     library.read_json.cache_clear()
     assert [c.name for c in candidates('pairwise', [pw])] == ['r1']
+
+
+def test_compare_menu_suggests_past_the_picker_cap(tmp_path: Path, monkeypatch) -> None:
+    # The picker lists the newest MAX_CANDIDATES runs; suggestions still search every run.
+    from evaluatorq.dashboard import app, compare_suggest
+
+    monkeypatch.setattr(compare_suggest, 'MAX_CANDIDATES', 2)
+    sim = tmp_path / 'sim'
+    sim.mkdir()
+    for i, name in enumerate(['agent v1', 'agent v2', 'other', 'other 2']):
+        (sim / f'{i}.json').write_text(_sim(name, T0 + timedelta(days=i)))
+    v1, v2 = report_id(sim / '0.json'), report_id(sim / '1.json')
+    html = app._compare_menu(v2, 'sim', [sim])
+    assert 'Earlier runs' in html and f'r={v2}&amp;r={v1}"' in html
+    assert html.count(v1) == 1  # suggested, but past the picker's cap

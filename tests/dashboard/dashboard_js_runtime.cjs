@@ -1025,27 +1025,23 @@ test('an outerHTML swap of a trace block scrolls the replacement, not the detach
   assert.equal(thread.scrollTop, 400 - 100 / 2 + 40 / 2);
 });
 
-test('runs-list compare picks enable the button only for exactly two runs and name them a and b', () => {
-  const box = value => ({ value, checked: false, name: '', matches: sel => sel === 'input[form="cmp-pick"]', closest: () => null });
-  const boxes = [box('r3'), box('r2'), box('r1')];
+test('runs-list compare enables the button only at exactly two ticked runs', () => {
+  const box = () => ({ checked: false, matches: sel => sel === 'input[form="cmp-pick"]', closest: () => null });
+  const boxes = [box(), box(), box()];
   const button = { disabled: true };
   const app = loadDashboard({
     query: sel => (sel === '#cmp-pick button' ? button : null),
-    queryAll: sel => (sel === 'input[form="cmp-pick"]' ? boxes : []),
+    queryAll: sel => (sel === 'input[form="cmp-pick"]:checked' ? boxes.filter(b => b.checked) : []),
   });
   const pick = (i, on) => { boxes[i].checked = on; app.body.emit('change', { target: boxes[i] }); };
   pick(2, true);
   assert.equal(button.disabled, true);
   pick(0, true);
   assert.equal(button.disabled, false);
-  assert.deepEqual(boxes.map(b => b.name), ['a', '', 'b']);
   pick(1, true);
   assert.equal(button.disabled, true);
-  assert.deepEqual(boxes.map(b => b.name), ['', '', '']);
   pick(1, false);
-  pick(0, false);
-  assert.equal(button.disabled, true);
-  assert.deepEqual(boxes.map(b => b.name), ['', '', '']);
+  assert.equal(button.disabled, false);
 });
 
 test('report compare menu closes on Escape and on a click outside it', () => {
@@ -1062,4 +1058,24 @@ test('report compare menu closes on Escape and on a click outside it', () => {
   app.documentEvents.emit('keydown', { key: 'Escape', target: outside });
   assert.equal(menu.open, false);
   assert.equal(summary.focused, true);
+});
+
+test('Escape inside the compare menu closes its open run picker first, not the menu', () => {
+  const summary = { focus() { this.focused = true; } };
+  const picker = {};
+  const menu = { open: true, querySelector: sel => (sel === 'summary' ? summary : sel === '.finder-facets.open' ? picker : null) };
+  const app = loadDashboard({ queryAll: sel => (sel === 'details.cmp-menu[open]' ? [menu].filter(m => m.open) : []) });
+  app.documentEvents.emit('keydown', { key: 'Escape', target: { closest: () => null, matches: () => false } });
+  assert.equal(menu.open, true);
+  assert.equal(summary.focused, undefined);
+});
+
+test('runs-list compare re-syncs ticks a back-forward restore brought back', () => {
+  const button = { disabled: true };
+  const app = loadDashboard({
+    query: sel => (sel === '#cmp-pick button' ? button : null),
+    queryAll: sel => (sel === 'input[form="cmp-pick"]:checked' ? [{}, {}] : []),
+  });
+  app.windowEvents.emit('pageshow', {});
+  assert.equal(button.disabled, false);
 });

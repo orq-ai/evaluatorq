@@ -19,13 +19,13 @@ from evaluatorq.dashboard import library, metrics
 if TYPE_CHECKING:
     from datetime import datetime
 
-# Candidate list cap, the same as the "any other run" picker.
+# How many runs the "any other run" picker lists. Suggestions search every run.
 MAX_CANDIDATES = 100
 
 # One trailing version or date ending, with the separators before it. A bare
 # number counts only after a separator: `gpt4` is a model name, `agent 2` a version.
 _TAIL = re.compile(
-    r'[\s_.#-]*(?:v\d+|\(\d+\)|(?<=[\s_.#-])#?\d{1,3}|\d{4}-\d{2}-\d{2}(?:[t ]\d{2}:?\d{2}(?::?\d{2})?)?|\d{8}(?:-\d{6})?|[0-9a-f]{8})$'
+    r'[\s_.#-]*(?:v\d+|\(\d+\)|(?<=[\s_#])#?\d{1,3}|\d{4}-\d{2}-\d{2}(?:[t ]\d{2}:?\d{2}(?::?\d{2})?)?|\d{8}(?:-\d{6})?|[0-9a-f]{8})$'
 )
 # Side labels that name a role, not an agent: two runs sharing them tested nothing in common.
 _PLACEHOLDER_LABELS = frozenset({'a', 'b', 'baseline', 'candidate', 'control', 'treatment'})
@@ -75,7 +75,7 @@ def suggest(current: CompareCandidate, others: list[CompareCandidate], limit: in
 def candidates(surface: Literal['sim', 'pairwise'], roots: list[Path] | None) -> list[CompareCandidate]:
     """Comparable runs of *surface*, newest first, errored runs left out."""
     if surface == 'sim':
-        return [_sim_candidate(r) for r in metrics.sim_run_rows(roots) if not r.error][:MAX_CANDIDATES]
+        return [_sim_candidate(r) for r in metrics.sim_run_rows(roots) if not r.error]
     key = tuple(str(r.resolve()) for r in (roots or library.default_roots()))
     return list(_pairwise_candidates(key, library.fingerprint(roots)))
 
@@ -86,7 +86,8 @@ def _pairwise_candidates(roots_key: tuple[str, ...], fingerprint: tuple[int, int
     del fingerprint  # only part of the cache key
     cards = [c for c in library.scan([Path(r) for r in roots_key]) if c.surface == 'pairwise' and not c.error]
     found = []
-    for card in cards[:MAX_CANDIDATES]:
+    # ponytail: reads every pairwise report once per store change; carry the labels on ReportCard if that gets slow.
+    for card in cards:
         if card.path is None:
             continue
         try:

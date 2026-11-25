@@ -473,13 +473,12 @@ def test_overview_lets_you_pick_two_runs_to_compare(roots: list[Path]):
     """The runs list carries a checkbox per run outside each row link, plus a
     "Compare selected" button that starts disabled (the JS enables it at two)."""
     html = TestClient(build_app(roots)).get('/?surface=sim').text
-    assert '<form id="cmp-pick" class="cmp-pick" action="/compare/sim" method="get">' in html
+    assert '<form id="cmp-pick" class="cmp-pick" action="/compare/sim/pick" method="get">' in html
     assert 'disabled>Compare selected</button>' in html
     for rid in _rids(roots):
-        assert f'value="{rid}" aria-label="Select' in html
+        assert f'name="r" value="{rid}"' in html
         # the checkbox closes before the row link opens: never an input inside an <a>
         assert f'</label><a class="runs-grid-row" href="/r/{rid}"' in html
-    assert 'name="a"' not in html and 'name="b"' not in html
 
 
 def test_redteam_overview_has_no_compare_picks(roots: list[Path]):
@@ -487,12 +486,12 @@ def test_redteam_overview_has_no_compare_picks(roots: list[Path]):
 
 
 def test_compare_control_on_sim_report(roots: list[Path]):
-    """The run report hero carries a compare control: this run pinned as A
-    (hidden input), the other run selectable as B — never itself."""
+    """The run report hero carries a compare control: this run pinned (hidden
+    input), the other run selectable — never itself."""
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)
     html = client.get(f'/r/{rid_a}').text
-    assert f'name="a" value="{rid_a}"' in html
+    assert f'name="r" value="{rid_a}"' in html
     assert f'data-model="{rid_b}"' in html
     assert f'data-model="{rid_a}"' not in html
 
@@ -911,7 +910,7 @@ def test_sim_report_hero_has_compare_menu_with_earlier_run(versioned_roots: list
     v1, v2 = report_id(sim / 'v1.json'), report_id(sim / 'v2.json')
     html = TestClient(build_app(versioned_roots)).get(f'/r/{v2}').text
     assert '<details class="cmp-menu"' in html
-    assert f'/compare/sim?a={v2}&amp;b={v1}' in html
+    assert f'/compare/sim/pick?r={v2}&amp;r={v1}' in html
     start = html.index('<header class="report-hero">')
     hero = html[start : html.index('</header>', start)]
     assert 'cmp-menu' in hero

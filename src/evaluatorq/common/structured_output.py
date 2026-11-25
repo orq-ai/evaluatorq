@@ -149,13 +149,18 @@ def sum_structured_usage(usages: Sequence[TokenUsage | None]) -> TokenUsage | No
     return total
 
 
-def sum_usage_coverage(usages: Sequence[TokenUsage | None]) -> tuple[TokenUsage | None, int]:
+def sum_usage_coverage(
+    usages: Sequence[TokenUsage | None], *, require_cost: bool = False
+) -> tuple[TokenUsage | None, int]:
     """`sum_structured_usage` plus how many entries reported no usage at all.
 
     The count is what makes a summed figure honest: a total over 3 of 5 items is
-    a lower bound, and a caller that only has the sum cannot say so.
+    a lower bound, and a caller that only has the sum cannot say so. With
+    *require_cost*, an entry with usage but no ``total_cost`` counts as missing
+    too, for a caller that shows the sum as a cost.
     """
-    return sum_structured_usage(usages), sum(1 for u in usages if u is None)
+    missing = sum(1 for u in usages if u is None or (require_cost and u.total_cost is None))
+    return sum_structured_usage(usages), missing
 
 
 def log_structured_usage(usage: TokenUsage | None, *, phase: str) -> None:

@@ -34,6 +34,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlencode
 
 import httpx
 from fasthtml.core import FastHTML, NotStr
@@ -870,13 +871,13 @@ def _search(req: Request) -> NotStr:
 
 def _compare_menu(rid: str, surface: Literal['sim', 'pairwise'], roots: list[Path] | None) -> str:
     """The report hero's compare menu: earlier runs to suggest, then any other run of *surface*."""
-    from evaluatorq.dashboard.compare_suggest import candidates, suggest
+    from evaluatorq.dashboard.compare_suggest import MAX_CANDIDATES, candidates, suggest
     from evaluatorq.dashboard.view import compare_menu
 
     cands = candidates(surface, roots)
     current = next((c for c in cands if c.rid == rid), None)
     suggestions = suggest(current, cands) if current is not None else []
-    return compare_menu(rid, suggestions, cands, f'/compare/{surface}')
+    return compare_menu(rid, suggestions, cands[:MAX_CANDIDATES], f'/compare/{surface}/pick')
 
 
 def _report_view(rid: str, req: Request) -> NotStr | Response:
@@ -942,7 +943,7 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
         body_html = pairwise_tabs.pairwise_report_tabs(
             rid,
             report_obj,
-            hero_actions_html=_compare_menu(rid, 'pairwise', roots),
+            compare_html=_compare_menu(rid, 'pairwise', roots),
             focus=focus,
         )
     else:
@@ -1032,7 +1033,7 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
 
         menu = await asyncio.to_thread(_compare_menu, rid, 'pairwise', roots)
         body_html = await asyncio.to_thread(
-            pairwise_tabs.pairwise_report_tabs, rid, report_obj, filtered, hero_actions_html=menu
+            pairwise_tabs.pairwise_report_tabs, rid, report_obj, filtered, compare_html=menu
         )
     else:
         body_html = adapter.body_from_results(report_obj, filtered)
@@ -1324,6 +1325,22 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: GET /compare/sim*  — side-by-side sim run comparison
     # ------------------------------------------------------------------
     register_sim_compare_routes(app, roots)
+
+    @app.get('/compare/{surface}/pick')
+    def compare_pick(req: Request, surface: str) -> Response:
+        """Two picked runs, in any order: the older is A (baseline), the newer B."""
+        from evaluatorq.dashboard.sim_compare import error_page
+
+        if surface not in ('sim', 'pairwise'):
+            return Response('Not found', status_code=404)
+        rids = list(dict.fromkeys(req.query_params.getlist('r')))
+        if len(rids) != 2:
+            return error_page('Pick two different runs to compare.', 400, surface)
+        made = {c.id: c.created_at for c in library.scan(_roots(req)) if c.id in rids}
+        if len(made) == 2:
+            rids.sort(key=lambda rid: made[rid])
+        return RedirectResponse(f'/compare/{surface}?{urlencode({"a": rids[0], "b": rids[1]})}', status_code=303)
+
     register_pairwise_compare_routes(app, roots)
 
     # ------------------------------------------------------------------
