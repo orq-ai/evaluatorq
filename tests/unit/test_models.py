@@ -870,6 +870,7 @@ class TestDashboardPage:
         calls = self._as_admin(monkeypatch, admin=False)
         assert 'Only workspace admins' in client.post('/models/toggle', data=enable).text
         assert not calls
+        client.app.state.models_admin.clear()  # a "no" is remembered for a minute; this is a new sign-in
         calls = self._as_admin(monkeypatch, admin=True)
         assert 'Stale or missing form token' in client.post('/models/toggle', data={'model_id': 'f/off'}).text
         assert not calls
@@ -878,6 +879,36 @@ class TestDashboardPage:
         text = client.post('/models/toggle', data={'model_id': 'f/off', CSRF_FIELD: csrf_token()}).text
         assert 'aria-checked="false"' in text and 'models-toggle-note' not in text
         assert calls == [('f/off', True), ('f/off', False)]
+
+    def test_catalogue_and_admin_answer_are_reused_until_a_switch(
+        self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
+    ) -> None:
+        from evaluatorq.dashboard import models_views
+        from evaluatorq.dashboard.security import CSRF_FIELD, csrf_token
+
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+        self._as_admin(monkeypatch, admin=True)
+        loads: list[bool] = []
+        checks: list[object] = []
+
+        async def counting_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
+            del client
+            loads.append(include_disabled)
+            return fake_catalogue
+
+        async def counting_can(auth: object) -> bool:
+            checks.append(auth)
+            return True
+
+        monkeypatch.setattr(models_views, 'load_models', counting_load)
+        monkeypatch.setattr(models_views, 'can_manage_models', counting_can)
+        monkeypatch.setattr(models_views, '_auth_key', lambda auth: ('cli_oauth',))
+        for path in ('/models?disabled=1', '/models?disabled=1&x=latency', '/models?disabled=1'):
+            client.get(path)
+        assert loads == [True] and len(checks) == 1
+        client.post('/models/toggle', data={'model_id': 'f/off', 'enable': '1', CSRF_FIELD: csrf_token()})
+        client.get('/models?disabled=1')
+        assert loads == [True, True] and len(checks) == 1  # the switch drops the stale catalogue, not the admin answer
 
     def test_toggle_route_shows_why_orq_refused(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         from evaluatorq.dashboard import models_views

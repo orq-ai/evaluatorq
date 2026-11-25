@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from dataclasses import dataclass
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -734,9 +735,13 @@ async def _load(req: Request, *, include_disabled: bool) -> list[ScoredModel] | 
     auth, reason = auth_or_reason(lambda: selected_dashboard_auth(req.app))
     if auth is None:
         return _alert(reason or 'No Orq account is connected.', hint=_CONNECT_HINT)
+    key, cache = (_auth_key(auth), include_disabled), _store(req, 'models_catalogue')
+    hit = cache.get(key)
+    if hit is not None and hit[0] > time.monotonic():
+        return hit[1]
     try:
         async with model_choices.catalogue_client(auth) as client:
-            return await load_models(client, include_disabled=include_disabled)
+            models = await load_models(client, include_disabled=include_disabled)
     except MissingLLMCredentialsError as exc:
         logger.warning('No Orq credentials for /models: {}', exc)
         return _alert(str(exc), hint=_CONNECT_HINT)
@@ -746,6 +751,45 @@ async def _load(req: Request, *, include_disabled: bool) -> list[ScoredModel] | 
     except _UNEXPECTED_LOAD_ERRORS as exc:
         logger.exception('The /models page failed to load the catalogue')
         return _alert(f'The Pareto Frontier page failed with an unexpected {type(exc).__name__}.', hint=_LOG_HINT)
+    # A filter change only re-sorts the same catalogue, so it reuses this copy instead of refetching (about 0.6 s).
+    cache[key] = (time.monotonic() + _CATALOGUE_TTL_S, models)
+    return models
+
+
+# ponytail: per-process dicts on app.state, no eviction; a dashboard sees one or two sign-ins in its lifetime.
+_CATALOGUE_TTL_S = 60.0
+# A sign-in's admin rights rarely change, so a yes is kept until restart; a no may be a failed probe, so it expires.
+_ADMIN_NO_TTL_S = 60.0
+
+
+def _store(req: Request, name: str) -> dict[Any, tuple[float, Any]]:
+    """A cache on the app, so each app (and each test's app) starts empty."""
+    store = getattr(req.app.state, name, None)
+    if store is None:
+        store = {}
+        setattr(req.app.state, name, store)
+    return store
+
+
+def _auth_key(auth: DashboardAuth) -> tuple[object, ...]:
+    profile = getattr(auth, 'profile', None)
+    return (
+        auth.method,
+        getattr(auth, 'base_url', None),
+        getattr(auth, 'api_key', None),
+        getattr(profile, 'name', None),
+    )
+
+
+async def _may_manage(req: Request, auth: DashboardAuth) -> bool:
+    """`can_manage_models`, remembered per sign-in: for a CLI sign-in it costs two `orq` runs, about 1 s."""
+    cache, key = _store(req, 'models_admin'), _auth_key(auth)
+    hit = cache.get(key)
+    if hit is not None and hit[0] > time.monotonic():
+        return hit[1]
+    allowed = await can_manage_models(auth)
+    cache[key] = (math.inf if allowed else time.monotonic() + _ADMIN_NO_TTL_S, allowed)
+    return allowed
 
 
 def _intro(x_label: str) -> str:
@@ -956,7 +1000,7 @@ def _auth(req: Request) -> DashboardAuth | None:
 async def _is_admin(req: Request, *, wanted: bool) -> bool:
     """Whether the dashboard's sign-in may switch models on and off; skipped (False) when not `wanted`."""
     auth = _auth(req) if wanted else None
-    return auth is not None and await can_manage_models(auth)
+    return auth is not None and await _may_manage(req, auth)
 
 
 async def toggle_model(req: Request) -> HTMLResponse:
@@ -976,13 +1020,17 @@ async def toggle_model(req: Request) -> HTMLResponse:
     if rejected:
         return answer(rejected)
     auth = _auth(req)
-    if not model_id or auth is None or not await can_manage_models(auth):
+    if not model_id or auth is None or not await _may_manage(req, auth):
         return answer('Only workspace admins can switch models on or off.')
     try:
         await set_model_enabled(auth, model_id, enabled=enable)
     except WorkspaceModelError as exc:
         logger.warning('{} {} failed: {}', 'Enabling' if enable else 'Disabling', model_id, exc)
         return answer(f'Orq refused: {exc}')
+    # The stored catalogue still has the old state; drop this sign-in's copies so the next page shows the switch.
+    cache, signed_in = _store(req, 'models_catalogue'), _auth_key(auth)
+    for key in [k for k in cache if k[0] == signed_in]:
+        del cache[key]
     return answer(enabled=enable)
 
 
