@@ -4227,13 +4227,26 @@ _EXPERIMENT_REPORT_CSS = """
 .exp-report .exp-job{white-space:nowrap}
 .exp-report .rk-meta-value{overflow-wrap:anywhere}
 .exp-report .exp-clip summary::-webkit-details-marker{display:none}
-.exp-report .exp-full{white-space:pre-wrap;word-break:break-word;background:var(--surface-sunken);padding:8px;border-radius:6px;margin:6px 0 0;font-size:12px}
+.exp-report .exp-full{white-space:pre-wrap;word-break:break-word;background:var(--surface-sunken);padding:8px 10px;border-radius:6px;margin:6px 0 0;font:inherit;line-height:1.6}
 .exp-report .exp-error{color:var(--red-700)}
 .exp-report .exp-output-after-error{margin-top:4px;color:var(--text-muted)}
 .exp-report .exp-score{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .exp-report .exp-score-value{font-variant-numeric:tabular-nums;font-weight:600}
 .exp-report .exp-none,.exp-report .exp-empty{color:var(--text-faint)}
-.exp-report .exp-chart{margin-top:16px;overflow-x:auto}
+.exp-report details.exp-clip{margin:0}
+.exp-report .rk-panel-body > table:last-child,.exp-report .exp-table-wrap:last-child > table{margin-bottom:0}
+.exp-report .exp-clip summary{padding:0}
+.exp-report .exp-toggle{display:inline-block;margin-left:6px;font-size:12px;font-weight:500;color:var(--teal-600);text-decoration:underline;text-decoration-color:transparent;text-underline-offset:2px;transition:text-decoration-color .15s ease-out}
+.exp-report .exp-clip summary:hover .exp-toggle{text-decoration-color:currentColor}
+.exp-report .exp-clip summary:focus-visible{outline:2px solid var(--teal-600);outline-offset:2px;border-radius:2px}
+.exp-report .exp-clip .exp-toggle--less,.exp-report .exp-clip[open] .exp-toggle--more,.exp-report .exp-clip[open] .exp-preview{display:none}
+.exp-report .exp-clip[open] .exp-toggle--less{display:inline-block;margin-left:0}
+.exp-report .exp-clip[open] .exp-full{margin:0 0 6px}
+.exp-report .exp-pass{display:inline-flex;align-items:center;justify-content:flex-end;gap:10px;white-space:nowrap}
+.exp-report .exp-meter{width:96px;height:6px;border-radius:3px;background:var(--surface-sunken);overflow:hidden}
+.exp-report .exp-meter-fill{display:block;height:100%;background:var(--chart-1)}
+.exp-report .exp-pass-figure{min-width:84px;text-align:right;font-variant-numeric:tabular-nums}
+.exp-report .exp-pass-count{color:var(--text-muted)}
 """
 
 _PAIRWISE_COMPARE_CSS = """

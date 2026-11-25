@@ -154,7 +154,8 @@ def test_report_shows_scores_errors_and_a_clipped_output(client: TestClient) -> 
     assert 'capitals &lt;v2&gt;' in body
     for evaluator in ('exact', 'judge'):
         assert evaluator in body
-    assert '50% (1/2)' in body  # exact: pass rate over scores that set pass
+    assert '50% <span class="exp-pass-count">(1/2)</span>' in body  # exact: pass rate over scores that set pass
+    assert 'aria-label="50% passed, 1 of 2"' in body
     assert 'upstream model timed out' in body
     assert 'datapoint fetch failed' in body
     assert body.count('exp-row--error') == 2

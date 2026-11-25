@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from evaluatorq.common.output_adapters import output_to_text
 from evaluatorq.common.reports import esc, kpi_cards
 from evaluatorq.common.reports.html_helpers import humanize_duration, parse_http_url, pct
-from evaluatorq.dashboard.report_kit import bar_rows, meta_grid, panel, pill
+from evaluatorq.dashboard.report_kit import meta_grid, panel, pill
 from evaluatorq.experiment_run import combined_pass_rate, numeric_score
 
 if TYPE_CHECKING:
@@ -30,8 +30,9 @@ def _clip(text: str, limit: int = CELL_PREVIEW_CHARS) -> str:
     if len(text) <= limit:
         return f'<span class="exp-text">{esc(text)}</span>'
     return (
-        f'<details class="exp-clip"><summary>{esc(text[:limit].rstrip())}…</summary>'
-        f'<pre class="exp-full">{esc(text)}</pre></details>'
+        f'<details class="exp-clip"><summary><span class="exp-preview">{esc(text[:limit].rstrip())}…</span>'
+        '<span class="exp-toggle exp-toggle--more">Show all</span><span class="exp-toggle exp-toggle--less">Show less</span>'
+        f'</summary><pre class="exp-full">{esc(text)}</pre></details>'
     )
 
 
@@ -113,15 +114,30 @@ def _row_table(run: ExperimentRun, names: list[str]) -> str:
     return f'<div class="exp-table-wrap"><table class="exp-rows"><thead><tr>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
 
 
+def _pass_meter(stats: EvaluatorStats) -> str:
+    """The pass rate as a short bar beside its figure, so evaluators compare down the column."""
+    rate = stats.pass_rate or 0.0
+    return (
+        f'<span class="exp-pass" role="img" aria-label="{esc(pct(rate))} passed, {stats.passed} of {stats.pass_set}">'
+        f'<span class="exp-meter"><span class="exp-meter-fill" style="width:{rate * 100:.1f}%"></span></span>'
+        f'<span class="exp-pass-figure">{esc(pct(rate))} <span class="exp-pass-count">({stats.passed}/{stats.pass_set})</span></span>'
+        '</span>'
+    )
+
+
+def _duration(run: ExperimentRun) -> str:
+    return 'under 1s' if run.duration_seconds < 1 else humanize_duration(run.duration_seconds)
+
+
 def _evaluator_table(stats: list[EvaluatorStats]) -> str:
     if not stats:
         return '<p class="exp-empty">No evaluators ran in this run.</p>'
     rows = []
     for s in stats:
         average = '—' if s.average is None else _number(s.average)
-        pass_rate = '—' if s.pass_rate is None else f'{pct(s.pass_rate)} ({s.passed}/{s.pass_set})'
+        pass_rate = '—' if s.pass_rate is None else _pass_meter(s)
         rows.append(
-            f'<tr><td>{esc(s.name)}</td><td>{esc(average)}</td><td>{esc(pass_rate)}</td>'
+            f'<tr><td>{esc(s.name)}</td><td>{esc(average)}</td><td>{pass_rate}</td>'
             f'<td>{s.scored}</td><td>{s.non_numeric}</td><td>{s.errors}</td></tr>'
         )
     head = ''.join(
@@ -132,7 +148,7 @@ def _evaluator_table(stats: list[EvaluatorStats]) -> str:
 
 def _hero(run: ExperimentRun) -> str:
     when = run.started_at.strftime('%Y-%m-%d %H:%M %Z')
-    duration = 'under 1s' if run.duration_seconds < 1 else humanize_duration(run.duration_seconds)
+    duration = _duration(run)
     description = f' · {esc(run.description)}' if run.description else ''
     link = ''
     if (url := parse_http_url(run.experiment_url)) is not None:
@@ -161,7 +177,7 @@ def experiment_report_body(run: ExperimentRun) -> str:
             'label': 'Errored rows',
             'value': str(errored),
             'status': 'warn' if errored else 'neutral',
-            'sub': 'a job or datapoint that raised',
+            'sub': 'job or datapoint raised',
         },
         {
             'label': 'Pass rate',
@@ -175,11 +191,9 @@ def experiment_report_body(run: ExperimentRun) -> str:
             'sub': f'${cost:.4f}' if cost is not None else 'no cost reported',
         },
     ])
-    pass_bars = [(s.name, s.pass_rate * 100) for s in stats if s.pass_rate is not None]
-    chart = bar_rows(pass_bars, width=520, label_w=180, fmt=lambda v: f'{v:.0f}%', max_value=100.0) if pass_bars else ''
     evaluators = panel(
         'Evaluators',
-        _evaluator_table(stats) + (f'<div class="exp-chart">{chart}</div>' if chart else ''),
+        _evaluator_table(stats),
         sub='Average over numeric scores; pass rate over scores that set pass. Errored scores count in neither.',
     )
     rows = panel(
@@ -194,7 +208,7 @@ def experiment_report_body(run: ExperimentRun) -> str:
             ('Dataset id', run.dataset_id),
             ('Started', run.started_at.strftime('%Y-%m-%d %H:%M:%S %Z')),
             ('Ended', run.ended_at.strftime('%Y-%m-%d %H:%M:%S %Z')),
-            ('Duration', f'{run.duration_seconds:.1f}s'),
+            ('Duration', _duration(run)),
             ('evaluatorq version', run.evaluatorq_version),
         ]),
     )
