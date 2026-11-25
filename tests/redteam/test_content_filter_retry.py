@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import anthropic
 import httpx
+import openai
 import pytest
 from openai import APIStatusError
 
@@ -14,6 +15,7 @@ from evaluatorq.common.content_filter import (
     is_content_filter_error,
     regenerate_on_content_filter,
 )
+from evaluatorq.redteam.exceptions import StrategyGenerationError
 from tests.common.llm_error_factories import anthropic_status
 
 
@@ -71,6 +73,10 @@ class TestClassifiers:
         )
         assert is_content_filter_error(exc) is True
 
+    def test_is_content_filter_error_on_parse_finish_reason_error(self):
+        # `.parse()` raises this for a 200 reply with finish_reason='content_filter'; it has no code.
+        assert is_content_filter_error(openai.ContentFilterFinishReasonError()) is True
+
     def test_is_content_filter_error_false_for_other(self):
         assert is_content_filter_error(_cf_error('rate_limit')) is False
         assert is_content_filter_error(ValueError('nope')) is False
@@ -126,6 +132,21 @@ class TestRegenerateOnContentFilter:
         assert call.call_count == 2
 
     @pytest.mark.asyncio
+    async def test_retries_on_parse_finish_reason_error_then_succeeds(self):
+        usable = _resp('stop')
+        call = AsyncMock(side_effect=[openai.ContentFilterFinishReasonError(), usable])
+        result = await regenerate_on_content_filter(call, max_attempts=3)
+        assert result is usable
+        assert call.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_parse_finish_reason_error_on_last_attempt_propagates(self):
+        call = AsyncMock(side_effect=openai.ContentFilterFinishReasonError())
+        with pytest.raises(openai.ContentFilterFinishReasonError):
+            await regenerate_on_content_filter(call, max_attempts=3)
+        assert call.call_count == 3
+
+    @pytest.mark.asyncio
     async def test_non_filter_error_propagates_without_retry(self):
         call = AsyncMock(side_effect=_cf_error('rate_limit'))
         with pytest.raises(APIStatusError):
@@ -175,21 +196,29 @@ class TestObjectiveGenerationRetry:
         assert client.chat.completions.parse.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_exhausted_200_filter_degrades_to_empty(self):
-        client = self._client([_resp('content_filter'), _resp('content_filter'), _resp('content_filter')])
-        result = await self._call(client, retries=2)
-        assert result == []
-        assert client.chat.completions.parse.call_count == 3
-
-    @pytest.mark.asyncio
-    async def test_error_form_filter_degrades_to_empty(self):
+    async def test_error_form_filter_raises_naming_the_model(self):
         client = self._client(_cf_error())
-        result = await self._call(client, retries=1)
-        assert result == []
+        with pytest.raises(StrategyGenerationError, match="'openai/gpt-4o-mini'"):
+            await self._call(client, retries=1)
         assert client.chat.completions.parse.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_non_filter_status_error_propagates(self):
+    async def test_parse_finish_reason_error_is_retried_then_raises_naming_the_model(self):
+        # The shape from the field: `.parse()` raises instead of returning the filtered reply.
+        client = self._client(openai.ContentFilterFinishReasonError())
+        with pytest.raises(StrategyGenerationError, match=r"content filter of attacker model 'openai/gpt-4o-mini'"):
+            await self._call(client, retries=2)
+        assert client.chat.completions.parse.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_parse_finish_reason_error_then_success_returns_objectives(self):
+        parsed = SimpleNamespace(objectives=[SimpleNamespace(), SimpleNamespace()])
+        client = self._client([openai.ContentFilterFinishReasonError(), _resp('stop', parsed=parsed)])
+        assert len(await self._call(client)) == 2
+        assert client.chat.completions.parse.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_non_filter_status_error_is_not_retried_and_propagates(self):
         client = self._client(_cf_error('rate_limit'))
         with pytest.raises(APIStatusError):
             await self._call(client)

@@ -108,7 +108,13 @@ from evaluatorq.redteam.custom import (
     register_strategy,
     register_vulnerability,
 )
-from evaluatorq.redteam.exceptions import BackendError, CancelledError, CredentialError, RedTeamError
+from evaluatorq.redteam.exceptions import (
+    BackendError,
+    CancelledError,
+    CredentialError,
+    RedTeamError,
+    StrategyGenerationError,
+)
 from evaluatorq.redteam.hooks import (
     ConfirmPayload,
     DefaultHooks,
@@ -205,6 +211,7 @@ __all__ = [
     'Severity',
     'SeveritySummary',
     'StaticDataset',
+    'StrategyGenerationError',
     'TargetConfig',
     'TechniqueSummary',
     'TokenUsage',

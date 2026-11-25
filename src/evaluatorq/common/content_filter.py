@@ -9,6 +9,10 @@ a model's natural-language self-refusal. Two shapes exist, both normalized to th
 2. HTTP error with structured ``code='content_filter'`` — verified empirically: Azure
    via the Orq router raises ``openai.BadRequestError`` (HTTP 400) this way.
 
+A structured-output call (``.parse()``) turns shape 1 into a raised
+``openai.ContentFilterFinishReasonError`` before the caller sees the response, so that
+class counts as a content-filter block too.
+
 A model that self-censors in prose is deliberately NOT detected: at the protocol level
 it is indistinguishable from a real response (``finish_reason='stop'``, no ``refusal``
 field — verified for Anthropic and Gemini via the Orq router), so it is left for the
@@ -21,7 +25,7 @@ from typing import TYPE_CHECKING, Literal, TypeVar
 
 from loguru import logger
 
-from evaluatorq.common.llm_errors import CONNECTION_ERRORS, STATUS_ERRORS, error_body
+from evaluatorq.common.llm_errors import CONNECTION_ERRORS, CONTENT_FILTER_FINISH_ERRORS, STATUS_ERRORS, error_body
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -41,7 +45,11 @@ def is_content_filter_error(exc: BaseException) -> bool:
     present in the JSON error body of either SDK), NOT on message prose, so it recognises
     any block the router normalizes to that code. The body is read through
     `llm_errors.error_body`, because Anthropic keeps the code one level deeper than OpenAI.
+    The ``ContentFilterFinishReasonError`` that ``.parse()`` raises for a 200-form block
+    carries no code, so it is recognised by its class.
     """
+    if isinstance(exc, CONTENT_FILTER_FINISH_ERRORS):
+        return True
     if getattr(exc, 'code', None) == 'content_filter':
         return True
     body = error_body(exc)
@@ -58,7 +66,8 @@ async def regenerate_on_content_filter(
 
     ``call(attempt)`` makes one chat-completion request (and owns its own span / token
     accounting — the attempt index is passed so it can tag retries). A block is detected
-    in either shape: a 200 response whose ``finish_reason='content_filter'``, or a raised
+    in either shape: a 200 response whose ``finish_reason='content_filter'`` (or the
+    ``ContentFilterFinishReasonError`` that ``.parse()`` raises for one), or a raised
     error carrying ``code='content_filter'``. Each is retried up to ``max_attempts`` total.
 
     Returns the first usable response. When every attempt is content-filtered, returns the
@@ -70,9 +79,11 @@ async def regenerate_on_content_filter(
     for attempt in range(attempts):
         try:
             response = await call(attempt)
-        except CONNECTION_ERRORS + STATUS_ERRORS as e:
+        except CONNECTION_ERRORS + STATUS_ERRORS + CONTENT_FILTER_FINISH_ERRORS as e:
             if is_content_filter_error(e) and attempt < attempts - 1:
-                logger.warning(f'{label} content-filtered (error form); regenerating ({attempt + 1}/{attempts - 1})')
+                logger.warning(
+                    f'{label} content-filtered ({type(e).__name__}); regenerating ({attempt + 1}/{attempts - 1})'
+                )
                 continue
             raise
         choices = getattr(response, 'choices', None) or []

@@ -19,3 +19,12 @@ class DatasetError(RedTeamError):
 
 class CancelledError(RedTeamError):
     """Pipeline run was cancelled by the user via hooks."""
+
+
+class StrategyGenerationError(RedTeamError):
+    """The attacker model produced no attack strategies for a vulnerability.
+
+    Raised by objective generation when the attacker model's content filter blocks every
+    attempt, and by the strategy planner when failed generation leaves no vulnerability with
+    a strategy to run. The message names the attacker model, since that is the setting to change.
+    """
