@@ -13,7 +13,9 @@ store), otherwise ``.evaluatorq`` relative to the current working directory.
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from pathlib import Path
 
 from evaluatorq.common.env_config import env_raw
@@ -35,6 +37,21 @@ def sanitise_run_name(name: str, *, default: str) -> str:
     sanitised = re.sub(r'_+', '_', sanitised)
     sanitised = sanitised.strip('_')
     return sanitised[:64] or default
+
+
+def probe_writable_dir(folder: Path) -> None:
+    """Create *folder* if missing and prove it is writable by creating and removing a file in it.
+
+    A real write, not ``os.access``: permission bits miss read-only mounts, ACLs and full disks.
+    Call it before a run spends anything, so a store that cannot be written fails up front.
+
+    Raises:
+        OSError: The folder could not be created or written to.
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    descriptor, probe = tempfile.mkstemp(prefix='.evaluatorq-write-check-', suffix='.tmp', dir=folder)
+    os.close(descriptor)
+    Path(probe).unlink()
 
 
 def write_unique_json(runs_dir: Path, *, base: str, payload: str) -> Path:

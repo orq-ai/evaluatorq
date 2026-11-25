@@ -603,7 +603,7 @@ from evaluatorq.contracts import (  # noqa: F401
     OutputMessage,
     ReasoningOutputItem,
     ResponseTrace,
-    SaveMode,  # shared with evaluatorq() since experiment runs save too
+    SaveMode,
     StrategyToolCall,
     TextOutputItem,
     ToolCallOutputItem,

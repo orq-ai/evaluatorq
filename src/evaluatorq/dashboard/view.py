@@ -399,14 +399,18 @@ def landing_body(data: Landing) -> str:
         if data.cost_by_kind
         else '<p class="rt-panel-loading">No cost recorded.</p>'
     )
-    spend_panel = _panel('Spend by job type', 'Real cost across runs', spend_inner)
+    # An experiment's tokens and spend are its evaluators' calls only; say so wherever its bar shows.
+    judge_only = ' · experiments: evaluator calls only'
+    spend_sub = 'Real cost across runs' + (judge_only if any(k == 'Experiments' for k, _ in data.cost_by_kind) else '')
+    spend_panel = _panel('Spend by job type', spend_sub, spend_inner)
 
     tok_inner = (
         _bars(data.tokens_by_kind, _kind_colors(data.tokens_by_kind), fmt='{:,}')
         if data.tokens_by_kind
         else '<p class="rt-panel-loading">No token usage recorded.</p>'
     )
-    tokens_panel = _panel('Token usage', 'By job type', tok_inner)
+    tokens_sub = 'By job type' + (judge_only if any(k == 'Experiments' for k, _ in data.tokens_by_kind) else '')
+    tokens_panel = _panel('Token usage', tokens_sub, tok_inner)
 
     # 2x2 grid of the four remaining panels.
     grid = (

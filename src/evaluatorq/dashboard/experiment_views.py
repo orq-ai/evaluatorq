@@ -15,7 +15,7 @@ from evaluatorq.common.output_adapters import output_to_text
 from evaluatorq.common.reports import esc, kpi_cards
 from evaluatorq.common.reports.html_helpers import humanize_duration, parse_http_url, pct
 from evaluatorq.dashboard.report_kit import bar_rows, meta_grid, panel, pill
-from evaluatorq.experiment_run import numeric_score
+from evaluatorq.experiment_run import combined_pass_rate, numeric_score
 
 if TYPE_CHECKING:
     from evaluatorq.experiment_run import EvaluatorStats, ExperimentRun
@@ -44,6 +44,11 @@ def _inputs_text(result: DataPointResult) -> str:
     return json.dumps(inputs, ensure_ascii=False, default=str)
 
 
+def _number(value: float) -> str:
+    """Three significant digits below 1000, else the whole number: ``.3g`` alone shows 12345 as ``1.23e+04``."""
+    return f'{value:.3g}' if abs(value) < 1000 else f'{value:,.0f}'
+
+
 def _score_cell(score: EvaluatorScore | None) -> str:
     if score is None:
         return '<span class="exp-none">—</span>'
@@ -55,7 +60,7 @@ def _score_cell(score: EvaluatorScore | None) -> str:
     if isinstance(value, bool):
         shown = 'true' if value else 'false'
     elif number is not None:
-        shown = f'{number:.3g}'
+        shown = _number(number)
     elif isinstance(value, str):
         shown = value if len(value) <= 40 else f'{value[:40].rstrip()}…'
     else:
@@ -113,7 +118,7 @@ def _evaluator_table(stats: list[EvaluatorStats]) -> str:
         return '<p class="exp-empty">No evaluators ran in this run.</p>'
     rows = []
     for s in stats:
-        average = '—' if s.average is None else f'{s.average:.3g}'
+        average = '—' if s.average is None else _number(s.average)
         pass_rate = '—' if s.pass_rate is None else f'{pct(s.pass_rate)} ({s.passed}/{s.pass_set})'
         rows.append(
             f'<tr><td>{esc(s.name)}</td><td>{esc(average)}</td><td>{esc(pass_rate)}</td>'
@@ -147,7 +152,7 @@ def experiment_report_body(run: ExperimentRun) -> str:
     names = [s.name for s in stats]
     counts = run.row_counts()
     errored = counts.errored
-    pass_rate = run.pass_rate()
+    pass_rate = combined_pass_rate(stats)
     tokens, cost = run.judge_usage()
     kpis = kpi_cards([
         {'label': 'Datapoints', 'value': str(len(run.results))},

@@ -1,0 +1,82 @@
+{
+  "experiment_run_version": 1,
+  "run_id": "00000000000000000000000000000000",
+  "run_name": "capitals",
+  "description": "tiny QA",
+  "dataset_id": null,
+  "started_at": "2026-11-20T10:00:00Z",
+  "ended_at": "2026-11-20T10:00:02Z",
+  "duration_seconds": 2.0,
+  "created_at": "2026-11-20T10:00:02Z",
+  "evaluatorq_version": "0.0.0",
+  "evaluator_names": [
+    "mentions-paris"
+  ],
+  "experiment_url": null,
+  "results": [
+    {
+      "data_point": {
+        "inputs": {
+          "question": "capital of France?"
+        },
+        "expected_output": null
+      },
+      "error": null,
+      "job_results": [
+        {
+          "job_name": "answer",
+          "output": "Paris",
+          "error": null,
+          "evaluator_scores": [
+            {
+              "evaluator_name": "mentions-paris",
+              "score": {
+                "value": 1,
+                "explanation": "mentions Paris",
+                "pass_": true,
+                "token_usage": {
+                  "input_tokens": 100,
+                  "output_tokens": 20,
+                  "total_tokens": 120,
+                  "cached_tokens": 0,
+                  "cache_creation_tokens": 0,
+                  "cache_creation_1h_tokens": 0,
+                  "cache_creation_5m_tokens": 0,
+                  "audio_input_tokens": 0,
+                  "reasoning_tokens": 0,
+                  "input_cost": null,
+                  "output_cost": null,
+                  "total_cost": 0.001,
+                  "calls": 0,
+                  "priced_calls": 0,
+                  "prompt_tokens": 100,
+                  "completion_tokens": 20,
+                  "cost_usd": 0.001
+                },
+                "raw_output": null
+              },
+              "error": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "data_point": {
+        "inputs": {
+          "question": "boom"
+        },
+        "expected_output": null
+      },
+      "error": null,
+      "job_results": [
+        {
+          "job_name": "answer",
+          "output": null,
+          "error": "target exploded",
+          "evaluator_scores": []
+        }
+      ]
+    }
+  ]
+}

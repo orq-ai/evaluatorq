@@ -7,6 +7,7 @@ import asyncio
 import importlib
 import json
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -18,8 +19,6 @@ from evaluatorq.job_helper import job
 from evaluatorq.send_results import OrqResponse
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.types import DataPointResult, ScorerParameter
 
@@ -386,3 +385,81 @@ def test_a_run_that_raises_closes_its_manifest(exc: BaseException, expected: str
     with pytest.raises(type(exc)), _finish_manifest_on_error(cast('ManifestWriter', writer)):
         raise exc
     assert writer.calls == [expected]
+
+
+GOLDEN_V1 = Path(__file__).parent / 'fixtures' / 'experiment_run_v1.json'
+
+
+def test_a_checked_in_version_1_file_still_loads() -> None:
+    """A run saved by an earlier release must keep loading; a format change that breaks it fails here."""
+    saved = load_experiment_run(GOLDEN_V1)
+
+    assert saved.experiment_run_version == 1
+    assert saved.run_name == 'capitals'
+    assert saved.row_counts().errored == 1
+    assert saved.pass_rate() == 1.0
+    assert saved.judge_usage() == (120, pytest.approx(0.001))
+    assert [s.name for s in saved.evaluator_stats()] == ['mentions-paris']
+
+
+def test_a_file_from_a_newer_format_version_is_refused(tmp_path: Path) -> None:
+    import pydantic
+
+    data = json.loads(GOLDEN_V1.read_text())
+    data['experiment_run_version'] = 2
+    newer = tmp_path / 'newer.json'
+    _ = newer.write_text(json.dumps(data))
+
+    with pytest.raises(pydantic.ValidationError, match='experiment_run_version'):
+        _ = load_experiment_run(newer)
+
+
+def test_the_manifest_summary_matches_the_run_statistics() -> None:
+    saved = load_experiment_run(GOLDEN_V1)
+
+    summary = saved.manifest_summary()
+
+    assert summary['pass_rate'] == saved.pass_rate()
+    assert summary['errored_rows'] == saved.row_counts().errored
+    assert summary['judge_tokens'] == saved.judge_usage()[0]
+    assert summary['scorer_averages'] == {'mentions-paris': 1.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error', [TypeError('not serializable'), ValueError('bad field')])
+async def test_a_run_that_cannot_be_built_or_serialized_still_returns_its_results(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: Exception
+) -> None:
+    module = importlib.import_module('evaluatorq.evaluatorq')
+
+    def refuse(*_args: object, **_kwargs: object) -> Path:
+        raise error
+
+    monkeypatch.setattr(module, 'save_experiment_run', refuse)
+
+    results = await run(save=SaveMode.FINAL, output_dir=tmp_path)
+
+    assert len(results) == 2
+    [manifest] = _manifests(tmp_path)
+    assert manifest['status'] == 'error'
+
+
+@pytest.mark.asyncio
+async def test_a_failed_url_rewrite_keeps_the_saved_run_and_warns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    module = importlib.import_module('evaluatorq.evaluatorq')
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise OSError('read-only now')
+
+    monkeypatch.setattr(module, 'write_private_atomic', refuse)
+    _fake_upload(monkeypatch, url='https://my.orq.ai/experiments/exp-1')
+    messages: list[str] = []
+    sink = logger.add(lambda m: messages.append(m.record['message']), level='WARNING')
+    try:
+        _ = await run(save=SaveMode.FINAL, output_dir=tmp_path, upload=True)
+    finally:
+        logger.remove(sink)
+
+    [saved] = tmp_path.glob('capitals_*.json')
+    assert load_experiment_run(saved).experiment_url is None
+    assert any('Could not add the Orq experiment URL' in m and 'read-only now' in m for m in messages)

@@ -1,9 +1,7 @@
 import asyncio
 import contextlib
 import inspect
-import os
 import stat
-import tempfile
 import uuid
 from collections.abc import Awaitable, Callable, Generator, Sequence
 from contextlib import AsyncExitStack
@@ -21,6 +19,7 @@ from .common.messages import coerce_content_text
 from .common.output_adapters import has_meaningful_output
 from .common.parallelism import resolve_datapoint_parallelism
 from .common.private_files import write_private_atomic
+from .common.run_store_dir import probe_writable_dir
 from .common.save_mode import resolve_save_mode
 from .common.trace_input import load_traces
 from .contracts import ManifestSurface, SaveMode
@@ -809,10 +808,7 @@ async def _run_in_memory_evaluation(
 
 
 def _require_writable_dir(runs_dir: Path) -> None:
-    """Create *runs_dir* and its manifest folder if missing and prove both are writable.
-
-    A real write, not ``os.access``: permission bits miss read-only mounts, ACLs and full disks.
-    The manifest folder is probed too, because ``start_manifest`` only logs a failed write.
+    """Prove *runs_dir* and its manifest folder are writable; ``start_manifest`` only logs a failed write.
 
     Raises:
         ValueError: A folder could not be created or written to.
@@ -822,10 +818,7 @@ def _require_writable_dir(runs_dir: Path) -> None:
     folder = runs_dir
     try:
         for folder in (runs_dir, runs_dir / MANIFESTS_DIR_NAME):
-            folder.mkdir(parents=True, exist_ok=True)
-            descriptor, probe = tempfile.mkstemp(prefix='.evaluatorq-write-check-', suffix='.tmp', dir=folder)
-            os.close(descriptor)
-            Path(probe).unlink()
+            probe_writable_dir(folder)
     except OSError as exc:
         raise ValueError(
             f'Cannot save the experiment run: the folder {folder} is not writable ({exc}). '
@@ -912,26 +905,29 @@ class _ExperimentSave:
     ) -> None:
         """Write the finished run and complete its manifest.
 
-        A write failure is logged at ERROR and marks the manifest errored. It does not raise,
-        because the run has already been paid for: its results are still returned and uploaded.
+        A failure to build or write the run file is logged at ERROR and marks the manifest errored.
+        It does not raise, because the run has already been paid for: its results are still
+        returned and uploaded.
         """
         from . import __version__
 
-        run = ExperimentRun(
-            run_id=self._writer.manifest.run_id,
-            run_name=name,
-            description=description,
-            dataset_id=dataset_id,
-            started_at=started_at,
-            ended_at=ended_at,
-            duration_seconds=(ended_at - started_at).total_seconds(),
-            evaluatorq_version=__version__,
-            evaluator_names=evaluator_names,
-            results=results,
-        )
         try:
+            run = ExperimentRun(
+                run_id=self._writer.manifest.run_id,
+                run_name=name,
+                description=description,
+                dataset_id=dataset_id,
+                started_at=started_at,
+                ended_at=ended_at,
+                # Wall-clock stamps: a clock step back during the run must not fail the save.
+                duration_seconds=max(0.0, (ended_at - started_at).total_seconds()),
+                evaluatorq_version=__version__,
+                evaluator_names=evaluator_names,
+                results=results,
+            )
             path = save_experiment_run(run, output_dir=self._runs_dir)
-        except (OSError, RuntimeError) as exc:
+            summary = run.manifest_summary()
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(
                 'Could not save experiment run {!r} to {}: {}. The run itself is unaffected: its results '
                 'are still returned and uploaded, but are not on disk.',
@@ -942,7 +938,7 @@ class _ExperimentSave:
             self._writer.fail(f'save failed: {type(exc).__name__}: {exc}')
             return
         logger.info('Saved experiment run to {}', path)
-        self._writer.complete(report_path=path.resolve(), summary=run.manifest_summary())
+        self._writer.complete(report_path=path.resolve(), summary=summary)
         self._saved = (run, path)
 
     def record_experiment_url(self, url: str | None) -> None:
@@ -957,9 +953,7 @@ class _ExperimentSave:
         run, path = self._saved
         run = run.model_copy(update={'experiment_url': url})
         try:
-            mode = stat.S_IMODE(path.stat().st_mode)
-            write_private_atomic(path, run.to_json(), private_directory=False)
-            path.chmod(mode)
+            write_private_atomic(path, run.to_json(), private_directory=False, mode=stat.S_IMODE(path.stat().st_mode))
         except OSError as exc:
             logger.warning('Could not add the Orq experiment URL to the saved run {}: {}', path, exc)
             return

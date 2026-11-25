@@ -129,6 +129,11 @@ def test_landing_counts_evaluator_tokens_and_cost(runs_dir: Path) -> None:
     assert landing.total_cost == pytest.approx(0.004)
 
 
+def test_landing_says_experiment_spend_is_evaluator_calls_only(client: TestClient) -> None:
+    page = client.get('/').text
+    assert page.count('experiments: evaluator calls only') == 2  # spend panel and token panel
+
+
 def test_an_unreadable_run_left_out_of_the_landing_totals_is_logged(runs_dir: Path) -> None:
     [saved] = runs_dir.glob('*.json')
     saved.write_text('{"experiment_run_version": 1, "results": "not a list"}')
@@ -235,3 +240,10 @@ def test_run_list_and_report_agree_when_every_row_errored(tmp_path: Path) -> Non
     assert row.status == 'error'
     assert row.score is None
     assert _kpi(experiment_report_body(run), 'Errored rows') == str(counts.rows)
+
+
+@pytest.mark.parametrize(('value', 'shown'), [(0.8333, '0.833'), (4.0, '4'), (12345.0, '12,345'), (-2500.4, '-2,500')])
+def test_scores_of_any_magnitude_show_without_scientific_notation(value: float, shown: str) -> None:
+    from evaluatorq.dashboard.experiment_views import _number
+
+    assert _number(value) == shown

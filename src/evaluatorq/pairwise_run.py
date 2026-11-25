@@ -149,8 +149,6 @@ class PairwiseRun(BaseModel):
             return target
 
         base = f'{self.created_at.strftime("%Y%m%d_%H%M%S")}_{_slug(self.run_name)}'
-        # Exclusive-create, matching the sim run store: two runs of the same name
-        # in the same second would otherwise silently overwrite each other.
         return write_unique_json(get_pairwise_runs_dir(), base=base, payload=payload)
 
     @classmethod

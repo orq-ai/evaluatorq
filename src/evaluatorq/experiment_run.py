@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,6 +25,7 @@ from evaluatorq.types import DataPointResult  # noqa: TC001 — runtime-required
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import RunSummary, Usage
+    from evaluatorq.types import EvaluatorScore
 
 EXPERIMENT_RUNS_SUBDIR = 'experiment-runs'
 EXPERIMENT_RUN_VERSION = 1
@@ -88,6 +89,12 @@ class RowCounts:
         return self.rows > 0 and self.errored == self.rows
 
 
+def combined_pass_rate(stats: list[EvaluatorStats]) -> float | None:
+    """Share of the scores that set ``pass`` which passed, across *stats*; ``None`` when none set it."""
+    pass_set = sum(s.pass_set for s in stats)
+    return sum(s.passed for s in stats) / pass_set if pass_set else None
+
+
 def numeric_score(value: object) -> float | None:
     """The value as a number for averaging, or ``None`` when it is not one.
 
@@ -101,6 +108,41 @@ def numeric_score(value: object) -> float | None:
     return None
 
 
+@dataclass
+class _Tally:
+    """Running counts for one evaluator while `ExperimentRun.evaluator_stats` walks the results."""
+
+    values: list[float] = field(default_factory=list)
+    pass_set: int = 0
+    passed: int = 0
+    non_numeric: int = 0
+    errors: int = 0
+
+    def add(self, score: EvaluatorScore) -> None:
+        if score.error is not None:
+            self.errors += 1
+            return
+        number = numeric_score(score.score.value)
+        if number is None:
+            self.non_numeric += 1
+        else:
+            self.values.append(number)
+        if score.score.pass_ is not None:
+            self.pass_set += 1
+            self.passed += int(score.score.pass_)
+
+    def stats(self, name: str) -> EvaluatorStats:
+        return EvaluatorStats(
+            name=name,
+            scored=len(self.values),
+            average=math.fsum(self.values) / len(self.values) if self.values else None,
+            pass_set=self.pass_set,
+            passed=self.passed,
+            non_numeric=self.non_numeric,
+            errors=self.errors,
+        )
+
+
 class ExperimentRun(BaseModel):
     """A saved ``evaluatorq()`` run: its metadata and every datapoint result.
 
@@ -110,7 +152,12 @@ class ExperimentRun(BaseModel):
     run statistics cover the evaluators' calls only.
     """
 
-    experiment_run_version: int = EXPERIMENT_RUN_VERSION
+    experiment_run_version: int = Field(
+        default=EXPERIMENT_RUN_VERSION,
+        ge=1,
+        le=EXPERIMENT_RUN_VERSION,
+        description='Format version; a file written by a newer evaluatorq fails to load instead of misreading',
+    )
     run_id: str = Field(description='Unique id of this run; also the id of its run manifest')
     run_name: str = Field(description='The name passed to evaluatorq()')
     description: str | None = None
@@ -128,49 +175,16 @@ class ExperimentRun(BaseModel):
 
     def evaluator_stats(self) -> list[EvaluatorStats]:
         """Per-evaluator score counts, average and pass rate, in configured then first-seen order."""
-        order = list(self.evaluator_names)
-        scores: dict[str, list[float]] = {}
-        counts: dict[str, dict[str, int]] = {}
+        tallies = {name: _Tally() for name in self.evaluator_names}
         for result in self.results:
             for job in result.job_results or []:
                 for score in job.evaluator_scores or []:
-                    name = score.evaluator_name
-                    if name not in order:
-                        order.append(name)
-                    c = counts.setdefault(name, {'pass_set': 0, 'passed': 0, 'non_numeric': 0, 'errors': 0})
-                    if score.error is not None:
-                        c['errors'] += 1
-                        continue
-                    number = numeric_score(score.score.value)
-                    if number is None:
-                        c['non_numeric'] += 1
-                    else:
-                        scores.setdefault(name, []).append(number)
-                    if score.score.pass_ is not None:
-                        c['pass_set'] += 1
-                        c['passed'] += int(score.score.pass_)
-        stats: list[EvaluatorStats] = []
-        for name in order:
-            values = scores.get(name, [])
-            c = counts.get(name, {'pass_set': 0, 'passed': 0, 'non_numeric': 0, 'errors': 0})
-            stats.append(
-                EvaluatorStats(
-                    name=name,
-                    scored=len(values),
-                    average=math.fsum(values) / len(values) if values else None,
-                    pass_set=c['pass_set'],
-                    passed=c['passed'],
-                    non_numeric=c['non_numeric'],
-                    errors=c['errors'],
-                )
-            )
-        return stats
+                    tallies.setdefault(score.evaluator_name, _Tally()).add(score)
+        return [tally.stats(name) for name, tally in tallies.items()]
 
     def pass_rate(self) -> float | None:
         """Share of all scores that set ``pass`` which passed, across evaluators; ``None`` when none set it."""
-        stats = self.evaluator_stats()
-        pass_set = sum(s.pass_set for s in stats)
-        return sum(s.passed for s in stats) / pass_set if pass_set else None
+        return combined_pass_rate(self.evaluator_stats())
 
     def row_counts(self) -> RowCounts:
         """Rows, job results and errored rows, by the rule `RowCounts` describes."""
@@ -203,12 +217,12 @@ class ExperimentRun(BaseModel):
         return sum(u.total_tokens for u in usages), (math.fsum(costs) if costs else None)
 
     def manifest_summary(self) -> RunSummary:
-        """Compact headline stats for the run manifest, so a run list never reads the full file."""
-        averages = {s.name: s.average for s in self.evaluator_stats() if s.average is not None}
+        """Compact headline stats for the run manifest, which a run-list card reads without opening the run file."""
+        stats = self.evaluator_stats()
         return {
             RUN_SUMMARY_TOTAL_KEY: len(self.results),
-            'scorer_averages': averages,
-            'pass_rate': self.pass_rate(),
+            'scorer_averages': {s.name: s.average for s in stats if s.average is not None},
+            'pass_rate': combined_pass_rate(stats),
             'errored_rows': self.row_counts().errored,
             'judge_tokens': self.judge_usage()[0],
         }
