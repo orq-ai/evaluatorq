@@ -4250,7 +4250,7 @@ _MODELS_CSS = """
 /* Anchored under its button where supported; elsewhere the popover keeps the browser's centred default. */
 @supports (position-area: bottom) { .models-pop { inset: auto; margin: 6px 0 0; position-area: bottom span-right; position-try-fallbacks: flip-block, flip-inline; } }
 .models-cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-.models-card { --c: var(--orange-500); position: relative; overflow: hidden; background: linear-gradient(180deg, color-mix(in srgb, var(--c) 9%, var(--surface-card)) 0%, var(--surface-card) 70%); }
+.models-card { --c: var(--orange-500); position: relative; overflow: hidden; background: var(--surface-card); }
 .models-card.is-value { --c: var(--teal-600); }
 .models-card.is-balanced { --c: var(--amber-600); }
 .models-card.is-cheapest { --c: var(--green-600); }
@@ -4265,13 +4265,17 @@ _MODELS_CSS = """
 .models-card .stat-sub { margin-top: 2px; }
 .models-group th { padding: 14px 10px 6px; font-size: 12px; font-weight: 600; color: var(--text-strong); background: none; text-align: left; border-bottom: 1px solid var(--border-subtle); text-transform: none; letter-spacing: 0; }
 .models-row.is-excluded td { color: var(--text-faint); }
-.models-toggle { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; }
-.models-toggle form { display: inline; margin: 0; }
-.models-toggle-btn { font: inherit; font-size: 11px; padding: 1px 8px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--surface-card); color: var(--text-strong); cursor: pointer; }
-.models-toggle-btn:hover { border-color: var(--border-strong); }
-.models-toggle-note { font-size: 11px; }
-.models-toggle-note.is-ok { color: var(--green-600); }
-.models-toggle-note.is-err { color: var(--red-700); }
+.models-cell { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.models-cell-main { min-width: 0; }
+.models-toggle { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; padding-top: 2px; }
+.models-toggle form { margin: 0; }
+.models-switch { position: relative; display: block; width: 28px; height: 16px; padding: 0; border: 0; border-radius: 8px; background: var(--border-strong); cursor: pointer; transition: background .15s; }
+.models-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface-card); box-shadow: 0 1px 2px rgb(0 0 0 / .2); transition: left .15s; }
+.models-switch[aria-checked="true"] { background: var(--teal-600); }
+.models-switch[aria-checked="true"]::after { left: 14px; }
+.models-switch:focus-visible { outline: 2px solid var(--teal-600); outline-offset: 2px; }
+.htmx-request .models-switch { opacity: .5; cursor: progress; }
+.models-toggle-note { max-width: 22ch; font-size: 11px; line-height: 1.3; text-align: right; color: var(--red-700); }
 .models-alert { padding: 12px 14px; border: 1px solid var(--red-100); border-radius: 8px; background: var(--red-50); color: var(--red-700); font-size: 13px; }
 .models-alert p { margin: 0 0 4px; }
 /* One toolbar line built from the shared filter controls; More filters opens a panel under its trigger. */
@@ -4289,7 +4293,11 @@ _MODELS_CSS = """
 .models-filters .model-pick-btn strong, .models-filters .filter-dd-value, .models-filters .filter-dd-value.is-engaged { font-weight: 400; }
 .models-filters .filter-dd-more .filter-dd-trigger { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
 .models-filters > .filter-chip { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
-.models-filters > .filter-chip.is-active { border-color: var(--teal-600); color: var(--text-strong); }
+/* The tick follows the checkbox itself, so it shows on the click rather than when the swapped page arrives. */
+.models-filters > .filter-chip:has(:checked) .filter-chip-dot { display: none; }
+.models-filters > .filter-chip:has(:checked) .filter-chip-check { display: inline-block; color: var(--green-600); }
+.models-filters > .filter-chip:not(:has(:checked)) .filter-chip-dot { display: inline-block; }
+.models-filters > .filter-chip:not(:has(:checked)) .filter-chip-check { display: none; }
 .models-filters .filter-dd-more-body { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: 300px; margin: 0; padding: 12px; gap: 12px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); }
 .models-filters .filter-dd-more-body .models-field { justify-content: space-between; }
 /* The shared slider label is a mono caps heading on the report rails; here it matches the other toolbar labels. */

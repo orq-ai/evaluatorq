@@ -849,8 +849,8 @@ class TestDashboardPage:
         self._as_admin(monkeypatch, admin=True)
         off = model('f/off', 45.0, 1.5, 6.0, enabled=False, catalogue_id='uuid-off')
         text = self._models_text(client, monkeypatch, [*fake_catalogue, off], '/models?disabled=1')
-        assert text.count('>Enable</button>') == 1
-        assert '>Disable</button>' in text
+        assert text.count('aria-checked="false"') == 1 and 'aria-checked="true"' in text
+        assert '>disabled<' not in text  # the switch shows the state; no tag beside it
         assert 'name="model_id" value="uuid-off"' in text
 
     def test_buttons_need_admin_and_the_disabled_toggle(
@@ -859,9 +859,9 @@ class TestDashboardPage:
         self._as_admin(monkeypatch, admin=False)
         off = model('f/off', 45.0, 1.5, 6.0, enabled=False, catalogue_id='uuid-off')
         text = self._models_text(client, monkeypatch, [*fake_catalogue, off], '/models?disabled=1')
-        assert '>disabled<' in text and 'models-toggle-btn' not in text
+        assert '>disabled<' in text and 'models-switch' not in text
         self._as_admin(monkeypatch, admin=True)
-        assert 'models-toggle-btn' not in self._models_text(client, monkeypatch, fake_catalogue, '/models')
+        assert 'models-switch' not in self._models_text(client, monkeypatch, fake_catalogue, '/models')
 
     def test_toggle_route_switches_for_admins_only(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         from evaluatorq.dashboard.security import CSRF_FIELD, csrf_token
@@ -874,9 +874,9 @@ class TestDashboardPage:
         assert 'Stale or missing form token' in client.post('/models/toggle', data={'model_id': 'f/off'}).text
         assert not calls
         text = client.post('/models/toggle', data=enable).text
-        assert 'is-ok">Enabled<' in text and '>Disable</button>' in text
+        assert 'aria-checked="true"' in text and 'models-toggle-note' not in text
         text = client.post('/models/toggle', data={'model_id': 'f/off', CSRF_FIELD: csrf_token()}).text
-        assert 'is-ok">Disabled<' in text and '>Enable</button>' in text
+        assert 'aria-checked="false"' in text and 'models-toggle-note' not in text
         assert calls == [('f/off', True), ('f/off', False)]
 
     def test_toggle_route_shows_why_orq_refused(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -891,7 +891,7 @@ class TestDashboardPage:
 
         monkeypatch.setattr(models_views, 'set_model_enabled', refuse)
         text = client.post('/models/toggle', data={'model_id': 'x/y', 'enable': '1', CSRF_FIELD: csrf_token()}).text
-        assert 'is-err' in text and 'Model not found' in text and '>Enable</button>' in text
+        assert 'models-toggle-note' in text and 'Model not found' in text and 'aria-checked="false"' in text
 
     def test_cards_name_the_best_score_and_the_best_score_per_dollar(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]

@@ -225,11 +225,11 @@ def _filters_html(q: dict[str, str], st: _State) -> str:
             '?mix=READ:WRITE:FRESH:OUTPUT to the address for your own ratio.',
         )
         + dropdown('lab', 'Lab', st.vendors, st.labs, searchable=True)
-        + more
-        # On the toolbar, not in More filters: it is also how an admin reaches the Enable and Disable buttons.
+        # On the toolbar, not in More filters: it is also how an admin reaches the on/off switches.
         + chip(
             'disabled', '1', checked=bool(q.get('disabled')), dot_cls='chip-dot-jade', label='Include disabled models'
         )
+        + more
         + '<noscript><button type="submit">Apply</button></noscript></form>'
     )
 
@@ -575,19 +575,20 @@ def _row(
     admin: bool = False,
 ) -> str:
     m = p.model
-    host = m.router_id.split('/', 1)[0]
-    via = tag(f'via {host}', small=True, title='Listed by a host, not its lab') if host != model_vendor(m) else ''
-    est = tag('est', small=True, title='Estimated from an older benchmark version') if m.is_estimated else ''
-    if admin and m.enabled is not None and m.catalogue_id:
-        off = _toggle(m.catalogue_id, enabled=m.enabled)
-    else:
-        off = _DISABLED_TAG if m.enabled is False else ''
+    # An admin gets one switch at the cell's right edge that both shows and changes the state; anyone else a tag.
+    switch = _toggle(m.catalogue_id, enabled=m.enabled) if admin and m.enabled is not None and m.catalogue_id else ''
+    off = _DISABLED_TAG if m.enabled is False and not switch else ''
     cells = [
         (
-            f'<td><span class="models-name">{esc(_name(m))}{via}{off}</span>'
-            f'<span class="models-id" title="{esc(m.router_id)}">{esc(m.router_id)}</span></td>'
+            f'<td><div class="models-cell"><div class="models-cell-main">'
+            f'<span class="models-name">{esc(_name(m))}{off}</span>'
+            f'<span class="models-id" title="{esc(m.router_id)}">{esc(m.router_id)}</span></div>{switch}</div></td>'
         ),
-        f'<td class="num">{p.score:.1f}{est}</td>',
+        (
+            f'<td class="num" title="Estimated from an older benchmark version">~{p.score:.1f}</td>'
+            if m.is_estimated
+            else f'<td class="num">{p.score:.1f}</td>'
+        ),
         _beaten_by_cell(p, result, by_id, steps),
         f'<td class="num">{_AXIS_TEXT[result.x].fmt(p.x)}</td>',
     ]
@@ -608,16 +609,19 @@ def _row(
 _DISABLED_TAG = tag('disabled', small=True, title='Not enabled in this workspace')
 
 
-def _toggle(model_id: str, *, enabled: bool, note: str = '', ok: bool = True) -> str:
-    """The Enable or Disable button for a model, with the last click's outcome beside it; it swaps itself."""
-    action = 'Disable' if enabled else 'Enable'
-    status = f'<span class="models-toggle-note {"is-ok" if ok else "is-err"}">{esc(note)}</span>' if note else ''
+def _toggle(model_id: str, *, enabled: bool, note: str = '') -> str:
+    """An on/off switch for one model in the workspace, with Orq's refusal under it; it swaps itself on a click."""
+    state = (
+        'Enabled in this workspace. Click to disable.' if enabled else 'Disabled in this workspace. Click to enable.'
+    )
+    error = f'<span class="models-toggle-note">{esc(note)}</span>' if note else ''
     return (
-        f'<span class="models-toggle">{"" if enabled else _DISABLED_TAG}{status}<form hx-post="{TOGGLE_ROUTE}" hx-target="closest .models-toggle" '
+        f'<span class="models-toggle"><form hx-post="{TOGGLE_ROUTE}" hx-target="closest .models-toggle" '
         'hx-swap="outerHTML" hx-select=".models-toggle" hx-push-url="false">'
         f'<input type="hidden" name="model_id" value="{esc(model_id)}">'
         f'<input type="hidden" name="enable" value="{"" if enabled else "1"}">{csrf_field()}'
-        f'<button type="submit" class="models-toggle-btn">{action}</button></form></span>'
+        f'<button type="submit" class="models-switch" role="switch" aria-checked="{str(enabled).lower()}" '
+        f'title="{state}" aria-label="{state}"></button></form>{error}</span>'
     )
 
 
@@ -965,21 +969,21 @@ async def toggle_model(req: Request) -> HTMLResponse:
     enable = bool(form.get('enable'))
     current = not enable
 
-    def answer(note: str, *, ok: bool, enabled: bool = current) -> HTMLResponse:
-        return HTMLResponse(_toggle(model_id, enabled=enabled, note=note, ok=ok))
+    def answer(note: str = '', *, enabled: bool = current) -> HTMLResponse:
+        return HTMLResponse(_toggle(model_id, enabled=enabled, note=note))
 
     rejected = request_rejected(req, form)
     if rejected:
-        return answer(rejected, ok=False)
+        return answer(rejected)
     auth = _auth(req)
     if not model_id or auth is None or not await can_manage_models(auth):
-        return answer('Only workspace admins can switch models on or off.', ok=False)
+        return answer('Only workspace admins can switch models on or off.')
     try:
         await set_model_enabled(auth, model_id, enabled=enable)
     except WorkspaceModelError as exc:
         logger.warning('{} {} failed: {}', 'Enabling' if enable else 'Disabling', model_id, exc)
-        return answer(f'Orq refused: {exc}', ok=False)
-    return answer('Enabled' if enable else 'Disabled', ok=True, enabled=enable)
+        return answer(f'Orq refused: {exc}')
+    return answer(enabled=enable)
 
 
 def register_models_routes(app: Any) -> None:
