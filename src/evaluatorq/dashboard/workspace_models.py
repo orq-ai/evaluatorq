@@ -32,7 +32,7 @@ async def can_manage_models(auth: DashboardAuth) -> bool:
         return False
     # Orq checks the permission before the body, so an empty enable is a probe that changes nothing:
     # 403 means the key may not manage models, 400 (invalid body) means it may. Orq has no read-only way to ask: the
-    # profile endpoint `orq whoami` reads answers only a browser sign-in (RES-1973).
+    # profile endpoint `orq whoami` reads answers only a browser sign-in (ENG-3656).
     from orq_ai_sdk.models import OrqError
 
     try:
