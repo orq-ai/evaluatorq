@@ -4241,6 +4241,8 @@ _MODELS_CSS = """
 .models-intro, .models-summary { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
 .models-summary { display: flex; flex-wrap: wrap; align-items: baseline; color: var(--text-muted); font-size: 12px; }
 .models-summary > span + span::before { content: '·'; margin: 0 8px; color: var(--text-faint); }
+.models-reset { margin-left: auto; color: var(--text-muted); }
+.models-reset:hover { color: var(--text-body); }
 .models-caption { margin: -6px 0 0; color: var(--text-muted); font-size: 12px; }
 .models-pop-btn { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
 .models-pop-btn:hover { color: var(--text-strong); }
@@ -4250,7 +4252,7 @@ _MODELS_CSS = """
 /* Anchored under its button where supported; elsewhere the popover keeps the browser's centred default. */
 @supports (position-area: bottom) { .models-pop { inset: auto; margin: 6px 0 0; position-area: bottom span-right; position-try-fallbacks: flip-block, flip-inline; } }
 .models-cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-.models-card { --c: var(--orange-500); position: relative; overflow: hidden; background: var(--surface-card); }
+.models-card { --c: var(--orange-500); position: relative; overflow: hidden; background: linear-gradient(180deg, color-mix(in srgb, var(--c) 9%, var(--surface-card)) 0%, var(--surface-card) 70%); }
 .models-card.is-value { --c: var(--teal-600); }
 .models-card.is-balanced { --c: var(--amber-600); }
 .models-card.is-cheapest { --c: var(--green-600); }
@@ -4291,8 +4293,7 @@ _MODELS_CSS = """
 .models-filters .filter-dd-menu { left: 0; right: auto; }
 .models-filters .filter-dd-trigger { padding: 5px 9px; }
 .models-filters .model-pick-btn strong, .models-filters .filter-dd-value, .models-filters .filter-dd-value.is-engaged { font-weight: 400; }
-.models-filters .filter-dd-more .filter-dd-trigger { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
-.models-filters > .filter-chip { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
+.models-filters .filter-dd-more .filter-dd-trigger, .models-filters > .filter-chip { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
 /* The tick follows the checkbox itself, so it shows on the click rather than when the swapped page arrives. */
 .models-filters > .filter-chip:has(:checked) .filter-chip-dot { display: none; }
 .models-filters > .filter-chip:has(:checked) .filter-chip-check { display: inline-block; color: var(--green-600); }

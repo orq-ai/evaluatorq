@@ -10,16 +10,18 @@ chart names, for each dominated model, the nearest frontier model that beats it.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import math
+import re
 import time
 from dataclasses import dataclass
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, quote, unquote, urlencode
 
 import httpx
 from loguru import logger
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
@@ -620,7 +622,7 @@ def _toggle(model_id: str, *, enabled: bool, note: str = '') -> str:
         f'<span class="models-toggle"><form hx-post="{TOGGLE_ROUTE}" hx-target="closest .models-toggle" '
         'hx-swap="outerHTML" hx-select=".models-toggle" hx-push-url="false">'
         f'<input type="hidden" name="model_id" value="{esc(model_id)}">'
-        f'<input type="hidden" name="enable" value="{"" if enabled else "1"}">{csrf_field()}'
+        f'<input type="hidden" name="action" value="{"disable" if enabled else "enable"}">{csrf_field()}'
         f'<button type="submit" class="models-switch" role="switch" aria-checked="{str(enabled).lower()}" '
         f'title="{state}" aria-label="{state}"></button></form>{error}</span>'
     )
@@ -722,7 +724,9 @@ def _excluded(result: ParetoResult, min_score: float) -> str:
     return _popover('excluded', f'{len(result.excluded)} not plotted', body)
 
 
-async def _load(req: Request, *, include_disabled: bool) -> list[ScoredModel] | str:
+async def _load(
+    req: Request, auth: DashboardAuth | None, reason: str | None, *, include_disabled: bool
+) -> list[ScoredModel] | str:
     """The catalogue models, or the alert HTML the page shows instead.
 
     Each failure kind gets its own next step: missing credentials point at
@@ -730,15 +734,13 @@ async def _load(req: Request, *, include_disabled: bool) -> list[ScoredModel] | 
     else is logged with its traceback and named on the page instead of
     surfacing as a 500.
     """
-    from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
-
-    auth, reason = auth_or_reason(lambda: selected_dashboard_auth(req.app))
     if auth is None:
         return _alert(reason or 'No Orq account is connected.', hint=_CONNECT_HINT)
     key, cache = (_auth_key(auth), include_disabled), _store(req, 'models_catalogue')
     hit = cache.get(key)
     if hit is not None and hit[0] > time.monotonic():
         return hit[1]
+    switches = _switches(req).get(key[0], 0)
     try:
         async with model_choices.catalogue_client(auth) as client:
             models = await load_models(client, include_disabled=include_disabled)
@@ -752,7 +754,9 @@ async def _load(req: Request, *, include_disabled: bool) -> list[ScoredModel] | 
         logger.exception('The /models page failed to load the catalogue')
         return _alert(f'The Pareto Frontier page failed with an unexpected {type(exc).__name__}.', hint=_LOG_HINT)
     # A filter change only re-sorts the same catalogue, so it reuses this copy instead of refetching (about 0.6 s).
-    cache[key] = (time.monotonic() + _CATALOGUE_TTL_S, models)
+    # A switch made during the fetch makes this copy stale, so it is not kept.
+    if _switches(req).get(key[0], 0) == switches:
+        cache[key] = (time.monotonic() + _CATALOGUE_TTL_S, models)
     return models
 
 
@@ -762,7 +766,7 @@ _CATALOGUE_TTL_S = 60.0
 _ADMIN_NO_TTL_S = 60.0
 
 
-def _store(req: Request, name: str) -> dict[Any, tuple[float, Any]]:
+def _store(req: Request, name: str) -> dict[Any, Any]:
     """A cache on the app, so each app (and each test's app) starts empty."""
     store = getattr(req.app.state, name, None)
     if store is None:
@@ -771,14 +775,14 @@ def _store(req: Request, name: str) -> dict[Any, tuple[float, Any]]:
     return store
 
 
+def _switches(req: Request) -> dict[tuple[object, ...], int]:
+    """How many switches each sign-in has made, so a catalogue fetched across one is not kept."""
+    return _store(req, 'models_switches')
+
+
 def _auth_key(auth: DashboardAuth) -> tuple[object, ...]:
-    profile = getattr(auth, 'profile', None)
-    return (
-        auth.method,
-        getattr(auth, 'base_url', None),
-        getattr(auth, 'api_key', None),
-        getattr(profile, 'name', None),
-    )
+    secret = hashlib.sha256(auth.api_key.encode()).hexdigest() if auth.api_key else None
+    return (auth.method, auth.base_url, secret, auth.profile.name if auth.profile else None)
 
 
 async def _may_manage(req: Request, auth: DashboardAuth) -> bool:
@@ -823,28 +827,14 @@ def _price_caption(mix: PriceMix) -> str:
     )
 
 
-# The filters live in the address, so remembering them is remembering the query string: every filter change pushes
-# one, and a visit with none (the sidebar link, a reload of /models) goes back to the last one this browser used.
-# ponytail: browser-local, per device; a server-side setting if filters should follow a person across machines.
-_REMEMBER_FILTERS_JS = (
-    "(function(){var K='eq-models-query';"
-    f"function save(){{try{{if(location.pathname==='{ROUTE}'&&location.search)localStorage.setItem(K,location.search);}}catch(e){{}}}}"
-    'try{var q=localStorage.getItem(K);if(!location.search&&q){location.replace(location.pathname+q);return;}}catch(e){}'
-    "save();document.addEventListener('htmx:pushedIntoHistory',save);})();"
-)
-
-
 def _shell(inner: str) -> HTMLResponse:
     """The page around `inner`: boost swaps `.models-page` inside the stable #models-root on a filter change.
 
-    An outerHTML swap would detach the node dashboard.js scans for charts, and the server still fetches the
-    catalogue per request; cache `load_models()` if that round trip is the slow part.
+    An outerHTML swap would detach the node dashboard.js scans for charts.
     """
     body = (
         '<div id="models-root" hx-boost="true" hx-target="#models-root" hx-select=".models-page" '
         f'hx-swap="innerHTML" hx-push-url="true"><div class="models-page">{inner}</div></div>'
-        # Outside #models-root, so it runs once per full load rather than on every swap.
-        f'<script>{_REMEMBER_FILTERS_JS}</script>'
     )
     return HTMLResponse(page('Pareto Frontier', body, active_nav='models'))
 
@@ -952,18 +942,43 @@ def _summary(result: ParetoResult, state: _State) -> str:
         f'{fallbacks} priced with a cache rate their host does not list' if fallbacks else '',
         f'Unknown x axis "{esc(state.unknown_x)}", showing price' if state.unknown_x else '',
     ]
-    return '<div class="models-summary">' + ''.join(f'<span>{c}</span>' for c in chips if c) + '</div>'
+    reset = f'<a class="models-reset" href="{ROUTE}?reset=1" hx-boost="false">Reset filters</a>'
+    return '<div class="models-summary">' + ''.join(f'<span>{c}</span>' for c in chips if c) + reset + '</div>'
 
 
-async def models_page(req: Request) -> HTMLResponse:
-    """Render the Pareto view over the live catalogue."""
+# The filters live in the address, so remembering them is remembering the query string. A cookie rather than
+# browser storage, so a visit with none (the sidebar link) is redirected before the catalogue is loaded.
+_FILTERS_COOKIE = 'eq_models_query'
+
+
+async def models_page(req: Request) -> Response:
+    """Render the Pareto view, or send a visit without filters to the ones this browser used last."""
+    if 'reset' in req.query_params:
+        response = RedirectResponse(ROUTE, status_code=303)
+        response.delete_cookie(_FILTERS_COOKIE, path=ROUTE)
+        return response
+    if not req.url.query:
+        saved = urlencode(parse_qsl(unquote(req.cookies.get(_FILTERS_COOKIE, '')), keep_blank_values=True))
+        if saved:
+            return RedirectResponse(f'{ROUTE}?{saved}', status_code=303)
+        return await _render(req)
+    response = await _render(req)
+    query = urlencode(parse_qsl(req.url.query, keep_blank_values=True))
+    response.set_cookie(_FILTERS_COOKIE, quote(query), max_age=365 * 86400, path=ROUTE, httponly=True, samesite='lax')
+    return response
+
+
+async def _render(req: Request) -> HTMLResponse:
     q = _query(req)
     x = _choice(q.get('x'), X_AXES, 'price')
     mix = _mix(q.get('mix'))
-    # Enable and Disable buttons show only with disabled models listed, so the admin check (one or two Orq calls)
+    # The on/off switches show only with disabled models listed, so the admin check (one or two Orq calls)
     # does not slow down the everyday view.
     disabled = bool(q.get('disabled'))
-    models, admin = await asyncio.gather(_load(req, include_disabled=disabled), _is_admin(req, wanted=disabled))
+    auth, reason = _auth(req)
+    models, admin = await asyncio.gather(
+        _load(req, auth, reason, include_disabled=disabled), _is_admin(req, auth if disabled else None)
+    )
     if isinstance(models, str):
         return _shell(f'{_intro(X_AXIS_SPECS[x].short_label)}{models}')
     indices = available_indices(models)
@@ -1006,16 +1021,20 @@ async def models_page(req: Request) -> HTMLResponse:
     )
 
 
-def _auth(req: Request) -> DashboardAuth | None:
+def _auth(req: Request) -> tuple[DashboardAuth | None, str | None]:
+    """The dashboard's sign-in, or why there is none."""
     from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
 
-    return auth_or_reason(lambda: selected_dashboard_auth(req.app))[0]
+    return auth_or_reason(lambda: selected_dashboard_auth(req.app))
 
 
-async def _is_admin(req: Request, *, wanted: bool) -> bool:
-    """Whether the dashboard's sign-in may switch models on and off; skipped (False) when not `wanted`."""
-    auth = _auth(req) if wanted else None
+async def _is_admin(req: Request, auth: DashboardAuth | None) -> bool:
+    """Whether `auth` may switch models on and off; False without one."""
     return auth is not None and await _may_manage(req, auth)
+
+
+# The id goes on the orq command line, so it must not start like an option.
+_MODEL_ID = re.compile(r'\w[\w./:-]*')
 
 
 async def toggle_model(req: Request) -> HTMLResponse:
@@ -1025,7 +1044,8 @@ async def toggle_model(req: Request) -> HTMLResponse:
     """
     form = await req.form()
     model_id = str(form.get('model_id') or '').strip()
-    enable = bool(form.get('enable'))
+    action = form.get('action')
+    enable = action == 'enable'
     current = not enable
 
     def answer(note: str = '', *, enabled: bool = current) -> HTMLResponse:
@@ -1034,8 +1054,10 @@ async def toggle_model(req: Request) -> HTMLResponse:
     rejected = request_rejected(req, form)
     if rejected:
         return answer(rejected)
-    auth = _auth(req)
-    if not model_id or auth is None or not await _may_manage(req, auth):
+    if not _MODEL_ID.fullmatch(model_id) or action not in ('enable', 'disable'):
+        return answer('Unknown model or action.')
+    auth = _auth(req)[0]
+    if auth is None or not await _may_manage(req, auth):
         return answer('Only workspace admins can switch models on or off.')
     try:
         await set_model_enabled(auth, model_id, enabled=enable)
@@ -1046,6 +1068,8 @@ async def toggle_model(req: Request) -> HTMLResponse:
     cache, signed_in = _store(req, 'models_catalogue'), _auth_key(auth)
     for key in [k for k in cache if k[0] == signed_in]:
         del cache[key]
+    switches = _switches(req)
+    switches[signed_in] = switches.get(signed_in, 0) + 1
     return answer(enabled=enable)
 
 

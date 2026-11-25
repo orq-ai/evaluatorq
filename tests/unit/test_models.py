@@ -824,9 +824,8 @@ class TestDashboardPage:
 
     def _as_admin(self, monkeypatch: pytest.MonkeyPatch, *, admin: bool) -> list[tuple[str, bool]]:
         """Sign the page in as someone who may (or may not) manage models; returns the switches made."""
-        from types import SimpleNamespace
-
         from evaluatorq.dashboard import models_views
+        from evaluatorq.dashboard.auth import DashboardAuth
 
         calls: list[tuple[str, bool]] = []
 
@@ -838,12 +837,13 @@ class TestDashboardPage:
             del auth
             calls.append((model_id, enabled))
 
-        monkeypatch.setattr(models_views, '_auth', lambda req: SimpleNamespace(method='cli_oauth'))
+        signed_in = DashboardAuth(method='environment', api_key='test-key', base_url='https://my.orq.ai')
+        monkeypatch.setattr(models_views, '_auth', lambda req: (signed_in, None))
         monkeypatch.setattr(models_views, 'can_manage_models', fake_can)
         monkeypatch.setattr(models_views, 'set_model_enabled', fake_set)
         return calls
 
-    def test_admins_get_enable_and_disable_buttons(
+    def test_admins_get_an_on_off_switch(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
         self._as_admin(monkeypatch, admin=True)
@@ -853,7 +853,7 @@ class TestDashboardPage:
         assert '>disabled<' not in text  # the switch shows the state; no tag beside it
         assert 'name="model_id" value="uuid-off"' in text
 
-    def test_buttons_need_admin_and_the_disabled_toggle(
+    def test_switches_need_admin_and_the_disabled_toggle(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
         self._as_admin(monkeypatch, admin=False)
@@ -866,7 +866,7 @@ class TestDashboardPage:
     def test_toggle_route_switches_for_admins_only(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         from evaluatorq.dashboard.security import CSRF_FIELD, csrf_token
 
-        enable = {'model_id': 'f/off', 'enable': '1', CSRF_FIELD: csrf_token()}
+        enable = {'model_id': 'f/off', 'action': 'enable', CSRF_FIELD: csrf_token()}
         calls = self._as_admin(monkeypatch, admin=False)
         assert 'Only workspace admins' in client.post('/models/toggle', data=enable).text
         assert not calls
@@ -876,17 +876,23 @@ class TestDashboardPage:
         assert not calls
         text = client.post('/models/toggle', data=enable).text
         assert 'aria-checked="true"' in text and 'models-toggle-note' not in text
-        text = client.post('/models/toggle', data={'model_id': 'f/off', CSRF_FIELD: csrf_token()}).text
+        text = client.post('/models/toggle', data={'model_id': 'f/off', 'action': 'disable', CSRF_FIELD: csrf_token()}).text
         assert 'aria-checked="false"' in text and 'models-toggle-note' not in text
         assert calls == [('f/off', True), ('f/off', False)]
 
-    def test_page_remembers_its_filters_in_the_browser(
+    def test_a_visit_without_filters_goes_back_to_the_last_ones(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
-        text = self._models_text(client, monkeypatch, fake_catalogue, '/models')
-        assert 'localStorage.setItem(K,location.search)' in text and 'htmx:pushedIntoHistory' in text
-        # Outside the swapped root, so a filter change does not re-run it and bounce back to the saved query.
-        assert text.index('eq-models-query') > text.index('</div></div><script>')
+        assert 'models-page' in self._models_text(client, monkeypatch, fake_catalogue, '/models')  # nothing saved yet
+        self._models_text(client, monkeypatch, fake_catalogue, '/models?x=latency&mix=list')
+        bare = client.get('/models', follow_redirects=False)
+        assert bare.status_code == 303 and bare.headers['location'] == '/models?x=latency&mix=list'
+        self._models_text(client, monkeypatch, fake_catalogue, '/models?x=price')
+        assert client.get('/models', follow_redirects=False).headers['location'] == '/models?x=price'
+        reset = client.get('/models?reset=1', follow_redirects=False)
+        assert reset.headers['location'] == '/models' and 'eq_models_query=""' in reset.headers['set-cookie']
+        client.cookies.set('eq_models_query', 'javascript:alert(1)//', path='/models')
+        assert client.get('/models', follow_redirects=False).headers['location'].startswith('/models?')
 
     def test_catalogue_and_admin_answer_are_reused_until_a_switch(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
@@ -914,7 +920,7 @@ class TestDashboardPage:
         for path in ('/models?disabled=1', '/models?disabled=1&x=latency', '/models?disabled=1'):
             client.get(path)
         assert loads == [True] and len(checks) == 1
-        client.post('/models/toggle', data={'model_id': 'f/off', 'enable': '1', CSRF_FIELD: csrf_token()})
+        client.post('/models/toggle', data={'model_id': 'f/off', 'action': 'enable', CSRF_FIELD: csrf_token()})
         client.get('/models?disabled=1')
         assert loads == [True, True] and len(checks) == 1  # the switch drops the stale catalogue, not the admin answer
 
@@ -929,7 +935,7 @@ class TestDashboardPage:
             raise WorkspaceModelError('HTTP 404 Not Found: Model not found')
 
         monkeypatch.setattr(models_views, 'set_model_enabled', refuse)
-        text = client.post('/models/toggle', data={'model_id': 'x/y', 'enable': '1', CSRF_FIELD: csrf_token()}).text
+        text = client.post('/models/toggle', data={'model_id': 'x/y', 'action': 'enable', CSRF_FIELD: csrf_token()}).text
         assert 'models-toggle-note' in text and 'Model not found' in text and 'aria-checked="false"' in text
 
     def test_cards_name_the_best_score_and_the_best_score_per_dollar(
@@ -1241,6 +1247,7 @@ class TestDashboardPage:
         assert 'lab=a&amp;lab=b' in text
         one = self._models_text(client, monkeypatch, fake_catalogue, '/models?lab=a')
         assert '<span>1 on the frontier</span><span>0 dominated</span>' in one
+        client.cookies.clear()  # else the bare address goes back to lab=a
         every = self._models_text(client, monkeypatch, fake_catalogue, '/models')
         assert '<span class="filter-dd-value">All</span>' in every
         # Every box ticked is the same as no lab filter, so the sort links do not carry the whole list.
