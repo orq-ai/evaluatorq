@@ -429,3 +429,92 @@ def test_reduction_can_be_negative_when_formatting_expands_the_trace() -> None:
                        compressed_chars=preview.full_json_chars * 3)
     assert expanded.readable_reduction_percent == -100
     assert expanded.decision_reduction_percent == -200
+
+
+def _tool_document() -> TraceDocument:
+    messages = (
+        {'role': 'system', 'content': 'You are a careful agent.'},
+        {'role': 'user', 'content': 'List the files.'},
+        {
+            'role': 'assistant',
+            'content': 'Looking.',
+            'tool_calls': [
+                {'id': 'call-1', 'type': 'function', 'function': {'name': 'ls', 'arguments': '{"path": "."}'}}
+            ],
+        },
+        {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'a.py\nb.py\n' * 40},
+        {'role': 'assistant', 'content': 'Two files.'},
+    )
+    return ensure_trace_document(make_trace('layers').model_copy(update={'messages': messages}))
+
+
+def test_layers_split_every_representation_by_message_type_and_sum_to_its_size() -> None:
+    preview = inspector_data.preview_document(_tool_document(), knobs=CompressionKnobs.defaults(500_000))
+
+    full, readable, state = preview.layers
+    assert [layer.label for layer in preview.layers] == ['Full trace JSON', 'Readable view', 'Decision state']
+    assert (full.total, readable.total, state.total) == (
+        preview.full_json_chars,
+        preview.readable_chars,
+        preview.compressed_chars,
+    )
+    for layer in preview.layers:
+        assert sum(size for _, size in layer.segments) == layer.total
+        assert all(size > 0 for _, size in layer.segments)
+        assert not layer.estimated
+    sizes = dict(full.segments)
+    assert sizes['tool_result'] == len('a.py\nb.py\n' * 40)
+    assert sizes['tool_input'] == len('{"path": "."}')
+    assert sizes['assistant'] == len('Looking.') + len('Two files.')
+    assert {'system', 'user', 'assistant', 'tool_input', 'tool_result', 'other'} <= set(dict(state.segments))
+    assert {'user', 'tool_result'} <= set(dict(readable.segments))
+
+
+def test_a_budget_cut_readable_layer_is_marked_estimated_and_still_sums_to_its_size() -> None:
+    knobs = replace(CompressionKnobs.defaults(500_000), budget=400, coverage=False)
+    preview = inspector_data.preview_document(_tool_document(), knobs=knobs)
+
+    readable = preview.layers[1]
+    assert readable.estimated
+    assert readable.total == preview.readable_chars
+    assert sum(size for _, size in readable.segments) == readable.total
+
+
+def test_message_runs_follow_the_conversation_and_merge_neighbours_of_one_type() -> None:
+    preview = inspector_data.preview_document(_tool_document(), knobs=CompressionKnobs.defaults(500_000))
+
+    full = preview.layers[0]
+    assert [(run.kind, run.first, run.last) for run in full.runs] == [
+        ('system', 0, 0),
+        ('user', 1, 1),
+        ('assistant', 2, 2),
+        ('tool_input', 2, 2),
+        ('tool_result', 3, 3),
+        ('assistant', 4, 4),
+    ]
+    assert full.runs[1].preview == 'List the files.'
+    for layer in preview.layers:
+        other = dict(layer.segments).get('other', 0)
+        assert sum(run.chars for run in layer.runs) + other == layer.total
+    assert full.messages_of('assistant') == 2
+
+
+def test_runs_past_the_limit_merge_neighbours_and_keep_every_character() -> None:
+    entries = [
+        inspector_data.LayerEntry(index=i, kind='tool_input' if i % 2 else 'tool_result', chars=10)
+        for i in range(inspector_data.MAX_LAYER_RUNS * 3)
+    ]
+    layer = inspector_data._layer('Test', 10 * len(entries) + 5, entries, {})
+
+    assert len(layer.runs) <= inspector_data.MAX_LAYER_RUNS
+    assert sum(run.chars for run in layer.runs) == 10 * len(entries)
+    assert all(len(run.kinds) == 2 for run in layer.runs)
+
+
+def test_hover_previews_are_scrubbed_and_cut_to_one_line() -> None:
+    secret = 'sk-ant-api03-' + 'A' * 90
+    preview = inspector_data._preview_text(f'token {secret}\n' + 'word ' * 200)
+
+    assert secret not in preview
+    assert '\n' not in preview
+    assert len(preview) <= inspector_data.PREVIEW_CHARS

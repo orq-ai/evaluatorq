@@ -23,6 +23,16 @@ _RESET_SCRIPT = (
     "f.dispatchEvent(new Event('change',{bubbles:true}));"
 )
 _WRAP_SCRIPT = "document.getElementById('compression-output').classList.toggle('is-wrapped',this.checked)"
+FORM_ID = 'compression-knobs-form'
+# Fields shown above the collapsible settings; they change the display, not the compression.
+_DISPLAY_FIELDS = frozenset({'original_view', 'wrap', 'coverage', 'bar_view'})
+_COUNT_SCRIPT = (
+    "var s=this.querySelector('.compression-settings');if(!s)return;var n=0;"
+    "s.querySelectorAll('[data-default]').forEach(function(e){"
+    "var v=e.type==='checkbox'?(e.checked?'1':'0'):e.value;if(v!==e.dataset.default){n++;}});"
+    "s.querySelector('.compression-changed').textContent=n?n+' changed':'All defaults';"
+    "s.classList.toggle('has-changes',n>0);"
+)
 
 _DECISION_EDGE_LABELS = {
     'assistant': 'Assistant messages',
@@ -199,12 +209,17 @@ def _view_group(values: Values, defaults: Values) -> str:
 def knobs_form_html(knobs: CompressionKnobs, defaults: CompressionKnobs, token: str, *, has_source: bool) -> str:
     """Render the live-updating form; its fields post under the names ``CompressionKnobs.from_form`` reads."""
     values, default_values = knobs.as_form(), defaults.as_form()
+    changed = sum(1 for name, value in values.items() if name not in _DISPLAY_FIELDS and value != default_values[name])
+    state = f'{changed} changed' if changed else 'All defaults'
     return (
-        '<form class="compression-knobs" autocomplete="off" novalidate '
+        f'<form id="{FORM_ID}" class="compression-knobs" autocomplete="off" novalidate '
         f'hx-post="{PREVIEW_ROUTE}" hx-trigger="change, input delay:400ms" hx-target="#compression-output" '
-        'hx-swap="outerHTML" hx-sync="this:replace">'
+        f'hx-swap="outerHTML" hx-sync="this:replace" onchange="{_COUNT_SCRIPT}" oninput="{_COUNT_SCRIPT}">'
         f'{csrf_field()}<input type="hidden" name="token" value="{token}">'
         f'{_display_group(values, default_values, has_source=has_source)}'
+        f'<details class="compression-settings{" has-changes" if changed else ""}"{" open" if changed else ""}>'
+        '<summary><span class="compression-settings-title">Compression settings</span>'
+        f'<span class="compression-changed">{state}</span></summary>'
         '<div class="compression-knobs-groups">'
         f'{_view_group(values, default_values)}{_decision_group(values, default_values)}'
         '</div>'
@@ -216,5 +231,5 @@ def knobs_form_html(knobs: CompressionKnobs, defaults: CompressionKnobs, token: 
         'up to 5,000,000 bytes; a note says when anything is cut. Coverage is added to the readable '
         'text and decision state, not ATIF or raw-source originals. Format switches start on here only; production '
         'Insights and classifier defaults are unchanged. Changes update the preview as you make them.</p>'
-        '</div></form>'
+        '</div></details></form>'
     )

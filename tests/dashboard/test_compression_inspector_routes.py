@@ -333,6 +333,11 @@ def test_rendered_preview_uses_exact_backend_counts_and_structured_state(client:
     assert f'{preview.compressed_chars:,}' in response.text
     assert str(preview.omitted_messages) in response.text
     assert state in response.text
+    assert 'Size by layer' in response.text
+    assert 'class="compression-tip' in response.text
+    assert 'is-by-message' in response.text
+    for layer in preview.layers:
+        assert f'aria-label="{html.escape(layer.label, quote=True)}: {layer.total:,} characters.' in response.text
 
 
 @pytest.mark.parametrize(

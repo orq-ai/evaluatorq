@@ -538,3 +538,42 @@ def test_preview_route_switches_decision_omission_format_without_changing_count(
     }
     assert 'omission' not in states[0]
     assert states[1]['omission'] == '[... 1 messages left out ...]'
+
+
+def test_the_bar_view_choice_switches_the_size_bars_to_one_segment_per_message(client: TestClient) -> None:
+    token = _load(client)
+
+    types = _preview(client, token).text
+    messages = _preview(client, token, bar_view='messages').text
+    checked = re.compile(r'name="bar_view" value="(\w+)" form="compression-knobs-form" checked')
+
+    assert checked.findall(types) == ['types']
+    assert checked.findall(messages) == ['messages']
+    assert checked.findall(_preview(client, token, htmx=False, bar_view='messages').text) == ['messages']
+    assert CompressionKnobs.defaults(1_000).bar_view == 'types'
+
+
+def test_a_post_without_the_bar_switch_falls_back_to_message_types(client: TestClient) -> None:
+    token = _load(client)
+    knobs = CompressionKnobs.defaults(effective_settings().trace_input_chars)
+    form = {key: value for key, value in _posted(knobs).items() if key != 'bar_view'}
+    response = client.post(
+        '/compression-inspector/preview',
+        data={**form, 'csrf': _csrf(client), 'token': token},
+        headers={'HX-Request': 'true'},
+    )
+
+    assert 'compression-notice' not in response.text
+    assert 'value="types" form="compression-knobs-form" checked' in response.text
+
+
+def test_the_settings_summary_counts_changed_fields_and_opens_when_any_differ(client: TestClient) -> None:
+    token = _load(client)
+
+    default = _preview(client, token, htmx=False).text
+    changed = _preview(client, token, htmx=False, budget=1_234, wrap=True).text
+
+    assert '<details class="compression-settings">' in default
+    assert 'All defaults' in default
+    assert '<details class="compression-settings has-changes" open>' in changed
+    assert '1 changed' in changed
