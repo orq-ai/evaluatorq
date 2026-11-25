@@ -4257,11 +4257,11 @@ _MODELS_CSS = """
 .models-card .stat-label { color: var(--c); font-weight: 600; }
 .models-card .stat-value { font-size: 30px; margin-top: 2px; }
 .models-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-.models-card-spark { position: absolute; right: 18px; bottom: 18px; width: 160px; height: 56px; overflow: visible; }
+.models-card-spark { position: absolute; right: 18px; top: 30px; width: 160px; height: 56px; overflow: visible; }
 .models-card-spark polyline { fill: none; stroke: var(--border-strong); stroke-width: 1.5; stroke-linejoin: round; }
 .models-card-spark g circle { fill: var(--border-strong); }
 .models-card-spark .is-mark { fill: var(--c); stroke: var(--surface-card); stroke-width: 1.5; }
-.models-card-model { margin-top: 6px; font-size: 13px; font-weight: 600; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.models-card-model { margin-top: 6px; font-size: 18px; font-weight: 600; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .models-card .stat-sub { margin-top: 2px; }
 .models-group th { padding: 14px 10px 6px; font-size: 12px; font-weight: 600; color: var(--text-strong); background: none; text-align: left; border-bottom: 1px solid var(--border-subtle); text-transform: none; letter-spacing: 0; }
 .models-row.is-excluded td { color: var(--text-faint); }

@@ -145,7 +145,6 @@ def _field(label: str, name: str, control: str, *, off: str = '', title: str = '
 # The More filters toggles: query name and chip label. Each submits `1` when on.
 _TOGGLES = {
     'frontier': 'Frontier only',
-    'disabled': 'Include disabled models',
     'no_estimate': 'Hide estimated scores',
     'guides': 'Score per $ lines',
 }
@@ -227,6 +226,10 @@ def _filters_html(q: dict[str, str], st: _State) -> str:
         )
         + dropdown('lab', 'Lab', st.vendors, st.labs, searchable=True)
         + more
+        # On the toolbar, not in More filters: it is also how an admin reaches the Enable and Disable buttons.
+        + chip(
+            'disabled', '1', checked=bool(q.get('disabled')), dot_cls='chip-dot-jade', label='Include disabled models'
+        )
         + '<noscript><button type="submit">Apply</button></noscript></form>'
     )
 
