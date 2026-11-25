@@ -5,19 +5,26 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, TypedDict, TypeVar, cast
+from typing import Any, TypedDict, TypeVar
 
 from loguru import logger as _converters_logger
 from pydantic import ValidationError
 
 from evaluatorq.common.structured_output import sum_usage_coverage
 from evaluatorq.common.target_call import TargetCallResult, classify_error_type
-from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, AgentResponse, AgentResponseError, Message
+from evaluatorq.contracts import (
+    EVAL_ERROR_RAW_OUTPUT_KEY,
+    VERDICT_COERCED_RAW_OUTPUT_KEY,
+    AgentResponse,
+    AgentResponseError,
+    Message,
+)
 from evaluatorq.redteam.contracts import (
     JURY_RAW_OUTPUT_KEY,
     OWASP_CATEGORY_NAMES,
     AgentContext,
     AgentInfo,
+    AnyFramework,
     AttackInfo,
     AttackSource,
     AttackStrategy,
@@ -29,7 +36,6 @@ from evaluatorq.redteam.contracts import (
     DomainSummary,
     EvaluatedRow,
     ExecutionDetails,
-    Framework,
     FrameworkSummary,
     JobOutputPayload,
     JuryHealth,
@@ -39,6 +45,7 @@ from evaluatorq.redteam.contracts import (
     PipelineStage,
     RedTeamReport,
     RedTeamResult,
+    RegisteredValue,
     ReportSummary,
     RunError,
     SeveritySummary,
@@ -50,7 +57,9 @@ from evaluatorq.redteam.contracts import (
     Vulnerability,
     VulnerabilitySummary,
     infer_framework,
+    is_known_open_value,
     normalize_category,
+    resolve_open_value,
 )
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_metadata_for_category
@@ -379,15 +388,16 @@ def _coerce_job_output_text(raw_output: Any) -> str:
     return str(raw_output)
 
 
-def _normalize_attack_technique(value: str | None) -> AttackTechnique:
-    """Normalize free-form/static dataset techniques to supported enum values."""
+def _normalize_attack_technique(value: str | None) -> AttackTechnique | RegisteredValue:
+    """Normalize free-form/static dataset techniques to supported or registered values."""
     raw = str(value or '').strip()
     if not raw:
         return AttackTechnique.INDIRECT_INJECTION
+    if is_known_open_value(AttackTechnique, raw):
+        return resolve_open_value(AttackTechnique, raw)
     lowered = raw.lower().replace('_', '-').replace(' ', '-')
-    supported = {str(item.value) for item in AttackTechnique}
-    if lowered in supported:
-        return AttackTechnique(lowered)
+    if is_known_open_value(AttackTechnique, lowered):
+        return resolve_open_value(AttackTechnique, lowered)
     # Common jailbreak-like labels in LLM datasets map to direct injection.
     _converters_logger.warning('Unknown attack technique %r, defaulting to direct-injection', raw)
     return AttackTechnique.DIRECT_INJECTION
@@ -453,7 +463,7 @@ def static_sample_to_result(
         id=inp.id,
         vulnerability=vulnerability_str,
         category=category,
-        framework=cast('Framework', infer_framework(category)),
+        framework=infer_framework(category),
         attack_technique=_normalize_attack_technique(inp.attack_technique),
         delivery_methods=delivery_methods,
         turn_type=inp.turn_type,
@@ -686,7 +696,7 @@ def dynamic_evaluatorq_results_to_report(
             id=inputs.get('id', f'{category}-{strategy.name}'),
             vulnerability=vulnerability_str,
             category=category,
-            framework=cast('Framework', infer_framework(category)),
+            framework=infer_framework(category),
             attack_technique=strategy.attack_technique,
             # AttackInfo.delivery_methods is the open set (DeliveryMethod | str); a copy
             # widens the strategy's closed list[DeliveryMethod] (list is invariant).
@@ -1015,6 +1025,38 @@ def _compute_jury_reliability(results: list[RedTeamResult]) -> JuryReliability |
     return JuryReliability(krippendorff_alpha=alpha, samples=samples)
 
 
+def coerced_passes(evaluation: Any) -> int:
+    """How many judge passes of one result were coerced from a verdict to an abstention.
+
+    A panel records it per judge (``JuryVote.repetitions_coerced``). The single-judge path builds no vote, so its
+    writers leave a ``verdict_coerced`` flag in ``raw_output``; that counts as one pass.
+    """
+    if evaluation is None:
+        return 0
+    jury = getattr(evaluation, 'jury', None)
+    if jury is not None:
+        return sum(vote.repetitions_coerced for vote in jury.votes)
+    raw_output = getattr(evaluation, 'raw_output', None)
+    return 1 if isinstance(raw_output, dict) and raw_output.get(VERDICT_COERCED_RAW_OUTPUT_KEY) is True else 0
+
+
+def samples_with_coerced_verdict(report: RedTeamReport) -> int:
+    """How many samples of a report had a coerced verdict, counted from its results.
+
+    The summary carries the same count, but only for a report converted since the count existed: an older saved
+    report loads it as 0 while its results still record the coerced passes. Counting here keeps the report's
+    headline and its per-attack panel in agreement. A report saved without results falls back to the summary.
+    """
+    if not report.results:
+        return report.summary.samples_with_coerced_verdict
+    return sum(1 for result in report.results if coerced_passes(result.evaluation))
+
+
+def sample_count(count: int) -> str:
+    """``1 sample`` or ``N samples``, for a count shown to a reader."""
+    return f'{count} sample' if count == 1 else f'{count} samples'
+
+
 def _compute_jury_health(results: list[RedTeamResult]) -> JuryHealth | None:
     """Roll per-sample jury panel health up into a run-level count (RES-1649).
 
@@ -1200,11 +1242,13 @@ def compute_report_summary(
 
     vuln_summaries: dict[str, VulnerabilitySummary] = {}
     for v, v_counts in by_vuln.items():
-        try:
-            vuln_enum = Vulnerability(v)
-        except ValueError:
-            _converters_logger.warning('Skipping unknown vulnerability %r in by_vulnerability grouping.', v)
+        if v is None:
             continue
+        # A saved report can hold custom vulnerabilities this process never registered;
+        # they keep their own row instead of being dropped (RES-1922).
+        vuln_enum = (
+            resolve_open_value(Vulnerability, v) if is_known_open_value(Vulnerability, v) else RegisteredValue(v)
+        )
         vdef = VULNERABILITY_DEFS.get(vuln_enum)
         v_eval_total = v_counts.passed + v_counts.failed
         v_vulns = v_counts.failed
@@ -1299,10 +1343,11 @@ def compute_report_summary(
         by_framework=by_framework,
         jury_reliability=_compute_jury_reliability(results),
         jury_health=_compute_jury_health(results),
+        samples_with_coerced_verdict=sum(1 for r in results if coerced_passes(r.evaluation)),
     )
 
 
-def _dominant_framework(results: list[RedTeamResult]) -> Framework | None:
+def _dominant_framework(results: list[RedTeamResult]) -> AnyFramework | None:
     """Return the dominant framework, or None if mixed/empty."""
     if not results:
         return None
@@ -1377,7 +1422,7 @@ def merge_reports(
 
     all_results: list[RedTeamResult] = []
     all_errors: list[RunError] = []
-    frameworks: set[Framework | None] = set()
+    frameworks: set[AnyFramework | None] = set()
     pipelines: set[Pipeline] = set()
     merged_agent_contexts: dict[str, AgentContext] = {}
 
@@ -1391,7 +1436,7 @@ def merge_reports(
             merged_agent_contexts.update(report.agent_contexts)
 
     # Resolve framework: use single value if unanimous, else None
-    resolved_framework: Framework | None = None
+    resolved_framework: AnyFramework | None = None
     non_none_frameworks = {f for f in frameworks if f is not None}
     if len(non_none_frameworks) == 1:
         resolved_framework = non_none_frameworks.pop()

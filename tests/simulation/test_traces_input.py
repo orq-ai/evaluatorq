@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -24,6 +25,7 @@ from evaluatorq.simulation.traces import (
 )
 from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 from evaluatorq.types import Trace, TraceInput
+from tests.common.orq_trace_api import SEARCH_PATH, search_page, serve_spans
 
 
 def _make_persona(name: str = "Test Persona") -> Persona:
@@ -100,14 +102,10 @@ async def test_base_url_env_override_through_fetch_trace_conversations(monkeypat
 
 def _mock_client(spans_by_trace: dict[str, list[dict[str, Any]]]) -> httpx.AsyncClient:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v2/traces/v3oql":
-            assert request.headers["Authorization"] == "Bearer test-key"
-            data = [{"trace_id": tid} for tid in spans_by_trace]
-            return httpx.Response(200, json={"object": "list", "data": data, "has_more": False})
-        for tid, spans in spans_by_trace.items():
-            if request.url.path == f"/v2/traces/{tid}/v3spans":
-                return httpx.Response(200, json=spans)
-        return httpx.Response(404, json={"message": "not found"})
+        assert request.headers["Authorization"] == "Bearer test-key"
+        if request.url.path == SEARCH_PATH:
+            return search_page(list(spans_by_trace))
+        return serve_spans(request, spans_by_trace) or httpx.Response(404, json={"message": "not found"})
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
@@ -163,18 +161,13 @@ async def test_fetch_honours_a_limit_beyond_one_page() -> None:
     pages_served = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if "v3spans" in str(request.url):
-            return httpx.Response(200, json=[])
+        if request.url.path != SEARCH_PATH:
+            return serve_spans(request, {}) or httpx.Response(404)
+        body = json.loads(request.content)
+        assert body.get("page_token", "") == ("" if pages_served["n"] == 0 else f"p{pages_served['n']}")
         pages_served["n"] += 1
         start = (pages_served["n"] - 1) * 200
-        return httpx.Response(
-            200,
-            json={
-                "object": "list",
-                "data": [{"trace_id": f"t{i}"} for i in range(start, start + 200)],
-                "has_more": True,
-            },
-        )
+        return search_page([f"t{i}" for i in range(start, start + 200)], next_page_token=f"p{pages_served['n']}")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         await fetch_trace_conversations(limit=5000, api_key="test-key", http_client=client)
@@ -554,25 +547,22 @@ async def test_extend_from_traces_requires_conversations() -> None:
 async def test_fetch_survives_malformed_span_body() -> None:
     """A 200-OK-but-invalid-JSON span body drops that trace, not the batch."""
 
+    good = [
+        {
+            "parent_id": None,
+            "type": "Trace",
+            "input": {"messages": [{"role": "user", "content": "hello"}]},
+            "output": {"role": "assistant", "content": "hi"},
+        }
+    ]
+
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v2/traces/v3oql":
-            data = [{"trace_id": "bad"}, {"trace_id": "good"}]
-            return httpx.Response(200, json={"object": "list", "data": data, "has_more": False})
-        if request.url.path == "/v2/traces/bad/v3spans":
+        if request.url.path == SEARCH_PATH:
+            return search_page(["bad", "good"])
+        if request.url.path == "/v3/traces/bad/spans":
+            # What the retired /v2 span route did: the web app's HTML page with a 200.
             return httpx.Response(200, text="<html>not json</html>")
-        if request.url.path == "/v2/traces/good/v3spans":
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "parent_id": None,
-                        "type": "Trace",
-                        "input": {"messages": [{"role": "user", "content": "hello"}]},
-                        "output": {"role": "assistant", "content": "hi"},
-                    }
-                ],
-            )
-        return httpx.Response(404, json={"message": "not found"})
+        return serve_spans(request, {"good": good}) or httpx.Response(404, json={"message": "not found"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         conversations = await fetch_trace_conversations(limit=10, api_key="test-key", http_client=client)
@@ -596,13 +586,9 @@ async def test_fetch_skips_non_list_spans_payload() -> None:
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v2/traces/v3oql":
-            data = [{"trace_id": tid} for tid in spans_by_trace]
-            return httpx.Response(200, json={"object": "list", "data": data, "has_more": False})
-        for tid, spans in spans_by_trace.items():
-            if request.url.path == f"/v2/traces/{tid}/v3spans":
-                return httpx.Response(200, json=spans)
-        return httpx.Response(404, json={"message": "not found"})
+        if request.url.path == SEARCH_PATH:
+            return search_page(list(spans_by_trace))
+        return serve_spans(request, spans_by_trace) or httpx.Response(404, json={"message": "not found"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         conversations = await fetch_trace_conversations(limit=10, api_key="test-key", http_client=client)

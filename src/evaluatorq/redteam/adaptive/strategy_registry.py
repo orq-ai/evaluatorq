@@ -17,49 +17,110 @@ from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     AgentCapability,
     AgentContext,
+    AnyAgentCapability,
+    AnyVulnerability,
     AttackStrategy,
     AttackTechnique,
     DeliveryMethod,
     TurnType,
-    Vulnerability,
 )
 from evaluatorq.redteam.frameworks.owasp.evaluators import OWASP_EVALUATOR_REGISTRY
 from evaluatorq.redteam.frameworks.owasp_asi import ASI_STRATEGIES
 from evaluatorq.redteam.frameworks.owasp_llm import LLM_STRATEGIES
+from evaluatorq.redteam.registry_scope import ScopedDict, ScopedSet, register_rebuilder
 from evaluatorq.redteam.vulnerability_registry import (
     CATEGORY_TO_VULNERABILITY,
     VULNERABILITY_DEFS,
+    get_primary_category,
     resolve_vulnerabilities,
 )
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
 
-# Combined registry of all strategies
-_strategy_registry: dict[str, list[AttackStrategy]] = {
-    **ASI_STRATEGIES,
-    **LLM_STRATEGIES,
-}
+_BUILTIN_STRATEGIES: dict[str, list[AttackStrategy]] = {**ASI_STRATEGIES, **LLM_STRATEGIES}
+_custom_strategies: ScopedDict[AnyVulnerability, list[AttackStrategy]] = ScopedDict('custom_strategies')
 
-# Also support OWASP- prefixed versions
-_strategy_registry.update({f'OWASP-{k}': v for k, v in _strategy_registry.items()})
+_strategy_registry: ScopedDict[str, list[AttackStrategy]] = ScopedDict('strategy_registry', derived=True)
+_vulnerability_strategy_registry: ScopedDict[AnyVulnerability, list[AttackStrategy]] = ScopedDict(
+    'vulnerability_strategy_registry', derived=True
+)
 
-# Primary registry keyed by vulnerability
-_vulnerability_strategy_registry: dict[Vulnerability, list[AttackStrategy]] = {}
-for _cat, _strategies in _strategy_registry.items():
-    if _cat.startswith('OWASP-'):
-        continue  # skip prefixed duplicates
-    _vuln = CATEGORY_TO_VULNERABILITY.get(_cat)
-    if _vuln is not None:
-        _vulnerability_strategy_registry[_vuln] = _strategies
 
+def _rebuild_strategy_registries() -> None:
+    """Refill both registries in place from built-ins plus registered custom strategies.
+
+    The public names are read-only proxies over these dicts and are bound by name in
+    other modules, so the dicts are mutated, never replaced.
+    """
+    _strategy_registry.clear()
+    _strategy_registry.update(_BUILTIN_STRATEGIES)
+    _vulnerability_strategy_registry.clear()
+    for cat, strategies in _BUILTIN_STRATEGIES.items():
+        vuln = CATEGORY_TO_VULNERABILITY.get(cat)
+        if vuln is not None:
+            _vulnerability_strategy_registry[vuln] = strategies
+    for vuln, strategies in _custom_strategies.items():
+        merged = [*_vulnerability_strategy_registry.get(vuln, []), *strategies]
+        _vulnerability_strategy_registry[vuln] = merged
+        _strategy_registry[get_primary_category(vuln)] = merged
+    _strategy_registry.update({f'OWASP-{k}': v for k, v in list(_strategy_registry.items())})
+
+
+_rebuild_strategy_registries()
+register_rebuilder(_rebuild_strategy_registries)
 
 STRATEGY_REGISTRY = types.MappingProxyType(_strategy_registry)
 
 VULNERABILITY_STRATEGY_REGISTRY = types.MappingProxyType(_vulnerability_strategy_registry)
 
 
-def get_strategies_for_vulnerability(vuln: Vulnerability) -> list[AttackStrategy]:
+def register_strategy(strategy: AttackStrategy) -> None:
+    """Add a custom attack strategy to its vulnerability's strategies (RES-1922).
+
+    The strategy's vulnerability must be built in or registered, and its name must be
+    unique within that vulnerability. Registering an identical strategy again is a no-op.
+    """
+    if strategy.vulnerability is None:
+        msg = f'Strategy {strategy.name!r} needs a vulnerability to be registered.'
+        raise ValueError(msg)
+    vuln = strategy.vulnerability
+    for existing in _vulnerability_strategy_registry.get(vuln, []):
+        if existing.name == strategy.name:
+            if existing.model_dump(mode='json') == strategy.model_dump(mode='json'):
+                return
+            msg = f'Vulnerability {vuln.value!r} already has a strategy named {strategy.name!r}.'
+            raise ValueError(msg)
+    _custom_strategies.setdefault(vuln, []).append(strategy)
+    _rebuild_strategy_registries()
+
+
+_generation_disabled: ScopedSet[AnyVulnerability] = ScopedSet('generation_disabled')
+
+
+def disable_generation(vuln: AnyVulnerability) -> None:
+    """Run only the registered strategies for *vuln*; the planner generates none for it."""
+    _generation_disabled.add(vuln)
+
+
+def generation_enabled(vuln: AnyVulnerability) -> bool:
+    """False when the vulnerability was registered with ``generate: false``."""
+    return vuln not in _generation_disabled
+
+
+def clear_custom_strategies() -> None:
+    """Drop every registered custom strategy (test isolation)."""
+    _custom_strategies.clear()
+    _generation_disabled.clear()
+    _rebuild_strategy_registries()
+
+
+def refresh_strategy_registries() -> None:
+    """Re-derive the category keys after vulnerability registrations changed."""
+    _rebuild_strategy_registries()
+
+
+def get_strategies_for_vulnerability(vuln: AnyVulnerability) -> list[AttackStrategy]:
     """Get all strategies for a given vulnerability.
 
     Args:
@@ -168,7 +229,7 @@ def select_applicable_strategies(
 
 
 def select_applicable_strategies_for_vulnerability(
-    vuln: Vulnerability,
+    vuln: AnyVulnerability,
     agent_context: AgentContext,
     agent_capabilities: AgentCapabilities | None = None,
 ) -> list[AttackStrategy]:
@@ -299,7 +360,7 @@ def strategy_catalog() -> list[StrategyRow]:
     ]
 
 
-def _fallback_capability_check(required: list[AgentCapability], agent_context: AgentContext) -> bool:
+def _fallback_capability_check(required: list[AnyAgentCapability], agent_context: AgentContext) -> bool:
     """Check capabilities without LLM classification using agent config heuristics.
 
     Used when agent_capabilities is not provided.
@@ -337,7 +398,7 @@ def list_available_categories() -> list[str]:
     return sorted(strategy_cats | evaluator_cats)
 
 
-def default_vulnerabilities() -> list[Vulnerability]:
+def default_vulnerabilities() -> list[AnyVulnerability]:
     """The vulnerabilities a run covers when it selects no categories or vulnerabilities."""
     return resolve_vulnerabilities(list_available_categories())
 

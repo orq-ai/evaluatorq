@@ -101,6 +101,13 @@ from evaluatorq.redteam.contracts import (
     normalize_category,
     normalize_framework,
 )
+from evaluatorq.redteam.custom import (
+    CustomVulnerability,
+    JudgeExamples,
+    register_judge,
+    register_strategy,
+    register_vulnerability,
+)
 from evaluatorq.redteam.exceptions import BackendError, CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import (
     ConfirmPayload,
@@ -147,6 +154,7 @@ __all__ = [
     'CategorySummary',
     'ConfirmPayload',
     'CredentialError',
+    'CustomVulnerability',
     'DefaultHooks',
     'DeliveryMethod',
     'DeliveryMethodSummary',
@@ -158,6 +166,7 @@ __all__ = [
     'FrameworkSummary',
     # Message models
     'FunctionCall',
+    'JudgeExamples',
     'JuryResult',
     'JuryStats',
     'JuryVote',
@@ -235,6 +244,10 @@ __all__ = [
     'redteam_sample_from_openresponses',
     # Backend extension
     'register_backend',
+    # Custom vulnerabilities (RES-1922)
+    'register_judge',
+    'register_strategy',
+    'register_vulnerability',
     'resolve_category',
     'resolve_vulnerabilities',
     'turns_to_openresponses_input',

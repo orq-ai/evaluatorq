@@ -219,3 +219,30 @@ jobs:
 
       - name: Test dashboard
         run: uv run --no-sync pytest tests/dashboard
+
+  orq-sdk-floor:
+    name: Tests on orq-ai-sdk floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras --all-groups
+
+      - name: Install the lowest allowed orq-ai-sdk
+        run: |
+          floor="$(python3 -c "import re,tomllib; d=tomllib.load(open('pyproject.toml','rb'))['project']['optional-dependencies']['orq']; v=re.search(r'orq-ai-sdk>=([\d.]+)', ' '.join(d)).group(1); print(v if v.count('.') == 2 else v + '.0')")"
+          echo "floor=${floor}"
+          uv pip install "orq-ai-sdk==${floor}"
+
+      - name: Test on the floor
+        run: uv run --no-sync pytest -m 'not integration' -n auto

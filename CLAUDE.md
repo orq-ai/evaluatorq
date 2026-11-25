@@ -238,6 +238,7 @@ Every variable evaluatorq owns is an `EnvVar` row in `ENV_VARS` (`src/evaluatorq
   - When a rule splits, carry an ignore or override over to every rule it split into, so the policy does not change. When `unresolved-attribute` split, the dashboard overrides kept ignoring `missing-attribute`; `missing-union-attribute` is checked in `src/evaluatorq/dashboard` and ignored only in `tests/dashboard`.
   - Delete `ty: ignore` comments ty now reports as unused instead of keeping them.
 - Logging: `loguru` everywhere (core runtime dependency since 1.3)
+- **Keyword arguments by default.** Call `f(model=model, max_tokens=512)`, not `f(model, 512)`: a positional call silently binds the wrong value when a signature gains or reorders a parameter. A new function or method with more than one parameter puts everything after the first obvious subject behind `*`, so callers cannot pass them positionally. Exempt: single-argument calls, builtins and positional-only parameters (`len(x)`, `isinstance(x, T)`), and the logger's format arguments. Existing positional calls are not a finding unless the change touches them. The review rule is **Pass arguments by keyword in new code** in `CODING_STANDARDS.md`.
 
 ### Releases
 

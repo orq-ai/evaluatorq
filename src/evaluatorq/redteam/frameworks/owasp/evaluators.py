@@ -26,7 +26,7 @@ and is scored by the ASI04 evaluator. The runner logs a relabel notice at INFO l
 from collections.abc import Callable
 from typing import TypedDict
 
-from evaluatorq.redteam.contracts import Vulnerability
+from evaluatorq.redteam.contracts import AnyVulnerability, Vulnerability, resolve_open_value
 from evaluatorq.redteam.frameworks.owasp.agent_evaluators import (
     get_asi01_goal_hijacking_evaluator,
     get_asi02_tool_misuse_evaluator,
@@ -50,6 +50,7 @@ from evaluatorq.redteam.frameworks.owasp.llm_evaluators import (
     get_llm09_misinformation_evaluator,
 )
 from evaluatorq.redteam.frameworks.owasp.models import LlmEvaluatorEntity
+from evaluatorq.redteam.registry_scope import ScopedDict
 from evaluatorq.redteam.vulnerability_registry import (
     CANONICAL_EVALUATOR_METADATA,
     CATEGORY_TO_VULNERABILITY,
@@ -86,18 +87,21 @@ _LLM_REGISTRY: dict[str, EvaluatorGetter] = {
 }
 
 # Unified registry supporting 'ASI01', 'OWASP-ASI01', 'LLM01', 'OWASP-LLM01' formats
-OWASP_EVALUATOR_REGISTRY: dict[str, EvaluatorGetter] = {
-    **_ASI_REGISTRY,
-    **{f'OWASP-{k}': v for k, v in _ASI_REGISTRY.items()},
-    **_LLM_REGISTRY,
-    **{f'OWASP-{k}': v for k, v in _LLM_REGISTRY.items()},
-}
+OWASP_EVALUATOR_REGISTRY: ScopedDict[str, EvaluatorGetter] = ScopedDict(
+    'owasp_evaluators',
+    {
+        **_ASI_REGISTRY,
+        **{f'OWASP-{k}': v for k, v in _ASI_REGISTRY.items()},
+        **_LLM_REGISTRY,
+        **{f'OWASP-{k}': v for k, v in _LLM_REGISTRY.items()},
+    },
+)
 
 # Backwards compatibility alias
-OWASP_EVALUATOR_REGISTRY_FULL: dict[str, EvaluatorGetter] = OWASP_EVALUATOR_REGISTRY.copy()
+OWASP_EVALUATOR_REGISTRY_FULL: dict[str, EvaluatorGetter] = dict(OWASP_EVALUATOR_REGISTRY)
 
 # Primary registry keyed by vulnerability
-VULNERABILITY_EVALUATOR_REGISTRY: dict[Vulnerability, EvaluatorGetter] = {}
+VULNERABILITY_EVALUATOR_REGISTRY: ScopedDict[AnyVulnerability, EvaluatorGetter] = ScopedDict('vulnerability_evaluators')
 for _cat, _getter in _ASI_REGISTRY.items():
     _vuln = CATEGORY_TO_VULNERABILITY.get(_cat)
     if _vuln is not None:
@@ -106,6 +110,48 @@ for _cat, _getter in _LLM_REGISTRY.items():
     _vuln = CATEGORY_TO_VULNERABILITY.get(_cat)
     if _vuln is not None:
         VULNERABILITY_EVALUATOR_REGISTRY[_vuln] = _getter
+
+_custom_judges: ScopedDict[AnyVulnerability, list[str]] = ScopedDict('custom_judges')
+
+
+def register_judge(vuln: AnyVulnerability, judge: LlmEvaluatorEntity | EvaluatorGetter) -> None:
+    """Register the judge for a vulnerability under the vulnerability and its category
+    codes (RES-1922). *judge* is an entity or a ``getter(model_id)``; a built-in
+    vulnerability keeps its shipped judge, so registering one for it raises.
+    """
+    from evaluatorq.redteam.vulnerability_registry import get_framework_categories, get_primary_category
+
+    vuln = resolve_open_value(Vulnerability, vuln)
+    if isinstance(vuln, Vulnerability):
+        msg = f'{vuln.value!r} is a built-in vulnerability and keeps its shipped judge.'
+        raise ValueError(msg)  # noqa: TRY004 - a wrong value, not a wrong type
+    if isinstance(judge, LlmEvaluatorEntity):
+        entity = judge
+
+        def getter(model_id: str | None = None) -> LlmEvaluatorEntity:
+            if not model_id:
+                return entity
+            return entity.model_copy(update={'model': entity.model.model_copy(update={'id': model_id})})
+
+    else:
+        getter = judge
+    codes = [code for codes in get_framework_categories(vuln).values() for code in codes] or [
+        get_primary_category(vuln)
+    ]
+    keys = [k for code in codes for k in (code, f'OWASP-{code}')]
+    VULNERABILITY_EVALUATOR_REGISTRY[vuln] = getter
+    for key in keys:
+        OWASP_EVALUATOR_REGISTRY[key] = getter
+    _custom_judges[vuln] = keys
+
+
+def clear_custom_judges() -> None:
+    """Drop every registered custom judge (test isolation)."""
+    for vuln, keys in _custom_judges.items():
+        VULNERABILITY_EVALUATOR_REGISTRY.pop(vuln, None)
+        for key in keys:
+            OWASP_EVALUATOR_REGISTRY.pop(key, None)
+    _custom_judges.clear()
 
 
 class EvaluatorMetadata(TypedDict):
@@ -171,7 +217,7 @@ def get_evaluator_for_category(
 
 
 def get_evaluator_for_vulnerability(
-    vuln: Vulnerability,
+    vuln: AnyVulnerability,
     model_id: str | None = None,
 ) -> LlmEvaluatorEntity | None:
     """Get the evaluator for a vulnerability.
@@ -189,7 +235,7 @@ def get_evaluator_for_vulnerability(
     return getter(model_id)
 
 
-def get_evaluator_metadata_for_vulnerability(vuln: Vulnerability) -> EvaluatorMetadata | None:
+def get_evaluator_metadata_for_vulnerability(vuln: AnyVulnerability) -> EvaluatorMetadata | None:
     """Return evaluator metadata for a vulnerability."""
     mapped = CANONICAL_EVALUATOR_METADATA.get(vuln)
     if mapped:

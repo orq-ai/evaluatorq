@@ -186,6 +186,7 @@ The red-team CLI targets are Orq agents and deployments, which need `ORQ_API_KEY
 | `ANTHROPIC_API_KEY` | Red-team / sim only, if not using Orq or OpenAI | — | API key for Claude. Used by the red teaming pipeline and agent simulation when neither `ORQ_API_KEY` nor `OPENAI_API_KEY` is set, and needs the `anthropic` extra. `ANTHROPIC_BASE_URL` is read by the Anthropic SDK itself. |
 | `OPENAI_BASE_URL` | No | OpenAI default | Redirect OpenAI-compatible calls to a different host (vLLM, OpenRouter, Azure, local). Honoured by the red teaming LLM client. **Not** honoured on the simulation conversation path, which resolves its client with `honor_openai_base_url=False` — inject a pre-built client there instead. Simulation's post-run calls (recommendations and the executive summary) do honour it, because they resolve their own client at the default. |
 | `EVALUATORQ_CATALOGUE_TIMEOUT_S` | No | `30` | HTTP timeout in seconds for the `GET /v2/models` model-catalogue fetch, read once at import (unlike the three `EVALUATORQ_LLM_*` vars under [Simulation LLM defaults](#simulation-llm-defaults), which are read at call time). The catalogue supplies per-model prices, Responses support, and accepted reasoning-effort values. A failed fetch is **not** cached immediately: the first two failures leave the catalogue unloaded so a later call can still succeed, and only the third gives up and degrades the rest of the process to unpriced and chat-completions-only. Each failure logs a warning naming the attempt number. |
+| `EVALUATORQ_UPLOAD_TIMEOUT_S` | No | `120` | Seconds the results upload may spend sending its body, and again waiting for the reply, at the end of an `evaluatorq()`, simulation or red-team run, read on every upload. See [Giving a large upload more time](evaluation-reference.md#giving-a-large-upload-more-time). |
 
 ### Model roles
 
@@ -255,13 +256,13 @@ All three are fallback defaults only: the matching field on the agent's `LLMCall
 
 ## When a value is wrong
 
-Ten of the variables on this page are validated when they are read, and a wrong value in any of them never stops a run: evaluatorq logs a `WARNING`, uses the documented default, and carries on.
+The variables listed below are validated when they are read, and a wrong value in any of them never stops a run: evaluatorq logs a `WARNING`, uses the documented default, and carries on.
 
 A variable that looks like it did nothing was rejected, outranked, or never read, and only the first of the three says so. A rejected value leaves the `WARNING` below. An outranked one leaves nothing: the three [Simulation LLM defaults](#simulation-llm-defaults) are fallbacks, and an `LLMCallConfig` field beats them whenever it is set at all — including when it is set to the same number as the default. A knob nobody read leaves nothing either, because these are read where they are used rather than at startup: `ORQ_OTEL_MAX_QUEUE_SIZE` is read when tracing initialises, so with tracing off a bad value passes without a word. Read the warnings first, and treat their absence as "no opinion" rather than as "fine".
 
-**Which variables this covers.** Ten knobs are parsed and validated — the numbers against a minimum, the booleans against an accepted vocabulary: `ORQ_DISABLE_TRACING`, the four `ORQ_OTEL_*` variables, `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`, `EVALUATORQ_PROPAGATE_TRACE_CONTEXT`, `EVALUATORQ_CATALOGUE_TIMEOUT_S`, `EVALUATORQ_LLM_TIMEOUT_S` and `EVALUATORQ_LLM_MAX_TOKENS`.
+**Which variables this covers.** These knobs are parsed and validated — the numbers against a minimum, the booleans against an accepted vocabulary: `ORQ_DISABLE_TRACING`, the four `ORQ_OTEL_*` variables, `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`, `EVALUATORQ_PROPAGATE_TRACE_CONTEXT`, `EVALUATORQ_CATALOGUE_TIMEOUT_S`, `EVALUATORQ_UPLOAD_TIMEOUT_S`, `EVALUATORQ_LLM_TIMEOUT_S` and `EVALUATORQ_LLM_MAX_TOKENS`.
 
-The minimum is `1` for the four `ORQ_OTEL_*` variables and for `EVALUATORQ_LLM_MAX_TOKENS`, `1.0` for `EVALUATORQ_LLM_TIMEOUT_S`, and `0.1` for `EVALUATORQ_CATALOGUE_TIMEOUT_S`. None of them has a maximum.
+The minimum is `1` for the four `ORQ_OTEL_*` variables and for `EVALUATORQ_LLM_MAX_TOKENS`, `1.0` for `EVALUATORQ_LLM_TIMEOUT_S` and `EVALUATORQ_UPLOAD_TIMEOUT_S`, and `0.1` for `EVALUATORQ_CATALOGUE_TIMEOUT_S`. None of them has a maximum.
 
 Everything else on this page is a string evaluatorq hands on as it finds it — a key, a base URL, a directory, `EVALUATORQ_REASONING_EFFORT` — and a wrong value there surfaces where it is used, as a failed request or an empty run store, not as one of these warnings. `EVALUATORQ_LOG_LEVEL` is the one that does not land softly: a name Python's `logging` module does not recognise raises `ValueError: Unknown level` out of the dashboard's logging setup, and the dashboard never starts.
 
@@ -285,7 +286,7 @@ Assert the values arrived instead of watching for a warning. This distinguishes 
 
 ```bash
 rc=0
-for v in ORQ_DISABLE_TRACING ORQ_OTEL_MAX_QUEUE_SIZE ORQ_OTEL_MAX_BATCH_SIZE ORQ_OTEL_SCHEDULE_DELAY_MS ORQ_OTEL_FLUSH_TIMEOUT_MS EVALUATORQ_CAPTURE_MESSAGE_CONTENT EVALUATORQ_PROPAGATE_TRACE_CONTEXT EVALUATORQ_CATALOGUE_TIMEOUT_S EVALUATORQ_LLM_TIMEOUT_S EVALUATORQ_LLM_MAX_TOKENS; do
+for v in ORQ_DISABLE_TRACING ORQ_OTEL_MAX_QUEUE_SIZE ORQ_OTEL_MAX_BATCH_SIZE ORQ_OTEL_SCHEDULE_DELAY_MS ORQ_OTEL_FLUSH_TIMEOUT_MS EVALUATORQ_CAPTURE_MESSAGE_CONTENT EVALUATORQ_PROPAGATE_TRACE_CONTEXT EVALUATORQ_CATALOGUE_TIMEOUT_S EVALUATORQ_UPLOAD_TIMEOUT_S EVALUATORQ_LLM_TIMEOUT_S EVALUATORQ_LLM_MAX_TOKENS; do
   if [ -n "${!v+set}" ] && [ -z "${!v}" ]; then
     echo "::error::$v is set but empty — a repository variable did not resolve."
     rc=1

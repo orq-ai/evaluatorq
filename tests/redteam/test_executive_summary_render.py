@@ -84,7 +84,7 @@ def test_unevaluated_vulnerability_does_not_render_as_passed():
     print_report_summary(report, console=Console(file=buffer, width=120, highlight=False, markup=False, no_color=True))
     out = buffer.getvalue()
 
-    row = next(line for line in out.splitlines() if 'agent_goal_hijacking' in line)
+    row = next(line for line in out.splitlines() if 'Agent Goal Hijacking' in line)
     cells = [c.strip() for c in row.strip('│ ').split('│')]
     assert cells[2] == '0 of 3', row  # Tested names the denominator that was actually scored
     assert cells[3] == '0', row  # Passed, not 3

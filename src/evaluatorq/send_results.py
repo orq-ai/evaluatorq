@@ -6,16 +6,16 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from .common.env_config import DEFAULT_ORQ_BASE_URL, env_raw
+from .common.env_config import DEFAULT_ORQ_BASE_URL, env_float, env_raw
 from .common.retry import with_retry
 from .types import DataPointResult, EvaluatorqResult
 
-# Fixed, not configurable: a longer wait than the proxy in front of the
-# endpoint allows fails anyway, and the largest reported upload (27 MB) took ~58 s.
-UPLOAD_TIMEOUT_S = 120.0
-
 # Experiments API route that receives evaluation results (Orq 4.18 and later).
 RESULTS_RECEIVE_PATH = '/v3/experiments/evaluations/receive'
+
+# Connecting is fast or never happens, so it keeps a short fixed limit; only
+# sending the body and waiting for the reply scale with EVALUATORQ_UPLOAD_TIMEOUT_S.
+UPLOAD_CONNECT_TIMEOUT_S = 10.0
 
 
 class SendResultsPayload(BaseModel):
@@ -53,6 +53,7 @@ async def _post_results(
     api_key: str,
     payload: dict[str, object],
     *,
+    timeout_s: float,
     raise_on_error: bool,
 ) -> httpx.Response | None:
     """POST the payload, retrying only failures that never reached the handler.
@@ -61,7 +62,7 @@ async def _post_results(
     ``SendResultsError`` under ``raise_on_error``); any other response,
     successful or not, is returned for the caller to inspect.
     """
-    async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT_S) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s, connect=UPLOAD_CONNECT_TIMEOUT_S)) as client:
 
         async def post() -> httpx.Response | None:
             try:
@@ -88,8 +89,9 @@ async def _post_results(
             return err.response
     if response is None:
         message = (
-            f'Orq results upload timed out after {UPLOAD_TIMEOUT_S:g}s. The server may still finish and '
-            'create the run: check the experiment before uploading again.'
+            f'Orq results upload timed out after {timeout_s:g}s. The server may still finish and '
+            'create the run: check the experiment before uploading again. To wait longer, set '
+            'EVALUATORQ_UPLOAD_TIMEOUT_S.'
         )
         if raise_on_error:
             raise SendResultsError(message)
@@ -113,10 +115,11 @@ async def send_results_to_orq(
     """
     Send evaluation results to Orq platform.
 
-    The upload waits up to ``UPLOAD_TIMEOUT_S`` (120 s) and makes up to 3
-    attempts, retrying on connection errors and 429. A timed-out upload is not
-    retried: the server may still finish and create the run, so a retry could
-    add a second run.
+    The upload waits up to ``EVALUATORQ_UPLOAD_TIMEOUT_S`` seconds (120 by
+    default) to send the body and again for the reply, and 10 seconds to
+    connect. It makes up to 3 attempts, retrying on connection errors, connect
+    and send timeouts, and 429. A reply timeout is not retried: the server may
+    still finish and create the run, so a retry could add a second run.
 
     Args:
         api_key: Orq API key for authentication
@@ -190,6 +193,7 @@ async def send_results_to_orq(
             f'{resolved_base_url}{RESULTS_RECEIVE_PATH}',
             api_key,
             payload_dict,
+            timeout_s=env_float('EVALUATORQ_UPLOAD_TIMEOUT_S'),
             raise_on_error=raise_on_error,
         )
         if response is None:

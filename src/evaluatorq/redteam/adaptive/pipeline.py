@@ -44,6 +44,7 @@ from evaluatorq.redteam.adaptive.strategy_planner import (
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
+    AnyVulnerability,
     AttackOutput,
     AttackStrategy,
     AttackTechnique,
@@ -61,6 +62,7 @@ from evaluatorq.redteam.contracts import (
     Vulnerability,
     attacker_model_for,
     evaluator_model_for,
+    resolve_open_value,
 )
 from evaluatorq.redteam.traces import TRACE_SEED_MESSAGES_KEY, TRACE_START_FROM_KEY, TraceStart, parse_trace_seed
 from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs, with_redteam_span
@@ -150,7 +152,7 @@ def expand_trace_seed_datapoints(seeds: list[DataPoint] | None, dynamic_datapoin
 
 async def generate_dynamic_datapoints_for_vulnerabilities(
     agent_context: AgentContext,
-    vulnerabilities: list[Vulnerability],
+    vulnerabilities: list[AnyVulnerability],
     max_per_category: int | None = None,
     max_turns: int = 5,
     *,
@@ -823,10 +825,10 @@ def create_dynamic_evaluator(
         output_messages = [item for t in scorable_turns for item in t.target.output]
 
         # Prefer vulnerability-first path when a valid Vulnerability enum can be resolved
-        resolved_vuln: Vulnerability | None = None
+        resolved_vuln: AnyVulnerability | None = None
         if vulnerability:
             try:
-                resolved_vuln = Vulnerability(vulnerability)
+                resolved_vuln = resolve_open_value(Vulnerability, vulnerability)
             except ValueError:
                 resolved_vuln = resolve_category_safe(vulnerability)
 

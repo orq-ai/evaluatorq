@@ -22,6 +22,9 @@ from evaluatorq.redteam.contracts import (
     SaveMode,
     TargetConfig,
 )
+from evaluatorq.redteam.custom import (
+    CustomVulnerability,  # noqa: TC001  (pydantic resolves field annotations at runtime)
+)
 from evaluatorq.types import DataPoint  # noqa: TC001 — pydantic resolves field annotations at runtime
 
 
@@ -40,6 +43,7 @@ class RedTeamRunConfig(BaseModel):
     categories: list[str] | None = None
     vulnerabilities: list[str] | None = None
     strategies: list[str] | None = None
+    custom: str | list[str | CustomVulnerability] | None = None
     datapoints: list[DataPoint] | None = None
     attack_techniques: list[AttackTechnique | str] | None = None
     delivery_methods: list[DeliveryMethod | str] | None = None
