@@ -273,19 +273,25 @@ def _raise_if_generation_left_nothing(
     all_vuln_strategies: dict[AnyVulnerability, list[AttackStrategy]],
     generation_errors: dict[AnyVulnerability, str | None],
 ) -> None:
-    """Stop the run before any attack is sent when a failed generation left a vulnerability untested.
+    """Skip a vulnerability a failed generation left untested; stop only when nothing is left to run.
 
-    A vulnerability that still has hardcoded strategies runs with reduced coverage and is
-    reported by the end-of-run warnings. One with none would silently drop out of the report,
-    so a run that looks complete would not have tested it at all.
+    Red-team prompts are often blocked by the attacker model's content filter, so one blocked
+    vulnerability must not end a run for every other one. It is logged here and reported by the
+    end-of-run warnings (`_collect_filter_warnings` in the runner) as not tested. When failed
+    generation leaves no vulnerability with a strategy, there is nothing to run, so the run is
+    stopped before any attack is sent.
     """
     empty = {vuln: error for vuln, error in generation_errors.items() if error and not all_vuln_strategies.get(vuln)}
-    if not empty:
+    for vuln, error in empty.items():
+        logger.warning(
+            f'{vuln.value} will NOT be tested: strategy generation failed and it has no other strategy ({error})'
+        )
+    if not empty or any(all_vuln_strategies.values()):
         return
     details = '; '.join(f'{vuln.value}: {error}' for vuln, error in empty.items())
     msg = (
-        f'Strategy generation failed and left {len(empty)} vulnerabilit{"y" if len(empty) == 1 else "ies"} '
-        f'with no strategy to run, so the run was stopped before any attack was sent. {details}'
+        'Strategy generation failed and left no vulnerability with a strategy to run, '
+        f'so the run was stopped before any attack was sent. {details}'
     )
     raise StrategyGenerationError(msg)
 

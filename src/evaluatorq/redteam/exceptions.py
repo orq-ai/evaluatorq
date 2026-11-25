@@ -26,6 +26,7 @@ class StrategyGenerationError(RedTeamError):
 
     Raised by objective generation when the call fails (a content-filter block that
     survived its retries, a transport error, an unparseable reply), and by the strategy
-    planner when a vulnerability is left with zero strategies because generation failed.
+    planner when failed generation leaves no vulnerability with a strategy to run. A single
+    vulnerability left empty is skipped and reported, not raised.
     The message names the attacker model, since that is the setting to change.
     """

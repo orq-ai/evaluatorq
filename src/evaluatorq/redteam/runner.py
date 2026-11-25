@@ -4316,7 +4316,7 @@ def _collect_filter_warnings(*, prepared_targets: list[PreparedTarget]) -> list[
             selected = cat_meta.get('total_selected', 0)
             if selected == 0 and gen_error:
                 filter_warnings.append(
-                    f'Category {cat_key!r}: zero strategies selected (generation error: {gen_error})'
+                    f'Category {cat_key!r}: NOT TESTED — zero strategies selected (generation error: {gen_error})'
                 )
             elif selected == 0:
                 filter_warnings.append(

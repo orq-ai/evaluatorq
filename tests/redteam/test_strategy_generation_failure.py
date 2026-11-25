@@ -67,7 +67,7 @@ async def test_generation_failure_with_hardcoded_strategies_is_recorded_and_the_
 
 
 @pytest.mark.asyncio
-async def test_generation_failure_that_leaves_no_strategy_stops_the_run(monkeypatch):
+async def test_generation_failure_that_leaves_nothing_to_run_stops_the_run(monkeypatch):
     with pytest.raises(StrategyGenerationError) as info:
         await _plan(monkeypatch=monkeypatch, hardcoded=[])
 
@@ -77,6 +77,41 @@ async def test_generation_failure_that_leaves_no_strategy_stops_the_run(monkeypa
     assert 'before any attack was sent' in message
     # Callers catching the package's base error (the CLI does) see it too.
     assert isinstance(info.value, RedTeamError)
+
+
+@pytest.mark.asyncio
+async def test_one_blocked_vulnerability_without_strategies_is_skipped_and_the_rest_run(monkeypatch):
+    """A content-filter block is likely in red teaming; it must not end the run for other vulnerabilities."""
+    blocked, healthy = Vulnerability.EXCESSIVE_AGENCY, Vulnerability.GOAL_HIJACKING
+    hardcoded = strategy_planner.get_strategies_for_vulnerability(healthy)[:1]
+
+    async def _generate(**kwargs: Any) -> list[AttackStrategy]:
+        if kwargs['vuln'] == blocked:
+            msg = f'the content filter of attacker model {kwargs["model"]!r} blocked objective generation'
+            raise StrategyGenerationError(msg)
+        return []
+
+    monkeypatch.setattr(strategy_planner, 'generate_strategies_for_vulnerability', _generate)
+    monkeypatch.setattr(
+        strategy_planner,
+        'select_applicable_strategies_for_vulnerability',
+        lambda **kw: hardcoded if kw['vuln'] == healthy else [],
+    )
+
+    strategies, selection, _ = await strategy_planner.plan_strategies_for_vulnerabilities(
+        agent_context=AgentContext(key='test-agent'),
+        vulnerabilities=[blocked, healthy],
+        llm_client=cast(Any, object()),
+        attack_model=_MODEL,
+        max_turns=5,
+        max_per_category=None,
+        generate_additional_strategies=True,
+        generated_strategy_count=2,
+    )
+
+    assert strategies[healthy] == hardcoded
+    assert strategies[blocked] == []
+    assert _MODEL in selection[blocked]['generation_error']
 
 
 @pytest.mark.asyncio

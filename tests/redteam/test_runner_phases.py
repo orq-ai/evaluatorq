@@ -117,7 +117,7 @@ class TestCollectFilterWarnings:
             prepared_targets=[_prepared('t', {'ASI01': {'total_selected': 0, 'generation_error': 'boom'}})]
         )
 
-        assert warnings == ["Category 'ASI01': zero strategies selected (generation error: boom)"]
+        assert warnings == ["Category 'ASI01': NOT TESTED — zero strategies selected (generation error: boom)"]
 
     def test_zero_selected_without_generation_error(self):
         warnings = _collect_filter_warnings(prepared_targets=[_prepared('t', {'ASI01': {'total_selected': 0}})])
