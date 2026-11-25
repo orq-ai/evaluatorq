@@ -1454,8 +1454,8 @@ class TestManagementKey:
 
         return DashboardAuth(method='environment', api_key='mk', base_url='https://my.orq.ai')
 
-    @pytest.mark.parametrize(('status', 'expected'), [(400, True), (403, False), (401, False)])
-    def test_probe_reads_the_permission_check(
+    @pytest.mark.parametrize(('status', 'expected'), [(200, True), (403, False), (401, False)])
+    def test_admin_check_lists_the_workspace_users(
         self, monkeypatch: pytest.MonkeyPatch, status: int, *, expected: bool
     ) -> None:
         import asyncio
@@ -1470,20 +1470,13 @@ class TestManagementKey:
             seen.append(request)
             return httpx.Response(status)
 
-        from orq_ai_sdk import Orq
-
+        real = httpx.AsyncClient
         monkeypatch.setattr(
-            workspace_models,
-            'resolve_orq_client',
-            lambda *, api_key, base_url: Orq(
-                api_key=api_key,
-                server_url=base_url,
-                async_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-            ),
+            workspace_models.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
         )
         assert asyncio.run(workspace_models.can_manage_models(self._auth())) is expected
-        assert seen[0].method == 'POST' and seen[0].url.path == '/v2/workspace-models'
-        assert seen[0].content == b'{"model_id":""}'
+        assert seen[0].method == 'GET' and seen[0].url.path == '/v3/users'
+        assert seen[0].headers['authorization'] == 'Bearer mk'
 
     def test_disable_deletes_the_encoded_model_id_and_surfaces_refusals(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import asyncio

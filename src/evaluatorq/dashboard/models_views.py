@@ -763,7 +763,7 @@ async def _load(
 
 # ponytail: per-process dicts on app.state, no eviction; a dashboard sees one or two sign-ins in its lifetime.
 _CATALOGUE_TTL_S = 60.0
-# A sign-in's admin rights rarely change, so a yes is kept for half an hour; a no may be a failed probe, so it expires
+# A sign-in's admin rights rarely change, so a yes is kept for half an hour; a no may be a failed check, so it expires
 # sooner.
 _ADMIN_YES_TTL_S = 30 * 60.0
 _ADMIN_NO_TTL_S = 60.0

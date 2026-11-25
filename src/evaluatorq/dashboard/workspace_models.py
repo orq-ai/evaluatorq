@@ -1,7 +1,7 @@
 """Switching catalogue models on and off for the dashboard's workspace (`/v2/workspace-models`).
 
 A CLI OAuth sign-in names a person, so it may manage models when that person holds the workspace Admin role. An
-API key names no one; it may manage models when Orq lets it (a Management Key with the workspace-model permission).
+API key names no one; it counts as an admin when Orq lets it list the workspace users.
 """
 
 from __future__ import annotations
@@ -30,18 +30,18 @@ async def can_manage_models(auth: DashboardAuth) -> bool:
         return await is_workspace_admin(auth.base_url)
     if not auth.api_key:
         return False
-    # Orq checks the permission before the body, so an empty enable is a probe that changes nothing:
-    # 403 means the key may not manage models, 400 (invalid body) means it may. Orq has no read-only way to ask: the
-    # profile endpoint `orq whoami` reads answers only a browser sign-in (ENG-3656).
-    from orq_ai_sdk.models import OrqError
-
+    # A key is no workspace member, so it has no role to read. Listing the members needs the user read permission,
+    # which admin keys hold; a key with workspace-model write but no user read reads as no (ENG-3656).
     try:
-        await _set(auth, '', enabled=True)
-    except OrqError as exc:
-        return exc.status_code == 400
+        async with httpx.AsyncClient(timeout=_TIMEOUT_MS / 1000) as http:
+            response = await http.get(
+                f'{auth.base_url.rstrip("/")}/v3/users',
+                params={'limit': 1},
+                headers={'Authorization': f'Bearer {auth.api_key}'},
+            )
     except httpx.HTTPError:
         return False
-    return True
+    return response.is_success
 
 
 async def set_model_enabled(auth: DashboardAuth, model_id: str, *, enabled: bool) -> None:
