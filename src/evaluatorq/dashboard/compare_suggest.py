@@ -22,10 +22,13 @@ if TYPE_CHECKING:
 # Candidate list cap, the same as the "any other run" picker.
 MAX_CANDIDATES = 100
 
-# One trailing version or date ending, with the separators before it.
+# One trailing version or date ending, with the separators before it. A bare
+# number counts only after a separator: `gpt4` is a model name, `agent 2` a version.
 _TAIL = re.compile(
-    r'[\s_.#-]*(?:v\d+|\(\d+\)|#?\d{1,3}|\d{4}-\d{2}-\d{2}(?:[t ]\d{2}:?\d{2}(?::?\d{2})?)?|\d{8}(?:-\d{6})?|[0-9a-f]{8})$'
+    r'[\s_.#-]*(?:v\d+|\(\d+\)|(?<=[\s_.#-])#?\d{1,3}|\d{4}-\d{2}-\d{2}(?:[t ]\d{2}:?\d{2}(?::?\d{2})?)?|\d{8}(?:-\d{6})?|[0-9a-f]{8})$'
 )
+# Side labels that name a role, not an agent: two runs sharing them tested nothing in common.
+_PLACEHOLDER_LABELS = frozenset({'a', 'b', 'baseline', 'candidate', 'control', 'treatment'})
 _DEFAULT_KEYS = frozenset({'', 'sim', 'red-team', 'simulation'})
 _GENERATED_NAME = re.compile(r'simulation-\d{8}-\d{6}-[0-9a-f]{8}')
 
@@ -108,5 +111,5 @@ def _sim_candidate(row: metrics.SimRunRow) -> CompareCandidate:
 def _pairwise_candidate(card: library.ReportCard, path: Path) -> CompareCandidate:
     data = library.read_json_cached(path)
     a, b = str(data.get('label_a') or 'A'), str(data.get('label_b') or 'B')
-    target = None if (a, b) == ('A', 'B') else f'{a} vs {b}'
+    target = None if {a.lower(), b.lower()} <= _PLACEHOLDER_LABELS else f'{a} vs {b}'
     return CompareCandidate(card.id, card.name, card.created_at, target, card.headline)

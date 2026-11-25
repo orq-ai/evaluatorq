@@ -29,6 +29,8 @@ def cand(rid: str, name: str, day: int, target: str | None = None) -> CompareCan
         ('checkout-agent-20261118-143000', 'checkout-agent'),
         ('checkout-agent v3 2026-11-18', 'checkout-agent'),
         ('v2', ''),
+        ('checkout agent 2', 'checkout agent'),
+        ('agent-gpt4', 'agent-gpt4'),  # a number glued to the name is part of it, not a version
     ],
 )
 def test_name_key(raw: str, key: str) -> None:
@@ -124,6 +126,18 @@ def test_pairwise_candidates_use_named_label_pairs(tmp_path: Path) -> None:
     by_rid = {c.rid: c for c in candidates('pairwise', [pw])}
     assert by_rid[report_id(pw / 'a.json')].target == 'gpt vs claude'
     assert by_rid[report_id(pw / 'b.json')].target is None
+
+
+def test_pairwise_candidates_with_placeholder_labels_name_no_target(tmp_path: Path) -> None:
+    from evaluatorq.pairwise_run import new_run
+
+    pw = tmp_path / 'pw'
+    pw.mkdir()
+    (pw / 'a.json').write_text(new_run(run_name='x', label_a='Baseline', label_b='candidate', judges=['j']).model_dump_json())
+    (pw / 'b.json').write_text(new_run(run_name='y', label_a='gpt', label_b='baseline', judges=['j']).model_dump_json())
+    by_rid = {c.rid: c for c in candidates('pairwise', [pw])}
+    assert by_rid[report_id(pw / 'a.json')].target is None
+    assert by_rid[report_id(pw / 'b.json')].target == 'gpt vs baseline'
 
 
 def test_pairwise_candidates_reread_nothing_while_the_store_is_unchanged(tmp_path: Path, monkeypatch) -> None:
