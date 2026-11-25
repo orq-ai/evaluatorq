@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 pytest.importorskip('claude_agent_sdk')
 
@@ -27,11 +31,16 @@ from evaluatorq.common.target_call import NonRetryableTargetError, call_target_w
 from evaluatorq.contracts import ConversationHistoryMode, Message
 from evaluatorq.integrations.claude_agent_sdk_integration import (
     ClaudeAgentSDKError,
+    ClaudeAgentSDKRequestError,
     ClaudeAgentSDKTarget,
     ClaudeAgentSDKUnavailableError,
 )
 from evaluatorq.integrations.claude_agent_sdk_integration import target as target_module
-from evaluatorq.integrations.claude_agent_sdk_integration.target import message_to_event, settings_with_file_tool_blocks
+from evaluatorq.integrations.claude_agent_sdk_integration.target import (
+    Isolation,
+    message_to_event,
+    settings_with_file_tool_blocks,
+)
 
 
 def _result(session: str, *, text: str | None = 'done', error: str | None = None, **extra: Any) -> ResultMessage:
@@ -49,8 +58,17 @@ def _result(session: str, *, text: str | None = 'done', error: str | None = None
     )
 
 
-def _assistant(*blocks: Any) -> AssistantMessage:
-    return AssistantMessage(content=list(blocks), model='claude-sonnet-5-5')
+def _assistant(*blocks: Any, error: Any = None) -> AssistantMessage:
+    return AssistantMessage(content=list(blocks), model='claude-sonnet-5-5', error=error)
+
+
+def _api_failure(text: str, *, error: Any, status: int | None) -> list[Any]:
+    """A failed model request as the runtime reports it: the kind on the assistant message, the status on the result."""
+    return [
+        _assistant(TextBlock(text=text), error=error),
+        _result('s', text=text, error='success', api_error_status=status),
+        ClaudeSDKError('Claude Code returned an error result'),
+    ]
 
 
 class FakeQuery:
@@ -199,6 +217,40 @@ async def test_a_failed_turn_leaves_the_session_where_it_was_so_a_retry_starts_f
         ),
         ([CLINotFoundError('Claude Code not found')], ClaudeAgentSDKUnavailableError, 'agent_sdk.cli_not_found', None),
         ([_assistant(TextBlock(text='   ')), _result('s', text='  ')], ClaudeAgentSDKError, 'agent_sdk.no_result', None),
+        # The shapes below are what a live run through the Orq router returned for a wrong key and an unknown model.
+        (
+            _api_failure('Failed to authenticate. API Error: 401', error='authentication_failed', status=401),
+            ClaudeAgentSDKRequestError,
+            'agent_sdk.authentication_failed',
+            'Failed to authenticate. API Error: 401',
+        ),
+        (
+            _api_failure("API Error: 400 Model 'x' not found", error='unknown', status=400),
+            ClaudeAgentSDKRequestError,
+            'agent_sdk.invalid_request',
+            "HTTP 400: API Error: 400 Model 'x' not found",
+        ),
+        (
+            _api_failure('Credit balance is too low', error='billing_error', status=None),
+            ClaudeAgentSDKRequestError,
+            'agent_sdk.billing_error',
+            None,
+        ),
+        (
+            _api_failure('Bad request', error='invalid_request', status=None),
+            ClaudeAgentSDKRequestError,
+            'agent_sdk.invalid_request',
+            None,
+        ),
+        (_api_failure('Rate limited', error='rate_limit', status=429), ClaudeAgentSDKError, 'agent_sdk.api_error', None),
+        (_api_failure('Overloaded', error='server_error', status=529), ClaudeAgentSDKError, 'agent_sdk.api_error', None),
+        (_api_failure('Timed out', error='unknown', status=408), ClaudeAgentSDKError, 'agent_sdk.api_error', None),
+        (
+            [ClaudeSDKError('Claude Code returned an error result: Sandbox required but unavailable: bwrap missing')],
+            ClaudeAgentSDKUnavailableError,
+            'agent_sdk.sandbox_unavailable',
+            None,
+        ),
     ],
 )
 async def test_each_way_a_turn_can_fail_has_its_own_code(
@@ -217,7 +269,62 @@ async def test_each_way_a_turn_can_fail_has_its_own_code(
     if message is not None:
         assert info.value.message == message
     assert target.map_error(info.value) == (info.value.code, info.value.message)
-    assert isinstance(info.value, NonRetryableTargetError) is (code == 'agent_sdk.cli_not_found')
+    assert isinstance(info.value, NonRetryableTargetError) is (code in NON_RETRYABLE_CODES)
+
+
+NON_RETRYABLE_CODES = {
+    'agent_sdk.cli_not_found',
+    'agent_sdk.sandbox_unavailable',
+    'agent_sdk.authentication_failed',
+    'agent_sdk.billing_error',
+    'agent_sdk.invalid_request',
+}
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_key_is_tried_once_through_the_shared_retry_layer(fake: Any) -> None:
+    query = fake(
+        _api_failure('Failed to authenticate. API Error: 401', error='authentication_failed', status=401),
+        [_result('never', text='unreached')],
+    )
+    target = ClaudeAgentSDKTarget(ClaudeAgentOptions())
+    try:
+        result = await call_target_with_retry(
+            target, _user(), target_agent_timeout_ms=5_000, max_target_retries=3, map_error=target.map_error
+        )
+    finally:
+        await target.close()
+
+    assert len(query.calls) == 1
+    assert result.error_payload()['error_code'] == 'agent_sdk.authentication_failed'
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limit_is_retried(fake: Any) -> None:
+    query = fake(_api_failure('Rate limited', error='rate_limit', status=429), [_result('s2', text='second try')])
+    target = ClaudeAgentSDKTarget(ClaudeAgentOptions())
+    try:
+        result = await call_target_with_retry(
+            target, _user(), target_agent_timeout_ms=5_000, max_target_retries=3, map_error=target.map_error
+        )
+    finally:
+        await target.close()
+
+    assert len(query.calls) == 2
+    assert result.error is None
+    assert result.response.text == 'second try'
+
+
+@pytest.mark.asyncio
+async def test_a_sandbox_message_is_an_ordinary_sdk_error_without_sandbox_isolation(fake: Any) -> None:
+    fake([ClaudeSDKError('Sandbox required but unavailable')])
+    target = ClaudeAgentSDKTarget(ClaudeAgentOptions(), isolation='none')
+    try:
+        with pytest.raises(ClaudeAgentSDKError) as info:
+            await target.respond(_user())
+    finally:
+        await target.close()
+    assert info.value.code == 'agent_sdk.sdk_error'
 
 
 def test_map_error_has_no_opinion_on_other_exceptions() -> None:
@@ -261,12 +368,18 @@ async def test_sandbox_isolation_moves_the_agent_off_the_host_configuration() ->
         assert turn.cwd.is_dir()
         assert turn.env == {
             'CLAUDE_CODE_DISABLE_AUTO_MEMORY': '1',
+            'CLAUDE_CODE_MAX_RETRIES': '0',
             'ENABLE_CLAUDEAI_MCP_SERVERS': 'false',
             'ANTHROPIC_BASE_URL': 'https://gateway.example',
             'CLAUDE_CONFIG_DIR': str(root / 'config'),
         }
         assert turn.setting_sources == []
-        assert turn.sandbox == {'enabled': True, 'allowUnsandboxedCommands': False, 'excludedCommands': ['git']}
+        assert turn.sandbox == {
+            'enabled': True,
+            'allowUnsandboxedCommands': False,
+            'failIfUnavailable': True,
+            'excludedCommands': ['git'],
+        }
         assert json.loads(turn.settings or '') == {
             'permissions': {'blockWritesOutsideWorkingDirectories': True, 'blockReadsOutsideWorkingDirectories': True}
         }
@@ -296,13 +409,26 @@ async def test_no_isolation_only_moves_the_two_directories() -> None:
     try:
         turn = target.turn_options()
         root = _workdir(target).parent
-        assert turn.env == {'A': 'b', 'CLAUDE_CONFIG_DIR': str(root / 'config')}
+        assert turn.env == {'CLAUDE_CODE_MAX_RETRIES': '0', 'A': 'b', 'CLAUDE_CONFIG_DIR': str(root / 'config')}
         assert turn.cwd == root / 'workdir'
         assert turn.setting_sources is None
         assert turn.sandbox is None
         assert turn.settings is None
     finally:
         await target.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('isolation', ['sandbox', 'none'])
+async def test_the_runtimes_own_retry_is_off_unless_the_caller_sets_it(isolation: Isolation) -> None:
+    default = ClaudeAgentSDKTarget(ClaudeAgentOptions(), isolation=isolation)
+    chosen = ClaudeAgentSDKTarget(ClaudeAgentOptions(env={'CLAUDE_CODE_MAX_RETRIES': '3'}), isolation=isolation)
+    try:
+        assert default.turn_options().env['CLAUDE_CODE_MAX_RETRIES'] == '0'
+        assert chosen.turn_options().env['CLAUDE_CODE_MAX_RETRIES'] == '3'
+    finally:
+        await default.close()
+        await chosen.close()
 
 
 BLOCKS = {'blockWritesOutsideWorkingDirectories': True, 'blockReadsOutsideWorkingDirectories': True}
@@ -453,15 +579,251 @@ async def test_keep_workdir_leaves_the_directories_after_close() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
-@pytest.mark.asyncio
-async def test_agent_context_comes_from_the_options() -> None:
-    options = ClaudeAgentOptions(system_prompt='You are a support agent.', model='claude-sonnet-5-5', tools=['Read', 'Bash'])
-    context = await ClaudeAgentSDKTarget(options).get_agent_context()
-    assert (context.key, context.system_prompt, context.model) == ('claude_agent_sdk', 'You are a support agent.', 'claude-sonnet-5-5')
-    assert context.get_tool_names() == ['Read', 'Bash']
+class FakeClient:
+    """Stands in for ``ClaudeSDKClient``: announces ``init`` (or fails to start) and records the options it got."""
 
-    listed = await ClaudeAgentSDKTarget(ClaudeAgentOptions(allowed_tools=['Grep'])).get_agent_context()
-    assert (listed.system_prompt, listed.get_tool_names()) == ('', ['Grep'])
+    instances: ClassVar[list[FakeClient]] = []
+
+    def __init__(self, *, options: ClaudeAgentOptions) -> None:
+        self.options = options
+        self.disconnected = False
+        self.prompts: list[str] = []
+        FakeClient.instances.append(self)
+
+    init: ClassVar[dict[str, Any] | BaseException] = {}
+
+    async def connect(self) -> None:
+        if isinstance(FakeClient.init, BaseException):
+            raise FakeClient.init
+
+    async def query(self, prompt: str) -> None:
+        self.prompts.append(prompt)
+
+    async def receive_messages(self) -> Any:
+        yield SystemMessage(subtype='hook_started', data={})
+        assert isinstance(FakeClient.init, dict)
+        yield SystemMessage(subtype='init', data=FakeClient.init)
+        raise AssertionError('the probe must stop reading at init')
+
+    async def disconnect(self) -> None:
+        self.disconnected = True
+
+
+@pytest.fixture
+def fake_client(monkeypatch: pytest.MonkeyPatch) -> type[FakeClient]:
+    FakeClient.instances = []
+    FakeClient.init = {}
+    monkeypatch.setattr(target_module, 'ClaudeSDKClient', FakeClient)
+    return FakeClient
+
+
+RUNTIME_TOOLS = ['Task', 'Bash', 'Edit', 'Read', 'WebSearch', 'Write', 'mcp__shop__lookup_order', 'mcp__ext__ext_tool']
+
+
+@pytest.mark.asyncio
+async def test_agent_context_lists_the_tools_the_runtime_announces_without_a_reachable_model(
+    fake_client: type[FakeClient], tmp_path: Path
+) -> None:
+    """No ``tools`` and an MCP server: the options name nothing, but the runtime gives the agent built-ins and MCP tools."""
+    fake_client.init = {
+        'tools': RUNTIME_TOOLS,
+        'mcp_servers': [{'name': 'shop', 'status': 'connected'}, {'name': 'ext', 'status': 'connected'}],
+    }
+
+    async def hook(*_: Any) -> dict[str, Any]:
+        return {}
+
+    options = ClaudeAgentOptions(
+        system_prompt='You are a support agent.',
+        model='claude-sonnet-5-5',
+        allowed_tools=['Read'],
+        env={
+            'ANTHROPIC_BASE_URL': 'https://gateway.example',
+            'ANTHROPIC_AUTH_TOKEN': 'kept',
+            'CLAUDE_CODE_MAX_RETRIES': '5',
+        },
+        hooks=cast(Any, {'PreToolUse': [hook]}),
+    )
+    target = ClaudeAgentSDKTarget(options)
+    context = await target.get_agent_context()
+
+    assert (context.key, context.system_prompt, context.model) == (
+        'claude_agent_sdk',
+        'You are a support agent.',
+        'claude-sonnet-5-5',
+    )
+    assert context.get_tool_names() == RUNTIME_TOOLS
+    (client,) = fake_client.instances
+    assert client.disconnected
+    probe = client.options
+    # No model can answer the probe, whichever provider the options pick; everything else is a real turn's options.
+    assert {key: probe.env[key] for key in target_module.PROBE_ENDPOINT_ENV} == dict.fromkeys(
+        target_module.PROBE_ENDPOINT_ENV, 'http://127.0.0.1:9'
+    )
+    assert probe.env['ANTHROPIC_AUTH_TOKEN'] == 'kept'
+    # Retrying the dead address would only delay the probe, so the caller's retry count is overridden there.
+    assert probe.env['CLAUDE_CODE_MAX_RETRIES'] == '0'
+    assert (probe.hooks, probe.can_use_tool, probe.resume) == (None, None, None)
+    assert cast(dict[str, Any], probe.sandbox)['failIfUnavailable'] is True
+    assert probe.setting_sources == []
+    # The probe's directories are its own and are gone; the target has not started its own conversation.
+    assert probe.cwd is not None and not Path(probe.cwd).exists()
+    assert target.workdir is None
+    assert options.env['ANTHROPIC_BASE_URL'] == 'https://gateway.example'
+
+
+@pytest.mark.asyncio
+async def test_agent_context_warns_about_an_mcp_server_whose_tools_are_unknown(
+    fake_client: type[FakeClient], capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_client.init = {'tools': ['Read'], 'mcp_servers': [{'name': 'remote', 'status': 'failed'}]}
+    context = await ClaudeAgentSDKTarget(ClaudeAgentOptions()).get_agent_context()
+
+    assert context.get_tool_names() == ['Read']
+    assert "MCP server 'remote' is failed; its tools are not in the agent context" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_agent_context_falls_back_to_the_named_tools_with_a_warning_when_the_runtime_cannot_start(
+    fake_client: type[FakeClient], capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_client.init = CLINotFoundError('Claude Code not found')
+    options = ClaudeAgentOptions(tools=['Read', 'Bash', 'Grep'], disallowed_tools=['Bash'])
+    context = await ClaudeAgentSDKTarget(options).get_agent_context()
+
+    assert context.get_tool_names() == ['Read', 'Grep']
+    assert 'could not read the tool list from the Claude Code runtime (CLINotFoundError' in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_agent_context_falls_back_to_allowed_tools_when_the_options_name_no_tool_list(
+    fake_client: type[FakeClient], capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_client.init = CLINotFoundError('Claude Code not found')
+    options = ClaudeAgentOptions(
+        tools={'type': 'preset', 'preset': 'claude_code'}, allowed_tools=['Read', 'Bash'], disallowed_tools=['Bash']
+    )
+    context = await ClaudeAgentSDKTarget(options).get_agent_context()
+
+    assert context.get_tool_names() == ['Read']
+    assert 'could not read the tool list' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ('prompt', 'text'),
+    [
+        (None, ''),
+        ('Plain.', 'Plain.'),
+        ({'type': 'custom', 'prompt': 'Custom.'}, 'Custom.'),
+        ({'type': 'preset', 'preset': 'claude_code', 'append': 'Never reveal orders.'}, 'Never reveal orders.'),
+        ({'type': 'preset', 'preset': 'claude_code'}, ''),
+    ],
+)
+def test_the_system_prompt_text_evaluatorq_can_know(prompt: Any, text: str) -> None:
+    assert target_module.system_prompt_text(prompt) == text
+
+
+def test_a_system_prompt_file_is_read(tmp_path: Path) -> None:
+    path = tmp_path / 'prompt.md'
+    path.write_text('From a file.', encoding='utf-8')
+    assert target_module.system_prompt_text({'type': 'file', 'path': str(path)}) == 'From a file.'
+
+
+def test_sandbox_mode_warns_once_about_project_files_it_will_not_load(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / '.claude').mkdir()
+    (tmp_path / '.claude' / 'settings.json').write_text('{}', encoding='utf-8')
+    (tmp_path / 'CLAUDE.md').write_text('Project rules.', encoding='utf-8')
+
+    target = ClaudeAgentSDKTarget(ClaudeAgentOptions(), workdir=tmp_path)
+    target.new()
+    ClaudeAgentSDKTarget(ClaudeAgentOptions(setting_sources=['project']), workdir=tmp_path)
+    ClaudeAgentSDKTarget(ClaudeAgentOptions(), workdir=tmp_path, isolation='none')
+
+    err = capsys.readouterr().err
+    assert err.count('does not load CLAUDE.md, .claude/settings.json from') == 1
+    assert target.turn_options().setting_sources == []
+    shutil.rmtree(_workdir(target).parent)
+
+
+@pytest.mark.asyncio
+async def test_cached_tokens_and_the_runtime_cost_reach_the_response_and_the_span(
+    fake: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr('evaluatorq.common.tracing.get_tracer', lambda: provider.get_tracer('agent-sdk-tests'))
+    # The runtime's usage is the Anthropic shape: input_tokens excludes the cache reads and writes.
+    usage = {
+        'input_tokens': 10,
+        'output_tokens': 7,
+        'cache_read_input_tokens': 1200,
+        'cache_creation_input_tokens': 300,
+    }
+    fake([ResultMessage(
+        subtype='success',
+        duration_ms=10,
+        duration_api_ms=8,
+        is_error=False,
+        num_turns=1,
+        session_id='sess-c',
+        total_cost_usd=0.0123,
+        usage=usage,
+        result='cached',
+    )])
+    target = ClaudeAgentSDKTarget(ClaudeAgentOptions(model='claude-haiku-5-5'))
+    try:
+        response = await target.respond(_user())
+    finally:
+        await target.close()
+        provider.shutdown()
+
+    assert response.usage is not None
+    assert (response.usage.input_tokens, response.usage.cached_tokens, response.usage.cache_creation_tokens) == (
+        1510,
+        1200,
+        300,
+    )
+    assert response.usage.output_tokens == 7
+    assert response.usage.total_cost is None  # evaluatorq prices the tokens itself; the runtime's cost is on the span
+    (span,) = exporter.get_finished_spans()
+    attributes = span.attributes or {}
+    assert attributes['evaluatorq.claude_agent_sdk.cost_usd'] == 0.0123
+    assert attributes['gen_ai.response.id'] == 'sess-c'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'stream',
+    [
+        # The run raises after yielding the error result.
+        _api_failure('Failed to authenticate. API Error: 401', error='authentication_failed', status=401),
+        # The run ends on the error result without raising.
+        [_assistant(TextBlock(text='Overloaded'), error='server_error'), _result('s', text='Overloaded', error='success')],
+    ],
+)
+async def test_a_failed_turn_still_puts_its_usage_and_cost_on_the_span(
+    fake: Any, monkeypatch: pytest.MonkeyPatch, stream: list[Any]
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr('evaluatorq.common.tracing.get_tracer', lambda: provider.get_tracer('agent-sdk-tests'))
+    fake(stream)
+    target = ClaudeAgentSDKTarget(ClaudeAgentOptions(model='claude-haiku-5-5'))
+    try:
+        with pytest.raises(ClaudeAgentSDKError):
+            await target.respond(_user())
+    finally:
+        await target.close()
+        provider.shutdown()
+
+    (span,) = exporter.get_finished_spans()
+    attributes = span.attributes or {}
+    assert attributes['evaluatorq.claude_agent_sdk.cost_usd'] == 0.01
+    assert (attributes['gen_ai.usage.input_tokens'], attributes['gen_ai.usage.output_tokens']) == (11, 7)
 
 
 def test_messages_with_nothing_for_the_transcript_are_skipped() -> None:
