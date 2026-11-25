@@ -1,9 +1,9 @@
 # Dashboard
 
 !!! note "The UI — FastHTML `eq dashboard`"
-    The combined `eq dashboard` documented here opens the report index for red-team, simulation and pairwise runs. Its canonical invocation scans a run directory and opens the multi-run FastHTML UI — `eq dashboard` (no path) browses the default stores, and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link to that report.
+    The combined `eq dashboard` documented here opens the report index for red-team, simulation, pairwise and experiment runs. Its canonical invocation scans a run directory and opens the multi-run FastHTML UI — `eq dashboard` (no path) browses the default stores, and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link to that report.
 
-evaluatorq ships a built-in web dashboard for browsing red-team, simulation and pairwise reports.  It is powered by **FastHTML** (a lightweight Python web framework) and served locally via **uvicorn**.  There is no external service dependency — everything runs on your machine.
+evaluatorq ships a built-in web dashboard for browsing red-team, simulation, pairwise and experiment reports.  It is powered by **FastHTML** (a lightweight Python web framework) and served locally via **uvicorn**.  There is no external service dependency — everything runs on your machine.
 
 The separate **Insights** sidebar page at `/insights` reads `.evaluatorq/insights-runs`, outside this report index. See the [Trace Insights guide](insights.md) for how to create and review those runs.
 
@@ -26,7 +26,7 @@ Prefer pip? Use `python -m pip install "evaluatorq[dashboard]"`, which installs 
 Launch it with `eq dashboard` (the `evaluatorq` and `eq` entry points are interchangeable):
 
 ```bash
-# Canonical — browse all default stores (red team + simulation + pairwise)
+# Canonical — browse all default stores (red team + simulation + pairwise + experiments)
 eq dashboard
 
 # Canonical — scope to the simulation run store
@@ -48,7 +48,7 @@ ORQ_WORKSPACE=orq-research eq dashboard
 
 | Invocation | What it scans |
 |---|---|
-| `eq dashboard` | All three default stores: `.evaluatorq/runs` (red team), `.evaluatorq/sim-runs` (simulation), and `.evaluatorq/pairwise-runs` (pairwise) |
+| `eq dashboard` | All four default stores: `.evaluatorq/runs` (red team), `.evaluatorq/sim-runs` (simulation), `.evaluatorq/pairwise-runs` (pairwise), and `.evaluatorq/experiment-runs` (experiments) |
 | `eq dashboard <dir>` | Only that directory (e.g. `eq dashboard .evaluatorq/sim-runs`) |
 | `eq dashboard <file>.json` | Optional direct deep-link; prints that report's direct URL so you land straight on it |
 
@@ -122,8 +122,9 @@ The dashboard auto-discovers JSON report files in the configured root directorie
 | Default store | Written by |
 |---|---|
 | `.evaluatorq/runs/*.json` | `red_team()` / `eq redteam run` |
-| `.evaluatorq/sim-runs/*.json` | `eq sim run` (auto-saves unless `--no-save`); `simulate()` only when called with `save=True` |
+| `.evaluatorq/sim-runs/*.json` | `eq sim run` (auto-saves unless `--no-save`); `simulate()` only when called with `save=SaveMode.FINAL` |
 | `.evaluatorq/pairwise-runs/*.json` | `PairwiseRun.save()` (see [Pairwise Judging](pairwise-judging.md#saving-a-run-and-viewing-it-in-the-dashboard)) |
+| `.evaluatorq/experiment-runs/*.json` | `evaluatorq()` only when called with `save=SaveMode.FINAL` (see [Saving a run locally](evaluation-reference.md#saving-a-run-locally)) |
 
 Each report gets a stable URL for the lifetime of its file, so links you share keep working.
 
@@ -134,6 +135,7 @@ Each report gets a stable URL for the lifetime of its file, so links you share k
 | Red team | `"pipeline"` key present |
 | Simulation | `"mode"` key present (`mode` wins over `pipeline`) |
 | Pairwise | `"judging"` key present |
+| Experiment | `"experiment_run_version"` key present |
 
 Files that cannot be parsed (invalid JSON) are silently skipped.  Files that parse but fail model validation appear in the index as **broken cards** with an error badge; their detail page shows a non-fatal error message instead of a traceback.
 
@@ -141,7 +143,7 @@ Files that cannot be parsed (invalid JSON) are silently skipped.  Files that par
 
 ## Landing
 
-`GET /` opens the combined dashboard: a stat band (total runs, per-surface counts, attack resistance), runs-by-type and attack-resistance breakdowns, findings by severity, token usage, and a **recent runs** list across both stores.  The left sidebar switches surface — **Red Team** and **Agent Sim** open filtered run lists at `?surface=…`, sorted by creation time (newest first). Drag its right edge to resize it (arrow keys also work when the edge has focus, and a double-click resets it), or collapse it with **⌘ B** (Ctrl B elsewhere); both settings are remembered in the browser.  Each run row drills into its report view; reports whose JSON is only partially valid surface an error badge instead of a traceback.  The **export** action on a report downloads the standalone self-contained HTML for offline sharing.
+`GET /` opens the combined dashboard: a stat band (total runs, per-surface counts, attack resistance), runs-by-type and attack-resistance breakdowns, findings by severity, token usage, and a **recent runs** list across both stores.  The left sidebar switches surface — **Red Team**, **Agent Sim**, **Pairwise** and **Experiments** open filtered run lists at `?surface=…`, sorted by creation time (newest first). Drag its right edge to resize it (arrow keys also work when the edge has focus, and a double-click resets it), or collapse it with **⌘ B** (Ctrl B elsewhere); both settings are remembered in the browser.  Each run row drills into its report view; reports whose JSON is only partially valid surface an error badge instead of a traceback.  The **export** action on a report downloads the standalone self-contained HTML for offline sharing.
 
 ### How attack resistance is counted
 
@@ -361,7 +363,7 @@ Click a row to expand the evaluator's verdict, its reasoning, and the full messa
 
 ## Reading a simulation run
 
-Runs are saved to `.evaluatorq/sim-runs/<name>_<timestamp>.json` — automatically by `eq sim run` (unless you pass `--no-save`), and by `simulate()` when called with `save=True`. `eq dashboard` browses those files locally, no external service:
+Runs are saved to `.evaluatorq/sim-runs/<name>_<timestamp>.json` — automatically by `eq sim run` (unless you pass `--no-save`), and by `simulate()` when called with `save=SaveMode.FINAL`. `eq dashboard` browses those files locally, no external service:
 
 ```bash
 uv add "evaluatorq[dashboard]"
@@ -371,7 +373,7 @@ eq dashboard .evaluatorq/sim-runs  # scope to simulation runs
 ```
 
 !!! warning "The Python examples above don't save by default"
-    `simulate()` and `generate_and_simulate()` default to `save=False`, so a script copy-pasted from earlier on this page leaves the dashboard empty. Pass `save=True`, or drive the run from the CLI (`eq sim run`), which saves unless you pass `--no-save`.
+    `simulate()` and `generate_and_simulate()` default to `save=SaveMode.NONE`, so a script copy-pasted from earlier on this page leaves the dashboard empty. Pass `save=SaveMode.FINAL`, or drive the run from the CLI (`eq sim run`), which saves unless you pass `--no-save`.
 
 What follows walks the dashboard the way you'd read a finished run: land, pick the run, then work down the report tabs from headline to transcript. The screenshots come from one example run — 10 personas × 5 scenarios against a refund agent — so your own numbers will differ. [Filters](#filters), [trace links](#orq-trace-links) and [downloads](#downloads) are documented above. For the simulation concepts behind these numbers, see the [Agent Simulation guide](guides/agent-simulation.md).
 
@@ -379,7 +381,7 @@ What follows walks the dashboard the way you'd read a finished run: land, pick t
 
 `eq dashboard` opens on a cross-surface overview: jobs run, spend, tokens and the red team / agent sim split across every stored run. Agent simulation sits next to red teaming in the left rail.
 
-Zeros everywhere and an empty rail mean no report files were found, not that the run failed — the usual cause is the `save=False` default in the warning above. Launch `eq dashboard` from the directory holding `.evaluatorq/`.
+Zeros everywhere and an empty rail mean no report files were found, not that the run failed — the usual cause is the `save=SaveMode.NONE` default in the warning above. Launch `eq dashboard` from the directory holding `.evaluatorq/`.
 
 ![The dashboard landing page: jobs run, spend, tokens and run mix across all stored runs.](assets/dashboard/sim-01-landing.png){ .dashboard-shot }
 
@@ -452,22 +454,48 @@ Run-level numbers always compare. For a per-conversation diff, the runs must sha
 
 ---
 
+## Reading an experiment run
+
+An **experiment run** is one call to `evaluatorq()` saved with `save=SaveMode.FINAL`: every data point, the output of each job that ran on it, and the score each evaluator gave that output. Open one from the **Experiments** run list when you want to see which evaluator a run did badly on and which rows caused it, without uploading anything to Orq.
+
+```bash
+eq dashboard .evaluatorq/experiment-runs  # scope to experiment runs
+```
+
+The run list scores each run by its **pass rate**: the share of evaluator scores that set `pass` and passed, across every evaluator. A run whose evaluators never set `pass` has no score rather than an invented one, because each evaluator's average is on its own scale (0 to 1, 1 to 5, a raw count) and no single average reads against one threshold. A run is marked errored when every row errored, counting rows the way the report's errored row count does: one row per job result, plus one for each data point that failed before any job ran.
+
+The run list opens with four figures across every saved run: the pooled pass rate, the number of datapoints, errored rows out of all rows, and evaluator spend. Each run row then shows its jobs, errored rows, pass rate, row count and evaluator cost.
+
+The report page reads like the Insights page. A status line under the title carries the start time, duration, datapoint and job-result counts, judge tokens and cost, and an amber chip when rows errored. Headline rows follow: the pass rate across evaluators, the weakest evaluator when more than one sets `pass`, and the errored row count. The **Filters** rail on the right narrows the report to datapoints that ran or errored (**Status**), or to those an evaluator failed (**Failed on**); every figure on the page then counts only the datapoints shown, and the bar above the headlines says how many that is.
+
+- **Evaluators.** One row per evaluator: its pass rate on a bar with the passed and pass-setting counts, and its average over numeric scores. Errored and non-numeric scores are noted under the name. An errored score counts in neither the average nor the pass rate, so check that note before trusting a high average.
+- **Run details.** Run id, dataset id, start and end time, duration and the evaluatorq version that wrote the file.
+- **Rows.** One row per job result. Inputs and outputs longer than 160 characters are shortened in the cell; click the cell to read the full text. A job that raised, or a data point that failed before any job ran, is tinted red with its error in the Output column and an `error` status. Hover a score to read the evaluator's explanation.
+
+The **judge tokens** count is the tokens your evaluators reported through `EvaluationResult.token_usage`; an evaluator that reports none adds nothing, and neither does one that raised, because a raising scorer returns no result to read usage from. The landing page's spend and token totals include this figure. It never includes your target calls: a job that returns an `AgentResponse` keeps its `usage` in the saved output, but the dashboard does not total it.
+
+![An experiment run: a status line with five data points and one errored row, headlines for a 75% pass rate and the errored row, the filter rail, per-evaluator pass rates and averages, and a row table.](assets/dashboard/experiment-report.png){ .dashboard-shot }
+
+---
+
 ## Downloads
 
 Every report page includes a download sidebar with export links:
 
-| Format | Red team | Simulation | Pairwise |
-|---|---|---|---|
-| HTML (standalone, self-contained) | yes | yes | yes |
-| Markdown | yes | yes | — |
-| CSV (filtered result rows) | yes | — | yes |
-| JSON (filtered result rows) | yes | yes | yes |
+| Format | Red team | Simulation | Pairwise | Experiment |
+|---|---|---|---|---|
+| HTML (standalone, self-contained) | yes | yes | yes | yes |
+| Markdown | yes | yes | — | — |
+| CSV (filtered result rows) | yes | — | yes | yes |
+| JSON (filtered result rows) | yes | yes | yes | yes |
 
 Simulation and red-team HTML downloads open with a compact report brief: tested scope, outcome and coverage counts, and up to three priority findings linked to their evidence. The findings show recorded recommendations or existing framework guidance when available; missing recommendations stay explicit. Every available dashboard tab follows as a numbered section, with chart-reading notes and links back to the brief. Configuration and usage appear in closed appendix disclosures at the end. The file embeds its styles, fonts, charts and recorded evidence, so it opens without the dashboard server or an internet connection. Conversation and attack details are embedded in foldable rows that are closed by default, with local links from summary tables to their summaries. Open a row to read the complete transcript. Printing includes the evidence rows and appendix disclosures you have opened; closed disclosures retain only their summaries. A notice in the printout explains this limit. Recommendations retain their recorded applied status; applying changes, fetching live agent details and comparing runs remain dashboard actions.
 
 Red-team rates use evaluated attacks as their denominator. The Overview shows evaluation coverage and distinguishes attacks without verdicts from recorded errors, so a partially evaluated run does not read as a clean pass.
 
 HTML downloads render the full, unfiltered saved report. For simulation, the saved run supplies the captured agent details, target, model, maximum turns, recommendations and whole-run token usage when recorded. Missing fields in older runs stay unavailable. Transcripts are included in full, so a large run produces a larger file. CSV and JSON downloads continue to contain the filtered result rows.
+
+The experiment CSV writes one row per job result with the full input, output and error text, and one column per evaluator holding its score, or `error: <message>` when the evaluator failed.
 
 The pairwise CSV writes one row per comparison: the question, the consensus winner, and each judge's vote as its own column, all resolved to the run's side labels rather than the bare `A` / `B` slot letters.
 
@@ -477,4 +505,5 @@ Download links respect the currently active filter state — the CSV/JSON export
 
 - **[Red Teaming](guides/red-teaming.md)** — generate the red-team reports the dashboard browses.
 - **[Agent Simulation](guides/agent-simulation.md)** — generate simulation reports.
+- **[Evaluation Reference](evaluation-reference.md#saving-a-run-locally)** — save `evaluatorq()` experiment runs for the dashboard.
 - **[CLI Reference](cli-reference/overview.md)** — the `eq dashboard` command and options.

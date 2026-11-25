@@ -144,7 +144,7 @@ def dashboard(
         typer.Argument(
             help=(
                 'Optional paths to scan (repeatable). '
-                'Omit to show all runs from the red-team, simulation and pairwise stores. '
+                'Omit to show all runs from the red-team, simulation, pairwise and experiment stores. '
                 'Directories are scanned for reports; '
                 "a file opens the dashboard scoped to that file's parent directory "
                 'and prints the direct report URL so you can navigate straight to it.'
@@ -191,8 +191,8 @@ def dashboard(
     """Launch the FastHTML dashboard (preview — still in development).
 
     With no PATH the red-team (.evaluatorq/runs/), simulation
-    (.evaluatorq/sim-runs/) and pairwise (.evaluatorq/pairwise-runs/)
-    run stores are scanned.
+    (.evaluatorq/sim-runs/), pairwise (.evaluatorq/pairwise-runs/) and
+    experiment (.evaluatorq/experiment-runs/) run stores are scanned.
 
     With one or more directory PATHs those directories are scanned together —
     e.g. sim runs from one repo next to red team runs from another.
@@ -235,9 +235,11 @@ def dashboard(
                     path / 'runs',
                     path / 'sim-runs',
                     path / 'pairwise-runs',
+                    path / 'experiment-runs',
                     path / '.evaluatorq' / 'runs',
                     path / '.evaluatorq' / 'sim-runs',
                     path / '.evaluatorq' / 'pairwise-runs',
+                    path / '.evaluatorq' / 'experiment-runs',
                 ]
             elif path.is_file():
                 # Scan the parent so the report resolves, but surface the direct link.

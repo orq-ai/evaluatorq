@@ -52,7 +52,7 @@ Five decisions cover almost every real configuration. The rest of this page is r
 | Decision | Variable | Default | Notes |
 |---|---|---|---|
 | **Which backend runs my LLM calls?** | `ORQ_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` | — | Set one. `ORQ_API_KEY` unlocks datasets, deployments and tracing, and wins over the others; `OPENAI_API_KEY` (plus `OPENAI_BASE_URL` for a non-OpenAI host) is the standalone route and wins over `ANTHROPIC_API_KEY`, which talks to Claude directly. |
-| **Where do run reports land?** | `EVALUATORQ_DIR` | `.evaluatorq` in the current directory | The run store that red teaming (`runs/`) and simulation (`sim-runs/`) write to, and that the [dashboard](dashboard.md) reads. |
+| **Where do run reports land?** | `EVALUATORQ_DIR` | `.evaluatorq` in the current directory | The run store that red teaming (`runs/`), simulation (`sim-runs/`), pairwise judging (`pairwise-runs/`) and saved experiments (`experiment-runs/`) write to, and that the [dashboard](dashboard.md) reads. |
 | **Do I want traces?** | `ORQ_DISABLE_TRACING` | off (traces enabled when `ORQ_API_KEY` **or** `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the `otel` extra is installed) | Set to `1`, `true`, `yes` or `on` to send nothing. Point traces elsewhere with `OTEL_EXPORTER_OTLP_ENDPOINT`. See [Tracing](tracing.md). |
 | **Which models run each step?** | `EVALUATORQ_FAST_MODEL`, `EVALUATORQ_SMART_MODEL` | `openai/gpt-6-luna`, `openai/gpt-6-sol` | Four model roles cover every LLM call evaluatorq makes. See [Models](#models). |
 | **Do dashboard links open my Orq workspace?** | `ORQ_WORKSPACE` | unset | Your workspace slug for runs without an experiment URL. Without one, their deep-link buttons are hidden. |
@@ -207,7 +207,7 @@ Set the embedding role with `EVALUATORQ_EMBEDDING_MODEL`, `--embedding-model`, t
 
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
-| `EVALUATORQ_DIR` | No | `.evaluatorq` in the current directory | Base directory for the run store, where both red teaming (`runs/`) and simulation (`sim-runs/`) persist reports. Must point at the store directory itself (e.g. `/tmp/x/.evaluatorq`), not its parent — only the working-directory fallback appends `.evaluatorq`. Empty is treated as unset. |
+| `EVALUATORQ_DIR` | No | `.evaluatorq` in the current directory | Base directory for the run store, where red teaming (`runs/`), simulation (`sim-runs/`), pairwise judging (`pairwise-runs/`) and saved experiments (`experiment-runs/`) persist reports. Must point at the store directory itself (e.g. `/tmp/x/.evaluatorq`), not its parent — only the working-directory fallback appends `.evaluatorq`. Empty is treated as unset. |
 | `EQ_DEBUG` | No | unset | Set to any non-empty value to show the full traceback on CLI errors instead of the one-line message. CLI-wide; distinct from `ORQ_DEBUG`, which only affects tracing diagnostics. |
 | `EVALUATORQ_LOG_LEVEL` | No | `INFO` | Dashboard server log level. `DEBUG` logs finder model requests and responses, including trace content, in CLI and dashboard runs; `eq find` also prints changed progress. The default suppresses httpx's per-request INFO line; explicit `INFO` or `DEBUG` allows it. |
 

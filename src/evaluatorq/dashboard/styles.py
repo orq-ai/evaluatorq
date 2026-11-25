@@ -627,6 +627,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .type-cell.redteam svg { color: var(--red-600); }
 .type-cell.sim svg { color: var(--teal-600); }
 .type-cell.pairwise svg { color: var(--orange-500); }
+.type-cell.experiment svg { color: var(--chart-1); }
 
 /* Landing 'Recent runs' — airy aligned columns, no table chrome */
 .recent-runs { display: flex; flex-direction: column; }
@@ -4215,6 +4216,37 @@ _PAIRWISE_COMPARISONS_CSS = """
 .pw-report .pw-filtered > .pw-filtered-text, .pw-report .pw-filtered > span { flex: 1 1 240px; min-width: 0; max-width: 72ch; text-wrap: pretty; }
 """
 
+_EXPERIMENT_REPORT_CSS = """
+/* Status line, headlines, score tracks and the filter bar are the shared cmp-* and rk-* pieces; the track colour is set here because --cmp-a is otherwise scoped to the sim comparison. */
+.exp-report{--cmp-a:var(--teal-600)}
+.exp-report .cmp-status a{color:var(--teal-600);font-weight:500}
+.exp-report .exp-table-wrap{overflow-x:auto}
+.exp-report table.exp-rows td{vertical-align:top}
+/* .report-aligned right-aligns every column after the first; the row table is text. */
+.exp-report table.exp-rows thead th:not(:first-child),.exp-report table.exp-rows tbody td:not(:first-child){text-align:left}
+.exp-report table.exp-rows td{max-width:420px;overflow-wrap:break-word}
+.exp-report .exp-row--error td{background:var(--red-50)}
+.exp-report .exp-clip summary{cursor:pointer;list-style:none;color:inherit;font-weight:inherit}
+.exp-report .exp-job{white-space:nowrap}
+.exp-report .rk-meta-value{overflow-wrap:anywhere}
+.exp-report .exp-clip summary::-webkit-details-marker{display:none}
+.exp-report .exp-full{white-space:pre-wrap;word-break:break-word;background:var(--surface-sunken);padding:8px 10px;border-radius:6px;margin:6px 0 0;font:inherit;line-height:1.6}
+.exp-report .exp-error{color:var(--red-700)}
+.exp-report .exp-output-after-error{margin-top:4px;color:var(--text-muted)}
+.exp-report .exp-score{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.exp-report .exp-score-value{font-variant-numeric:tabular-nums;font-weight:600}
+.exp-report .exp-none,.exp-report .exp-empty{color:var(--text-faint)}
+.exp-report details.exp-clip{margin:0}
+.exp-report .rk-panel-body > table:last-child,.exp-report .exp-table-wrap:last-child > table{margin-bottom:0}
+.exp-report .exp-clip summary{padding:0}
+.exp-report .exp-toggle{display:inline-block;margin-left:6px;font-size:12px;font-weight:500;color:var(--teal-600);text-decoration:underline;text-decoration-color:transparent;text-underline-offset:2px;transition:text-decoration-color .15s ease-out}
+.exp-report .exp-clip summary:hover .exp-toggle{text-decoration-color:currentColor}
+.exp-report .exp-clip summary:focus-visible{outline:2px solid var(--teal-600);outline-offset:2px;border-radius:2px}
+.exp-report .exp-clip .exp-toggle--less,.exp-report .exp-clip[open] .exp-toggle--more,.exp-report .exp-clip[open] .exp-preview{display:none}
+.exp-report .exp-clip[open] .exp-toggle--less{display:inline-block;margin-left:0}
+.exp-report .exp-clip[open] .exp-full{margin:0 0 6px}
+"""
+
 _PAIRWISE_COMPARE_CSS = """
 .pw-compare .pw-cmp-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0;align-items:start}
 .pw-compare .pw-cmp-cols>.rk-panel{margin:0}
@@ -4251,6 +4283,7 @@ DASHBOARD_CSS = (
     + _PAIRWISE_REPORT_CSS
     + _PAIRWISE_COMPARISONS_CSS
     + _PAIRWISE_COMPARE_CSS
+    + _EXPERIMENT_REPORT_CSS
 )
 
 # Report foundations and component rules, shared by offline HTML documents.
@@ -4262,4 +4295,6 @@ REPORT_CSS = (
     + _SIM_REPORT_OVERRIDES_CSS
     + _SIM_TRANSCRIPT_OVERRIDES_CSS
     + _RT_REPORT_CSS
+    + _SIM_COMPARE_CSS
+    + _EXPERIMENT_REPORT_CSS
 )

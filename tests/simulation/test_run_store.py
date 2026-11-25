@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from evaluatorq.contracts import SaveMode
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.utils.run_store import (
     SIM_RUNS_DIR_NAME,
@@ -447,7 +448,7 @@ async def test_simulate_experiment_url_populated_from_upload(
             datapoints=[_make_datapoint()],
             llm_config=LLMCallConfig(model="test"),
             upload_results=False,
-            save=True,
+            save=SaveMode.FINAL,
         )
 
     assert out == results  # public simulate() still returns the plain results list
@@ -457,7 +458,7 @@ async def test_simulate_experiment_url_populated_from_upload(
 
 @pytest.mark.asyncio
 async def test_simulate_save_true_writes_one_run_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=True)
+    await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=SaveMode.FINAL)
     assert len(list(tmp_path.glob("*.json"))) == 1
 
 
@@ -466,8 +467,8 @@ async def test_simulate_save_true_callable_target_kind_is_callback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Regression: a plain-callable target produced target_kind='callback', which
-    # was not in the SimulationRun.target_kind Literal and crashed on save=True.
-    await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=True)
+    # was not in the SimulationRun.target_kind Literal and crashed on save=SaveMode.FINAL.
+    await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=SaveMode.FINAL)
     data = json.loads(next(tmp_path.glob("*.json")).read_text())
     assert data["target_kind"] == "callback"
     assert data["mode"] == "simulate"
@@ -498,7 +499,7 @@ async def test_simulate_save_true_openai_model_target_kind_is_openai_model(
             datapoints=[_make_datapoint()],
             llm_config=LLMCallConfig(model="test"),
             upload_results=False,
-            save=True,
+            save=SaveMode.FINAL,
         )
         mock_fetch.assert_not_called()
 
@@ -532,7 +533,7 @@ async def test_simulate_save_true_vercel_target_kind_is_vercel(
             datapoints=[_make_datapoint()],
             llm_config=LLMCallConfig(model="test"),
             upload_results=False,
-            save=True,
+            save=SaveMode.FINAL,
         )
         mock_fetch.assert_not_called()
 
@@ -544,8 +545,25 @@ async def test_simulate_save_true_vercel_target_kind_is_vercel(
 
 @pytest.mark.asyncio
 async def test_simulate_save_false_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=False)
+    await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=SaveMode.NONE)
     assert list(tmp_path.glob("*.json")) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("legacy_value", "files"), [(True, 1), (False, 0)])
+async def test_simulate_bool_save_still_works_and_warns_at_the_callers_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_value: bool, files: int
+) -> None:
+    with pytest.warns(DeprecationWarning, match="save=True/False is deprecated") as recorded:
+        await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=legacy_value)
+    assert recorded[0].filename == __file__
+    assert len(list(tmp_path.glob("*.json"))) == files
+
+
+@pytest.mark.asyncio
+async def test_simulate_rejects_save_detail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match="DETAIL only applies to red_team"):
+        await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=SaveMode.DETAIL)
 
 
 @pytest.mark.asyncio
@@ -553,7 +571,7 @@ async def test_simulate_report_writes_explicit_path(tmp_path: Path, monkeypatch:
     auto_dir = tmp_path / "auto"
     auto_dir.mkdir()
     explicit = tmp_path / "nested" / "explicit.json"
-    await _run_simulate(runs_dir=auto_dir, monkeypatch=monkeypatch, save=True, report=str(explicit))
+    await _run_simulate(runs_dir=auto_dir, monkeypatch=monkeypatch, save=SaveMode.FINAL, report=str(explicit))
     assert explicit.exists()
     assert list(auto_dir.glob("*.json")) == []  # explicit path bypasses auto-save dir
 
@@ -561,7 +579,7 @@ async def test_simulate_report_writes_explicit_path(tmp_path: Path, monkeypatch:
 @pytest.mark.asyncio
 async def test_simulate_report_path_writes_when_save_is_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     explicit = tmp_path / "nested" / "report.json"
-    await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=True, report_path=explicit)
+    await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=SaveMode.FINAL, report_path=explicit)
     assert explicit.exists()
     assert json.loads(explicit.read_text())["run_name"]
 
@@ -570,7 +588,7 @@ async def test_simulate_report_path_writes_when_save_is_enabled(tmp_path: Path, 
 async def test_simulate_run_output_alias_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     explicit = tmp_path / "legacy.json"
     with pytest.raises(TypeError, match="run_output"):
-        await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=True, run_output=str(explicit))
+        await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=SaveMode.FINAL, run_output=str(explicit))
     assert not explicit.exists()
 
 
@@ -604,7 +622,7 @@ async def test_simulate_save_failure_still_returns_results(
             datapoints=[_make_datapoint()],
             llm_config=LLMCallConfig(model="test"),
             upload_results=False,
-            save=True,
+            save=SaveMode.FINAL,
         )
 
     assert out == results  # results survived the save failure

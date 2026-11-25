@@ -34,11 +34,15 @@ def ensure_private_directory(path: Path) -> None:
     path.chmod(0o700)
 
 
-def write_private_atomic(path: Path, contents: str | bytes, *, private_directory: bool = True) -> None:
-    """Replace a file atomically with mode 0o600, in an owned, non-symlink directory.
+def write_private_atomic(
+    path: Path, contents: str | bytes, *, private_directory: bool = True, mode: int = 0o600
+) -> None:
+    """Replace a file atomically with *mode* (0o600 by default), in an owned, non-symlink directory.
 
     Application storage defaults to mode 0o700. Explicit user exports may set
     `private_directory=False` to preserve an existing destination directory's permissions.
+    *mode* is set on the temporary file before the replace, so the file never appears with
+    another mode; a rewrite that must keep an existing file's permissions passes them here.
 
     Windows access control comes from the containing directory's inherited ACL;
     POSIX permission bits do not enforce access control there.
@@ -56,7 +60,7 @@ def write_private_atomic(path: Path, contents: str | bytes, *, private_directory
             raise
         with handle:
             if os.name != 'nt':
-                os.fchmod(handle.fileno(), 0o600)
+                os.fchmod(handle.fileno(), mode)
             handle.write(contents.encode('utf-8') if isinstance(contents, str) else contents)
             handle.flush()
             os.fsync(handle.fileno())

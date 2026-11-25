@@ -47,11 +47,23 @@ if TYPE_CHECKING:
     from evaluatorq.common.cli_oauth import OAuthSession
     from evaluatorq.common.model_roles import Role
     from evaluatorq.dashboard.library import ReportCard
-    from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
+    from evaluatorq.dashboard.metrics import (
+        ExperimentOverview,
+        ExperimentRunRow,
+        Landing,
+        RedTeamOverview,
+        RunRow,
+        SimOverview,
+    )
     from evaluatorq.dashboard.orq_scope import OAuthScopes
 
 # Surface key → display label, used for run-list titles + kind badges.
-SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pairwise': 'Pairwise'}
+SURFACE_LABELS: dict[str, str] = {
+    'redteam': 'Red Team',
+    'sim': 'Agent Sim',
+    'pairwise': 'Pairwise',
+    'experiment': 'Experiments',
+}
 
 # Allow-listed run-overview page sizes (first entry is the default). Shared with
 # app.py so the query parser and the size picker agree.
@@ -139,6 +151,7 @@ _SCORE_TITLES: dict[str, str] = {
     'redteam': 'Resistance rate: attacks the target withstood',
     'sim': 'Mean scorer average across this run',
     'pairwise': 'Called rate: comparisons ending in a win or tie (not inconclusive)',
+    'experiment': 'Pass rate: evaluator scores that set pass and passed',
 }
 
 
@@ -197,6 +210,11 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
 
 # Surface → inline glyph (lucide: shield-alert / messages-square / columns-2) for the Type column.
 PAIRWISE_ICON_PATH = '<path d="M4 6h6v12H4z"/><path d="M14 6h6v12h-6z"/><path d="M12 4v16"/>'
+# lucide: flask-conical
+EXPERIMENT_ICON_PATH = (
+    '<path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45'
+    'l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/>'
+)
 _SURFACE_ICONS: dict[str, str] = {
     'redteam': (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
@@ -212,6 +230,10 @@ _SURFACE_ICONS: dict[str, str] = {
     'pairwise': (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
         f'stroke-linecap="round" stroke-linejoin="round">{PAIRWISE_ICON_PATH}</svg>'
+    ),
+    'experiment': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        f'stroke-linecap="round" stroke-linejoin="round">{EXPERIMENT_ICON_PATH}</svg>'
     ),
 }
 
@@ -310,6 +332,7 @@ _KIND_COLORS = {
     'Red team': 'var(--chart-1)',
     'Agent sim': 'var(--chart-2)',
     'Pairwise': 'var(--chart-3)',
+    'Experiments': 'var(--chart-4)',
 }
 
 
@@ -329,7 +352,7 @@ def landing_body(data: Landing) -> str:
     if data.total_runs == 0:
         return (
             '<section class="dash-wrap"><div class="runs-empty">'
-            'No reports found. Run a red team, simulation, or pairwise job to generate reports.'
+            'No reports found. Run a red team, simulation, pairwise or saved evaluatorq() job to generate reports.'
             '</div></section>'
         )
 
@@ -383,14 +406,18 @@ def landing_body(data: Landing) -> str:
         if data.cost_by_kind
         else '<p class="rt-panel-loading">No cost recorded.</p>'
     )
-    spend_panel = _panel('Spend by job type', 'Real cost across runs', spend_inner)
+    # An experiment's tokens and spend are its evaluators' calls only; say so wherever its bar shows.
+    judge_only = ' · experiments: evaluator calls only'
+    spend_sub = 'Real cost across runs' + (judge_only if any(k == 'Experiments' for k, _ in data.cost_by_kind) else '')
+    spend_panel = _panel('Spend by job type', spend_sub, spend_inner)
 
     tok_inner = (
         _bars(data.tokens_by_kind, _kind_colors(data.tokens_by_kind), fmt='{:,}')
         if data.tokens_by_kind
         else '<p class="rt-panel-loading">No token usage recorded.</p>'
     )
-    tokens_panel = _panel('Token usage', 'By job type', tok_inner)
+    tokens_sub = 'By job type' + (judge_only if any(k == 'Experiments' for k, _ in data.tokens_by_kind) else '')
+    tokens_panel = _panel('Token usage', tokens_sub, tok_inner)
 
     # 2x2 grid of the four remaining panels.
     grid = (
@@ -588,6 +615,37 @@ def _redteam_row(r: Any) -> str:
     )
 
 
+def _experiment_row(r: ExperimentRunRow) -> str:
+    """One experiment run: errored rows, the pooled pass rate, rows and evaluator spend."""
+    when_text, when_title = _when_label(r.when)
+    when_attrs = f' title="{esc(when_title)}"' if when_title else ''
+    rate = r.passed / r.pass_set if r.pass_set else None
+    rate_text = '—' if rate is None else pct(rate)
+    status = _run_status_pill(r.status) if r.status != 'finished' else ''
+    errored = f'{r.errored:,}/{r.rows:,}' if r.rows else '—'
+    errored_class = 'rg-broke-n' if r.errored else 'rg-broke-n is-none'
+    jobs = ''.join(f'<span class="target-pill"><span class="target-label">{esc(job)}</span></span>' for job in r.jobs)
+    pass_label = (
+        'no evaluator set pass' if rate is None else f'pass rate {rate_text}, {r.passed} of {r.pass_set} passed'
+    )
+    label = (
+        f'{r.name}, {when_text}, jobs {", ".join(r.jobs) or "none"}, status {r.status}, '
+        f'{r.errored} of {r.rows} rows errored, {pass_label}, evaluator cost {_fmt_spend(r.cost)}'
+    )
+    err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
+    return (
+        f'<a class="runs-grid-row" href="/r/{esc(r.rid)}" aria-label="{esc(label)}">'
+        f'<span class="rg-job"><span class="rg-name" title="{esc(r.name)}">{esc(r.name)}{err}</span>'
+        f'<span class="rg-sub"{when_attrs}>{esc(when_text)}</span></span>'
+        f'<span class="rg-targets" title="{esc(", ".join(r.jobs))}">{jobs}</span>'
+        f'<span class="rg-status">{status}<span class="{errored_class}">{errored}</span></span>'
+        f'<span class="run-score rg-score {_goal_status(rate)}" title="{esc(_SCORE_TITLES["experiment"])}">{rate_text}</span>'
+        f'<span class="rg-num rg-cases">{r.rows:,}</span>'
+        f'<span class="rg-num rg-cost">{esc(_fmt_spend(r.cost))}</span>'
+        f'{_CHEVRON}</a>'
+    )
+
+
 def _run_grid(rows: list[Any], *, redteam: bool = False) -> str:
     """Run-level table as a clickable anchor-grid — the WHOLE row links to the
     run's report. Borderless (no boxed table chrome), aligned columns.
@@ -624,7 +682,7 @@ def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
 
     sizes = ''.join(link(str(sz), pg=1, pp=sz, active=(sz == per_page)) for sz in RUN_PAGE_SIZES)
     # Hide the picker when every run fits even the smallest page.
-    fits_smallest = surface in {'redteam', 'sim'} and total <= min(RUN_PAGE_SIZES)
+    fits_smallest = surface in {'redteam', 'sim', 'experiment'} and total <= min(RUN_PAGE_SIZES)
     left = '' if fits_smallest else f'<span class="runs-pager-sizes">Per page: {sizes}</span>'
 
     if total <= per_page:
@@ -769,18 +827,56 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
     return _run_overview(data=data, surface='redteam', band=band)
 
 
-def _run_overview(*, data: SimOverview | RedTeamOverview, surface: str, band: str) -> str:
+def experiment_overview_body(data: ExperimentOverview) -> str:
+    """Experiments run overview: pooled pass rate, rows, errored rows and evaluator spend, then the run list."""
+    from evaluatorq.common.reports.html_helpers import kpi_cards
+
+    if data.total_runs == 0:
+        return runs_screen_body([], 'experiment')
+    rate = data.pass_rate
+    band = kpi_cards(
+        [
+            {
+                'label': 'Pass rate',
+                'value': '—' if rate is None else pct(rate),
+                'status': _goal_status(rate),
+                'sub': f'{data.passed:,} of {data.pass_set:,} scores that set pass'
+                if rate is not None
+                else 'No evaluator set pass',
+            },
+            {'label': 'Datapoints', 'value': f'{data.datapoints:,}'},
+            {
+                'label': 'Errored rows',
+                'value': f'{data.errored:,}',
+                'status': 'warn' if data.errored else 'neutral',
+                'sub': f'of {data.rows:,} rows',
+            },
+            {'label': 'Evaluator spend', 'value': _fmt_spend(data.total_cost), 'sub': 'judge calls only'},
+        ],
+        modifier='strip',
+    )
+    head = (
+        '<div class="runs-grid-head" aria-hidden="true"><span>Job</span><span>Jobs</span>'
+        '<span>Errored</span><span>Pass rate</span><span>Rows</span><span>Cost</span><span></span></div>'
+    )
+    grid = f'<div class="runs-grid">{head}{"".join(map(_experiment_row, data.recent))}</div>'
+    return _run_overview(data=data, surface='experiment', band=band, grid=grid)
+
+
+def _run_overview(
+    *, data: SimOverview | RedTeamOverview | ExperimentOverview, surface: str, band: str, grid: str = ''
+) -> str:
     """Shared overview shell: scope, KPI strip, run grid, and pagination."""
     pager = _run_pager(surface, data.page, data.total_runs, data.per_page)
     panel = _panel(
         'Recent runs',
         '',
-        _run_grid(data.recent, redteam=surface == 'redteam') + pager,
+        (grid or _run_grid(data.recent, redteam=surface == 'redteam')) + pager,
         cls='' if pager else 'panel--flush',
         title_tag='h2',
     )
     scope = f'All {data.total_runs:,} runs' if data.total_runs != 1 else '1 run'
-    surface_class = 'rt-overview' if surface == 'redteam' else 'sim-overview'
+    surface_class = {'redteam': 'rt-overview', 'experiment': 'exp-overview'}.get(surface, 'sim-overview')
     return (
         f'<section class="dash-wrap run-overview {surface_class}">'
         f'<p class="rt-scope">{scope}</p>{band}{panel}</section>'
@@ -833,8 +929,14 @@ _DOWNLOAD_ICON = (
 
 def report_back_link(surface: str) -> str:
     """Render the 'back to run list' link shown above a report (matches v1)."""
-    target = f'/?surface={esc(surface)}' if surface in ('redteam', 'sim', 'pairwise') else '/'
-    label = {'redteam': 'Red team runs', 'sim': 'Agent sim runs', 'pairwise': 'Pairwise runs'}.get(surface, 'All runs')
+    labels = {
+        'redteam': 'Red team runs',
+        'sim': 'Agent sim runs',
+        'pairwise': 'Pairwise runs',
+        'experiment': 'Experiment runs',
+    }
+    target = f'/?surface={esc(surface)}' if surface in labels else '/'
+    label = labels.get(surface, 'All runs')
     return f'<a class="report-back" href="{target}">{_ARROW_LEFT} {esc(label)}</a>'
 
 
@@ -1984,6 +2086,49 @@ def _render_pairwise_filter_rail(
     )
 
 
+def _render_experiment_filter_rail(
+    rid: str,
+    opts: dict[str, list[str]],
+    selections: dict[str, list[str]],
+    *,
+    shown: int | None,
+    total: int | None,
+) -> str:
+    """Render the experiment filter rail: status chips, one "failed on" chip per pass-setting evaluator, counter.
+
+    As on the pairwise rail, no status selection renders both status chips checked.
+    """
+    status_sel = set(selections.get('status', [])) or {'ok', 'errored'}
+    status_chips = ''.join(
+        _chip('status', value, checked=value in status_sel, dot_cls=dot, label=label)
+        for value, label, dot in (('ok', 'Ran', 'chip-dot-green'), ('errored', 'Errored', 'chip-dot-amber'))
+    )
+    failed_sel = set(selections.get('failed_on', []))
+    failed_chips = ''.join(
+        _chip('failed_on', name, checked=name in failed_sel, dot_cls='chip-dot-red')
+        for name in opts.get('failed_on', [])
+    )
+    failed_group = (
+        '<div class="filter-group" data-dim="failed_on"><label class="filter-label">Failed on</label>'
+        f'<div class="filter-chip-row">{failed_chips}</div></div>'
+        if failed_chips
+        else ''
+    )
+    filtered = shown is not None and total is not None and shown < total
+    counter = f'{shown} of {total} datapoints' if filtered else 'Showing all datapoints'
+    footer_cls = 'filter-rail-footer is-filtered' if filtered else 'filter-rail-footer'
+    return (
+        f'<form id="filter-form" class="filter-form filter-form--sim filter-form--experiment"'
+        f' hx-post="/r/{esc(rid)}/filter" hx-trigger="change" hx-target="#filter-swap" hx-swap="outerHTML">'
+        f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        '<div class="filter-group" data-dim="status"><label class="filter-label">Status</label>'
+        f'<div class="filter-chip-row">{status_chips}</div></div>'
+        f'{failed_group}'
+        f'<div class="{footer_cls}">{esc(counter)}</div>'
+        '</form>'
+    )
+
+
 def render_filter_form(
     rid: str,
     surface: str,
@@ -2017,6 +2162,8 @@ def render_filter_form(
         return _render_redteam_filter_rail(rid, opts, selections, shown=shown, total=total)
     if surface == 'pairwise':
         return _render_pairwise_filter_rail(rid, opts, selections, shown=shown, total=total)
+    if surface == 'experiment':
+        return _render_experiment_filter_rail(rid, opts, selections, shown=shown, total=total)
 
     from evaluatorq.dashboard.filters import FILTERS
 

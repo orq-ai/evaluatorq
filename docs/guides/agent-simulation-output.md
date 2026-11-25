@@ -16,7 +16,7 @@ Import simulation data models from `evaluatorq.simulation.contracts`. The former
 | You ran | What you get | Model |
 |---|---|---|
 | `simulate()` or `generate_and_simulate()` | the return value | `list[SimulationResult]` |
-| the same with `save=True` | `.evaluatorq/sim-runs/<name>_<YYYYmmdd-HHMMSS>.json`, or `report_path=` when set | `SimulationRun` |
+| the same with `save=SaveMode.FINAL` | `.evaluatorq/sim-runs/<name>_<YYYYmmdd-HHMMSS>.json`, or `report_path=` when set | `SimulationRun` |
 | `evaluatorq sim simulate` or `sim run` (saves by default; `--no-save` skips) | `.evaluatorq/sim-runs/<name>_<YYYYmmdd-HHMMSS>.json` | `SimulationRun` |
 | the CLI with `--report out.json` | `out.json` | `SimulationRun` |
 | the CLI with `--results out.jsonl` | one result per line | `SimulationResult` |

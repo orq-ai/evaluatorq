@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from evaluatorq.common.reports import esc, load_css, load_logo_svg
 
 if TYPE_CHECKING:
+    from evaluatorq.experiment_run import ExperimentRun
     from evaluatorq.redteam.contracts import RedTeamReport
     from evaluatorq.simulation.contracts import SimulationRun
 
@@ -131,8 +132,10 @@ def _styles() -> str:
 
     theme = re.sub(r'url\("/static/fonts/([^"/]+)"\)', embed_font, EDITORIAL_CSS)
     overrides = Path(__file__).with_name('standalone.css').read_text(encoding='utf-8')
+    # The experiment report shares the Insights headline rows and filter bar (rk-*) with the dashboard page.
+    review_kit = (font_root.parent / 'review-kit.css').read_text(encoding='utf-8')
     base = re.sub(r'@import\s+[^;]+;', '', load_css())
-    return f'{base}\n{theme}\n{REPORT_CSS}\n{overrides}'
+    return f'{base}\n{theme}\n{REPORT_CSS}\n{review_kit}\n{overrides}'
 
 
 def _document(title: str, body: str) -> str:
@@ -165,3 +168,10 @@ def redteam_html(report: RedTeamReport) -> str:
     from evaluatorq.dashboard.report_tabs import redteam_report_tabs
 
     return _document('Red Team Security Report', redteam_report_tabs('', report, standalone=True))
+
+
+def experiment_html(run: ExperimentRun) -> str:
+    """Render a saved ``evaluatorq()`` experiment run as the same body the dashboard shows."""
+    from evaluatorq.dashboard.experiment_views import experiment_report_body
+
+    return _document('Experiment Report', experiment_report_body(run))

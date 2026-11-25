@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from evaluatorq.contracts import SaveMode
 from evaluatorq.contracts import AgentResponse, AgentTarget
 from evaluatorq.simulation import generate_and_simulate, simulate
 from evaluatorq.simulation.contracts import (
@@ -376,7 +377,7 @@ async def test_a_saved_repeated_run_stores_the_cases_once_and_replays_with_its_c
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    await _run(datapoints=[_case('a'), _case('b')], repetitions=3, save=True)
+    await _run(datapoints=[_case('a'), _case('b')], repetitions=3, save=SaveMode.FINAL)
 
     runs_dir = get_sim_runs_dir()
     saved = json.loads(next(runs_dir.glob('*.json')).read_text(encoding='utf-8'))
@@ -407,7 +408,7 @@ async def test_a_run_saved_by_1_97_0_with_trial_index_still_loads_and_replays(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    await _run(datapoints=[_case('a')], repetitions=2, save=True)
+    await _run(datapoints=[_case('a')], repetitions=2, save=SaveMode.FINAL)
     path = next(get_sim_runs_dir().glob('*.json'))
     # Rewrite the saved run into the 1.97.0 shape: `trial_index` and `#t<index>` ids.
     legacy = path.read_text(encoding='utf-8').replace('"repetition_index"', '"trial_index"').replace('a#r', 'a#t')

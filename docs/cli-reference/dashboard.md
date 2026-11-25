@@ -21,7 +21,7 @@ eq dashboard [PATHS]... [OPTIONS]
 
 The argument is what decides which runs appear, and the three forms behave differently:
 
-- **No path** — scans both default stores together: `.evaluatorq/runs/` (red team) and `.evaluatorq/sim-runs/` (simulation). This is the usual invocation.
+- **No path** — scans every default store together: `.evaluatorq/runs/` (red team), `.evaluatorq/sim-runs/` (simulation), `.evaluatorq/pairwise-runs/` (pairwise) and `.evaluatorq/experiment-runs/` (experiments saved with `evaluatorq(..., save=SaveMode.FINAL)`). This is the usual invocation.
 - **One or more directories** — scans exactly those, together. Useful for putting simulation runs from one repo next to red-team runs from another.
 - **A file** — scans that file's *parent directory*, so sibling reports still resolve, and prints the direct URL for that one report. You land on the report rather than the index.
 

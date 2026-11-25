@@ -8,7 +8,6 @@ import functools
 import json
 import re
 import uuid
-import warnings
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -37,6 +36,7 @@ from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.run_store_dir import get_store_dir
+from evaluatorq.common.save_mode import resolve_save_mode
 from evaluatorq.common.structured_output import warn_unread_config_fields
 from evaluatorq.common.target_call import call_target_with_retry, close_target, default_map_error
 from evaluatorq.common.thread_context import (
@@ -637,22 +637,6 @@ async def _redteam_root_scope(run_id: str, attributes: AttrMap, parent_context: 
     ) as pipeline_span:
         with _evaluatorq_run_scope(run_id, pipeline_span):
             yield pipeline_span
-
-
-def _resolve_save_mode(*, save: SaveMode | bool) -> SaveMode:
-    if isinstance(save, bool):
-        warnings.warn(
-            'Passing save=True/False is deprecated. Use SaveMode.FINAL / SaveMode.NONE instead.',
-            DeprecationWarning,
-            # 4: this helper, red_team, and the run-scope wrapper sit
-            # between the warning and the user's call site.
-            stacklevel=4,
-        )
-        save = SaveMode.FINAL if save else SaveMode.NONE
-    elif save not in SaveMode.__members__.values():
-        msg = f'Invalid save value {save!r}. Must be one of: {", ".join(SaveMode.__members__.values())}.'
-        raise ValueError(msg)
-    return save
 
 
 @dataclass(frozen=True)
@@ -1626,7 +1610,8 @@ async def red_team(
     # generation site downstream only has to check for None.
     recommendation_config = resolve_recommendations(recommendations, RedTeamRecommendationConfig)
 
-    save = _resolve_save_mode(save=save)
+    # 4: resolve_save_mode, red_team, and the run-scope wrapper sit between the warning and the user's call site.
+    save = resolve_save_mode(save=save, stacklevel=4)
 
     register_custom(custom)
     strategy_names = _register_strategy_objects(strategies)

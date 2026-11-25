@@ -518,14 +518,6 @@ ReportVulnerabilityDomain: TypeAlias = Annotated[
 ReportFramework: TypeAlias = Annotated[Framework | RegisteredValue, _OpenSet(Framework, lenient=True)]
 
 
-class SaveMode(StrEnum):
-    """Controls what gets persisted to disk after a red team run."""
-
-    NONE = 'none'
-    FINAL = 'final'
-    DETAIL = 'detail'
-
-
 class AttackSource(StrEnum):
     """Origin of an attack datapoint."""
 
@@ -611,6 +603,7 @@ from evaluatorq.contracts import (  # noqa: F401
     OutputMessage,
     ReasoningOutputItem,
     ResponseTrace,
+    SaveMode,
     StrategyToolCall,
     TextOutputItem,
     ToolCallOutputItem,

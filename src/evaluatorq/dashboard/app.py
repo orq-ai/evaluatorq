@@ -76,10 +76,12 @@ from evaluatorq.dashboard.trace_finder.routes import (
     register_finder_routes,
 )
 from evaluatorq.dashboard.trace_finder.sessions import TraceSessionMiddleware
+from evaluatorq.dashboard.ui_components import stylesheet_asset
 from evaluatorq.dashboard.view import (
     MODEL_FIELDS,
     RUN_PAGE_SIZES,
     SURFACE_LABELS,
+    experiment_overview_body,
     filter_fragment,
     landing_body,
     model_field_source,
@@ -233,6 +235,8 @@ def _index(req: Request) -> NotStr:
         body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg))
     elif surface == 'redteam':
         body = redteam_overview_body(metrics.redteam_overview(roots, page=pg, per_page=per_pg))
+    elif surface == 'experiment':
+        body = experiment_overview_body(metrics.experiment_overview(roots, page=pg, per_page=per_pg))
     else:
         rows = [r for r in metrics.run_rows(roots) if r.surface == surface]
         body = runs_screen_body(rows, surface)
@@ -963,6 +967,8 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
         active_surface=surface,
         actions_html=report_actions(rid),
         back_html=back_link,
+        # The experiment report reads like the Insights page: headline rows and the filter bar come from review-kit.css.
+        head_html=stylesheet_asset(filename='review-kit.css') if surface == 'experiment' else '',
     )
     return NotStr(html)
 

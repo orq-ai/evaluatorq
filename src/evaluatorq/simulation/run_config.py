@@ -14,12 +14,12 @@ from __future__ import annotations
 from pathlib import Path  # noqa: TC003 — pydantic resolves field annotations at runtime
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.llm_limit import check_llm_parallelism
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
-from evaluatorq.contracts import LLMCallConfig  # noqa: TC001 — pydantic resolves field annotations at runtime
+from evaluatorq.contracts import LLMCallConfig, SaveMode
 from evaluatorq.simulation._config import (
     DEFAULT_MAX_TARGET_RETRIES,
     DEFAULT_MAX_TOOL_RESULT_CHARS,
@@ -29,6 +29,23 @@ from evaluatorq.simulation._config import (
 from evaluatorq.simulation.contracts import Persona, Scenario, SimulationDatapoint  # noqa: TC001
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
+
+
+def _bool_save_mode(value: object) -> object:
+    """A config file or ``--save/--no-save`` carries a bool; it maps to `SaveMode` without the SDK's deprecation warning."""
+    if isinstance(value, bool):
+        return SaveMode.FINAL if value else SaveMode.NONE
+    return value
+
+
+def _no_detail(mode: SaveMode) -> SaveMode:
+    if mode == SaveMode.DETAIL:
+        raise ValueError('save=detail only applies to red teaming, which writes per-stage artifacts. Use final.')
+    return mode
+
+
+ConfigSaveMode = Annotated[SaveMode, BeforeValidator(_bool_save_mode), AfterValidator(_no_detail)]
+"""``save`` in a simulation config: a `SaveMode` value, or a bool for configs written before `SaveMode`."""
 
 
 class _SharedRunConfig(BaseModel):
@@ -60,7 +77,7 @@ class _SharedRunConfig(BaseModel):
     orq_results_path: str | None = None
     raise_on_execution_failure: bool | None = None
     exit_on_failure: bool | None = None
-    save: bool = False
+    save: ConfigSaveMode = SaveMode.NONE
     report_path: Path | None = None
     report: Path | None = None
     executive_summary: bool = True
@@ -132,10 +149,10 @@ class GenerateAndSimulateRunConfig(_SharedRunConfig):
 class SimulateCliConfig(SimulateRunConfig):
     """What ``eq sim simulate --config`` accepts, with the CLI's defaults: it saves the run unless told not to."""
 
-    save: bool = True
+    save: ConfigSaveMode = SaveMode.FINAL
 
 
 class GenerateAndSimulateCliConfig(GenerateAndSimulateRunConfig):
     """What ``eq sim run --config`` accepts, with the CLI's defaults: it saves the run unless told not to."""
 
-    save: bool = True
+    save: ConfigSaveMode = SaveMode.FINAL

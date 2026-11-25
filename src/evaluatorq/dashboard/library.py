@@ -98,6 +98,8 @@ def sniff_kind(data: dict[str, object]) -> str | None:
         return 'redteam'
     if 'judging' in data:
         return 'pairwise'
+    if 'experiment_run_version' in data:
+        return 'experiment'
     return None
 
 
@@ -143,11 +145,12 @@ class ReportCard:
 
 
 def default_roots() -> list[Path]:
+    from evaluatorq.experiment_run import get_experiment_runs_dir
     from evaluatorq.pairwise_run import get_pairwise_runs_dir
     from evaluatorq.redteam.runner import get_runs_dir
     from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
 
-    return [get_runs_dir(), get_sim_runs_dir(), get_pairwise_runs_dir()]
+    return [get_runs_dir(), get_sim_runs_dir(), get_pairwise_runs_dir(), get_experiment_runs_dir()]
 
 
 def _iter_report_files(roots: list[Path]) -> Iterator[Path]:
@@ -181,6 +184,8 @@ def _card(path: Path) -> ReportCard | None:
         error = 'missing required field: scorer_averages'
     elif surface == 'pairwise' and 'entries' not in data:
         error = 'missing required field: entries'
+    elif surface == 'experiment' and 'results' not in data:
+        error = 'missing required field: results'
     if error:
         headline = ''
     elif surface == 'pairwise':
@@ -206,9 +211,21 @@ def _card(path: Path) -> ReportCard | None:
                 low, _ = wilson_interval(max(a_wins, b_wins), decided)
                 too_close = '' if low > 0.5 else ' · too close'
                 headline += f' · {label} leads {max(a_wins, b_wins) / decided:.0%}{too_close}'
+    elif surface == 'experiment':
+        results = data.get('results')
+        headline = _count_noun(len(results) if isinstance(results, list) else 0, surface=surface)
     else:
         headline = f'{data.get("total_results", 0)} {"attacks" if surface == "redteam" else "conversations"}'
     return ReportCard(report_id(path), surface, str(name), created_at, headline, path, error)
+
+
+def _count_noun(count: int, *, surface: str) -> str:
+    """``'<count> <noun>'`` for a run-list headline: attacks, datapoints or conversations by surface."""
+    if surface == 'redteam':
+        return f'{count} attacks'
+    if surface == 'experiment':
+        return f'{count} datapoint{"" if count == 1 else "s"}'
+    return f'{count} conversations'
 
 
 def _manifest_card_id(run_id: str) -> str:
@@ -238,8 +255,7 @@ def _card_from_manifest(m: RunManifest) -> ReportCard:
     summary = m.summary or {}
     status = m.status.value
     if status == 'completed' and summary:
-        noun = 'attacks' if surface == 'redteam' else 'conversations'
-        headline = f'{summary.get("total_results", 0)} {noun}'
+        headline = _count_noun(summary.get('total_results', 0), surface=surface)
     elif status == 'running':
         headline = f'running · {m.stage}' if m.stage else 'running'
     else:  # error / cancelled with no report
@@ -318,7 +334,7 @@ def _backfill_manifest(path: Path, card: ReportCard) -> None:
     from evaluatorq.common.run_manifest import ManifestWriter, summary_is_current
     from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest
 
-    if card.error or card.surface not in (ManifestSurface.SIM, ManifestSurface.REDTEAM):
+    if card.error or card.surface not in (ManifestSurface.SIM, ManifestSurface.REDTEAM, ManifestSurface.EXPERIMENT):
         return
     mpath = path.parent / MANIFESTS_DIR_NAME / f'{path.stem}.json'
     existing: RunManifest | None = None

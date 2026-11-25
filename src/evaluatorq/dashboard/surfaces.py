@@ -1,6 +1,6 @@
 """Surface adapter registry for the evaluatorq dashboard.
 
-Each surface (redteam, sim, pairwise) gets a ``SurfaceAdapter`` dataclass that holds
+Each surface (redteam, sim, pairwise, experiment) gets a ``SurfaceAdapter`` dataclass that holds
 callables for loading, rendering body HTML, exporting full HTML, extracting a
 display name, and extracting a ``datetime`` from a parsed report object.
 
@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
     from pathlib import Path as _Path
+
+    from evaluatorq.types import DataPointResult
 
 
 @dataclass(frozen=True)
@@ -208,8 +210,64 @@ def _pairwise_adapter() -> SurfaceAdapter:
     )
 
 
+def _experiment_adapter() -> SurfaceAdapter:
+    """Adapter for saved ``evaluatorq()`` experiment runs (``<store>/experiment-runs``)."""
+    from evaluatorq.common.output_adapters import output_to_text
+    from evaluatorq.common.reports.standalone import experiment_html
+    from evaluatorq.dashboard.experiment_views import experiment_report_body
+    from evaluatorq.experiment_run import ExperimentRun
+
+    def _exp_rows(run: ExperimentRun, filtered: list[DataPointResult]) -> list[dict[str, Any]]:
+        """One row per job result, full text, with one column per evaluator in run order.
+
+        Every row carries the same keys, because the CSV export takes its
+        fieldnames from the first row.
+        """
+        names = [s.name for s in run.evaluator_stats()]
+        rows: list[dict[str, Any]] = []
+        for index, result in enumerate(filtered, start=1):
+            jobs = result.job_results or []
+            for job in jobs or [None]:
+                scores = {s.evaluator_name: s for s in (job.evaluator_scores or [])} if job is not None else {}
+                row: dict[str, Any] = {
+                    '#': index,
+                    'Inputs': result.data_point.inputs,
+                    'Job': job.job_name if job is not None else '',
+                    'Output': output_to_text(job.output) if job is not None else '',
+                    'Error': (job.error if job is not None else None) or result.error or '',
+                }
+                for name in names:
+                    score = scores.get(name)
+                    if score is None:
+                        row[name] = ''
+                    elif score.error is not None:
+                        row[name] = f'error: {score.error}'
+                    else:
+                        row[name] = score.score.value
+                rows.append(row)
+        return rows
+
+    def _exp_load(p: _Path) -> ExperimentRun:
+        from evaluatorq.dashboard.library import load_model_cached
+
+        return load_model_cached(p, ExperimentRun.model_validate)
+
+    return SurfaceAdapter(
+        load=_exp_load,
+        body=experiment_report_body,
+        export=experiment_html,
+        name=lambda run: run.run_name,
+        created_at=lambda run: run.started_at,
+        body_from_results=lambda run, filtered: experiment_report_body(
+            run.model_copy(update={'results': filtered}), total=len(run.results)
+        ),
+        rows=_exp_rows,
+    )
+
+
 ADAPTERS: dict[str, SurfaceAdapter] = {
     'redteam': _redteam_adapter(),
     'sim': _sim_adapter(),
     'pairwise': _pairwise_adapter(),
+    'experiment': _experiment_adapter(),
 }

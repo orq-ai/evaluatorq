@@ -21,6 +21,8 @@ async def evaluatorq(
     inference: bool = True,
     single_trace: bool = False,
     on_datapoint_complete: DataPointComplete | None = None,
+    save: SaveMode | str | bool = SaveMode.NONE,
+    output_dir: Path | str | None = None,
 ) -> EvaluatorqResult
 ```
 
@@ -37,6 +39,8 @@ async def evaluatorq(
 | `inference` | `bool` | `True` | Run the jobs; set `False` to score data that already has outputs |
 | `single_trace` | `bool` | `False` | Open one span for the whole run so every row shares a trace — see [One trace per run](tracing.md#one-trace-per-run-single_tracetrue) |
 | `on_datapoint_complete` | `DataPointComplete` \| `None` | `None` | Callback run once per data point as it finishes — see [Reacting to each row as it finishes](#reacting-to-each-row-as-it-finishes) |
+| `save` | `SaveMode` \| `str` | `SaveMode.NONE` | `SaveMode.FINAL` writes the finished run to disk so `eq dashboard` lists it — see [Saving a run locally](#saving-a-run-locally). `SaveMode.DETAIL` raises `ValueError`; `True` and `False` still work but raise a `DeprecationWarning` |
+| `output_dir` | `Path` \| `str` \| `None` | `None` | Folder for a saved run instead of `.evaluatorq/experiment-runs`; created and checked for writes before the run starts; ignored with a warning unless `save=SaveMode.FINAL` |
 
 Parameters can also be passed positionally as an `EvaluatorParams` model or a plain dict — the three forms below are equivalent:
 
@@ -499,6 +503,55 @@ await evaluatorq(
     jobs=[...],
 )
 ```
+
+### Saving a run locally
+
+`save=SaveMode.FINAL` writes the finished run to `.evaluatorq/experiment-runs/<name>_<timestamp>.json`, so you can open it later in [the dashboard](dashboard.md#reading-an-experiment-run) or load it back in Python. Reach for it when you want to compare runs on your machine, keep a record without an Orq workspace, or debug a run after the terminal has scrolled away. The default, `SaveMode.NONE`, writes nothing.
+
+```python
+import asyncio
+from pathlib import Path
+
+from evaluatorq import DataPoint, EvaluationResult, SaveMode, evaluatorq, job, load_experiment_run
+
+
+@job("answer")
+async def answer(data: DataPoint, row: int) -> str:
+    return "Paris is the capital of France."
+
+
+async def mentions_paris(params) -> EvaluationResult:
+    found = "Paris" in str(params["output"])
+    return EvaluationResult.model_validate({"value": 1 if found else 0, "pass": found})
+
+
+async def main() -> None:
+    await evaluatorq(
+        "capitals",
+        data=[DataPoint(inputs={"question": "What is the capital of France?"})],
+        jobs=[answer],
+        evaluators=[{"name": "mentions-paris", "scorer": mentions_paris}],
+        save=SaveMode.FINAL,
+        output_dir="runs",  # omit to use .evaluatorq/experiment-runs
+    )
+    saved = sorted(Path("runs").glob("capitals_*.json"))[-1]
+    run = load_experiment_run(saved)
+    for stats in run.evaluator_stats():
+        print(stats.name, stats.average, stats.pass_rate)
+
+
+asyncio.run(main())
+```
+
+The file holds every row the run returned: data point inputs, job outputs, job and evaluator errors, every score with its explanation, and the token usage your evaluators reported. It also records the run's name, description, dataset id, start and end time, when the file was written, the evaluatorq version and, when the results were uploaded to Orq, the experiment URL. A job that returns an `AgentResponse` keeps its `usage` inside the saved job output, but nothing totals it: the run's token and cost figures, here and in the dashboard, count your evaluators' calls only. A job that returns plain text carries no usage, so its target cost is not recorded at all. `load_experiment_run(path)` returns an `ExperimentRun` with the rows under `results`; `evaluator_stats()` gives each evaluator's average over numeric scores and its pass rate over the scores that set `pass`, `pass_rate()` gives that share across every evaluator, and `row_counts()` counts the rows and the rows that errored, the same numbers the dashboard shows.
+
+The file is written as soon as the results exist, before the results table prints and before the upload to Orq. If the upload raises, the run is already on disk; if it returns an experiment URL, evaluatorq adds the URL to the saved file.
+
+Two runs with the same name in the same second do not overwrite each other: the second file gets a `_001` suffix. Each saved run also gets a run manifest, the small status file the dashboard reads to show a run as running, finished or failed.
+
+**An unwritable save folder fails before the run starts.** Before any data point runs or any model is called, evaluatorq creates the save folder and its `.manifests` folder if they are missing and writes and removes a small test file in each. If that fails, for example because the folder is read-only or the path points at a file, `evaluatorq()` raises `ValueError` with the folder in the message, and nothing has been spent. Pass a writable `output_dir`, or `save=SaveMode.NONE`.
+
+**A save that fails at the end does not fail the run.** If the file still cannot be written once the results exist, for example because the disk filled up during the run, evaluatorq logs `Could not save experiment run` at `ERROR` level with the folder, marks the manifest failed, and still returns and uploads the results. Check the log when a run you saved is missing from the dashboard. `SaveMode.DETAIL`, which red teaming uses to keep per-stage files, raises `ValueError` here, because an experiment has no stages.
 
 ### Suppressing terminal output
 
