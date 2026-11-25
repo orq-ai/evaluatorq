@@ -12,7 +12,7 @@ import json
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.output_adapters import output_to_text
-from evaluatorq.common.reports import esc, kpi_cards
+from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.html_helpers import humanize_duration, parse_http_url, pct
 from evaluatorq.dashboard.report_kit import meta_grid, panel, pill
 from evaluatorq.experiment_run import combined_pass_rate, numeric_score
@@ -114,92 +114,129 @@ def _row_table(run: ExperimentRun, names: list[str]) -> str:
     return f'<div class="exp-table-wrap"><table class="exp-rows"><thead><tr>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
 
 
-def _pass_meter(stats: EvaluatorStats) -> str:
-    """The pass rate as a short bar beside its figure, so evaluators compare down the column."""
-    rate = stats.pass_rate or 0.0
-    return (
-        f'<span class="exp-pass" role="img" aria-label="{esc(pct(rate))} passed, {stats.passed} of {stats.pass_set}">'
-        f'<span class="exp-meter"><span class="exp-meter-fill" style="width:{rate * 100:.1f}%"></span></span>'
-        f'<span class="exp-pass-figure">{esc(pct(rate))} <span class="exp-pass-count">({stats.passed}/{stats.pass_set})</span></span>'
-        '</span>'
-    )
-
-
 def _duration(run: ExperimentRun) -> str:
     return 'under 1s' if run.duration_seconds < 1 else humanize_duration(run.duration_seconds)
 
 
-def _evaluator_table(stats: list[EvaluatorStats]) -> str:
+def _evaluator_scores(stats: list[EvaluatorStats]) -> str:
+    """One row per evaluator: its pass rate on the shared score track, then the figure and the average."""
     if not stats:
         return '<p class="exp-empty">No evaluators ran in this run.</p>'
     rows = []
     for s in stats:
-        average = '—' if s.average is None else _number(s.average)
-        pass_rate = '—' if s.pass_rate is None else _pass_meter(s)
+        rate = s.pass_rate
+        hint = [f'{s.errors} errored' if s.errors else '', f'{s.non_numeric} non-numeric' if s.non_numeric else '']
+        hint_text = ' · '.join(h for h in hint if h)
+        hint_html = f'<span class="cmp-score-hint">{esc(hint_text)}</span>' if hint_text else ''
+        if rate is None:
+            track = '<span class="cmp-track"><span class="cmp-track-na">no pass set</span></span>'
+            figure = '—'
+        else:
+            track = f'<span class="cmp-track"><span class="cmp-track-fill cmp-track-fill--a" style="width:{rate * 100:.1f}%"></span></span>'
+            figure = f'{pct(rate)} ({s.passed}/{s.pass_set})'
+        average = '—' if s.average is None else f'avg {_number(s.average)}'
         rows.append(
-            f'<tr><td>{esc(s.name)}</td><td>{esc(average)}</td><td>{pass_rate}</td>'
-            f'<td>{s.scored}</td><td>{s.non_numeric}</td><td>{s.errors}</td></tr>'
+            f'<div class="cmp-score-row"><span class="cmp-score-label">{esc(s.name)}{hint_html}</span>'
+            f'<span class="cmp-score-tracks" aria-hidden="true">{track}</span>'
+            f'<span class="cmp-score-ab">{esc(figure)}</span><span class="cmp-score-ab">{esc(average)}</span></div>'
         )
-    head = ''.join(
-        f'<th>{h}</th>' for h in ('Evaluator', 'Average', 'Pass rate', 'Numeric scores', 'Non-numeric', 'Errors')
-    )
-    return f'<table class="exp-evaluators"><thead><tr>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+    return f'<div class="cmp-scores">{"".join(rows)}</div>'
 
 
-def _hero(run: ExperimentRun) -> str:
-    when = run.started_at.strftime('%Y-%m-%d %H:%M %Z')
-    duration = _duration(run)
-    description = f' · {esc(run.description)}' if run.description else ''
-    link = ''
+def _hero(run: ExperimentRun, *, errored: int) -> str:
+    """Report hero plus the Insights-style status line: when, how long, how many, and where it lives in Orq."""
+    tokens, cost = run.judge_usage()
+    chips = [
+        run.started_at.strftime('%Y-%m-%d %H:%M %Z').strip(),
+        _duration(run),
+        f'{len(run.results):,} datapoints',
+        f'{run.row_counts().job_results:,} job results',
+        f'{tokens:,} judge tokens' + (f' · ${cost:.4f}' if cost is not None else ''),
+    ]
+    status = ''.join(f'<span class="cmp-chip">{esc(chip)}</span>' for chip in chips)
+    if errored:
+        status += f'<span class="cmp-chip cmp-chip--warn">{errored:,} errored</span>'
+    if run.description:
+        status += f'<span class="cmp-run-meta">{esc(run.description)}</span>'
     if (url := parse_http_url(run.experiment_url)) is not None:
-        link = f' · <a href="{esc(url.geturl())}" target="_blank" rel="noopener">Open in Orq</a>'
+        status += f'<a href="{esc(url.geturl())}" target="_blank" rel="noopener">Open in Orq</a>'
     return (
-        '<header class="report-hero">'
-        '<p class="report-hero-kicker">Experiment</p>'
-        f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
-        f'<p class="report-hero-sub">{esc(when)} · {esc(duration)}{description}{link}</p>'
-        '</header>'
+        '<header class="report-hero"><p class="report-hero-kicker">Experiment</p>'
+        f'<h2 class="report-hero-title">{esc(run.run_name)}</h2></header>'
+        f'<div class="cmp-status">{status}</div>'
     )
 
 
-def experiment_report_body(run: ExperimentRun) -> str:
-    """Render a saved experiment run: KPIs, per-evaluator averages and pass rates, and one row per job result."""
+def _headline(number: str, finding: str, why: str, *, unit: str = '', tone: str = '') -> str:
+    """One Insights-style headline row: a big number, the finding, and why it reads that way."""
+    unit_html = f' <span class="rk-head-unit">{esc(unit)}</span>' if unit else ''
+    tone_cls = f' rk-head--{tone}' if tone else ''
+    return (
+        f'<div class="rk-head{tone_cls}"><span class="rk-head-number">{esc(number)}{unit_html}</span>'
+        f'<span><span class="rk-head-finding">{esc(finding)}</span><span class="rk-head-why">{esc(why)}</span></span>'
+        '<span></span></div>'
+    )
+
+
+def _headlines(stats: list[EvaluatorStats], *, errored: int, rows: int) -> str:
+    """The overall pass rate, the weakest evaluator when there are several, and errored rows when any."""
+    heads: list[str] = []
+    passed, pass_set = sum(s.passed for s in stats), sum(s.pass_set for s in stats)
+    rate = combined_pass_rate(stats)
+    if rate is not None:
+        heads.append(
+            _headline(
+                pct(rate),
+                'Pass rate across evaluators',
+                f'{passed:,} of {pass_set:,} scores that set pass passed',
+                tone='good' if rate >= 0.8 else 'warn',
+            )
+        )
+    graded = [s for s in stats if s.pass_rate is not None]
+    if len(graded) > 1:
+        weakest = min(graded, key=lambda s: s.pass_rate or 0.0)
+        weak_rate = weakest.pass_rate or 0.0
+        heads.append(
+            _headline(
+                pct(weak_rate),
+                f'Weakest evaluator: {weakest.name}',
+                f'{weakest.passed:,} of {weakest.pass_set:,} passed',
+                tone='bad' if weak_rate < 0.8 else '',
+            )
+        )
+    if errored:
+        heads.append(
+            _headline(
+                f'{errored:,}',
+                'Rows errored',
+                f'of {rows:,}; a job or datapoint raised, so those rows have no scores',
+                unit='rows',
+                tone='warn',
+            )
+        )
+    return f'<section class="rk-heads" aria-label="Headlines">{"".join(heads)}</section>' if heads else ''
+
+
+def experiment_report_body(run: ExperimentRun, *, total: int | None = None) -> str:
+    """Render a saved experiment run the way the Insights page reads: status line, headlines, evaluators, rows.
+
+    *total* is the unfiltered datapoint count when *run* holds a filtered subset; it feeds the "Showing x of y" bar.
+    """
     stats = run.evaluator_stats()
     names = [s.name for s in stats]
     counts = run.row_counts()
     errored = counts.errored
-    pass_rate = combined_pass_rate(stats)
-    tokens, cost = run.judge_usage()
-    kpis = kpi_cards([
-        {'label': 'Datapoints', 'value': str(len(run.results))},
-        {'label': 'Job results', 'value': str(counts.job_results)},
-        {
-            'label': 'Errored rows',
-            'value': str(errored),
-            'status': 'warn' if errored else 'neutral',
-            'sub': 'job or datapoint raised',
-        },
-        {
-            'label': 'Pass rate',
-            'value': pct(pass_rate),
-            'status': 'neutral' if pass_rate is None else ('pass' if pass_rate >= 0.8 else 'warn'),
-            'sub': 'scores that set pass' if pass_rate is not None else 'no evaluator set pass',
-        },
-        {
-            'label': 'Judge tokens',
-            'value': f'{tokens:,}',
-            'sub': f'${cost:.4f}' if cost is not None else 'no cost reported',
-        },
-    ])
+    shown = len(run.results)
+    total = shown if total is None else total
+    fbar = (
+        '<div class="rk-fbar" role="status">'
+        f'<span class="rk-fbar-count">Showing <b>{shown:,}</b> of <b>{total:,}</b> datapoints</span>'
+        '<span class="rk-fbar-hint">Use the filters to narrow the rows to errored or failing datapoints.</span></div>'
+    )
     evaluators = panel(
         'Evaluators',
-        _evaluator_table(stats),
-        sub='Average over numeric scores; pass rate over scores that set pass. Errored scores count in neither.',
-    )
-    rows = panel(
-        'Rows',
-        _row_table(run, names),
-        sub='One row per job result. Long inputs and outputs are shortened here; open a cell to read all of it.',
+        _evaluator_scores(stats),
+        sub='Pass rate over scores that set pass; average over numeric scores. Errored scores count in neither.',
     )
     details = panel(
         'Run details',
@@ -212,4 +249,13 @@ def experiment_report_body(run: ExperimentRun) -> str:
             ('evaluatorq version', run.evaluatorq_version),
         ]),
     )
-    return f'<div class="report-aligned exp-report">{_hero(run)}{kpis}{evaluators}{rows}{details}</div>'
+    rows = panel(
+        'Rows',
+        _row_table(run, names),
+        sub='One row per job result. Long inputs and outputs are shortened here; open a cell to read all of it.',
+    )
+    return (
+        f'<div class="report-aligned cmp-report exp-report">{_hero(run, errored=errored)}{fbar}'
+        f'{_headlines(stats, errored=errored, rows=counts.rows)}'
+        f'<div class="cmp-grid">{evaluators}{details}</div>{rows}</div>'
+    )

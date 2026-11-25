@@ -462,17 +462,19 @@ An **experiment run** is one call to `evaluatorq()` saved with `save=SaveMode.FI
 eq dashboard .evaluatorq/experiment-runs  # scope to experiment runs
 ```
 
-The run list scores each run by its **pass rate**: the share of evaluator scores that set `pass` and passed, across every evaluator. A run whose evaluators never set `pass` has no score rather than an invented one, because each evaluator's average is on its own scale (0 to 1, 1 to 5, a raw count) and no single average reads against one threshold. A run is marked errored when every row errored, counting rows the way the report's **Errored rows** figure does: one row per job result, plus one for each data point that failed before any job ran.
+The run list scores each run by its **pass rate**: the share of evaluator scores that set `pass` and passed, across every evaluator. A run whose evaluators never set `pass` has no score rather than an invented one, because each evaluator's average is on its own scale (0 to 1, 1 to 5, a raw count) and no single average reads against one threshold. A run is marked errored when every row errored, counting rows the way the report's errored row count does: one row per job result, plus one for each data point that failed before any job ran.
 
-The report page has three panels below the headline counts.
+The run list opens with four figures across every saved run: the pooled pass rate, the number of datapoints, errored rows out of all rows, and evaluator spend. Each run row then shows its jobs, errored rows, pass rate, row count and evaluator cost.
 
-- **Evaluators.** One row per evaluator: its average over numeric scores, its pass rate over the scores that set `pass`, and how many scores were numeric, non-numeric, or errored. An errored score counts in neither the average nor the pass rate, so check the Errors column before trusting a high average. A bar chart of pass rates follows when any evaluator set `pass`.
-- **Rows.** One row per job result. Inputs and outputs longer than 160 characters are shortened in the cell; click the cell to read the full text. A job that raised, or a data point that failed before any job ran, is tinted red with its error in the Output column and an `error` status. Hover a score to read the evaluator's explanation.
+The report page reads like the Insights page. A status line under the title carries the start time, duration, datapoint and job-result counts, judge tokens and cost, and an amber chip when rows errored. Headline rows follow: the pass rate across evaluators, the weakest evaluator when more than one sets `pass`, and the errored row count. The **Filters** rail on the right narrows the report to datapoints that ran or errored (**Status**), or to those an evaluator failed (**Failed on**); every figure on the page then counts only the datapoints shown, and the bar above the headlines says how many that is.
+
+- **Evaluators.** One row per evaluator: its pass rate on a bar with the passed and pass-setting counts, and its average over numeric scores. Errored and non-numeric scores are noted under the name. An errored score counts in neither the average nor the pass rate, so check that note before trusting a high average.
 - **Run details.** Run id, dataset id, start and end time, duration and the evaluatorq version that wrote the file.
+- **Rows.** One row per job result. Inputs and outputs longer than 160 characters are shortened in the cell; click the cell to read the full text. A job that raised, or a data point that failed before any job ran, is tinted red with its error in the Output column and an `error` status. Hover a score to read the evaluator's explanation.
 
-The **Judge tokens** count is the tokens your evaluators reported through `EvaluationResult.token_usage`; an evaluator that reports none adds nothing, and neither does one that raised, because a raising scorer returns no result to read usage from. The landing page's spend and token totals include this figure. It never includes your target calls: a job that returns an `AgentResponse` keeps its `usage` in the saved output, but the dashboard does not total it.
+The **judge tokens** count is the tokens your evaluators reported through `EvaluationResult.token_usage`; an evaluator that reports none adds nothing, and neither does one that raised, because a raising scorer returns no result to read usage from. The landing page's spend and token totals include this figure. It never includes your target calls: a job that returns an `AgentResponse` keeps its `usage` in the saved output, but the dashboard does not total it.
 
-![An experiment run: five data points, one errored row, a 75% pass rate and judge token usage, with per-evaluator averages and pass rates and a row table.](assets/dashboard/experiment-report.png){ .dashboard-shot }
+![An experiment run: a status line with five data points and one errored row, headlines for a 75% pass rate and the errored row, the filter rail, per-evaluator pass rates and averages, and a row table.](assets/dashboard/experiment-report.png){ .dashboard-shot }
 
 ---
 

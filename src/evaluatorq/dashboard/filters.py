@@ -421,6 +421,45 @@ def _pairwise_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     return kept
 
 
+_EXPERIMENT_DIMS = ['status', 'failed_on']
+
+
+def _experiment_errored(result: Any) -> bool:
+    return result.error is not None or any(job.error is not None for job in result.job_results or [])
+
+
+def _experiment_failed_on(result: Any) -> set[str]:
+    """Names of the evaluators whose score set ``pass`` to false on any of *result*'s jobs."""
+    return {
+        score.evaluator_name
+        for job in result.job_results or []
+        for score in job.evaluator_scores or []
+        if score.score.pass_ is False
+    }
+
+
+def _experiment_options(run: Any) -> dict[str, list[str]]:
+    """Status chips, plus one "failed on" chip per evaluator that set ``pass`` somewhere in the run."""
+    return {
+        'status': ['ok', 'errored'],
+        'failed_on': [s.name for s in run.evaluator_stats() if s.pass_set],
+    }
+
+
+def _experiment_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
+    """Keep datapoints whose status is selected and, when any "failed on" chip is on, that failed one of them."""
+    status = set(_sel(selections, 'status', default=['ok', 'errored']))
+    failed_on = set(selections.get('failed_on', []))
+    kept: list[Any] = []
+    for result in run.results:
+        if ('errored' if _experiment_errored(result) else 'ok') not in status:
+            continue
+        if failed_on and not failed_on & _experiment_failed_on(result):
+            continue
+        kept.append(result)
+    return kept
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -442,12 +481,10 @@ FILTERS: dict[str, FilterDef] = {
         apply=_pairwise_apply,
         results=lambda run: list(run.entries),
     ),
-    # No filter dimensions yet; registered because the report route requires a
-    # FilterDef, and so CSV/JSON export reads the result list through it.
     'experiment': FilterDef(
-        dimensions=[],
-        options=lambda _run: {},
-        apply=lambda run, _selections: list(run.results),
+        dimensions=_EXPERIMENT_DIMS,
+        options=_experiment_options,
+        apply=_experiment_apply,
     ),
 }
 

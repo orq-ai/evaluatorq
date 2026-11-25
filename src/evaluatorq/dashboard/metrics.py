@@ -415,6 +415,108 @@ def _experiment_row(card: library.ReportCard) -> RunRow:
     )
 
 
+@dataclass(frozen=True)
+class ExperimentRunRow:
+    """One saved experiment run, as a row of the Experiments run list."""
+
+    rid: str
+    name: str
+    when: datetime
+    jobs: list[str]  # job names, first-seen order
+    status: str  # lifecycle: 'finished' | 'error' | 'running' | 'cancelled'
+    rows: int  # job results, plus datapoints that never reached a job
+    errored: int
+    passed: int  # scores that set pass and passed, across evaluators
+    pass_set: int  # scores that set pass
+    cost: float | None  # evaluator (judge) spend; None when none was reported
+    error: bool
+
+
+@dataclass(frozen=True)
+class ExperimentOverview:
+    """Rolled-up Experiments surface data: the KPI strip plus the run list."""
+
+    datapoints: int
+    rows: int
+    errored: int
+    passed: int
+    pass_set: int
+    total_cost: float | None
+    recent: list[ExperimentRunRow] = field(default_factory=list)  # newest run first, current page
+    total_runs: int = 0
+    page: int = 1
+    per_page: int = 8
+
+    @property
+    def pass_rate(self) -> float | None:
+        return self.passed / self.pass_set if self.pass_set else None
+
+
+def _experiment_run_row(card: library.ReportCard) -> tuple[ExperimentRunRow, int]:
+    """The run-list row for *card* and its datapoint count; an unreadable or in-flight run keeps zero counts."""
+    run = (
+        _load_experiment(card)
+        if card.path is not None and card.status not in ('running', 'error', 'cancelled')
+        else None
+    )
+    if run is None:
+        status = {'completed': 'finished'}.get(card.status or 'error', card.status or 'error')
+        row = ExperimentRunRow(
+            rid=card.id,
+            name=card.name,
+            when=card.created_at,
+            jobs=[],
+            status=status,
+            rows=0,
+            errored=0,
+            passed=0,
+            pass_set=0,
+            cost=None,
+            error=status == 'error' or card.path is not None,
+        )
+        return row, 0
+    counts = run.row_counts()
+    stats = run.evaluator_stats()
+    jobs = list(dict.fromkeys(job.job_name for result in run.results for job in result.job_results or []))
+    row = ExperimentRunRow(
+        rid=card.id,
+        name=card.name,
+        when=card.created_at,
+        jobs=jobs,
+        status=_lifecycle_status(broken=bool(card.error), all_errored=counts.all_errored),
+        rows=counts.rows,
+        errored=counts.errored,
+        passed=sum(s.passed for s in stats),
+        pass_set=sum(s.pass_set for s in stats),
+        cost=run.judge_usage()[1],
+        error=bool(card.error),
+    )
+    return row, len(run.results)
+
+
+def experiment_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: int = 8) -> ExperimentOverview:
+    """Aggregate the experiment store into the KPI strip and a newest-first run list sliced to *page*.
+
+    The pass rate pools every score that set ``pass`` across runs, the same rule a single run uses.
+    """
+    built = [_experiment_run_row(card) for card in library.scan(roots) if card.surface == 'experiment']
+    rows = [row for row, _ in built]
+    costs = [row.cost for row in rows if row.cost is not None]
+    page = min(max(1, page), max(1, -(-len(rows) // per_page)))
+    return ExperimentOverview(
+        datapoints=sum(n for _, n in built),
+        rows=sum(r.rows for r in rows),
+        errored=sum(r.errored for r in rows),
+        passed=sum(r.passed for r in rows),
+        pass_set=sum(r.pass_set for r in rows),
+        total_cost=math.fsum(costs) if costs else None,
+        recent=rows[(page - 1) * per_page : page * per_page],
+        total_runs=len(rows),
+        page=page,
+        per_page=per_page,
+    )
+
+
 def _card_status_row(card: library.ReportCard) -> RunRow:
     """Build a RunRow straight from a manifest-backed card (no report read).
 

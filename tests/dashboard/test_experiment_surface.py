@@ -116,7 +116,13 @@ def test_nav_and_landing_list_the_experiment(client: TestClient) -> None:
 def test_run_list_shows_the_run_with_its_pass_rate(client: TestClient, runs_dir: Path) -> None:
     page = client.get('/?surface=experiment')
     assert page.status_code == 200
-    assert '4 datapoints' in page.text
+    assert 'runs-grid-row' in page.text  # the same run grid as the sim and red-team lists
+    assert _kpi(page.text, 'Pass rate') == '50%'
+    assert _kpi(page.text, 'Datapoints') == '4'
+    assert _kpi(page.text, 'Errored rows') == '2'
+    overview = metrics.experiment_overview([runs_dir])
+    assert (overview.total_runs, overview.datapoints, overview.rows, overview.errored) == (1, 4, 4, 2)
+    assert overview.total_cost == pytest.approx(0.004)
     [row] = [r for r in metrics.run_rows([runs_dir]) if r.surface == 'experiment']
     assert row.score == pytest.approx(0.5)  # one pass, one fail; errored rows set no pass
     assert row.status != 'error'
@@ -154,8 +160,9 @@ def test_report_shows_scores_errors_and_a_clipped_output(client: TestClient) -> 
     assert 'capitals &lt;v2&gt;' in body
     for evaluator in ('exact', 'judge'):
         assert evaluator in body
-    assert '50% <span class="exp-pass-count">(1/2)</span>' in body  # exact: pass rate over scores that set pass
-    assert 'aria-label="50% passed, 1 of 2"' in body
+    assert '<span class="cmp-score-ab">50% (1/2)</span>' in body  # exact: pass rate over scores that set pass
+    assert _headline(body, 'Pass rate across evaluators') == '50%'
+    assert 'Showing <b>4</b> of <b>4</b> datapoints' in body
     assert 'upstream model timed out' in body
     assert 'datapoint fetch failed' in body
     assert body.count('exp-row--error') == 2
@@ -191,6 +198,24 @@ def test_exports_carry_every_row(client: TestClient) -> None:
     assert client.get(f'{link}/export.json').status_code == 200
 
 
+def _headline(body: str, finding: str) -> str:
+    match = re.search(rf'<span class="rk-head-number">([^<]*)(?:<span[^>]*>[^<]*</span>)?</span><span><span class="rk-head-finding">{finding}</span>', body)
+    assert match is not None, finding
+    return match.group(1).strip()
+
+
+def test_filters_narrow_the_rows_to_failing_or_errored_datapoints(client: TestClient) -> None:
+    rid = _report_link(client).removeprefix('/r/')
+    failing = client.post(f'/r/{rid}/filter', data={'failed_on': 'exact'}).text
+    assert 'Showing <b>1</b> of <b>4</b> datapoints' in failing
+    assert 'plot of Hamlet?' in failing
+    assert 'capital of France?' not in failing
+    errored = client.post(f'/r/{rid}/filter', data={'status': 'errored'}).text
+    assert 'Showing <b>2</b> of <b>4</b> datapoints' in errored
+    assert 'upstream model timed out' in errored
+    assert 'Paris' not in errored
+
+
 def _kpi(body: str, label: str) -> str:
     match = re.search(rf'<div class="kpi-value">([^<]*)</div><div class="kpi-label">{label}</div>', body)
     assert match is not None, label
@@ -216,9 +241,9 @@ def test_run_list_summary_and_report_agree_on_errored_and_pass_counts(tmp_path: 
     summary = run.manifest_summary()
     assert (summary.get('pass_rate'), summary.get('errored_rows'), summary.get('judge_tokens')) == (0.5, 2, 150)
     body = experiment_report_body(run)
-    assert _kpi(body, 'Errored rows') == str(counts.errored)
-    assert _kpi(body, 'Pass rate') == '50%'
-    assert _kpi(body, 'Job results') == str(counts.job_results)
+    assert _headline(body, 'Rows errored') == str(counts.errored)
+    assert _headline(body, 'Pass rate across evaluators') == '50%'
+    assert f'{counts.job_results} job results' in body
 
 
 def test_run_list_and_report_agree_when_every_row_errored(tmp_path: Path) -> None:
@@ -240,7 +265,7 @@ def test_run_list_and_report_agree_when_every_row_errored(tmp_path: Path) -> Non
     [row] = [r for r in metrics.run_rows([tmp_path]) if r.surface == 'experiment']
     assert row.status == 'error'
     assert row.score is None
-    assert _kpi(experiment_report_body(run), 'Errored rows') == str(counts.rows)
+    assert _headline(experiment_report_body(run), 'Rows errored') == str(counts.rows)
 
 
 @pytest.mark.parametrize(('value', 'shown'), [(0.8333, '0.833'), (4.0, '4'), (12345.0, '12,345'), (-2500.4, '-2,500')])

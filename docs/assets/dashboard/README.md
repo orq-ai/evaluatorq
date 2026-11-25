@@ -39,13 +39,13 @@ Older screenshots use `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 
 
 ## Experiments — `experiment-*.png`
 
-Source run: two synthetic `evaluatorq()` runs saved with `save=SaveMode.FINAL`, five factual questions each, one job that raises on one row, a `contains-expected` evaluator that sets `pass`, and a `helpfulness-judge` evaluator that reports token usage. The report is captured at 1400×1560 with no `ORQ_API_KEY`, so the settings toast shows in the corner.
+Source run: two synthetic `evaluatorq()` runs (`support-bot-v1` and `support-bot-v2`) saved with `save=SaveMode.FINAL`, five factual questions each, one job that raises on one row, a `contains-expected` evaluator that sets `pass`, and a `helpfulness-judge` evaluator that reports token usage. No model is called; the job returns fixed answers. The report shows `support-bot-v2` and is captured at 1400×1560, light theme.
 
 | File | Page |
 |---|---|
 | `experiment-landing.png` | Dashboard landing with only experiment runs — runs by type, evaluator spend and tokens, recent runs (1400×900) |
-| `experiment-run-list.png` | Experiments run list — each run scored by its pass rate (1400×600) |
-| `experiment-report.png` | Experiment report — headline counts, per-evaluator averages and pass rates, the row table with one errored row |
+| `experiment-run-list.png` | Experiments run list — pass rate, datapoints, errored rows and evaluator spend, then each run with its pass rate (1400×600) |
+| `experiment-report.png` | Experiment report — status line, headline findings, the filter rail, per-evaluator pass rates and averages, the row table with one errored row |
 
 ## Pending re-shoot
 

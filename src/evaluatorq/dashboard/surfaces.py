@@ -258,7 +258,9 @@ def _experiment_adapter() -> SurfaceAdapter:
         export=experiment_html,
         name=lambda run: run.run_name,
         created_at=lambda run: run.started_at,
-        body_from_results=lambda run, filtered: experiment_report_body(run.model_copy(update={'results': filtered})),
+        body_from_results=lambda run, filtered: experiment_report_body(
+            run.model_copy(update={'results': filtered}), total=len(run.results)
+        ),
         rows=_exp_rows,
     )
 

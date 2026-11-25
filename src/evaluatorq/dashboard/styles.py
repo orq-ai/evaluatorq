@@ -4217,11 +4217,14 @@ _PAIRWISE_COMPARISONS_CSS = """
 """
 
 _EXPERIMENT_REPORT_CSS = """
+/* Status line, headlines, score tracks and the filter bar are the shared cmp-* and rk-* pieces; the track colour is set here because --cmp-a is otherwise scoped to the sim comparison. */
+.exp-report{--cmp-a:var(--teal-600)}
+.exp-report .cmp-status a{color:var(--teal-600);font-weight:500}
 .exp-report .exp-table-wrap{overflow-x:auto}
-.exp-report table.exp-rows td,.exp-report table.exp-evaluators td{vertical-align:top}
+.exp-report table.exp-rows td{vertical-align:top}
 /* .report-aligned right-aligns every column after the first; the row table is text. */
 .exp-report table.exp-rows thead th:not(:first-child),.exp-report table.exp-rows tbody td:not(:first-child){text-align:left}
-.exp-report table.exp-rows td{max-width:420px;overflow-wrap:anywhere}
+.exp-report table.exp-rows td{max-width:420px;overflow-wrap:break-word}
 .exp-report .exp-row--error td{background:var(--red-50)}
 .exp-report .exp-clip summary{cursor:pointer;list-style:none;color:inherit;font-weight:inherit}
 .exp-report .exp-job{white-space:nowrap}
@@ -4242,11 +4245,6 @@ _EXPERIMENT_REPORT_CSS = """
 .exp-report .exp-clip .exp-toggle--less,.exp-report .exp-clip[open] .exp-toggle--more,.exp-report .exp-clip[open] .exp-preview{display:none}
 .exp-report .exp-clip[open] .exp-toggle--less{display:inline-block;margin-left:0}
 .exp-report .exp-clip[open] .exp-full{margin:0 0 6px}
-.exp-report .exp-pass{display:inline-flex;align-items:center;justify-content:flex-end;gap:10px;white-space:nowrap}
-.exp-report .exp-meter{width:96px;height:6px;border-radius:3px;background:var(--surface-sunken);overflow:hidden}
-.exp-report .exp-meter-fill{display:block;height:100%;background:var(--chart-1)}
-.exp-report .exp-pass-figure{min-width:84px;text-align:right;font-variant-numeric:tabular-nums}
-.exp-report .exp-pass-count{color:var(--text-muted)}
 """
 
 _PAIRWISE_COMPARE_CSS = """
@@ -4297,5 +4295,6 @@ REPORT_CSS = (
     + _SIM_REPORT_OVERRIDES_CSS
     + _SIM_TRANSCRIPT_OVERRIDES_CSS
     + _RT_REPORT_CSS
+    + _SIM_COMPARE_CSS
     + _EXPERIMENT_REPORT_CSS
 )
