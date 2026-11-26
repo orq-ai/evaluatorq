@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 import typer.core
@@ -178,13 +178,18 @@ def test_conflicting_simulation_alias_names_fail_validation(
 
 
 def _explicit_context(param: str, value: str) -> typer.Context:
-    import click
+    # Built through a Typer app, not click classes: Typer 0.29+ vendors click, and its Context cannot parse a real click Option.
+    def command_fn(**_: Any) -> None:
+        pass
 
-    option = click.Option([f'--{param.replace("_", "-")}'])
-    command = click.Command('test', params=[option])
-    ctx = typer.Context(command)
-    command.parse_args(ctx, [option.opts[0], value])
-    return ctx
+    signature = inspect.Signature([
+        inspect.Parameter(param, inspect.Parameter.KEYWORD_ONLY, default=None, annotation=str | None),
+    ])
+    setattr(command_fn, '__signature__', signature)  # noqa: B010 - typer reads the parameter name from it
+    app = typer.Typer()
+    app.command()(command_fn)
+    command = typer.main.get_command(app)
+    return cast(typer.Context, command.make_context('test', [f'--{param.replace("_", "-")}', value]))
 
 
 @pytest.mark.parametrize('model', [SimulateCliConfig, GenerateAndSimulateCliConfig])

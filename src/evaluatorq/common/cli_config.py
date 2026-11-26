@@ -134,7 +134,7 @@ def model_kwargs(config: BaseModel) -> dict[str, Any]:
 
 def _read_source(source: str, *, flag: str) -> tuple[str, str]:
     if source == STDIN_SOURCE:
-        return typer.get_text_stream('stdin').read(), 'stdin'
+        return sys.stdin.read(), 'stdin'
     try:
         return Path(source).read_text(encoding='utf-8'), source
     except OSError as exc:
