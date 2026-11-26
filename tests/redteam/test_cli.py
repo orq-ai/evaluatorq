@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from click.testing import Result as CliResult
+from typer.testing import Result as CliResult
 from typer.testing import CliRunner
 
 from evaluatorq.common.model_roles import role_model

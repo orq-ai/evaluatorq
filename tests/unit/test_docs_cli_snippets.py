@@ -11,11 +11,11 @@ from __future__ import annotations
 import re
 import shlex
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import click
 import pytest
 import typer
+import typer.core
 from pydantic import BaseModel
 
 from evaluatorq.cli import _register_subapps, app
@@ -24,6 +24,14 @@ from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.redteam.cli import RedTeamCliConfig
 from evaluatorq.redteam.contracts import LLMConfig
 from evaluatorq.simulation.run_config import GenerateAndSimulateCliConfig, SimulateCliConfig
+
+if TYPE_CHECKING:
+    from typer._click import Command, Context
+
+try:  # Typer 0.29+ vendors click as typer._click; older Typer builds on click itself
+    from typer._click.exceptions import UsageError
+except ImportError:
+    from click.exceptions import UsageError
 
 ROOT = Path(__file__).resolve().parents[2]
 FENCE = re.compile(r'^(?P<indent>\s*)(?P<ticks>`{3,})(?P<lang>bash|sh|shell|console)\s*$')
@@ -95,33 +103,34 @@ def _cases() -> list[Any]:
 
 
 @pytest.fixture(scope='module')
-def root_command() -> click.Command:
+def root_command() -> Command:
     if not app.registered_groups:
         _register_subapps(app)
     return typer.main.get_command(app)
 
 
-def _resolve(root: click.Command, argv: list[str]) -> tuple[click.Command, tuple[str, ...], list[str], click.Context]:
-    ctx = click.Context(root, info_name='eq', resilient_parsing=False)
+def _resolve(root: Command, argv: list[str]) -> tuple[Command, tuple[str, ...], list[str], Context]:
+    # Each command builds its own context class: a context from another click copy breaks Typer 0.29's parameter coercion.
+    ctx = root.context_class(root, info_name='eq', resilient_parsing=False)
     cmd, path, rest = root, [], list(argv)
-    while isinstance(cmd, click.Group) and rest and not rest[0].startswith('-'):
+    while isinstance(cmd, typer.core.TyperGroup) and rest and not rest[0].startswith('-'):
         name, sub, rest = cmd.resolve_command(ctx, rest)
         if sub is None:
-            raise click.UsageError(f'no such command {rest!r}')
+            raise UsageError(f'no such command {rest!r}')
         path.append(name)
-        ctx = click.Context(sub, info_name=name, parent=ctx, resilient_parsing=False)
+        ctx = sub.context_class(sub, info_name=name, parent=ctx, resilient_parsing=False)
         cmd = sub
     return cmd, tuple(path), rest, ctx
 
 
 @pytest.mark.parametrize('argv', _cases())
-def test_documented_command_parses(root_command: click.Command, argv: list[str]) -> None:
+def test_documented_command_parses(root_command: Command, argv: list[str]) -> None:
     if any(a in ('--help', '-h') for a in argv):
         return
     cmd, path, rest, ctx = _resolve(root_command, argv)
     try:
         cmd.parse_args(ctx, list(rest))
-    except click.exceptions.Exit:  # --version / --help style eager flags: parsed fine, nothing more to check
+    except typer.Exit:  # --version / --help style eager flags: parsed fine, nothing more to check
         return
     opts = ctx.params
 
@@ -145,6 +154,6 @@ def test_documented_command_parses(root_command: click.Command, argv: list[str])
         ),
     ],
 )
-def test_checker_rejects_a_wrong_command(root_command: click.Command, argv: list[str]) -> None:
-    with pytest.raises((click.UsageError, click.BadParameter)):
+def test_checker_rejects_a_wrong_command(root_command: Command, argv: list[str]) -> None:
+    with pytest.raises(UsageError):  # BadParameter subclasses it
         test_documented_command_parses(root_command, argv)

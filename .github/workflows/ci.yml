@@ -186,7 +186,7 @@ jobs:
         run: uv pip install --upgrade typer
 
       - name: Test CLI compatibility
-        run: uv run --no-sync pytest tests/unit/test_cli_parameter_sources.py tests/test_cli_config_parity.py tests/redteam/test_cli*.py tests/simulation/test_cli*.py tests/trace_finder/test_cli.py tests/insights/test_cli.py tests/dashboard/test_launch.py
+        run: uv run --no-sync pytest tests/unit/test_cli_parameter_sources.py tests/test_cli_config_parity.py tests/redteam/test_cli*.py tests/simulation/test_cli*.py tests/trace_finder/test_cli.py tests/insights/test_cli.py tests/dashboard/test_launch.py tests/unit/test_docs_cli_snippets.py 'tests/simulation/test_repetitions.py::test_the_cli_offers_the_option_on_both_commands'
 
   fasthtml-floor:
     name: Dashboard on fasthtml floor
