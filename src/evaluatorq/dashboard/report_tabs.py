@@ -1761,23 +1761,45 @@ def _sim_hero(run: SimulationRun, compare_html: str = '', *, target_label: str |
     # KPI cards intentionally omitted: the same metrics render in the 5-card
     # band inside the Overview tab (_sim_kpi_band), so a hero band duplicated
     # them above the tabs. Hero is now just title + subtitle.
+    from evaluatorq.common.reports.icons import target_pill
+    from evaluatorq.dashboard.metrics import sim_target
     from evaluatorq.dashboard.report_kit import hero_cost_line
 
+    # Without run_name, an old report falls back to the kind label ("Orq agent")
+    # instead of repeating the title above it.
+    label, kind = sim_target({
+        'target': run.target,
+        'target_model': run.target_model,
+        'target_kind': run.target_kind,
+        'results': [{'metadata': r.metadata} for r in run.results],
+    })
+    target = (target_label or label, kind)  # an export's --target-label wins
     run_btn = trace_link_button(run_trace_url(run.run_id, run.experiment_url), 'View all run traces ↗')
-    inner = run_btn + trace_link_button(run.experiment_url, 'Open experiment in Orq') + compare_html
+    inner = run_btn + trace_link_button(run.experiment_url, 'Open experiment in Orq')
     actions = f'<div class="report-hero-actions">{inner}</div>' if inner else ''
     # Whole-run figures, like the run's saved totals: the hero does not follow the filter.
-    _, target_missing = sum_usage_coverage([r.target_token_usage for r in run.results])
+    # A run saved before the run-level totals existed falls back to the per-conversation
+    # sums, the same figure the runs list shows, marked as a lower bound over the
+    # conversations that reported a cost.
+    total_usage, total_missing = run.token_usage_total, 0
+    if total_usage is None or total_usage.total_cost is None:
+        total_usage, total_missing = sum_usage_coverage([r.token_usage for r in run.results], require_cost=True)
+    target_sum, target_missing = sum_usage_coverage([r.target_token_usage for r in run.results], require_cost=True)
     cost_html = hero_cost_line(
-        run.token_usage_total, target=run.target_token_usage, target_missing=target_missing, items=len(run.results)
+        total_usage,
+        target=run.target_token_usage if run.target_token_usage is not None else target_sum,
+        total_missing=total_missing,
+        target_missing=target_missing,
+        items=len(run.results),
     )
     return (
         '<header class="report-hero">'
         '<p class="report-hero-kicker">Agent Simulation</p>'
         f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
         '<div class="report-hero-meta">'
-        f'<p class="report-hero-sub">target {esc(target_label or run.target_kind)}</p>{cost_html}</div>'
-        f'{actions}</header>'
+        '<p class="report-hero-sub report-hero-target"><span class="report-hero-target-label">Target</span>'
+        f'{target_pill(*target)}</p>{cost_html}</div>'
+        f'{actions}{compare_html}</header>'
     )
 
 
@@ -2994,14 +3016,32 @@ def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
     kicker = f'Red Team · {pipeline.capitalize()}' if pipeline else 'Red Team'
     run_btn = trace_link_button(run_trace_url(report.run_id, report.experiment_url), 'View all run traces ↗')
     actions = f'<div class="report-hero-actions">{run_btn}</div>' if run_btn else ''
+    from evaluatorq.common.structured_output import sum_structured_usage
     from evaluatorq.dashboard.report_kit import hero_cost_line
     from evaluatorq.redteam.reports.converters import target_token_usage_coverage
 
     # Whole-run figures from the saved summary: the hero does not follow the filter.
-    _, target_missing = target_token_usage_coverage(report.results)
+    # A summary without a total cost falls back to the per-attack sums (attacker and
+    # target calls plus the judge), the same figure the runs list shows, marked as a
+    # lower bound over the attacks that reported a cost.
+    total_usage, total_missing = report.summary.token_usage_total, 0
+    if total_usage is None or total_usage.total_cost is None:
+        total_usage, total_missing = sum_usage_coverage(
+            [
+                sum_structured_usage([
+                    r.execution.token_usage if r.execution else None,
+                    r.evaluation.token_usage if r.evaluation else None,
+                ])
+                for r in report.results
+            ],
+            require_cost=True,
+        )
+    target_sum, target_missing = target_token_usage_coverage(report.results, require_cost=True)
+    target_usage = report.summary.token_usage_target
     cost_html = hero_cost_line(
-        report.summary.token_usage_total,
-        target=report.summary.token_usage_target,
+        total_usage,
+        target=target_usage if target_usage is not None else target_sum,
+        total_missing=total_missing,
         target_missing=target_missing,
         items=len(report.results),
         noun='attacks',

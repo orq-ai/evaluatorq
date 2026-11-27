@@ -96,17 +96,16 @@ def _swap_text(run: PairwiseRun) -> str:
     return 'on' if observed_swap(run) else 'on (never observed)'
 
 
-def _hero(run: PairwiseRun, hero_actions_html: str) -> str:
+def _hero(run: PairwiseRun, compare_html: str) -> str:
     judges = len(run.judges) or len(judge_order(run))
     criteria = f' · criteria: {esc(run.criteria)}' if run.criteria else ''
-    actions = f'<div class="report-hero-actions">{hero_actions_html}</div>' if hero_actions_html else ''
     return (
         '<header class="report-hero">'
         '<p class="report-hero-kicker">Pairwise</p>'
         f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
         f'<p class="report-hero-sub">{_swatch("A", run.label_a)} vs {_swatch("B", run.label_b)}'
         f' · {judges} {"judge" if judges == 1 else "judges"} · swap {esc(_swap_text(run))}{criteria}</p>'
-        f'{actions}</header>'
+        f'{compare_html}</header>'
     )
 
 
@@ -597,7 +596,7 @@ def pairwise_report_tabs(
     run: PairwiseRun,
     entries: list[PairwiseEntry] | None = None,
     *,
-    hero_actions_html: str = '',
+    compare_html: str = '',
     focus: int | None = None,
 ) -> str:
     """Render the pairwise report body as tabs.
@@ -632,4 +631,4 @@ def pairwise_report_tabs(
         ],
         active='Comparisons' if focus is not None else None,
     )
-    return f'<div class="report-aligned pw-report">{_hero(view, hero_actions_html)}{banner}{tabs}</div>'
+    return f'<div class="report-aligned pw-report">{_hero(view, compare_html)}{banner}{tabs}</div>'

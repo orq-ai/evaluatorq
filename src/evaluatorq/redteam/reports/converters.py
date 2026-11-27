@@ -947,9 +947,13 @@ def _aggregate_token_usage(results: list[RedTeamResult]) -> TokenUsage | None:
     return total if found else None
 
 
-def target_token_usage_coverage(results: Sequence[RedTeamResult]) -> tuple[TokenUsage | None, int]:
+def target_token_usage_coverage(
+    results: Sequence[RedTeamResult], *, require_cost: bool = False
+) -> tuple[TokenUsage | None, int]:
     """The target agent's own usage summed over *results*, and how many results recorded none."""
-    return sum_usage_coverage([r.execution.token_usage_target if r.execution else None for r in results])
+    return sum_usage_coverage(
+        [r.execution.token_usage_target if r.execution else None for r in results], require_cost=require_cost
+    )
 
 
 def _aggregate_token_usage_by_source(results: list[RedTeamResult]) -> dict[str, TokenUsage]:

@@ -639,6 +639,7 @@ def hero_cost_line(
     total: Usage | None,
     *,
     target: Usage | None,
+    total_missing: int = 0,
     target_missing: int = 0,
     items: int = 0,
     noun: str = 'conversations',
@@ -648,6 +649,10 @@ def hero_cost_line(
     The total covers every call the run made (simulated user or attacker, judges,
     generation, summaries); the target cost is the agent under test alone, so a
     cheap target judged by an expensive model no longer reads as expensive.
+
+    *total_missing* and *target_missing* count the *items* that are not in the
+    figure; a nonzero count marks the figure a lower bound, ``$0.42 (7 of 9
+    conversations)``, instead of hiding a known part behind "unknown".
     """
 
     def item(label: str, *, figure: CostFigure, cls: str) -> str:
@@ -659,7 +664,9 @@ def hero_cost_line(
             f'<b class="report-hero-cost-value{unknown}">{esc(figure.value)}</b>{qual}</span>'
         )
 
-    total_fig = cost_figure(total, unknown_tip='Unknown: this run recorded no cost.')
+    total_fig = cost_figure(
+        total, unknown_tip='Unknown: this run recorded no cost.', missing=total_missing, total=items, noun=noun
+    )
     target_fig = cost_figure(
         target, unknown_tip=TARGET_COST_UNKNOWN_TIP, missing=target_missing, total=items, noun=noun
     )

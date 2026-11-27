@@ -469,31 +469,31 @@ def test_compare_transcript_invalid_index_is_400(roots: list[Path]):
     assert resp.status_code == 400
 
 
-def test_overview_drops_compare_selectors(roots: list[Path]):
-    client = TestClient(build_app(roots))
-    html = client.get('/?surface=sim').text
-    assert 'Compare runs' not in html
-    assert 'name="a"' not in html and 'name="b"' not in html
+def test_overview_lets_you_pick_two_runs_to_compare(roots: list[Path]):
+    """The runs list carries a checkbox per run outside each row link, plus a
+    "Compare selected" button that starts disabled (the JS enables it at two)."""
+    html = TestClient(build_app(roots)).get('/?surface=sim').text
+    assert '<form id="cmp-pick" class="cmp-pick" action="/compare/sim/pick" method="get">' in html
+    assert 'disabled>Compare selected</button>' in html
+    for rid in _rids(roots):
+        assert f'name="r" value="{rid}"' in html
+        # the checkbox closes before the row link opens: never an input inside an <a>
+        assert f'</label><a class="runs-grid-row" href="/r/{rid}"' in html
 
 
-def test_compare_bar_absent_on_sim_overview(roots: list[Path]):
-    client = TestClient(build_app(roots))
-    resp = client.get('/?surface=sim')
-    assert resp.status_code == 200
-    html = resp.text
-    assert 'action="/compare/sim"' not in html
-    assert 'Recent runs' in html
+def test_redteam_overview_has_no_compare_picks(roots: list[Path]):
+    assert 'cmp-pick' not in TestClient(build_app(roots)).get('/?surface=redteam').text
 
 
 def test_compare_control_on_sim_report(roots: list[Path]):
-    """The run report hero carries a compare control: this run pinned as A
-    (hidden input), the other run selectable as B — never itself."""
+    """The run report hero carries a compare control: this run pinned (hidden
+    input), the other run selectable — never itself."""
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)
     html = client.get(f'/r/{rid_a}').text
-    assert f'name="a" value="{rid_a}"' in html
-    assert f'<option value="{rid_b}"' in html
-    assert f'<option value="{rid_a}"' not in html
+    assert f'name="r" value="{rid_a}"' in html
+    assert f'data-model="{rid_b}"' in html
+    assert f'data-model="{rid_a}"' not in html
 
 
 # ---------------------------------------------------------------------------
@@ -890,3 +890,35 @@ def test_compare_page_places_the_heatmap_after_outcomes(roots: list[Path]):
     client = TestClient(build_app(roots))
     html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
     assert html.index('Outcomes') < html.index('Where it changed') < html.index('id="cmp-conversations"')
+
+
+@pytest.fixture
+def versioned_roots(tmp_path: Path) -> list[Path]:
+    from datetime import timedelta
+
+    sim = tmp_path / 'sim-runs'
+    sim.mkdir()
+    for i, run in enumerate((_run_a(), _run_b())):
+        run.run_name = f'agent v{i + 1}'
+        run.created_at = datetime(2026, 11, 1, tzinfo=timezone.utc) + timedelta(days=i)
+        (sim / f'v{i + 1}.json').write_text(run.model_dump_json())
+    return [tmp_path / 'runs', sim]
+
+
+def test_sim_report_hero_has_compare_menu_with_earlier_run(versioned_roots: list[Path]):
+    sim = versioned_roots[1]
+    v1, v2 = report_id(sim / 'v1.json'), report_id(sim / 'v2.json')
+    html = TestClient(build_app(versioned_roots)).get(f'/r/{v2}').text
+    assert '<details class="cmp-menu"' in html
+    assert f'/compare/sim/pick?r={v2}&amp;r={v1}' in html
+    start = html.index('<header class="report-hero">')
+    hero = html[start : html.index('</header>', start)]
+    assert 'cmp-menu' in hero
+    assert hero.rstrip().endswith('</details>')  # its own corner, not in the trace-link row
+
+
+def test_sim_filter_keeps_the_compare_menu(versioned_roots: list[Path]):
+    """Applying a filter re-renders the hero; the compare menu must survive it."""
+    v2 = report_id(versioned_roots[1] / 'v2.json')
+    html = TestClient(build_app(versioned_roots)).post(f'/r/{v2}/filter', data={}).text
+    assert '<details class="cmp-menu"' in html

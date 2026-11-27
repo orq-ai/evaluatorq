@@ -1440,3 +1440,32 @@ def test_sim_failures_table_marks_numeric_columns_and_sizes_the_why_cell() -> No
     assert '<th class="fail-why">Why</th>' in html
     assert '<td class="fail-why" data-label="Why"><span data-no-drawer title="r">' in html
     assert '<th class="num">Score</th>' in html
+
+
+def _hero_run(**extra):
+    from datetime import datetime, timezone
+
+    from evaluatorq.simulation.contracts import SimulationRun
+
+    return SimulationRun(
+        created_at=datetime(2026, 11, 1, tzinfo=timezone.utc),
+        run_name='hello', mode='run', target_kind='orq_agent', evaluator_names=['goal_achieved'],
+        total_results=0, scorer_averages={}, results=[], **extra,
+    )
+
+
+def test_sim_hero_names_the_target_in_a_pill():
+    from evaluatorq.dashboard.report_tabs import _sim_hero
+
+    html = _sim_hero(_hero_run(target='agent:support-bot'))
+    assert '<span class="report-hero-target-label">Target</span><span class="target-pill" data-kind="agent">' in html
+    assert 'support-bot</span>' in html
+    assert 'orq_agent' not in html
+
+
+def test_sim_hero_falls_back_to_the_target_kind_label():
+    from evaluatorq.dashboard.report_tabs import _sim_hero
+
+    html = _sim_hero(_hero_run())
+    assert 'data-kind="agent"' in html and 'Orq agent' in html
+    assert 'orq_agent' not in html
