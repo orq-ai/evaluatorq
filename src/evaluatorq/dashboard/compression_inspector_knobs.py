@@ -1,4 +1,4 @@
-"""Render the compression inspector's knobs form: every limit and include switch, with its default."""
+"""Render the compression inspector's knobs form: every limit and include switch, marked when it differs from its default."""
 
 from __future__ import annotations
 
@@ -26,12 +26,18 @@ _WRAP_SCRIPT = "document.getElementById('compression-output').classList.toggle('
 FORM_ID = 'compression-knobs-form'
 # Fields shown above the collapsible settings; they change the display, not the compression.
 _DISPLAY_FIELDS = frozenset({'original_view', 'wrap', 'coverage', 'bar_view'})
+# Marks every field that differs from its default and counts the changed compression settings.
 _COUNT_SCRIPT = (
     "var s=this.querySelector('.compression-settings');if(!s)return;var n=0;"
-    "s.querySelectorAll('[data-default]').forEach(function(e){"
-    "var v=e.type==='checkbox'?(e.checked?'1':'0'):e.value;if(v!==e.dataset.default){n++;}});"
+    "this.querySelectorAll('[data-default]').forEach(function(e){"
+    "var v=e.type==='checkbox'?(e.checked?'1':'0'):e.value,c=v!==e.dataset.default;"
+    "e.closest('label').classList.toggle('is-changed',c);if(c&&s.contains(e)){n++;}});"
     "s.querySelector('.compression-changed').textContent=n?n+' changed':'All defaults';"
     "s.classList.toggle('has-changes',n>0);"
+)
+_FIELD_RESET_SCRIPT = (
+    "var e=this.parentNode.querySelector('[data-default]');e.value=e.dataset.default;"
+    "e.dispatchEvent(new Event('change',{bubbles:true}))"
 )
 
 _DECISION_EDGE_LABELS = {
@@ -97,43 +103,57 @@ def _shown(value: object) -> str:
     return 'whole (-1)' if value == -1 else f'{value:,}' if isinstance(value, int) else str(value)
 
 
-def _number(name: str, label: str, values: Values, defaults: Values, *, low: int = 1) -> str:
+def _changed(value: object, default: object) -> str:
+    return ' is-changed' if value != default else ''
+
+
+def _knob(label: str, control: str, *, value: object, default: object, default_text: str) -> str:
+    """A labelled field; when changed it shows a mark and a Reset button that restores its default."""
     return (
-        '<label class="compression-knob">'
-        f'<span>{label}</span>'
-        f'<input type="number" name="{name}" value="{values[name]}" min="{low}" max="{MAX_KNOB_CHARS}" '
-        f'step="1" required data-default="{defaults[name]}">'
-        f'<small>Default {_shown(defaults[name])}</small></label>'
+        f'<label class="compression-knob{_changed(value, default)}">'
+        f'<span>{label}</span>{control}'
+        f'<button type="button" class="compression-field-reset" onclick="{_FIELD_RESET_SCRIPT}" '
+        f'title="Default {default_text}">Reset</button></label>'
     )
 
 
-def _check(name: str, label: str, values: Values, defaults: Values) -> str:
+def _number(name: str, label: str, values: Values, defaults: Values, *, low: int = 1) -> str:
+    control = (
+        f'<input type="number" name="{name}" value="{values[name]}" min="{low}" max="{MAX_KNOB_CHARS}" '
+        f'step="1" required data-default="{defaults[name]}" title="Default {_shown(defaults[name])}">'
+    )
+    return _knob(label, control, value=values[name], default=defaults[name], default_text=_shown(defaults[name]))
+
+
+def _select(name: str, label: str, options: tuple[tuple[str, str], ...], values: Values, defaults: Values) -> str:
+    rendered = ''.join(
+        f'<option value="{value}"{" selected" if values[name] == value else ""}>{text}</option>'
+        for value, text in options
+    )
+    default_text = dict(options).get(str(defaults[name]), str(defaults[name]))
+    control = (
+        f'<select name="{name}" data-default="{defaults[name]}" title="Default {default_text}">{rendered}</select>'
+    )
+    return _knob(label, control, value=values[name], default=defaults[name], default_text=default_text)
+
+
+def _check(name: str, label: str, values: Values, defaults: Values, *, onchange: str = '') -> str:
     checked = ' checked' if values[name] else ''
+    handler = f' onchange="{onchange}"' if onchange else ''
     return (
-        '<label class="compression-check">'
-        f'<input type="checkbox" name="{name}" value="1"{checked} data-default="{int(bool(defaults[name]))}">'
+        f'<label class="compression-check{_changed(bool(values[name]), bool(defaults[name]))}">'
+        f'<input type="checkbox" name="{name}" value="1"{checked} data-default="{int(bool(defaults[name]))}"{handler}>'
         f'<span>{label}</span></label>'
     )
 
 
 def _display_group(values: Values, defaults: Values, *, has_source: bool) -> str:
-    options = ''.join(
-        f'<option value="{value}"{" selected" if values["original_view"] == value else ""}>{label}</option>'
-        for value, label in _ORIGINAL_OPTIONS
-        if value != 'source' or has_source
-    )
-    wrap = (
-        '<label class="compression-check">'
-        f'<input type="checkbox" name="wrap" value="1"{" checked" if values["wrap"] else ""} '
-        f'data-default="{int(bool(defaults["wrap"]))}" onchange="{_WRAP_SCRIPT}">'
-        '<span>Wrap long lines</span></label>'
-    )
+    options = tuple((value, label) for value, label in _ORIGINAL_OPTIONS if value != 'source' or has_source)
+    wrap = _check('wrap', 'Wrap long lines', values, defaults, onchange=_WRAP_SCRIPT)
     coverage = _check('coverage', 'Describe what is present and absent at the start', values, defaults)
     return (
         '<div class="compression-knob-grid compression-display">'
-        '<label class="compression-knob"><span>Original shows</span>'
-        f'<select name="original_view" data-default="{defaults["original_view"]}">{options}</select>'
-        '<small>Default ATIF trajectory</small></label>'
+        f'{_select("original_view", "Original shows", options, values, defaults)}'
         f'{wrap}{coverage}'
         '</div>'
     )
@@ -179,18 +199,12 @@ def _view_group(values: Values, defaults: Values) -> str:
         _check(f'view_include_{kind}', _VIEW_KIND_LABELS[kind], values, defaults) for kind in sorted(MESSAGE_KINDS)
     )
     caps = ''.join(_number(name, _VIEW_CAP_LABELS[name], values, defaults, low=-1) for name in VIEW_CAP_FIELDS)
-    options = ''.join(
-        f'<option value="{value}"{" selected" if values["view_tools"] == value else ""}>{label}</option>'
-        for value, label in _TOOLS_OPTIONS
-    )
     return (
         '<fieldset class="compression-knob-group">'
         '<legend>Readable text</legend>'
         '<div class="compression-knob-grid">'
         f'{_number("view_budget", "Whole view limit", values, defaults)}'
-        '<label class="compression-knob"><span>Tool display</span>'
-        f'<select name="view_tools" data-default="{defaults["view_tools"]}">{options}</select>'
-        '<small>Default one line per call</small></label>'
+        f'{_select("view_tools", "Tool display", _TOOLS_OPTIONS, values, defaults)}'
         '</div>'
         '<p class="compression-knob-title">Include</p>'
         f'<div class="compression-checks">{kinds}</div>'
@@ -225,11 +239,14 @@ def knobs_form_html(knobs: CompressionKnobs, defaults: CompressionKnobs, token: 
         '</div>'
         '<div class="compression-knobs-footer">'
         f'<button type="button" class="compression-reset" onclick="{_RESET_SCRIPT}">Reset to defaults</button>'
-        '<p class="compression-count-note">The Original is the canonical ATIF JSON, the raw session file or the readable '
-        'text, which uses the Insights full_conversation_view options. The Output uses the decision-state limits of the classifier. '
+        '<p class="compression-count-note">Changes update the preview as you make them; production Insights and '
+        'classifier defaults are unchanged.</p>'
+        '</div>'
+        '<details class="compression-help"><summary>What the original and output are</summary>'
+        '<p>The Original is the canonical ATIF JSON, the raw session file or the readable text, which uses the '
+        'Insights full_conversation_view options. The Output uses the decision-state limits of the classifier. '
         'Every original is scrubbed of known secrets and cut to 2,000,000 characters, and a raw session file is read '
-        'up to 5,000,000 bytes; a note says when anything is cut. Coverage is added to the readable '
-        'text and decision state, not ATIF or raw-source originals. Format switches start on here only; production '
-        'Insights and classifier defaults are unchanged. Changes update the preview as you make them.</p>'
-        '</div></details></form>'
+        'up to 5,000,000 bytes; a note says when anything is cut. Coverage is added to the readable text and '
+        'decision state, not ATIF or raw-source originals. Format switches start on here only.</p>'
+        '</details></details></form>'
     )

@@ -275,8 +275,8 @@ def test_htmx_gets_only_the_live_region_and_a_plain_post_gets_the_page(client: T
     page = _preview(client, token, htmx=False).text
 
     assert fragment.startswith('<div id="compression-output"')
-    assert 'Inspect trace compression' not in fragment
-    assert 'Inspect trace compression' in page
+    assert 'class="compression-intro"' not in fragment
+    assert 'class="compression-intro"' in page
     assert 'id="compression-output"' in page
     assert 'Reset to defaults' in page
 
@@ -577,3 +577,27 @@ def test_the_settings_summary_counts_changed_fields_and_opens_when_any_differ(cl
     assert 'All defaults' in default
     assert '<details class="compression-settings has-changes" open>' in changed
     assert '1 changed' in changed
+
+
+def test_a_loaded_trace_folds_the_source_pickers_into_one_line(client: TestClient) -> None:
+    token = _load(client)
+
+    page = _preview(client, token, htmx=False).text
+
+    assert '<details class="compression-source-switch">' in page
+    assert re.search(r'Showing <strong>Local session [^<]+</strong>', page)
+    assert 'Load a different trace' in page
+    assert 'Load Orq trace' in page
+
+
+def test_changed_fields_are_marked_and_offer_a_reset_while_defaults_show_no_hint(client: TestClient) -> None:
+    token = _load(client)
+
+    default = _preview(client, token, htmx=False).text
+    changed = _preview(client, token, htmx=False, budget=1_234).text
+
+    assert '<small>Default' not in default
+    assert not re.search(r'class="compression-(knob|check) is-changed"', default)
+    assert 'title="Default 500,000"' in default
+    assert re.search(r'<label class="compression-knob is-changed"><span>Whole view limit</span>', changed)
+    assert 'class="compression-field-reset"' in changed
