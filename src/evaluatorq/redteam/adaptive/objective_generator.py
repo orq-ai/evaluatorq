@@ -4,7 +4,6 @@ This module generates additional attack objectives dynamically by analyzing
 the agent's tools, memory configuration, and system prompt.
 """
 
-import asyncio
 import hashlib
 import random
 from typing import Any
@@ -15,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from evaluatorq.common.content_filter import is_content_filter_error, regenerate_on_content_filter
 from evaluatorq.common.llm_call import execute_chat_parse
-from evaluatorq.common.llm_errors import CONNECTION_ERRORS, STATUS_ERRORS
+from evaluatorq.common.llm_errors import CONNECTION_ERRORS, CONTENT_FILTER_FINISH_ERRORS, STATUS_ERRORS
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
@@ -31,6 +30,7 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     attacker_model_for,
 )
+from evaluatorq.redteam.exceptions import StrategyGenerationError
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
 from evaluatorq.redteam.vulnerability_registry import (
@@ -207,6 +207,7 @@ async def _call_llm_for_objectives_single(
     ``prompt_template`` must contain a ``{count}`` placeholder.
     """
     cfg = cfg or PIPELINE_CONFIG
+    attempts = max(1, cfg.max_content_filter_retries + 1)
     try:
         prompt = prompt_template.replace('{count}', str(count))
         gen_messages: list[dict[str, Any]] = [{'role': 'user', 'content': prompt}]
@@ -225,7 +226,7 @@ async def _call_llm_for_objectives_single(
 
             async def _generate(attempt: int) -> Any:
                 if attempt > 0:
-                    logger.debug(f'Regenerating objectives for {log_label} (attempt {attempt + 1})')
+                    logger.debug(f'Regenerating objectives for {log_label} on {model!r} (attempt {attempt + 1})')
                 # RES-1295: `execute_chat_parse` prices this call, but the
                 # returned `Usage` is discarded here — this generator returns
                 # a bare `GeneratedObjectives`, with no sink to carry the
@@ -250,30 +251,27 @@ async def _call_llm_for_objectives_single(
             # budget (max_content_filter_retries) instead of a private constant.
             response = await regenerate_on_content_filter(
                 _generate,
-                max_attempts=max(1, cfg.max_content_filter_retries + 1),
-                label=f'Objective generation for {log_label}',
+                max_attempts=attempts,
+                label=f'Objective generation for {log_label} on {model!r}',
             )
 
             result = response.choices[0].message.parsed
             if result is None:
-                raise ValueError('Objective generation returned no parsed content')
+                raise StrategyGenerationError(
+                    f'attacker model {model!r} returned no parsed objectives (it may have refused the request)'
+                )
 
-            logger.debug(f'Generated {len(result.objectives)} objectives for {log_label}')
+            logger.debug(f'Generated {len(result.objectives)} objectives for {log_label} on {model!r}')
             return result.objectives[:count]
 
-    except (asyncio.CancelledError, *CONNECTION_ERRORS, *STATUS_ERRORS) as e:
-        # A content filter that surfaced as an error survived the retries above — drop
-        # this vulnerability's objectives rather than failing the whole run. Other
-        # transport/status errors propagate to the caller's own retry/handling.
+    except (*CONNECTION_ERRORS, *STATUS_ERRORS, *CONTENT_FILTER_FINISH_ERRORS) as e:
         if is_content_filter_error(e):
-            logger.error(
-                f'Objective generation content-filtered after retries for {log_label!r}; returning no objectives'
+            msg = (
+                f'the content filter of attacker model {model!r} blocked objective generation on all '
+                f'{attempts} attempt(s); pick another attacker model or raise max_content_filter_retries'
             )
-            return []
+            raise StrategyGenerationError(msg) from e
         raise
-    except Exception as e:  # noqa: BLE001
-        logger.error(f'Objective generation failed for {log_label!r} ({type(e).__name__}): {e}')
-        return []
 
 
 async def _call_llm_for_objectives(
@@ -285,11 +283,15 @@ async def _call_llm_for_objectives(
     log_label: str,
     llm_kwargs: dict[str, Any] | None = None,
     cfg: LLMConfig | None = None,
+    failures: list[str] | None = None,
 ) -> list[GeneratedObjective]:
     """Generate objectives, batching into multiple LLM calls if needed.
 
     ``prompt_template`` must contain a ``{count}`` placeholder. Each batch
     fills it with the batch size so the LLM generates the right number.
+
+    A blocked batch after earlier ones succeeded keeps their objectives and appends the
+    failure to ``failures``; a block with nothing generated yet raises.
     """
     cfg = cfg or PIPELINE_CONFIG
     max_per_call = cfg.max_objectives_per_llm_call
@@ -311,18 +313,25 @@ async def _call_llm_for_objectives(
 
     while remaining > 0:
         batch_size = min(remaining, max_per_call)
-        batch_objectives = await _call_llm_for_objectives_single(
-            prompt_template,
-            llm_client,
-            model,
-            batch_size,
-            {**span_attributes, 'orq.redteam.batch_index': batch_idx},
-            f'{log_label} (batch {batch_idx + 1})',
-            llm_kwargs,
-            cfg,
-        )
+        try:
+            batch_objectives = await _call_llm_for_objectives_single(
+                prompt_template,
+                llm_client,
+                model,
+                batch_size,
+                {**span_attributes, 'orq.redteam.batch_index': batch_idx},
+                f'{log_label} (batch {batch_idx + 1})',
+                llm_kwargs,
+                cfg,
+            )
+        except StrategyGenerationError as e:
+            if not all_objectives:
+                raise
+            if failures is not None:
+                failures.append(f'generated {len(all_objectives)} of {count} objectives: {e}')
+            break
         if not batch_objectives:
-            logger.warning(f'Batch {batch_idx + 1} returned no objectives for {log_label}; stopping early')
+            logger.warning(f'Batch {batch_idx + 1} returned no objectives for {log_label} on {model!r}; stopping early')
             break
         all_objectives.extend(batch_objectives)
         remaining -= batch_size
@@ -342,6 +351,8 @@ async def generate_objectives_for_vulnerability(
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
+    *,
+    failures: list[str] | None = None,
 ) -> list[GeneratedObjective]:
     """Generate attack objectives using an LLM based on agent context.
 
@@ -389,6 +400,7 @@ async def generate_objectives_for_vulnerability(
         log_label=f'{vuln.value} ({category_code})',
         llm_kwargs=llm_kwargs,
         cfg=cfg,
+        failures=failures,
     )
 
 
@@ -403,6 +415,8 @@ async def generate_objectives_for_category(
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
+    *,
+    failures: list[str] | None = None,
 ) -> list[GeneratedObjective]:
     """Generate attack objectives using an LLM based on agent context.
 
@@ -439,6 +453,7 @@ async def generate_objectives_for_category(
             attacker_instructions=attacker_instructions,
             llm_kwargs=llm_kwargs,
             pipeline_config=cfg,
+            failures=failures,
         )
 
     # Fallback path for unrecognized category codes: build a best-effort prompt
@@ -469,6 +484,7 @@ async def generate_objectives_for_category(
         log_label=category,
         llm_kwargs=llm_kwargs,
         cfg=cfg,
+        failures=failures,
     )
 
 
@@ -600,6 +616,8 @@ async def generate_strategies_for_vulnerability(
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
+    *,
+    failures: list[str] | None = None,
 ) -> list[AttackStrategy]:
     """Generate complete attack strategies for a vulnerability.
 
@@ -633,6 +651,7 @@ async def generate_strategies_for_vulnerability(
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
         pipeline_config=pipeline_config,
+        failures=failures,
     )
     return _objectives_to_strategies(
         objectives=objectives,
@@ -655,6 +674,8 @@ async def generate_strategies_for_category(
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
+    *,
+    failures: list[str] | None = None,
 ) -> list[AttackStrategy]:
     """Generate complete attack strategies for a category.
 
@@ -689,6 +710,7 @@ async def generate_strategies_for_category(
             attacker_instructions=attacker_instructions,
             llm_kwargs=llm_kwargs,
             pipeline_config=pipeline_config,
+            failures=failures,
         )
 
     # Fallback for unrecognized categories: generate objectives without a resolved
@@ -709,6 +731,7 @@ async def generate_strategies_for_category(
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
         pipeline_config=pipeline_config,
+        failures=failures,
     )
     return _objectives_to_strategies(
         objectives=objectives,

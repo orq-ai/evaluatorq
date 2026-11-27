@@ -36,6 +36,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.reports.icons import _TARGET_ICONS as _TARGET_ICONS
+from evaluatorq.common.reports.icons import target_pill as target_pill
 from evaluatorq.common.reports.messages import render_message_list as render_message_list
 from evaluatorq.dashboard.controls import (
     FILTER_CHEVRON,
@@ -56,6 +57,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.common.cli_oauth import OAuthSession
     from evaluatorq.common.model_roles import Role
+    from evaluatorq.dashboard.compare_suggest import CompareCandidate
     from evaluatorq.dashboard.library import ReportCard
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
     from evaluatorq.dashboard.orq_scope import OAuthScopes
@@ -259,10 +261,13 @@ def _recent_runs_table(rows: list[RunRow]) -> str:
     return f'<div class="recent-runs">{"".join(row_html)}</div>'
 
 
-def _panel(title: str, sub: str, inner: str, *, cls: str = '', title_tag: str = 'div') -> str:
+def _panel(title: str, sub: str, inner: str, *, cls: str = '', title_tag: str = 'div', actions: str = '') -> str:
     cls_attr = f' {cls}' if cls else ''
     sub_html = f'<div class="panel-sub">{esc(sub)}</div>' if sub else ''
-    return f'<div class="panel{cls_attr}"><{title_tag} class="panel-title">{esc(title)}</{title_tag}>{sub_html}{inner}</div>'
+    head = f'<{title_tag} class="panel-title">{esc(title)}</{title_tag}>'
+    if actions:
+        head = f'<div class="panel-head">{head}{actions}</div>'
+    return f'<div class="panel{cls_attr}">{head}{sub_html}{inner}</div>'
 
 
 def _bars(
@@ -430,25 +435,6 @@ _CHEVRON = (
 )
 
 
-def _target_pill(label: str, kind: str, *, ellipsis: bool = False) -> str:
-    """Target cell rendered exclusively from the saved run's target kind.
-
-    Older JSON and extensions may carry raw storage kinds rather than the
-    display categories emitted by metrics, so normalize here too. Unknown
-    targets are external entities, not green status dots.
-    """
-    display_kind = {
-        'orq_agent': 'agent',
-        'orq_deployment': 'deployment',
-        'openai_model': 'llm',
-        'vercel': 'deployment',
-        'callback': 'external',
-        'other': 'external',
-    }.get(kind, kind if kind in _TARGET_ICONS else 'external')
-    text = f'<span class="target-label">{esc(label)}</span>' if ellipsis else esc(label)
-    return f'<span class="target-pill" data-kind="{esc(display_kind)}">{_TARGET_ICONS[display_kind]}{text}</span>'
-
-
 # Run lifecycle → label for the solid status pill (mirrors the platform's
 # success/error spans). 'finished' reads as 'success'.
 _STATUS_LABEL: dict[str, str] = {'finished': 'success', 'error': 'error', 'running': 'running'}
@@ -528,7 +514,7 @@ def _sim_row(r: Any) -> str:
         f'{r.name}, {when_text}, target {all_targets}, status {r.status}, {outcome_label}, '
         f'{r.errors} errored, goal completion {rate_text}, cost {_fmt_spend(r.cost)}'
     )
-    targets = ''.join(_target_pill(*t, ellipsis=True) for t in r.targets)
+    targets = ''.join(target_pill(*t, ellipsis=True) for t in r.targets)
     return (
         f'<a class="runs-grid-row" href="/r/{esc(r.rid)}" aria-label="{esc(label)}">'
         f'<span class="rg-job"><span class="rg-name" title="{esc(r.name)}">{esc(r.name)}{err}</span>'
@@ -568,10 +554,10 @@ def _redteam_row(r: Any) -> str:
     )
     targets_attrs = ''
     if len(r.targets) > 1:
-        targets = _target_pill(*r.targets[0], ellipsis=True) + f'<span class="target-more">+{len(r.targets) - 1}</span>'
+        targets = target_pill(*r.targets[0], ellipsis=True) + f'<span class="target-more">+{len(r.targets) - 1}</span>'
         targets_attrs = f' title="{esc(all_targets)}"'
     else:
-        targets = ''.join(_target_pill(*t, ellipsis=True) for t in r.targets)
+        targets = ''.join(target_pill(*t, ellipsis=True) for t in r.targets)
         if r.targets:
             targets_attrs = f' title="{esc(r.targets[0][0])}"'
     score_hint = f'<span class="sr-only">{esc(asr_flag)}</span>' if asr_flag else ''
@@ -589,7 +575,27 @@ def _redteam_row(r: Any) -> str:
     )
 
 
-def _run_grid(rows: list[Any], *, redteam: bool = False) -> str:
+def compare_pick_form(surface: str) -> str:
+    """The runs list's "Compare selected" form. Row checkboxes join it through
+    ``form="cmp-pick"``; ``dashboard.js`` enables the button at exactly two."""
+    return (
+        f'<form id="cmp-pick" class="cmp-pick" action="/compare/{esc(surface)}/pick" method="get">'
+        '<button type="submit" class="btn-secondary" disabled>Compare selected</button></form>'
+    )
+
+
+def _compare_pick_row(row_html: str, rid: str, name: str, *, pickable: bool) -> str:
+    """*row_html* (a row link) with its compare checkbox beside it, never inside the link."""
+    box = (
+        f'<label class="run-pick"><input type="checkbox" form="cmp-pick" name="r" value="{esc(rid)}"'
+        f' aria-label="Select {esc(name)} to compare"></label>'
+        if pickable
+        else '<span class="run-pick"></span>'
+    )
+    return f'<div class="run-pick-row">{box}{row_html}</div>'
+
+
+def _run_grid(rows: list[Any], *, redteam: bool = False, pick: bool = False) -> str:
     """Run-level table as a clickable anchor-grid — the WHOLE row links to the
     run's report. Borderless (no boxed table chrome), aligned columns.
     Shared by the Red Team + Agent Sim surfaces (identical row shape).
@@ -603,7 +609,10 @@ def _run_grid(rows: list[Any], *, redteam: bool = False) -> str:
         f'<span>{status_head}</span><span>{score_head}</span><span>Cases</span><span>Cost</span><span></span></div>'
     )
     row = _redteam_row if redteam else _sim_row
-    return f'<div class="runs-grid">{head}{"".join(map(row, rows))}</div>'
+    if not pick:
+        return f'<div class="runs-grid">{head}{"".join(map(row, rows))}</div>'
+    picked = ''.join(_compare_pick_row(row(r), r.rid, r.name, pickable=not r.error) for r in rows)
+    return f'<div class="runs-grid has-pick">{_compare_pick_row(head, "", "", pickable=False)}{picked}</div>'
 
 
 def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
@@ -670,21 +679,39 @@ def _fmt_compact(n: int) -> str:
     return str(n)
 
 
-def run_compare_control(rid: str, choices: list[tuple[str, str]], action: str) -> str:
-    """Render the on-report compare control: this run is A, pick B from the
-    other runs of its surface. ``action`` is that surface's compare URL. Empty
+def run_compare_control(rid: str, choices: list[CompareCandidate], action: str) -> str:
+    """The "any other run" form inside `compare_menu`: pick a second run of this
+    surface in the shared rich picker (name, then date and headline, searchable).
+    ``action`` is that surface's pick URL, which makes the older run A. Empty
     when there is no other run to compare against."""
-    others = [(r, name) for r, name in choices if r != rid]
+    others = [c for c in choices if c.rid != rid]
     if not others:
         return ''
-    opts = ''.join(f'<option value="{esc(r)}">{esc(name)}</option>' for r, name in others)
+    rows = [(c.rid, pick_row(c.name, f'{c.when:%Y-%m-%d} · {c.headline}')) for c in others]
+    picker = rich_pick('r', others[0].rid, rows, filterable=True)
     return (
         f'<form class="cmp-bar" action="{esc(action)}" method="get">'
-        f'<input type="hidden" name="a" value="{esc(rid)}">'
-        '<span class="cmp-bar-label">Compare with</span>'
-        f'<select name="b" aria-label="Run B">{opts}</select>'
-        '<button type="submit" class="btn-secondary">Compare</button>'
-        '</form>'
+        f'<input type="hidden" name="r" value="{esc(rid)}">'
+        f'{picker}<button type="submit" class="btn-secondary">Compare</button></form>'
+    )
+
+
+def compare_menu(rid: str, suggestions: list[CompareCandidate], choices: list[CompareCandidate], action: str) -> str:
+    """The report hero's quiet compare button: a popover with suggested earlier
+    runs, then the "any other run" picker. Empty when there is no other run."""
+    picker = run_compare_control(rid, choices, action)
+    if not picker:
+        return ''
+    items = ''.join(
+        f'<a class="cmp-menu-item" href="{esc(action)}?{esc(urlencode([("r", rid), ("r", c.rid)]))}">'
+        f'<span class="cmp-menu-name">{esc(c.name)}</span>'
+        f'<span class="cmp-menu-meta">{c.when:%Y-%m-%d} · {esc(c.headline)}</span></a>'
+        for c in suggestions
+    )
+    earlier = f'<div class="cmp-menu-label">Earlier runs</div>{items}' if items else ''
+    return (
+        '<details class="cmp-menu"><summary class="cmp-menu-btn">⇄ Compare</summary>'
+        f'<div class="cmp-menu-pop">{earlier}<div class="cmp-menu-label">Any other run</div>{picker}</div></details>'
     )
 
 
@@ -773,12 +800,14 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
 def _run_overview(*, data: SimOverview | RedTeamOverview, surface: str, band: str) -> str:
     """Shared overview shell: scope, KPI strip, run grid, and pagination."""
     pager = _run_pager(surface, data.page, data.total_runs, data.per_page)
+    pick = surface == 'sim' and sum(not r.error for r in data.recent) >= 2
     panel = _panel(
         'Recent runs',
         '',
-        _run_grid(data.recent, redteam=surface == 'redteam') + pager,
+        _run_grid(data.recent, redteam=surface == 'redteam', pick=pick) + pager,
         cls='' if pager else 'panel--flush',
         title_tag='h2',
+        actions=compare_pick_form(surface) if pick else '',
     )
     scope = f'All {data.total_runs:,} runs' if data.total_runs != 1 else '1 run'
     surface_class = 'rt-overview' if surface == 'redteam' else 'sim-overview'
@@ -812,11 +841,16 @@ def runs_screen_body(rows: list[RunRow], surface: str) -> str:
             f'Run a {esc(label.lower())} job to generate one.</div>'
             '</div></section>'
         )
+    pick = surface == 'pairwise' and sum(not r.error for r in rows) >= 2
+    toolbar = f'<div class="runs-toolbar">{compare_pick_form(surface)}</div>' if pick else ''
     head = '<div class="runs-head"><span>Job</span><span>Score</span><span>Status</span><span></span></div>'
     body = ''.join(_run_row(r, show_badge=False) for r in rows)
-    return (
-        f'<section class="runs-screen"><div class="runs-card">{head}<div class="run-list">{body}</div></div></section>'
-    )
+    if pick:
+        head = _compare_pick_row(head, '', '', pickable=False)
+        body = ''.join(
+            _compare_pick_row(_run_row(r, show_badge=False), r.id, r.name, pickable=not r.error) for r in rows
+        )
+    return f'<section class="runs-screen">{toolbar}<div class="runs-card">{head}<div class="run-list">{body}</div></div></section>'
 
 
 _ARROW_LEFT = (

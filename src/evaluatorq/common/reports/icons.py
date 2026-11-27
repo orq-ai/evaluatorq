@@ -1,5 +1,9 @@
 """Target icons shared by dashboard and standalone report cards."""
 
+from __future__ import annotations
+
+from evaluatorq.common.reports.html_helpers import esc
+
 _TARGET_ICONS: dict[str, str] = {
     'agent': (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
@@ -27,3 +31,22 @@ _TARGET_ICONS: dict[str, str] = {
         '<path d="M3 12h18M12 3a14.9 14.9 0 0 1 0 18M12 3a14.9 14.9 0 0 0 0 18"/></svg>'
     ),
 }
+
+
+def target_pill(label: str, kind: str, *, ellipsis: bool = False) -> str:
+    """Target cell rendered exclusively from the saved run's target kind.
+
+    Older JSON and extensions may carry raw storage kinds rather than the
+    display categories emitted by metrics, so normalize here too. Unknown
+    targets are external entities, not green status dots.
+    """
+    display_kind = {
+        'orq_agent': 'agent',
+        'orq_deployment': 'deployment',
+        'openai_model': 'llm',
+        'vercel': 'deployment',
+        'callback': 'external',
+        'other': 'external',
+    }.get(kind, kind if kind in _TARGET_ICONS else 'external')
+    text = f'<span class="target-label">{esc(label)}</span>' if ellipsis else esc(label)
+    return f'<span class="target-pill" data-kind="{esc(display_kind)}">{_TARGET_ICONS[display_kind]}{text}</span>'

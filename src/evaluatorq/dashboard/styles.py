@@ -1885,6 +1885,10 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .chart-card .donut-legend { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 16px; }
 /* Sim report is all-sans to match the mockup (no monospace anywhere). */
 .sim-report .report-hero-sub { font-family: var(--font-sans); }
+/* What was tested: a small label, then the same target pill the runs list uses. */
+.report-hero-target { display: flex; align-items: center; gap: 8px; }
+.report-hero-target-label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.report-hero-target .target-pill { font-size: 13px; color: var(--text-strong); background: var(--surface-card); }
 
 .sim-report .tab-count {
     font-family: var(--font-sans); font-size: 11px; font-weight: 600;
@@ -3073,22 +3077,68 @@ _RT_REPORT_CSS = """
 # theme tokens. Kept with the other dashboard CSS blocks rather than inlined
 # per-request in the sim_compare package.
 _SIM_COMPARE_CSS = """
-/* Hero action row: trace-link button + the on-report compare control */
+/* Hero action row: trace-link buttons */
 .report-hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
-.report-hero-actions .cmp-bar { margin: 0; }
 
-/* Compare picker bar on the sim run overview and in the report hero. Controls
-   mirror the filter-rail trigger look (12.5px sans, card surface, default
-   hairline, md radius) so the bar reads as part of the same control family. */
-.cmp-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 14px; }
-.cmp-bar-label { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint); }
-.cmp-bar select { height: 32px; padding: 0 9px; max-width: 320px;
+/* Runs-list compare picks: a checkbox column beside each row link (never inside
+   it), and "Compare selected" in the panel head. The row rule moves from the
+   link to the wrapper so it spans the checkbox column too. */
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.run-overview .panel-head { margin-bottom: 14px; }
+.run-overview .panel-head .panel-title { margin-bottom: 0; }
+.cmp-pick { margin: 0; }
+.cmp-pick .btn-secondary { height: 28px; font-size: 12.5px; }
+.cmp-pick .btn-secondary:disabled { color: var(--text-faint); cursor: default; background: var(--surface-card); }
+.run-pick-row { display: flex; align-items: stretch; }
+.run-pick-row > :last-child { flex: 1 1 auto; min-width: 0; }
+.run-pick { flex: 0 0 28px; display: flex; align-items: center; justify-content: flex-end; }
+.run-pick input { margin: 0; width: 14px; height: 14px; accent-color: var(--teal-600); cursor: pointer; }
+.run-pick-row:hover { background: var(--app-gray-50); }
+.run-overview .has-pick > .run-pick-row { border-bottom: 1px solid var(--border-subtle); }
+.run-overview .has-pick > .run-pick-row:first-child { border-bottom-color: var(--border-default); }
+.run-overview .has-pick > .run-pick-row:last-child { border-bottom: 0; }
+.run-overview .has-pick .runs-grid-row, .run-overview .has-pick .runs-grid-head { border: 0; }
+.run-overview .has-pick .runs-grid-row, .run-overview .has-pick .runs-grid-head { padding-left: 12px; }
+.run-list > .run-pick-row + .run-pick-row { border-top: 1px solid var(--border-subtle); }
+.runs-card .run-pick-row .run-row, .runs-card .run-pick-row .runs-head { border: 0; padding-left: 12px; }
+.runs-card > .run-pick-row { background: var(--app-gray-50); border-bottom: 1px solid var(--border-subtle); }
+.runs-card > .run-pick-row:hover { background: var(--app-gray-50); }
+.runs-card .run-pick { flex-basis: 32px; }
+.runs-toolbar { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+
+/* Compare button in the report hero's top-right corner, styled like the
+   secondary buttons; its popover suggests earlier runs above the
+   "any other run" picker. */
+.report-hero { position: relative; }
+.report-hero:has(> .cmp-menu) .report-hero-title { padding-right: 104px; }
+.cmp-menu { position: absolute; top: 0; right: 0; z-index: 20; }
+.cmp-menu-btn { display: inline-flex; align-items: center; height: 28px; padding: 0 10px;
+  list-style: none; border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  background: var(--surface-card); font-family: var(--font-sans); font-size: 12.5px; font-weight: 500;
+  color: var(--text-body); cursor: pointer; user-select: none; }
+.cmp-menu-btn::-webkit-details-marker { display: none; }
+.cmp-menu-btn:hover, .cmp-menu[open] > .cmp-menu-btn { background: var(--app-gray-50); color: var(--text-strong); }
+.cmp-menu-btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-menu-pop { position: absolute; top: calc(100% + 6px); right: 0; width: 340px; padding: 6px;
   border: 1px solid var(--border-default); border-radius: var(--radius-md);
-  background: var(--surface-card); color: var(--text-body);
-  font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; cursor: pointer; }
-.cmp-bar select:hover { background: var(--app-gray-50); }
-.cmp-bar select:focus-visible { outline: none; box-shadow: var(--ring); }
+  background: var(--surface-card); box-shadow: var(--shadow-lg); }
+.cmp-menu-label { padding: 8px 8px 4px; font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint); }
+.cmp-menu-item { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px;
+  border-radius: var(--radius-md); text-decoration: none; color: var(--text-body); }
+.cmp-menu-item:hover { background: var(--app-gray-50); }
+.cmp-menu-item:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-menu-name { font-size: 13px; font-weight: 500; color: var(--text-strong);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-menu-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.cmp-menu-pop .cmp-bar { margin: 0; padding: 4px 8px 6px; flex-wrap: nowrap; }
+.cmp-menu-pop .cmp-bar .model-pick { flex: 1; min-width: 0; }
+.cmp-menu-pop .cmp-bar .model-pick-btn { padding: 5px 9px; }
+.cmp-menu-pop .cmp-bar .rich-pick .finder-facets { right: auto; width: 324px; }
+
+/* Compare picker bar inside the report compare menu: the shared rich picker
+   (as in Settings) plus the Compare button. */
+.cmp-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 14px; }
 .cmp-bar .btn-secondary { font-size: 12.5px; }
 
 .report-hero-title .cmp-vs { color: var(--orange-500); }

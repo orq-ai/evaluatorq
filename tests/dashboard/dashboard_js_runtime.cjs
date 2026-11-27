@@ -1087,3 +1087,58 @@ test('an outerHTML swap of a trace block scrolls the replacement, not the detach
 
   assert.equal(thread.scrollTop, 400 - 100 / 2 + 40 / 2);
 });
+
+test('runs-list compare enables the button only at exactly two ticked runs', () => {
+  const box = () => ({ checked: false, matches: sel => sel === 'input[form="cmp-pick"]', closest: () => null });
+  const boxes = [box(), box(), box()];
+  const button = { disabled: true };
+  const app = loadDashboard({
+    query: sel => (sel === '#cmp-pick button' ? button : null),
+    queryAll: sel => (sel === 'input[form="cmp-pick"]:checked' ? boxes.filter(b => b.checked) : []),
+  });
+  const pick = (i, on) => { boxes[i].checked = on; app.body.emit('change', { target: boxes[i] }); };
+  pick(2, true);
+  assert.equal(button.disabled, true);
+  pick(0, true);
+  assert.equal(button.disabled, false);
+  pick(1, true);
+  assert.equal(button.disabled, true);
+  pick(1, false);
+  assert.equal(button.disabled, false);
+});
+
+test('report compare menu closes on Escape and on a click outside it', () => {
+  const summary = { focus() { this.focused = true; } };
+  const menu = { open: true, contains: node => node === inside, querySelector: sel => (sel === 'summary' ? summary : null) };
+  const inside = { closest: sel => (sel === '.cmp-menu' ? menu : null), matches: () => false };
+  const outside = { closest: () => null, matches: () => false };
+  const app = loadDashboard({ queryAll: sel => (sel === 'details.cmp-menu[open]' ? [menu].filter(m => m.open) : []) });
+  click(app, inside);
+  assert.equal(menu.open, true);
+  click(app, outside);
+  assert.equal(menu.open, false);
+  menu.open = true;
+  app.documentEvents.emit('keydown', { key: 'Escape', target: outside });
+  assert.equal(menu.open, false);
+  assert.equal(summary.focused, true);
+});
+
+test('Escape inside the compare menu closes its open run picker first, not the menu', () => {
+  const summary = { focus() { this.focused = true; } };
+  const picker = {};
+  const menu = { open: true, querySelector: sel => (sel === 'summary' ? summary : sel === '.finder-facets.open' ? picker : null) };
+  const app = loadDashboard({ queryAll: sel => (sel === 'details.cmp-menu[open]' ? [menu].filter(m => m.open) : []) });
+  app.documentEvents.emit('keydown', { key: 'Escape', target: { closest: () => null, matches: () => false } });
+  assert.equal(menu.open, true);
+  assert.equal(summary.focused, undefined);
+});
+
+test('runs-list compare re-syncs ticks a back-forward restore brought back', () => {
+  const button = { disabled: true };
+  const app = loadDashboard({
+    query: sel => (sel === '#cmp-pick button' ? button : null),
+    queryAll: sel => (sel === 'input[form="cmp-pick"]:checked' ? [{}, {}] : []),
+  });
+  app.windowEvents.emit('pageshow', {});
+  assert.equal(button.disabled, false);
+});
