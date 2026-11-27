@@ -837,11 +837,12 @@ def _price_caption(mix: PriceMix) -> str:
 def _shell(inner: str) -> HTMLResponse:
     """The page around `inner`: boost swaps `.models-page` inside the stable #models-root on a filter change.
 
-    An outerHTML swap would detach the node dashboard.js scans for charts.
+    An outerHTML swap would detach the node dashboard.js scans for charts. `show:none` stops htmx scrolling the
+    boosted target to the top of the viewport, which jumped the page down on every filter change.
     """
     body = (
         '<div id="models-root" hx-boost="true" hx-target="#models-root" hx-select=".models-page" '
-        f'hx-swap="innerHTML" hx-push-url="true"><div class="models-page">{inner}</div></div>'
+        f'hx-swap="innerHTML show:none" hx-push-url="true"><div class="models-page">{inner}</div></div>'
     )
     return HTMLResponse(page('Pareto Frontier', body, active_nav='models'))
 
