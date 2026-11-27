@@ -13,6 +13,7 @@ from evaluatorq.common.trace_document import ensure_trace_document, to_chat_mess
 
 from evaluatorq.insights.readable_style import ReadableStyle
 from evaluatorq.insights.transcript import (
+    full_conversation_view_entries,
     COMPACT,
     DETAILED,
     WHOLE,
@@ -640,6 +641,19 @@ def test_full_conversation_source_spans_keep_message_indexes() -> None:
     assert [index for _, _, index in spans] == [0, 2]
     assert literal_marker in rendered[spans[0][0] : spans[0][1]]
     assert 'final answer' in rendered[spans[1][0] : spans[1][1]]
+
+
+@pytest.mark.parametrize('blocks', [False, True])
+def test_view_entries_split_the_rendered_view_by_message_and_type(blocks: bool) -> None:
+    style = ReadableStyle(blocks=blocks)
+    rendered = full_conversation_view(CODING_TRACE, budget=1_000_000, tools='per_call', style=style)
+    entries = full_conversation_view_entries(CODING_TRACE, tools='per_call', style=style)
+    total = sum(entry.chars for entry in entries)
+
+    assert {'user', 'tool_input'} <= {entry.kind for entry in entries}
+    assert all(entry.chars > 0 for entry in entries)
+    # Every entry is one kind; only the newlines joining entries belong to none.
+    assert total + rendered.count('\n') >= len(rendered) >= total
 
 
 def _header(text: str) -> str:

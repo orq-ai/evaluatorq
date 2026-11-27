@@ -22,14 +22,17 @@ from evaluatorq.common.model_input import (
     DECISION_STATE_QUESTION_CHARS,
 )
 from evaluatorq.dashboard.compression_inspector_data import (
+    LAYER_KIND_LABELS,
+    LAYER_KINDS,
     ORIGINAL_VIEW_LABELS,
     CompressionKnobs,
+    CompressionLayer,
     CompressionPreview,
     InspectorSourceError,
     fetch_orq_document,
     preview_document,
 )
-from evaluatorq.dashboard.compression_inspector_knobs import PREVIEW_ROUTE, knobs_form_html
+from evaluatorq.dashboard.compression_inspector_knobs import FORM_ID, PREVIEW_ROUTE, knobs_form_html
 from evaluatorq.dashboard.security import csrf_field, request_rejected
 from evaluatorq.dashboard.shell import page
 from evaluatorq.local_sessions import (
@@ -104,6 +107,13 @@ class _Loaded:
     knobs: CompressionKnobs
     token: str
     has_source: bool
+    source: str = ''
+
+
+def _source_label(document: TraceDocument, source_path: Path | None) -> str:
+    """What the collapsed source picker names: the trace or session ID the preview shows."""
+    kind = 'Local session' if source_path is not None else 'Orq trace'
+    return f'{kind} {document.metadata.trace_id}'.strip()
 
 
 def _date_bounds(form: Any) -> tuple[datetime | None, datetime | None]:
@@ -121,9 +131,167 @@ def _date_bounds(form: Any) -> tuple[datetime | None, datetime | None]:
     return day_window(start_day, end_day, zone=timezone.utc)
 
 
-def _output_html(*, preview: CompressionPreview | None = None, notice: str | None = None, wrapped: bool = False) -> str:
+def _tip_html(items: list[tuple[str, str]], *, title: str, align_right: bool) -> str:
+    """The hover card of one segment: a title and its detail items, escaped."""
+    rows = ''.join(
+        f'<div><dt>{html.escape(name, quote=True)}</dt><dd>{html.escape(value, quote=True)}</dd></div>'
+        for name, value in items
+    )
+    side = ' is-right' if align_right else ''
+    return (
+        f'<span class="compression-tip{side}" role="tooltip"><strong>{html.escape(title, quote=True)}</strong>'
+        f'<dl>{rows}</dl></span>'
+    )
+
+
+def _messages_text(first: int, last: int) -> str:
+    return f'#{first}' if first == last else f'#{first} to #{last}'
+
+
+# A segment under this share of the widest bar is a few pixels wide; its divider would hide its colour.
+_THIN_SHARE = 0.006
+
+
+def _thin(chars: int, widest: int) -> str:
+    return ' is-thin' if chars < _THIN_SHARE * widest else ''
+
+
+def _type_segments_html(layer: CompressionLayer, baseline: CompressionLayer, *, widest: int) -> str:
+    parts: list[str] = []
+    offset = 0
+    full = dict(baseline.segments)
+    for kind, size in layer.segments:
+        items = [
+            ('Characters', f'{size:,}'),
+            ('Share of this layer', f'{100 * size / layer.total:.1f}%'),
+        ]
+        if kind != 'other':
+            items.append(('Messages', f'{layer.messages_of(kind):,}'))
+        if layer is not baseline and full.get(kind):
+            items.append(('Versus full trace JSON', f'{100 * size / full[kind]:.1f}%'))
+        label = LAYER_KIND_LABELS[kind]
+        parts.append(
+            f'<span class="compression-segment is-{kind}{_thin(size, widest)}" '
+            f'style="width:{100 * size / layer.total:.3f}%" tabindex="0" '
+            f'aria-label="{html.escape(f"{label}: {size:,} characters", quote=True)}">'
+            f'{_tip_html(items, title=label, align_right=offset > layer.total / 2)}</span>'
+        )
+        offset += size
+    return ''.join(parts)
+
+
+def _message_segments_html(layer: CompressionLayer, *, widest: int) -> str:
+    parts: list[str] = []
+    offset = 0
+    for run in layer.runs:
+        label = LAYER_KIND_LABELS[run.kind] if len(run.kinds) == 1 else f'Mostly {LAYER_KIND_LABELS[run.kind].lower()}'
+        items = [
+            ('Messages', _messages_text(run.first, run.last)),
+            ('Characters', f'{run.chars:,}'),
+            ('Share of this layer', f'{100 * run.chars / layer.total:.1f}%'),
+        ]
+        if len(run.kinds) > 1:
+            items.append(('Holds', ', '.join(f'{LAYER_KIND_LABELS[kind]} {size:,}' for kind, size in run.kinds)))
+        if run.preview:
+            items.append(('Source text', run.preview))
+        parts.append(
+            f'<span class="compression-segment is-{run.kind}{_thin(run.chars, widest)}" '
+            f'style="width:{100 * run.chars / layer.total:.3f}%">'
+            f'{_tip_html(items, title=label, align_right=offset > layer.total / 2)}</span>'
+        )
+        offset += run.chars
+    other = dict(layer.segments).get('other', 0)
+    if other:
+        items = [('Characters', f'{other:,}'), ('Share of this layer', f'{100 * other / layer.total:.1f}%')]
+        parts.append(
+            f'<span class="compression-segment is-other" style="width:{100 * other / layer.total:.3f}%">'
+            f'{_tip_html(items, title=LAYER_KIND_LABELS["other"], align_right=True)}</span>'
+        )
+    return ''.join(parts)
+
+
+def _bar_switch_html(*, by_message: bool) -> str:
+    """Two radios bound to the knobs form, so a later knob change re-renders the bars the same way."""
+    options = (('types', 'Message types', not by_message), ('messages', 'Each message', by_message))
+    radios = ''.join(
+        f'<label><input type="radio" name="bar_view" value="{value}" form="{FORM_ID}"{" checked" if checked else ""}>'
+        f'<span>{label}</span></label>'
+        for value, label, checked in options
+    )
+    return f'<fieldset class="compression-switch"><legend class="sr-only">Split the bars by</legend>{radios}</fieldset>'
+
+
+def _layer_bars_html(layers: tuple[CompressionLayer, ...], *, by_message: bool = False) -> str:
+    """One bar per layer on a shared scale, split by message type or by message in order; hovering shows details."""
+    widest = max((layer.total for layer in layers), default=0)
+    if widest <= 0:
+        return ''
+    baseline = layers[0]
+    present = [kind for kind in LAYER_KINDS if any(size for layer in layers for k, size in layer.segments if k == kind)]
+    legend = ''.join(
+        f'<li><span class="compression-swatch is-{kind}" aria-hidden="true"></span>'
+        f'{html.escape(LAYER_KIND_LABELS[kind], quote=True)}</li>'
+        for kind in present
+    )
+    rows: list[str] = []
+    for layer in layers:
+        parts = ', '.join(f'{LAYER_KIND_LABELS[kind]} {size:,}' for kind, size in layer.segments)
+        estimate = ' (type shares estimated)' if layer.estimated else ''
+        aria = html.escape(f'{layer.label}: {layer.total:,} characters. {parts}.{estimate}', quote=True)
+        share = (
+            ''
+            if layer is baseline or not baseline.total
+            else f'<small>{100 * layer.total / baseline.total:.1f}%</small>'
+        )
+        rows.append(
+            '<div class="compression-layer">'
+            f'<div class="compression-layer-label"><strong>{html.escape(layer.label, quote=True)}</strong>'
+            f'{"<span>Shares estimated</span>" if layer.estimated else ""}</div>'
+            f'<div class="compression-layer-track" style="--share:{layer.total / widest:.5f}">'
+            f'<div class="compression-layer-bars" role="img" aria-label="{aria}">'
+            f'<div class="compression-layer-bar is-by-type">{_type_segments_html(layer, baseline, widest=widest)}</div>'
+            f'<div class="compression-layer-bar is-by-message">{_message_segments_html(layer, widest=widest)}</div>'
+            '</div>'
+            f'<span class="compression-layer-value">{layer.total:,}{share}</span>'
+            '</div></div>'
+        )
+    return (
+        '<section class="compression-layers" aria-labelledby="compression-layers-title">'
+        '<div class="compression-layers-head">'
+        '<h3 id="compression-layers-title">Size by layer</h3>'
+        f'{_bar_switch_html(by_message=by_message)}'
+        '</div>'
+        f'<ul class="compression-legend">{legend}</ul>'
+        f'{"".join(rows)}'
+        '<p class="compression-count-note">Characters on one shared scale. Hover or focus a segment for details.</p>'
+        '</section>'
+    )
+
+
+_SIZES_HELP = (
+    '<details class="compression-help"><summary>How sizes are measured</summary>'
+    '<p>Every bar and count is characters, not tokens. The bars share one scale, and the percentage at the end of a '
+    'bar compares it with the full trace JSON. Each message keeps conversation order, and neighbouring messages of '
+    'one type share a segment. Structure and metadata is everything that is not message text: JSON keys and '
+    'escaping, trace metadata, entry headers and cut markers. When the readable budget drops whole entries, its '
+    'shares are estimated from the uncut view.</p>'
+    '<p>Reduction compares character counts with the full uncapped trace document as compact JSON, including '
+    'metadata and null fields; a negative reduction means a larger output. The decision state is counted in compact '
+    'serialization, so the indentation in its pane is not counted.</p>'
+    '</details>'
+)
+
+
+def _output_html(
+    *,
+    preview: CompressionPreview | None = None,
+    notice: str | None = None,
+    wrapped: bool = False,
+    by_message: bool = False,
+) -> str:
     """The live region the knobs form replaces: metrics and both panes, or the reason there are none."""
-    opening = f'<div id="compression-output" class="compression-output{" is-wrapped" if wrapped else ""}">'
+    classes = 'compression-output' + (' is-wrapped' if wrapped else '')
+    opening = f'<div id="compression-output" class="{classes}">'
     if notice is not None or preview is None:
         message = html.escape(str(notice or ''), quote=True)
         return f'{opening}<p class="compression-notice" role="alert">{message}</p></div>'
@@ -144,6 +312,7 @@ def _output_html(*, preview: CompressionPreview | None = None, notice: str | Non
     label = html.escape(ORIGINAL_VIEW_LABELS[preview.original_view], quote=True)
     return (
         f'{opening}'
+        f'{_layer_bars_html(preview.layers, by_message=by_message)}'
         '<dl class="compression-metrics">'
         f'<div><dt>Original characters</dt><dd>{preview.original_chars:,}</dd></div>'
         f'<div><dt>Full trace JSON characters</dt><dd>{preview.full_json_chars:,}</dd></div>'
@@ -156,9 +325,7 @@ def _output_html(*, preview: CompressionPreview | None = None, notice: str | Non
         f'<div><dt>Messages omitted from the decision state</dt><dd>{preview.omitted_messages:,}</dd></div>'
         f'<div><dt>Global character cap</dt><dd>{preview.global_cap:,}</dd></div>'
         '</dl>'
-        '<p class="compression-count-note">Reduction compares character counts with the full uncapped trace document '
-        'as compact JSON, including metadata and null fields. Display whitespace is excluded for the decision state; '
-        'negative reduction means a larger output. These are not token savings.</p>'
+        f'{_SIZES_HELP}'
         '<div class="compression-panels">'
         '<section class="compression-panel" aria-labelledby="compression-original-title">'
         f'<h3 id="compression-original-title">Original, {label}</h3>'
@@ -167,7 +334,7 @@ def _output_html(*, preview: CompressionPreview | None = None, notice: str | Non
         '<section class="compression-panel" aria-labelledby="compression-decision-title">'
         '<h3 id="compression-decision-title">Output (decision state)</h3>'
         f'<pre>{html.escape(str(state), quote=True)}</pre>'
-        '<p class="compression-count-note">The state character count uses compact serialization; this readable display adds formatting whitespace.</p>'
+        '<p class="compression-count-note">Shown indented; the counts use compact serialization.</p>'
         '</section>'
         '</div></div>'
     )
@@ -182,7 +349,7 @@ def _preview_html(loaded: _Loaded) -> str:
         '<p>The original and its decision state, with known sensitive values scrubbed; the canonical ATIF source is unchanged.</p>'
         '</div><p class="compression-question-note">No question included.</p></div>'
         f'{knobs_form_html(loaded.knobs, defaults, loaded.token, has_source=loaded.has_source)}'
-        f'{_output_html(preview=loaded.preview, wrapped=loaded.knobs.wrap)}'
+        f'{_output_html(preview=loaded.preview, wrapped=loaded.knobs.wrap, by_message=loaded.knobs.bar_view == "messages")}'
         '</section>'
     )
 
@@ -246,15 +413,33 @@ def _body_html(
     )
     sessions_html = _session_results_html(sessions) if sessions is not None else ''
     preview_html = _preview_html(loaded) if loaded is not None else ''
+    sources_html = f'<div class="compression-sources">{_orq_source_html()}{_local_source_html(sessions_html)}</div>'
+    if loaded is not None:
+        # Once a trace is loaded the pickers fold into one line that names it.
+        sources_html = (
+            '<details class="compression-source-switch">'
+            f'<summary><span>Showing <strong>{html.escape(loaded.source or "a loaded trace", quote=True)}</strong></span>'
+            '<span class="compression-source-change">Load a different trace</span></summary>'
+            f'{sources_html}</details>'
+        )
     return (
         '<div class="dash-wrap compression-inspector">'
-        '<header class="compression-intro">'
-        '<h2>Inspect trace compression</h2>'
-        '<p>Compare the readable conversation with the structured decision state '
+        '<p class="compression-intro">Compare the readable conversation with the structured decision state '
         'without sending a question or calling a model.</p>'
-        '</header>'
         f'{notice_html}'
-        '<div class="compression-sources">'
+        f'{sources_html}'
+        '<section class="compression-limits" aria-label="Character limits">'
+        f'<p>Global cap <strong>{effective_settings().trace_input_chars:,}</strong> characters (500,000 by default) · '
+        f'decision state capped at {DECISION_STATE_CHARS:,} · question-aware ceilings '
+        f'{DECISION_STATE_QUESTION_CHARS:,} or {DECISION_STATE_ALL_QUESTIONS_CHARS:,}; this preview includes no question.</p>'
+        '</section>'
+        f'{preview_html}'
+        '</div>'
+    )
+
+
+def _orq_source_html() -> str:
+    return (
         '<section class="compression-source" aria-labelledby="compression-orq-title">'
         '<h3 id="compression-orq-title">Orq trace ID</h3>'
         '<p>Search the most recent 7 days by default. Set both dates to find an older trace; '
@@ -273,6 +458,11 @@ def _body_html(
         '</div>'
         '<button type="submit">Load Orq trace</button>'
         '</form></section>'
+    )
+
+
+def _local_source_html(sessions_html: str) -> str:
+    return (
         '<section class="compression-source" aria-labelledby="compression-local-title">'
         '<h3 id="compression-local-title">Local sessions</h3>'
         '<p>Search up to 50 sessions from Claude Code, Claude desktop, and Codex. '
@@ -281,17 +471,6 @@ def _body_html(
         "onsubmit=\"this.querySelector('button').disabled=true;this.querySelector('button').textContent='Loading...';\">"
         f'{csrf_field()}<button type="submit">Search local sessions</button></form>'
         f'{sessions_html}</section>'
-        '</div>'
-        '<section class="compression-limits" aria-labelledby="compression-limits-title">'
-        '<h3 id="compression-limits-title">Character limits</h3>'
-        f'<p>Global cap: <strong>{effective_settings().trace_input_chars:,}</strong> '
-        'characters (500,000 by default). '
-        f'The decision state is capped at {DECISION_STATE_CHARS:,} characters; question-aware ceilings are '
-        f'{DECISION_STATE_QUESTION_CHARS:,} or {DECISION_STATE_ALL_QUESTIONS_CHARS:,} characters. '
-        'This preview includes no question, so its state count is not fitted to a question payload.</p>'
-        '</section>'
-        f'{preview_html}'
-        '</div>'
     )
 
 
@@ -345,7 +524,9 @@ def _load(req: Request, document: TraceDocument, source_path: Path | None = None
     knobs = CompressionKnobs.defaults(effective_settings().trace_input_chars)
     preview = preview_document(document, knobs=knobs, source_path=source_path)
     token = req.app.state.compression_documents.put(document, source_path)
-    return _Loaded(preview, knobs, token, has_source=source_path is not None)
+    return _Loaded(
+        preview, knobs, token, has_source=source_path is not None, source=_source_label(document, source_path)
+    )
 
 
 async def compression_inspector_orq(req: Request) -> Response:
@@ -421,13 +602,22 @@ async def compression_inspector_preview(req: Request) -> Response:
         try:
             knobs = CompressionKnobs.from_form(form)
             preview = preview_document(cached.document, knobs=knobs, source_path=cached.source_path)
-            loaded = _Loaded(preview, knobs, token, has_source=cached.source_path is not None)
+            loaded = _Loaded(
+                preview,
+                knobs,
+                token,
+                has_source=cached.source_path is not None,
+                source=_source_label(cached.document, cached.source_path),
+            )
         except ValueError as exc:  # knob errors and fixed-text renderer limits; neither echoes trace content
             notice = str(exc)
     if req.headers.get('HX-Request', '').casefold() == 'true':
         return Response(
             content=_output_html(
-                preview=loaded.preview if loaded else None, notice=notice, wrapped=form.get('wrap') is not None
+                preview=loaded.preview if loaded else None,
+                notice=notice,
+                wrapped=form.get('wrap') is not None,
+                by_message=form.get('bar_view') == 'messages',
             ),
             media_type='text/html',
             headers={'Cache-Control': 'no-store'},

@@ -387,19 +387,20 @@ def full_conversation_view(
     style: ReadableStyle | None = None,
 ) -> str:
     """Render one preset with source-indexed entries, optional overrides and opt-in readable styling."""
-    kinds = _view_kinds(include, exclude, options.include)
-    caps = _view_caps(
+    kinds, caps, selected_tools = _resolve_view(
         options,
+        include=include,
+        exclude=exclude,
         system_chars=system_chars,
         user_chars=user_chars,
         assistant_chars=assistant_chars,
         assistant_edge=assistant_edge,
         reasoning_chars=reasoning_chars,
+        tools=tools,
         tool_input_chars=tool_input_chars,
         tool_result_chars=tool_result_chars,
         tool_max_chars=tool_max_chars,
     )
-    selected_tools = _view_tools(tools, options.tools, kinds)
     rendered, spans, message_count, present, parts_cut = _render_full_conversation(
         trace, include=kinds, caps=caps, tools=selected_tools, style=style
     )
@@ -421,6 +422,87 @@ def full_conversation_view(
         header = _coverage_header(**header_settings, cut=True)
         body, _ = _cap_under_header(rendered, header, cap)
     return message_lines(f'{header}\n{body}' if body else header, (), parts_cut=parts_cut or bool(omitted))
+
+
+@dataclass(frozen=True)
+class ViewEntry:
+    """One rendered entry of a conversation view: its source message, message kind and rendered length."""
+
+    index: int
+    kind: MessageKind
+    chars: int
+
+
+def full_conversation_view_entries(
+    trace: TraceRecord | TraceDocument,
+    options: ConversationViewOptions = COMPACT,
+    *,
+    include: Collection[MessageKind] | None = None,
+    exclude: Collection[MessageKind] = (),
+    system_chars: int | None = None,
+    user_chars: int | None = None,
+    assistant_chars: int | None = None,
+    assistant_edge: int | None = None,
+    reasoning_chars: int | None = None,
+    tools: Literal['collapsed', 'per_call'] | None = None,
+    tool_input_chars: int | None = None,
+    tool_result_chars: int | None = None,
+    tool_max_chars: int | None = None,
+    style: ReadableStyle | None = None,
+) -> tuple[ViewEntry, ...]:
+    """The entries of `full_conversation_view` under the same options, in order and before its budget cut.
+
+    Entry separators, the working-directory note, the coverage header and budget-cut markers belong to no entry and
+    are not counted, so the lengths can sum to less than the rendered view.
+    """
+    kinds, caps, selected_tools = _resolve_view(
+        options,
+        include=include,
+        exclude=exclude,
+        system_chars=system_chars,
+        user_chars=user_chars,
+        assistant_chars=assistant_chars,
+        assistant_edge=assistant_edge,
+        reasoning_chars=reasoning_chars,
+        tools=tools,
+        tool_input_chars=tool_input_chars,
+        tool_result_chars=tool_result_chars,
+        tool_max_chars=tool_max_chars,
+    )
+    renderer = _ConversationRenderer(trace=trace, include=kinds, caps=caps, tools=selected_tools, style=style)
+    renderer.render()
+    return renderer.entries()
+
+
+def _resolve_view(
+    options: ConversationViewOptions,
+    *,
+    include: Collection[MessageKind] | None,
+    exclude: Collection[MessageKind],
+    system_chars: int | None,
+    user_chars: int | None,
+    assistant_chars: int | None,
+    assistant_edge: int | None,
+    reasoning_chars: int | None,
+    tools: Literal['collapsed', 'per_call'] | None,
+    tool_input_chars: int | None,
+    tool_result_chars: int | None,
+    tool_max_chars: int | None,
+) -> tuple[frozenset[MessageKind], dict[MessageKind, int], Literal['collapsed', 'per_call']]:
+    """The message kinds, per-kind caps and tool display one view call selects."""
+    kinds = _view_kinds(include, exclude, options.include)
+    caps = _view_caps(
+        options,
+        system_chars=system_chars,
+        user_chars=user_chars,
+        assistant_chars=assistant_chars,
+        assistant_edge=assistant_edge,
+        reasoning_chars=reasoning_chars,
+        tool_input_chars=tool_input_chars,
+        tool_result_chars=tool_result_chars,
+        tool_max_chars=tool_max_chars,
+    )
+    return kinds, caps, _view_tools(tools, options.tools, kinds)
 
 
 def _cap_under_header(rendered: str, header: str, cap: int) -> tuple[str, int]:
@@ -667,6 +749,8 @@ class _ConversationRenderer:
         self.folded = {member for members in self.runs.values() for member in members[1:]}
         self.seen_results: dict[str, str] = {}
         self.lines: list[tuple[str, int]] = []
+        # The message kind of each entry in `lines`; `None` for the working-directory note.
+        self.line_kinds: list[MessageKind | None] = []
         self.present: set[MessageKind] = set()
         self.pending: list[str] = []
         self.pending_index = 0
@@ -679,17 +763,21 @@ class _ConversationRenderer:
         self.parts_cut |= cut
         return fitted
 
-    def _add(self, *, index: int, label: str, text: str) -> None:
+    def _add(self, *, index: int, kind: MessageKind, label: str, text: str) -> None:
         rendered = (
             _block(f'[{index}] {_header_text(label)}', text) if self.style.blocks else f'#{index} {label}: {text}'
         )
+        self._append(rendered=rendered, index=index, kind=kind)
+
+    def _append(self, *, rendered: str, index: int, kind: MessageKind) -> None:
         self.lines.append((rendered, index))
+        self.line_kinds.append(kind)
 
     def _flush(self) -> None:
         if self.pending:
             runs = ((entry, len(list(repeats))) for entry, repeats in groupby(self.pending))
             names = ', '.join(f'{entry} x{count}' if count > 1 else entry for entry, count in runs)
-            self._add(index=self.pending_index, label='tools', text=names)
+            self._add(index=self.pending_index, kind='tool_input', label='tools', text=names)
             self.pending.clear()
 
     def _result_text(self, *, index: int, message: dict[str, Any]) -> str:
@@ -730,7 +818,7 @@ class _ConversationRenderer:
             label, status = self.result_call_details.get(index, ('(no matching call)', 'completed'))
             flag = '' if status == 'completed' else f' [{status}]'
             rendered = f'#{index} tool result {label}{flag}: {body}'
-        self.lines.append((rendered, index))
+        self._append(rendered=rendered, index=index, kind='tool_result')
         self.present.add('tool_result')
 
     def _tool_input_text(self, call: dict[str, Any]) -> str:
@@ -758,7 +846,7 @@ class _ConversationRenderer:
                 if not self.explicit_style
                 else _clean(reasoning, self.caps['reasoning'], label=self._cut_label('reasoning'))
             )
-            self._add(index=index, label='reasoning', text=text)
+            self._add(index=index, kind='reasoning', label='reasoning', text=text)
             self.present.add('reasoning')
         role = str(message.get('role') or 'unknown')
         kind = _ROLE_KINDS.get(role, 'system')
@@ -772,7 +860,7 @@ class _ConversationRenderer:
                 text = _clean(content, -1 if kind == 'assistant' else cap, label=self._cut_label(kind))
                 if kind == 'assistant' and cap != -1:
                     text = _head_tail(text, cap, cap, self._cut_label(kind))
-            self._add(index=index, label=role, text=text)
+            self._add(index=index, kind=kind, label=role, text=text)
             self.present.add(kind)
 
     def _add_paired_results(self, members: list[tuple[int, int]]) -> None:
@@ -801,7 +889,7 @@ class _ConversationRenderer:
         else:
             flag = '' if status == 'completed' else f' [{status}]'
             rendered = f'#{index} tool input {_call_label(call, index, key[1])}{times}{flag}: {arguments}'
-        self.lines.append((rendered, index))
+        self._append(rendered=rendered, index=index, kind='tool_input')
         self.present.add('tool_input')
         self._add_paired_results(members=members)
 
@@ -838,6 +926,7 @@ class _ConversationRenderer:
             self.lines = [(line.replace('\n', '\n  '), index) for line, index in self.lines]
         if self.lines and self.cwd:
             self.lines.insert(0, (f'paths under {self.cwd} are shown as ./', 0))
+            self.line_kinds.insert(0, None)
         conversation = '\n'.join(line for line, _ in self.lines)
         spans = []
         offset = 0
@@ -845,6 +934,14 @@ class _ConversationRenderer:
             spans.append((offset, offset + len(line), index))
             offset += len(line) + 1
         return conversation, tuple(spans), len(self.messages), frozenset(self.present), self.parts_cut
+
+    def entries(self) -> tuple[ViewEntry, ...]:
+        """Each rendered entry in order, after `render`; joins and the working-directory note are left out."""
+        return tuple(
+            ViewEntry(index=index, kind=kind, chars=len(line))
+            for (line, index), kind in zip(self.lines, self.line_kinds, strict=True)
+            if kind is not None
+        )
 
 
 def _render_full_conversation(
