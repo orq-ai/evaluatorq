@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import random
 import re
@@ -38,19 +39,22 @@ from evaluatorq.models import (
     score_of,
     x_of,
 )
+from evaluatorq.dashboard import workspace_models
 from tests.common.garden_fakes import card
+
+
+_real_can_manage_models = workspace_models.can_manage_models
 
 
 @pytest.fixture(autouse=True)
 def _no_live_admin_check(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every /models page asks Orq whether the sign-in may switch models; a test that wants a yes says so."""
-    from evaluatorq.dashboard import models_views
-
     async def not_admin(auth: object) -> bool:
         del auth
         return False
 
-    monkeypatch.setattr(models_views, 'can_manage_models', not_admin)
+    monkeypatch.setattr(workspace_models, 'can_manage_models', not_admin)
+    monkeypatch.setattr(workspace_models, '_admin_answers', {})
 
 
 def model(
@@ -148,7 +152,7 @@ class TestDominance:
         result = pareto([quick, laggy, unmeasured], x='time_to_first_token')
         assert [p.model.router_id for p in result.frontier] == ['a/quick']
         assert result.points[1].dominated_by == 'a/quick'
-        assert result.points[1].pareto_score is None
+        assert result.points[1].score_per_usd is None
         assert [(e.router_id, e.reason) for e in result.excluded] == [('c/unmeasured', 'no time to first token data')]
 
     def test_unknown_index_is_refused_for_a_pair(self) -> None:
@@ -198,9 +202,9 @@ class TestKernelAgreement:
                 assert a.dominates(b) is _old_dominates(a, b)
                 assert dominates(a, b) is _old_dominates(a, b)
         assert model_frontier.pareto_frontier(garden) == _old_frontier(garden)
-        # The view defaults to the cache-aware blend; on the list blend it must agree with seating.
+        # The public helper and the view agree with seating on the same blend.
         assert {m.router_id for m in pareto_frontier(garden)} == {
-            p.model.router_id for p in pareto(garden, mix='list').frontier
+            p.model.router_id for p in pareto(garden, min_score=None).frontier
         }
 
 
@@ -231,19 +235,19 @@ class TestPareto:
         assert bad.dominators == ['b/mid']
         assert [e.router_id for e in result.excluded] == ['e/free']
 
-    def test_pareto_score_is_score_per_dollar(self) -> None:
+    def test_score_per_usd_is_score_per_dollar(self) -> None:
         point = next(p for p in pareto([MID], mix='list', min_score=0).points)
-        assert point.pareto_score == pytest.approx(40.0 / 2.0)
+        assert point.score_per_usd == pytest.approx(40.0 / 2.0)
         # The default blend: no cache rate on MID, so reads bill at input: (7*1 + 2*1 + 1*5) / 10 = 1.4.
-        assert pareto([MID], min_score=0).points[0].pareto_score == pytest.approx(40.0 / 1.4)
+        assert pareto([MID], min_score=0).points[0].score_per_usd == pytest.approx(40.0 / 1.4)
 
-    def test_pareto_score_subtracts_the_floor(self) -> None:
+    def test_score_per_usd_subtracts_the_floor(self) -> None:
         point = next(p for p in pareto([MID], mix='list', min_score=10).points)
-        assert point.pareto_score == pytest.approx((40.0 - 10) / 2.0)
+        assert point.score_per_usd == pytest.approx((40.0 - 10) / 2.0)
 
-    def test_pareto_score_is_zero_at_the_floor(self) -> None:
+    def test_score_per_usd_is_zero_at_the_floor(self) -> None:
         point = next(p for p in pareto([MID], mix='list', min_score=40.0).points)
-        assert point.pareto_score == 0.0
+        assert point.score_per_usd == 0.0
 
     def test_nearest_dominator_is_the_cheapest_frontier_model_at_least_as_smart(self) -> None:
         weak = model('z/weak', 10.0, 10.0, 10.0)
@@ -349,15 +353,15 @@ class TestPriceMix:
     def test_agentic_is_the_artificial_analysis_blend(self) -> None:
         # (7 * 0.2 + 2 * 4 + 1 * 20) / 10
         assert PRICE_MIXES['agentic'].price(OPUS) == pytest.approx(2.94)
-        assert x_of(OPUS) == OPUS.price == 8.0  # the seating default stays 3:1
-        assert x_of(OPUS, mix='agentic') == pytest.approx(2.94)
+        assert x_of(OPUS) == OPUS.price == pytest.approx(2.94)
+        assert x_of(OPUS, mix='list') == LIST_MIX.price(OPUS) == 8.0
 
     @pytest.mark.parametrize('seed', range(3))
-    def test_list_mix_is_the_seating_price_float_for_float(self, seed: int) -> None:
+    def test_agentic_mix_is_the_seating_price_float_for_float(self, seed: int) -> None:
         rng = random.Random(seed)
         for _ in range(200):
             m = model('a/m', 30.0, rng.uniform(0.01, 30), rng.uniform(0.01, 90), cache_read_price=rng.uniform(0, 1))
-            assert LIST_MIX.price(m) == m.price
+            assert PRICE_MIXES['agentic'].price(m) == m.price
 
     def test_explicit_ratio_with_a_write_share(self) -> None:
         mix = parse_mix('7:1:1:1')
@@ -471,17 +475,20 @@ class TestCacheFallbacks:
         assert (parsed.cache_read_price, parsed.cache_write_price, parsed.aa_cache_read_price) == (None, None, None)
 
 
-class TestSeatingKeepsTheListBlend:
-    def test_cache_rates_change_the_view_but_not_seating(self) -> None:
-        # Same 3:1 price; only the cache rate differs, so the agentic view has a cheaper model.
+class TestSeatingUsesTheAgenticBlend:
+    def test_cache_rates_change_seating_and_the_view_alike(self) -> None:
+        # Same 3:1 price; only the cache rate differs, so the cached model is cheaper everywhere by default.
         cached = model('a/cached', 40.0, 2.0, 8.0, cache_read_price=0.1)
         uncached = model('b/uncached', 41.0, 2.0, 8.0)
-        assert cached.price == uncached.price
-        assert uncached.dominates(cached)
-        assert dominates(uncached, cached)
-        assert [m.router_id for m in model_frontier.pareto_frontier([cached, uncached])] == ['b/uncached']
+        assert LIST_MIX.price(cached) == LIST_MIX.price(uncached)
+        assert cached.price < uncached.price
+        assert not uncached.dominates(cached)
+        assert not dominates(uncached, cached)
+        assert dominates(uncached, cached, mix='list')
+        both = ['b/uncached', 'a/cached']
+        assert [m.router_id for m in model_frontier.pareto_frontier([cached, uncached])] == both
+        assert [p.model.router_id for p in pareto([cached, uncached]).frontier] == both
         assert [p.model.router_id for p in pareto([cached, uncached], mix='list').frontier] == ['b/uncached']
-        assert [p.model.router_id for p in pareto([cached, uncached]).frontier] == ['b/uncached', 'a/cached']
 
 
 class TestVendor:
@@ -507,7 +514,7 @@ class TestSummary:
             'price',
             'score',
             'x',
-            'pareto_score',
+            'score_per_usd',
             'on_frontier',
             'dominated_by',
             'dominators',
@@ -517,7 +524,7 @@ class TestSummary:
             assert key in row
         assert 'model' not in row
         assert row['price'] == MID.price
-        assert row['pareto_score'] == pytest.approx((40.0 - 10) / 2.0)
+        assert row['score_per_usd'] == pytest.approx((40.0 - 10) / 2.0)
         json.dumps(row)
 
 
@@ -549,7 +556,7 @@ class TestLoadModels:
                 card('meta', 'muse-spark-1.3-contributor', model_developer='meta', input_cost=0.0001, metadata=meta),
             ]
 
-        monkeypatch.setattr(models_mod, 'model_cards', fake_cards)
+        monkeypatch.setattr(model_frontier, 'model_cards', fake_cards)
         loaded = await models_mod.load_models()
         assert [m.router_id for m in loaded] == ['meta/muse-spark-1.3', 'meta/muse-spark-1.3-contributor']
 
@@ -851,7 +858,7 @@ class TestDashboardPage:
 
         signed_in = DashboardAuth(method='environment', api_key='test-key', base_url='https://my.orq.ai')
         monkeypatch.setattr(models_views, '_auth', lambda req: (signed_in, None))
-        monkeypatch.setattr(models_views, 'can_manage_models', fake_can)
+        monkeypatch.setattr(workspace_models, 'can_manage_models', fake_can)
         monkeypatch.setattr(models_views, 'set_model_enabled', fake_set)
         return calls
 
@@ -872,7 +879,7 @@ class TestDashboardPage:
         off = model('f/off', 45.0, 1.5, 6.0, enabled=False, catalogue_id='uuid-off')
         text = self._models_text(client, monkeypatch, [*fake_catalogue, off], '/models?disabled=1')
         assert '>disabled<' in text and 'models-switch' not in text
-        client.app.state.models_admin.clear()  # a new sign-in
+        workspace_models._admin_answers.clear()  # a new sign-in
         self._as_admin(monkeypatch, admin=True)
         on = model('f/on', 45.0, 1.5, 6.0, enabled=True, catalogue_id='uuid-on')
         assert 'models-switch' in self._models_text(client, monkeypatch, [*fake_catalogue, on], '/models?x=price')
@@ -880,14 +887,12 @@ class TestDashboardPage:
     def test_a_failed_admin_check_hides_the_switches_instead_of_failing_the_page(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
-        from evaluatorq.dashboard import models_views
-
         self._as_admin(monkeypatch, admin=True)
 
         async def broken(auth: object) -> bool:
-            raise KeyError(auth)
+            raise RuntimeError(auth)
 
-        monkeypatch.setattr(models_views, 'can_manage_models', broken)
+        monkeypatch.setattr(workspace_models, 'can_manage_models', broken)
         on = model('f/on', 45.0, 1.5, 6.0, enabled=True, catalogue_id='uuid-on')
         text = self._models_text(client, monkeypatch, [*fake_catalogue, on], '/models?x=price')
         assert 'models-page' in text and 'models-switch' not in text
@@ -922,7 +927,7 @@ class TestDashboardPage:
         calls = self._as_admin(monkeypatch, admin=False)
         assert 'Only workspace admins' in client.post('/models/toggle', data=enable).text
         assert not calls
-        client.app.state.models_admin.clear()  # a "no" is remembered for a minute; this is a new sign-in
+        workspace_models._admin_answers.clear()  # a "no" is remembered for a minute; this is a new sign-in
         calls = self._as_admin(monkeypatch, admin=True)
         assert 'Stale or missing form token' in client.post('/models/toggle', data={'model_id': 'f/off'}).text
         assert not calls
@@ -946,35 +951,52 @@ class TestDashboardPage:
         client.cookies.set('eq_models_query', 'javascript:alert(1)//', path='/models')
         assert client.get('/models', follow_redirects=False).headers['location'].startswith('/models?')
 
-    def test_catalogue_and_admin_answer_are_reused_until_a_switch(
+    def test_the_admin_answer_is_reused_across_pages_and_switches(
         self, client: Any, monkeypatch: pytest.MonkeyPatch, fake_catalogue: list[ScoredModel]
     ) -> None:
-        from evaluatorq.dashboard import models_views
         from evaluatorq.dashboard.security import CSRF_FIELD, csrf_token
 
-        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
         self._as_admin(monkeypatch, admin=True)
-        loads: list[bool] = []
         checks: list[object] = []
-
-        async def counting_load(client: object = None, *, include_disabled: bool = False) -> list[ScoredModel]:
-            del client
-            loads.append(include_disabled)
-            return fake_catalogue
 
         async def counting_can(auth: object) -> bool:
             checks.append(auth)
             return True
 
-        monkeypatch.setattr(models_views, 'load_models', counting_load)
-        monkeypatch.setattr(models_views, 'can_manage_models', counting_can)
-        monkeypatch.setattr(models_views, '_auth_key', lambda auth: ('cli_oauth',))
-        for path in ('/models?disabled=1', '/models?disabled=1&x=latency', '/models?disabled=1'):
-            client.get(path)
-        assert loads == [True] and len(checks) == 1
+        monkeypatch.setattr(workspace_models, 'can_manage_models', counting_can)
+        for path in ('/models?disabled=1', '/models?disabled=1&x=latency'):
+            self._models_text(client, monkeypatch, fake_catalogue, path)
         client.post('/models/toggle', data={'model_id': 'f/off', 'action': 'enable', CSRF_FIELD: csrf_token()})
-        client.get('/models?disabled=1')
-        assert loads == [True, True] and len(checks) == 1  # the switch drops the stale catalogue, not the admin answer
+        assert len(checks) == 1
+
+    def test_oauth_cards_are_reused_until_forgotten(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A filter change re-reads the catalogue; an OAuth read is kept a minute, and a switch drops it."""
+        from evaluatorq.common import model_catalogue
+
+        fetches: list[int] = []
+
+        class OAuthClient:
+            async def get_model_catalogue(self) -> list[dict[str, object]]:
+                fetches.append(1)
+                return [card('a', 'm')]
+
+        oauth = OAuthClient()
+        monkeypatch.setattr(model_catalogue, 'resolve_results_base_url', lambda client: 'https://my.orq.ai')
+        first = asyncio.run(model_catalogue.model_cards(oauth))  # ty: ignore[invalid-argument-type]
+        assert asyncio.run(model_catalogue.model_cards(oauth)) is first  # ty: ignore[invalid-argument-type]
+        built: list[int] = []
+
+        def build(cards: tuple[dict[str, object], ...]) -> int:
+            built.append(1)
+            return len(cards)
+
+        assert model_catalogue.derived_from_cards(first, build) == model_catalogue.derived_from_cards(first, build) == 1
+        assert fetches == [1] and built == [1]
+        model_catalogue.forget_catalogue(oauth)  # ty: ignore[invalid-argument-type]
+        second = asyncio.run(model_catalogue.model_cards(oauth))  # ty: ignore[invalid-argument-type]
+        assert second is not first and fetches == [1, 1]
+        model_catalogue.derived_from_cards(second, build)
+        assert built == [1, 1]
 
     def test_toggle_route_shows_why_orq_refused(self, client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         from evaluatorq.dashboard import models_views
@@ -1020,7 +1042,7 @@ class TestDashboardPage:
         from evaluatorq.dashboard.models_views import _balanced
 
         def pt(score: float, x: float) -> Any:
-            return SimpleNamespace(score=score, x=x, pareto_score=1.0)
+            return SimpleNamespace(score=score, x=x, score_per_usd=1.0)
 
         value, best = pt(20, 0.1), pt(50, 10)
         # On log price the line from value to best passes 35 at $1 and 42.5 at $3.16.
@@ -1078,9 +1100,9 @@ class TestDashboardPage:
 
         from evaluatorq.dashboard.models_views import _guide_rows
 
-        stubs = [SimpleNamespace(x=x, score=s, pareto_score=(s - floor) / x) for x, s in points]
+        stubs = [SimpleNamespace(x=x, score=s, score_per_usd=(s - floor) / x) for x, s in points]
         rows = _guide_rows(cast(Any, SimpleNamespace(x='price', points=stubs)), floor)
-        positive = [p.pareto_score for p in stubs if p.pareto_score > 0]
+        positive = [p.score_per_usd for p in stubs if p.score_per_usd > 0]
         for r in rows:
             assert 'e' not in r['k']
             assert float(r['k'].replace(',', '')) > min(positive)
@@ -1093,9 +1115,9 @@ class TestDashboardPage:
         # Score per $ 0 (at the floor of 50), 5 and 20. Counting the 0 stretched the steps down six decades, to flat
         # lines on the floor labelled 1e-05 per $; only 10 lies strictly inside the positive range.
         stubs = [
-            SimpleNamespace(x=1.0, score=50.0, pareto_score=0.0),
-            SimpleNamespace(x=0.5, score=52.5, pareto_score=5.0),
-            SimpleNamespace(x=2.0, score=90.0, pareto_score=20.0),
+            SimpleNamespace(x=1.0, score=50.0, score_per_usd=0.0),
+            SimpleNamespace(x=0.5, score=52.5, score_per_usd=5.0),
+            SimpleNamespace(x=2.0, score=90.0, score_per_usd=20.0),
         ]
         rows = _guide_rows(cast(Any, SimpleNamespace(x='price', points=stubs)), 50.0)
         assert {r['k'] for r in rows} == {'10'}
@@ -1474,7 +1496,7 @@ class TestManagementKey:
         monkeypatch.setattr(
             workspace_models.httpx, 'AsyncClient', lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
         )
-        assert asyncio.run(workspace_models.can_manage_models(self._auth())) is expected
+        assert asyncio.run(_real_can_manage_models(self._auth())) is expected
         assert seen[0].method == 'GET' and seen[0].url.path == '/v3/users'
         assert seen[0].headers['authorization'] == 'Bearer mk'
 

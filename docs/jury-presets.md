@@ -14,7 +14,7 @@ correctness = llm_jury(
 
 ## The presets
 
-Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, uncached, one call per judge per item. The token counts are a flat 3:1 assumption, the same for every seat whatever its reasoning effort, and the same ratio the seats are ranked on. Every figure is recomputed by a weekly check from the live model catalog's rates (seats priced from `MANUAL_MODEL_CARDS` use that register's dated rates), so a repricing shows up as a failing run rather than a quietly wrong table.
+Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, uncached, one call per judge per item. The token counts are a flat 3:1 assumption, the same for every seat whatever its reasoning effort. Seats are ranked on a different, cache-aware price (below). Every figure is recomputed by a weekly check from the live model catalog's rates (seats priced from `MANUAL_MODEL_CARDS` use that register's dated rates), so a repricing shows up as a failing run rather than a quietly wrong table.
 
 | Preset | Judges | Aggregation | $ / 1k | Reserve |
 | --- | --- | --- | --- | --- |
@@ -33,7 +33,7 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 500 output tokens, un
 
 **`strong-jury`** costs about seven times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
 
-**`cheap-aggregate`** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose 3:1 blended price is under $2.00 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it shares two seats with `balanced-trio` (`deepseek/deepseek-flash` and `google-ai/gemini-3.8-flash`) and costs about the same; the difference is the third lineage (Zhipu instead of OpenAI). The `zai/glm-5.3-flash` seat is costed on its catalog card rate ($0.075/$0.25 per million); usage on the judge endpoint has been billed at twice that, which would put the panel at $3.83 rather than $3.59.
+**`cheap-aggregate`** is for volume: nightly reruns, regression suites and triage feeders. Its seats are derived rather than picked: the strongest model of each lineage whose `agentic` price (7 parts cache read, 2 fresh input, 1 output) is under $0.70 per million tokens, ranked at its default reasoning effort, or on its headline index where the card has no score at that effort. On the current catalog it shares two seats with `balanced-trio` (`deepseek/deepseek-flash` and `google-ai/gemini-3.8-flash`) and costs about the same; the difference is the third lineage (Zhipu instead of OpenAI). The `zai/glm-5.3-flash` seat is costed on its catalog card rate ($0.075/$0.25 per million); usage on the judge endpoint has been billed at twice that, which would put the panel at $3.83 rather than $3.59.
 
 **`open-weight-portable`** buys independence from any closed frontier vendor, and a migration path if you later want to serve the judges yourself. It is not the cheap option: most of its cost is the Kimi K3.1 Pro seat.
 
@@ -76,7 +76,7 @@ Two more limits worth knowing before you quote a number:
 
 ## How a preset stays current
 
-Seats are chosen in this package. `evaluatorq.common.model_frontier` reads the live `/v2/models` catalog, where every autorouter-eligible card carries Artificial Analysis intelligence scores per reasoning effort beside its rates, and ranks each model at its default effort on a 3:1 blended price. Compare seats within each lineage, because lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
+Seats are chosen in this package. `evaluatorq.common.model_frontier` reads the live `/v2/models` catalog, where every autorouter-eligible card carries Artificial Analysis intelligence scores per reasoning effort beside its rates, and ranks each model at its default effort on the `agentic` blended price, 7 parts cache read to 2 fresh input to 1 output, as [the Pareto frontier](model-pareto.md) does. Compare seats within each lineage, because lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
 
 Nothing about a seat is committed except the decision to seat it. Rates and default efforts are read live, so there is no rate table to refresh; the exceptions are the seats the catalog does not list, which are priced from the dated `MANUAL_MODEL_CARDS` register. A weekly workflow (`.github/workflows/preset-drift-weekly.yml`) runs the integration checks in `tests/integration/test_preset_freshness.py` against the live catalog; a failure leaves that run red in Actions and opens a pull request (see below). Each failure names the seat and the register to update:
 

@@ -11,8 +11,8 @@ is enough to decide seating arithmetically rather than by taste.
 Both axes are read where a judge actually runs. Judges are called with no
 reasoning effort, so the provider applies the catalogue default
 (`/v2/models` `parameters[reasoningEffort].config.default`), and each card is
-ranked on its score at that rung. Seating prices on the 3:1 input/output
-blend (`LIST_MIX`); the Pareto view defaults to a cache-aware one (`PriceMix`).
+ranked on its score at that rung. Price is the cache-aware `agentic` blend
+(`AGENTIC_MIX`) for seating and the Pareto view alike; `PriceMix` sets another.
 
 Dominance is the whole rule: B dominates A when B is at least as intelligent and
 no more expensive, and strictly better on one of them. A dominated seat is dead
@@ -53,6 +53,7 @@ from evaluatorq.common.model_catalogue import (
     _parse_default_reasoning_effort,
     _parse_reasoning_efforts,
     _reasoning_effort_config,
+    derived_from_cards,
     model_cards,
 )
 
@@ -139,8 +140,8 @@ class ScoredModel(BaseModel):
 
     @property
     def price(self) -> float:
-        """USD per 1M tokens, 3:1 input/output blend, lower is better."""
-        return (3 * self.input_price + self.output_price) / 4
+        """USD per 1M tokens under the `agentic` blend (`AGENTIC_MIX`), lower is better."""
+        return AGENTIC_MIX.price(self)
 
     @property
     def free(self) -> bool:
@@ -265,8 +266,7 @@ class PriceMix(BaseModel):
     def price(self, model: ScoredModel) -> float:
         """`model`'s USD per 1M tokens under this blend.
 
-        A bucket with no share is skipped, so the `list` mix is exactly
-        `ScoredModel.price`, float for float.
+        A bucket with no share is skipped, so a mix without cache shares never reads a cache rate.
         """
         terms: list[float] = []
         if self.read:
@@ -279,18 +279,11 @@ class PriceMix(BaseModel):
             terms.append(self.output * model.output_price)
         return sum(terms) / self.total
 
-    def sources(self, model: ScoredModel) -> tuple[CacheSource | None, CacheSource | None]:
-        """Where the cache-read and cache-write rates `price` used came from; None for a bucket with no share."""
-        return (
-            model.cache_read_rate()[1] if self.read else None,
-            model.cache_write_rate()[1] if self.write else None,
-        )
-
 
 # The two named blends. `agentic` is Artificial Analysis' published blend: "we
 # calculate a blended price assuming a 7:2:1 ratio of cache hit, input, and
 # output tokens" (artificialanalysis.ai/methodology, read 2026-11-20). `list`
-# is the 3:1 input/output blend the smart router and preset seating rank on.
+# is the 3:1 input/output blend the Orq smart router ranks on.
 PRICE_MIXES: dict[str, PriceMix] = {
     'agentic': PriceMix(read=7, write=0, fresh=2, output=1, name='agentic', tag='7:2:1 cached'),
     'list': PriceMix(read=0, write=0, fresh=3, output=1, name='list', tag='3:1 list'),
@@ -308,9 +301,12 @@ def parse_mix(mix: str | PriceMix) -> PriceMix:
     Raises:
         ValueError: Not a known name, not four numbers, a negative or
             non-finite share, or every share zero.
+        TypeError: `mix` is neither a string nor a `PriceMix`.
     """
     if isinstance(mix, PriceMix):
         return mix
+    if not isinstance(mix, str):
+        raise TypeError(f'a price mix is a name, a ratio or a PriceMix, not {type(mix).__name__}')
     text = mix.strip().lower()
     if text in PRICE_MIXES:
         return PRICE_MIXES[text]
@@ -424,19 +420,28 @@ def x_axis_spec(x: str, mix: PriceMix | None = None) -> AxisSpec:
 _EFFORT_ORDER = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'reasoning')
 
 
+class AxesError(ValueError):
+    """An axis combination a Pareto analysis cannot be run on; `axis` names the argument at fault."""
+
+    def __init__(self, message: str, *, axis: Literal['index', 'x', 'effort']) -> None:
+        super().__init__(message)
+        self.axis = axis
+
+
 def check_axes(*, index: str, effort: str | None, x: str) -> None:
     """Refuse an unknown index or x axis, and an effort on a domain index.
 
     Raises:
-        ValueError: The combination is not one a Pareto analysis can be run on.
+        AxesError: The combination is not one a Pareto analysis can be run on.
     """
     if index not in INDEX_AXES:
-        raise ValueError(f'unknown index {index!r}; choose one of {", ".join(INDICES)}')
+        raise AxesError(f'unknown index {index!r}; choose one of {", ".join(INDICES)}', axis='index')
     if x not in X_AXIS_SPECS:
-        raise ValueError(f'unknown x axis {x!r}; choose one of {", ".join(X_AXES)}')
+        raise AxesError(f'unknown x axis {x!r}; choose one of {", ".join(X_AXES)}', axis='x')
     if effort is not None and index != 'intelligence':
-        raise ValueError(
-            'domain indices exist only at the one effort Artificial Analysis benchmarked: pass effort=None'
+        raise AxesError(
+            'domain indices exist only at the one effort Artificial Analysis benchmarked: pass effort=None',
+            axis='effort',
         )
 
 
@@ -460,11 +465,10 @@ def score_of(model: ScoredModel, *, index: Index = 'intelligence', effort: str |
     return None
 
 
-def x_of(model: ScoredModel, x: XAxis = 'price', *, mix: str | PriceMix = LIST_MIX) -> float | None:
+def x_of(model: ScoredModel, x: XAxis = 'price', *, mix: str | PriceMix = AGENTIC_MIX) -> float | None:
     """A model's value on the x axis, or None when it has none (a free model has no place on price).
 
-    Price is blended under `mix`. The default is the 3:1 `list` blend preset
-    seating ranks on; `evaluatorq.models.pareto` defaults to `agentic`.
+    Price is blended under `mix`, the `agentic` blend by default.
     """
     if x == 'price':
         return None if model.free else parse_mix(mix).price(model)
@@ -479,7 +483,7 @@ def placement(
     effort: str | None = None,
     x: XAxis = 'price',
     exclude_estimated: bool = False,
-    mix: str | PriceMix = LIST_MIX,
+    mix: str | PriceMix = AGENTIC_MIX,
 ) -> tuple[float, float] | str:
     """The model's `(score, x)` point, or the reason it has no place on these axes.
 
@@ -510,12 +514,12 @@ def dominates(
     index: Index = 'intelligence',
     effort: str | None = None,
     x: XAxis = 'price',
-    mix: str | PriceMix = LIST_MIX,
+    mix: str | PriceMix = AGENTIC_MIX,
 ) -> bool:
     """Whether `a` is at least as good as `b` on both axes and strictly better on one.
 
     False when either model has no value on an axis. The defaults are the
-    seating axes: intelligence at the default effort against the 3:1 list price.
+    seating axes: intelligence at the default effort against the `agentic` price.
     """
     check_axes(index=index, effort=effort, x=x)
     pa = placement(a, index=index, effort=effort, x=x, mix=mix)
@@ -954,7 +958,7 @@ async def load_garden(client: AsyncOpenAI | None = None) -> dict[str, ScoredMode
 
     Scores and prices come from one response, so they share a benchmark version.
     The cards are fetched once per process and credential by
-    `common.model_catalogue.model_cards`; this only ranks them. A
+    `common.model_catalogue.model_cards` and parsed once per fetch; this only ranks them. A
     project-scoped catalogue is used with a warning rather than refused, since
     it is the only key most callers hold; the live drift suite fails on it.
 
@@ -970,7 +974,7 @@ async def load_garden(client: AsyncOpenAI | None = None) -> dict[str, ScoredMode
             'garden holds only what this workspace enabled. Use a workspace-scoped ORQ_API_KEY for '
             'the full catalogue.'
         )
-    return garden_from_cards(cards)
+    return derived_from_cards(cards, garden_from_cards)
 
 
 def load_garden_sync() -> dict[str, ScoredModel]:
@@ -1031,13 +1035,13 @@ async def public_listings(*, timeout_s: float = 60.0) -> dict[str, int | None]:
             cursor = str(data[-1]['id'])
 
 
-# The cheap-tier ceiling: 3:1 blended USD per 1M tokens, strictly under. The
+# The cheap-tier ceiling: `agentic` USD per 1M tokens, strictly under. The
 # user's rule is "input price under $1.00"; this is the same rule on the axis
-# the library ranks on. A model priced just under $1.00 in at the usual 1:5
-# input:output ratio blends to (3*1 + 5)/4 = $2.00. On the 2026-10-26 live
-# catalogue the two rules pick the same candidates, and $1.00 would leave only
-# three families, so no reserve (derivation in the 2-pager).
-MAX_BLEND = 2.0
+# the library ranks on. It was $2.00 on the 3:1 list blend; on the 2026-11-28
+# live catalogue $0.70 admits the same seatable cards minus two Qwen 27B
+# listings (groq qwen3.6 at $0.84, cerebras qwen-3.8 at $1.04) whose family
+# other cards already cover, and admits none the list ceiling refused.
+MAX_BLEND = 0.70
 
 # Hand-written cards for models the router can call but `/v2/models` does not
 # list (for this key), so there is no live card to read their price or score
@@ -1158,7 +1162,7 @@ def rank_cheapest_top(
     Eligible: comparable (not free), seatable (not
     NEVER_SEAT, UNROUTABLE, SUPERSEDED or under the floor), enabled, not
     EU-pinned, without a newer eligible version of itself
-    (`derived_successor` over the eligible set, so a successor that is itself EU-pinned or over the ceiling retires nothing), and a 3:1 blend strictly under `max_blend`. Prices are the garden's own, so pass
+    (`derived_successor` over the eligible set, so a successor that is itself EU-pinned or over the ceiling retires nothing), and an `agentic` price strictly under `max_blend`. Prices are the garden's own, so pass
     the live garden. One model per family (`family_of`), the highest default
     index in it; ties break to the lower price, then router_id. Seats are the
     first n entries and the reserve is the next, which is by construction a
@@ -1212,14 +1216,13 @@ def pareto_frontier(
     effort: str | None = None,
     x: XAxis = 'price',
     exclude_estimated: bool = False,
-    mix: str | PriceMix = LIST_MIX,
+    mix: str | PriceMix = AGENTIC_MIX,
 ) -> list[ScoredModel]:
     """Comparable models nothing else beats on both axes, strongest first.
 
     Everything off the frontier is a worse deal than something else in the same
     garden, which is why a preset containing one is dead weight. A model with
     no value on an axis is left out: on the default price axis, every free card.
-    Seating calls this with the default 3:1 `list` mix.
     """
     check_axes(index=index, effort=effort, x=x)
     placed = [

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import math
 import sys
 from typing import TYPE_CHECKING, Annotated, cast
@@ -68,13 +67,13 @@ def _print_table(
     for point in points:
         row = [point.model.router_id, f'{point.score:.1f}', spec.format(point.x)]
         if result.x == 'price':
-            row.append(f'{point.pareto_score:.1f}' if point.pareto_score is not None else '—')
+            row.append(f'{point.score_per_usd:.1f}' if point.score_per_usd is not None else '—')
         if show_read:
-            rate, source = point.model.cache_read_rate()
-            row.append(f'{rate:.3f}{_SOURCE_MARK[source]}')
+            rate, source = point.cache_read_rate, point.cache_read_source
+            row.append(f'{rate:.3f}{_SOURCE_MARK[source]}' if rate is not None and source else '—')
         if show_write:
-            rate, source = point.model.cache_write_rate()
-            row.append(f'{rate:.3f}{_SOURCE_MARK[source]}')
+            rate, source = point.cache_write_rate, point.cache_write_source
+            row.append(f'{rate:.3f}{_SOURCE_MARK[source]}' if rate is not None and source else '—')
         row.extend((
             'yes' if point.model.is_estimated else '',
             point.dominated_by or ('— (on the frontier)' if dominated else 'yes'),
@@ -110,18 +109,16 @@ def _print_table(
         console.print(f'[dim]{left_out_by_provider} model(s) from other providers left out by --provider.[/dim]')
 
 
-def _checked_options(*, index: str, x: str, effort: str | None, mix: str | None) -> PriceMix:
-    """Refuse an unknown index, x axis or mix, and an option the chosen axes do not take; return the price mix."""
-    from evaluatorq.models import INDICES, X_AXES, parse_mix
+def _checked_options(*, index: str, x: str, effort: str | None, mix: str | None, min_score: float) -> PriceMix:
+    """Refuse what `pareto()` would refuse, naming the flag, before the catalogue is fetched; return the price mix."""
+    from evaluatorq.common.model_frontier import AxesError, check_axes, parse_mix
 
-    if index not in INDICES:
-        raise typer.BadParameter(f'choose one of {", ".join(INDICES)}', param_hint='--index')
-    if x not in X_AXES:
-        raise typer.BadParameter(f'choose one of {", ".join(X_AXES)}', param_hint='--x')
-    if effort is not None and index != 'intelligence':
-        raise typer.BadParameter(
-            'domain indices exist only at the one effort Artificial Analysis benchmarked', param_hint='--effort'
-        )
+    try:
+        check_axes(index=index, effort=effort, x=x)
+    except AxesError as exc:
+        raise typer.BadParameter(str(exc), param_hint=f'--{exc.axis}') from None
+    if not math.isfinite(min_score):
+        raise typer.BadParameter('must be a finite number', param_hint='--min-score')
     if mix is not None and x != 'price':
         raise typer.BadParameter('a price mix applies only to --x price', param_hint='--mix')
     try:
@@ -187,11 +184,11 @@ def pareto_cmd(
 ) -> None:
     """Show which models nothing beats on score and x axis, or which are beaten and by what."""
     from evaluatorq.common.model_frontier import available_efforts, available_indices, matches_vendor
-    from evaluatorq.models import find_model, load_models, pareto
+    from evaluatorq.models import find_model, load_models_sync, pareto
 
-    price_mix = _checked_options(index=index, x=x, effort=effort, mix=mix)
+    price_mix = _checked_options(index=index, x=x, effort=effort, mix=mix, min_score=min_score)
 
-    pool = asyncio.run(load_models(include_disabled=include_disabled))
+    pool = load_models_sync(include_disabled=include_disabled)
     indices = available_indices(pool)
     if index not in indices:
         raise typer.BadParameter(
@@ -204,8 +201,6 @@ def pareto_cmd(
             f'no model in the catalogue has a score at effort {effort!r}; the catalogue has: {listed}',
             param_hint='--effort',
         )
-    if not math.isfinite(min_score):
-        raise typer.BadParameter('must be a finite number', param_hint='--min-score')
     # Resolve --model against the whole catalogue first, so --provider cannot make a named model unknown.
     shown: set[str] | None = None
     named: dict[str, ScoredModel] = {}
@@ -238,9 +233,10 @@ def pareto_cmd(
     )
     # A named model is shown whichever side of the frontier it is on; --dominated then only picks the table style.
     points = result.dominated if dominated else result.frontier
+    as_dominated = dominated
     if shown is not None:
         points = [p for p in result.points if p.model.router_id in shown]
-        dominated = dominated or any(not p.on_frontier for p in points)
+        as_dominated = dominated or any(not p.on_frontier for p in points)
         for gone in (e for e in result.excluded if e.router_id in shown):
             typer.echo(f'{gone.router_id} is not plotted: {gone.reason}.', err=True)
 
@@ -258,7 +254,7 @@ def pareto_cmd(
         })
         return
     if not points:
-        what = 'dominated' if dominated else 'on the frontier'
+        what = 'dominated' if as_dominated else 'on the frontier'
         typer.echo(f'No models {what} for these filters.')
         return
-    _print_table(result, points, dominated=dominated, left_out_by_provider=left_out_by_provider)
+    _print_table(result, points, dominated=as_dominated, left_out_by_provider=left_out_by_provider)

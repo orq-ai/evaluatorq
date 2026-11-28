@@ -22,15 +22,14 @@ for point in result.dominated:
 Price is a blend of the card's rates per 1M tokens, chosen with `mix`. The
 default, `agentic`, is Artificial Analysis' cache-aware blend: 7 parts cache
 read, 2 parts fresh input, 1 part output, which is what an agent loop that
-re-sends its history looks like. `list` is the 3:1 input/output blend the Orq
-smart router and preset seating rank on, and a `READ:WRITE:FRESH:OUTPUT` ratio
+re-sends its history looks like; preset seating ranks on it too. `list` is the
+3:1 input/output blend the Orq smart router ranks on, and a `READ:WRITE:FRESH:OUTPUT` ratio
 such as `7:1:1:1` sets the shares yourself. A card with no cache-read rate
 prices reads at the Artificial Analysis cache price on the same card, else at
 its input rate, and each point says which (`cache_read_source`).
 
-`pareto` and `dominated_by` default to `agentic`. The re-exported seating
-helpers `dominates`, `pareto_frontier` and `x_of` default to `list`, as preset
-seating does; pass `mix=` to change either.
+Every function here that prices a model defaults to `agentic`; pass `mix=` to
+change it.
 
 Every blend is a list price: a model that writes more tokens per task costs
 more than its blend suggests, and the catalogue does not say how many tokens a
@@ -52,7 +51,6 @@ from evaluatorq.common.model_catalogue import (
     Pricing,
     cost_of,
     get_model_info,
-    model_cards,
     models_by_provider,
     price_usage,
     register_model,
@@ -71,9 +69,8 @@ from evaluatorq.common.model_frontier import (
     XAxis,
     check_axes,
     dominates,
-    garden_from_cards,
+    load_garden,
     one_per_model,
-    pareto_frontier,
     parse_mix,
     placement,
     point_dominates,
@@ -94,7 +91,7 @@ class ParetoPoint(BaseModel):
     model: ScoredModel
     score: float = Field(description='The y value: the chosen index at the chosen effort.')
     x: float = Field(description='The x value in its own unit (USD per 1M tokens, tokens/s or seconds).')
-    pareto_score: float | None = Field(
+    score_per_usd: float | None = Field(
         default=None,
         description="Points above the minimum score (0 when there is none) per blended USD per 1M tokens (under the result's mix), higher is better. Set only when x is price.",
     )
@@ -112,6 +109,10 @@ class ParetoPoint(BaseModel):
         default=None,
         description="'host' or 'input' (no cache-write price on the card). None when x is not price or the mix has no "
         'cache-write share.',
+    )
+    cache_write_rate: float | None = Field(
+        default=None,
+        description='The cache-write rate (USD per 1M tokens) behind `cache_write_source`. None when that is None.',
     )
     on_frontier: bool
     dominated_by: str | None = Field(
@@ -192,6 +193,26 @@ class ParetoResult(BaseModel):
         return [e for e in self.excluded if e.below_min_score]
 
 
+def pareto_frontier(
+    models: Iterable[ScoredModel],
+    *,
+    index: Index = 'intelligence',
+    effort: str | None = None,
+    x: XAxis = 'price',
+    exclude_estimated: bool = False,
+    mix: str | PriceMix = 'agentic',
+) -> list[ScoredModel]:
+    """The frontier models of `pareto(..., min_score=None)`, strongest first: no score floor, contributors left out.
+
+    Raises:
+        ValueError: An unknown index, x axis or mix, or an effort with a domain index.
+    """
+    result = pareto(
+        models, index=index, effort=effort, x=x, mix=mix, exclude_estimated=exclude_estimated, min_score=None
+    )
+    return [p.model for p in result.frontier]
+
+
 def pareto(
     models: Iterable[ScoredModel],
     *,
@@ -268,16 +289,18 @@ def pareto(
     for (model, (score, xv)), beaters in zip(plotted, beaten_by, strict=True):
         # Every dominated model is dominated by a frontier one (dominance is transitive), so this is set whenever beaters is.
         nearest = next((b for b, _ in beaters if id(b) in frontier_ids), None)
-        read_source, write_source = price_mix.sources(model) if x == 'price' else (None, None)
+        read_rate, read_source = model.cache_read_rate() if x == 'price' and price_mix.read else (None, None)
+        write_rate, write_source = model.cache_write_rate() if x == 'price' and price_mix.write else (None, None)
         points.append(
             ParetoPoint(
                 model=model,
                 score=score,
                 x=xv,
-                pareto_score=(score - floor) / xv if x == 'price' and xv > 0 else None,
+                score_per_usd=(score - floor) / xv if x == 'price' and xv > 0 else None,
                 cache_read_source=read_source,
-                cache_read_rate=model.cache_read_rate()[0] if read_source else None,
+                cache_read_rate=read_rate,
                 cache_write_source=write_source,
+                cache_write_rate=write_rate,
                 on_frontier=not beaters,
                 dominated_by=nearest.router_id if nearest else None,
                 dominators=[b.router_id for b, _ in beaters],
@@ -340,7 +363,7 @@ async def load_models(
         ValueError: No Orq key or OAuth session is available (``MissingLLMCredentialsError``).
         ModelCatalogueError: The catalogue fetch failed or was unreadable.
     """
-    garden = garden_from_cards(await model_cards(client))
+    garden = await load_garden(client)
     models = [m for m in garden.values() if include_disabled or m.enabled is not False]
     if all_hosts:
         return sorted(models, key=lambda m: m.router_id)
@@ -350,7 +373,7 @@ async def load_models(
 
 
 def load_models_sync(*, include_disabled: bool = False, all_hosts: bool = False) -> list[ScoredModel]:
-    """`load_models` for synchronous callers, using the ambient `ORQ_API_KEY`.
+    """`load_models` for synchronous callers, with the ambient Orq key or OAuth session.
 
     Raises:
         RuntimeError: Called from inside a running event loop; `await load_models()` there instead.

@@ -85,7 +85,7 @@ def auth_or_reason(resolve: Callable[[], DashboardAuth]) -> tuple[DashboardAuth 
     """
     try:
         auth = resolve()
-    except (OSError, RuntimeError, ValueError) as exc:
+    except ValueError as exc:  # `resolve_dashboard_auth` turns file and CLI failures into ValueError
         return None, str(exc)
     if auth.method == 'environment' and not auth.api_key:
         return None, MISSING_ENVIRONMENT_KEY

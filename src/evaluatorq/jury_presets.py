@@ -304,7 +304,7 @@ STRONG_JURY = JuryPreset(
 CHEAP_AGGREGATE = JuryPreset(
     name='cheap-aggregate',
     # Derived, not hand-picked: the best default-effort index of each model
-    # family whose 3:1 blend is under MAX_BLEND, from the live catalogue plus
+    # family whose agentic price is under MAX_BLEND, from the live catalogue plus
     # the reviewed MANUAL_MODEL_CARDS and AA_FILLS registers, minus anything
     # superseded by a newer version of itself (model_frontier.rank_cheapest_top).
     # test_cheap_aggregate_matches_the_live_derivation fails with a readable
@@ -410,8 +410,7 @@ PRESETS: MappingProxyType[str, JuryPreset] = MappingProxyType({
 })
 
 # Flat estimate behind every published cost, the same for every seat whatever
-# its reasoning effort: 3:1 input to output, the ratio the garden's blended
-# price is ranked on. Measured usage runs above this when a judge reasons
+# its reasoning effort: 3:1 input to output, uncached. Measured usage runs above this when a judge reasons
 # without being asked (RES-996), so treat it as a floor.
 ESTIMATED_PROMPT_TOKENS = 1500
 ESTIMATED_COMPLETION_TOKENS = 500

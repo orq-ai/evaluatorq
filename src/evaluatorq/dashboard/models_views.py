@@ -10,10 +10,8 @@ chart names, for each dominated model, the nearest frontier model that beats it.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import math
 import re
-import time
 from dataclasses import dataclass
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -47,7 +45,7 @@ from evaluatorq.dashboard.report_kit import tag
 from evaluatorq.dashboard.security import csrf_field, request_rejected
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.tables import flipped, sortable_th
-from evaluatorq.dashboard.workspace_models import WorkspaceModelError, can_manage_models, set_model_enabled
+from evaluatorq.dashboard.workspace_models import WorkspaceModelError, may_manage_models, set_model_enabled
 from evaluatorq.models import X_AXES, ModelCatalogueError, PriceMix, load_models, pareto, parse_mix
 
 if TYPE_CHECKING:
@@ -100,9 +98,9 @@ _RETRY_HINT = (
     'Reload the page to try again. If it keeps failing, check the Orq account in <a href="/settings">Settings</a>.'
 )
 _LOG_HINT = 'The dashboard log has the details.'
-# Failures outside the catalogue's own error types: a missing optional dependency, a client that refuses to
-# start, or a card shape the parser did not expect. Named rather than a blind `except Exception`.
-_UNEXPECTED_LOAD_ERRORS = (ImportError, RuntimeError, ValueError, LookupError, TypeError, AttributeError)
+# Failures outside the catalogue's own error types, as `model_choices` catches them: a missing optional dependency, a
+# client that refuses to start, a card the parser refuses. A programming error is left to raise.
+_UNEXPECTED_LOAD_ERRORS = (ImportError, RuntimeError, ValueError)
 
 
 def _alert(message: str, *, hint: str) -> str:
@@ -366,7 +364,7 @@ def _guide_rows(result: ParetoResult, floor: float) -> list[dict[str, Any]]:
     if result.x != 'price':
         return []
     # A model scoring exactly at the floor has Score per $ 0; it would stretch the steps down to flat lines on the floor.
-    values = [p.pareto_score for p in result.points if p.pareto_score is not None and p.pareto_score > 0]
+    values = [p.score_per_usd for p in result.points if p.score_per_usd is not None and p.score_per_usd > 0]
     xs = [p.x for p in result.points if p.x > 0]
     if not values or not xs:
         return []
@@ -434,7 +432,7 @@ def _sort_key(column: str, x: str, mix: PriceMix) -> Callable[[ParetoPoint], Any
         'price': lambda p: mix.price(p.model),
         'rates': lambda p: (p.model.input_price, p.model.output_price),
         'cache': lambda p: p.cache_read_rate if p.cache_read_rate is not None else math.inf,
-        'value': lambda p: -p.pareto_score if p.pareto_score is not None else math.inf,
+        'value': lambda p: -p.score_per_usd if p.score_per_usd is not None else math.inf,
         'dominated_by': lambda p: (p.dominated_by or '', -p.score),
     }
     return keys.get(column, keys['score'])
@@ -597,7 +595,7 @@ def _row(
         f'<td class="num">{_AXIS_TEXT[result.x].fmt(p.x)}</td>',
     ]
     if 'value' not in hidden:
-        cells.append(f'<td class="num">{"—" if p.pareto_score is None else f"{p.pareto_score:,.1f}"}</td>')
+        cells.append(f'<td class="num">{"—" if p.score_per_usd is None else f"{p.score_per_usd:,.1f}"}</td>')
     if 'price' not in hidden:
         cells.append(f'<td class="num">{_usd(mix.price(m))}</td>')
     cells.append(f'<td class="num num-secondary">{_usd(m.input_price)} / {_usd(m.output_price)}</td>')
@@ -725,9 +723,7 @@ def _excluded(result: ParetoResult, min_score: float) -> str:
     return _popover('excluded', f'{len(result.excluded)} not plotted', body)
 
 
-async def _load(
-    req: Request, auth: DashboardAuth | None, reason: str | None, *, include_disabled: bool
-) -> list[ScoredModel] | str:
+async def _load(auth: DashboardAuth | None, reason: str | None, *, include_disabled: bool) -> list[ScoredModel] | str:
     """The catalogue models, or the alert HTML the page shows instead.
 
     Each failure kind gets its own next step: missing credentials point at
@@ -737,11 +733,6 @@ async def _load(
     """
     if auth is None:
         return _alert(reason or 'No Orq account is connected.', hint=_CONNECT_HINT)
-    key, cache = (_auth_key(auth), include_disabled), _store(req, 'models_catalogue')
-    hit = cache.get(key)
-    if hit is not None and hit[0] > time.monotonic():
-        return hit[1]
-    switches = _switches(req).get(key[0], 0)
     try:
         async with model_choices.catalogue_client(auth) as client:
             models = await load_models(client, include_disabled=include_disabled)
@@ -754,53 +745,7 @@ async def _load(
     except _UNEXPECTED_LOAD_ERRORS as exc:
         logger.exception('The /models page failed to load the catalogue')
         return _alert(f'The Pareto Frontier page failed with an unexpected {type(exc).__name__}.', hint=_LOG_HINT)
-    # A filter change only re-sorts the same catalogue, so it reuses this copy instead of refetching (about 0.6 s).
-    # A switch made during the fetch makes this copy stale, so it is not kept.
-    if _switches(req).get(key[0], 0) == switches:
-        cache[key] = (time.monotonic() + _CATALOGUE_TTL_S, models)
     return models
-
-
-# ponytail: per-process dicts on app.state, no eviction; a dashboard sees one or two sign-ins in its lifetime.
-_CATALOGUE_TTL_S = 60.0
-# A sign-in's admin rights rarely change, so a yes is kept for half an hour; a no may be a failed check, so it expires
-# sooner.
-_ADMIN_YES_TTL_S = 30 * 60.0
-_ADMIN_NO_TTL_S = 60.0
-
-
-def _store(req: Request, name: str) -> dict[Any, Any]:
-    """A cache on the app, so each app (and each test's app) starts empty."""
-    store = getattr(req.app.state, name, None)
-    if store is None:
-        store = {}
-        setattr(req.app.state, name, store)
-    return store
-
-
-def _switches(req: Request) -> dict[tuple[object, ...], int]:
-    """How many switches each sign-in has made, so a catalogue fetched across one is not kept."""
-    return _store(req, 'models_switches')
-
-
-def _auth_key(auth: DashboardAuth) -> tuple[object, ...]:
-    secret = hashlib.sha256(auth.api_key.encode()).hexdigest() if auth.api_key else None
-    return (auth.method, auth.base_url, secret, auth.profile.name if auth.profile else None)
-
-
-async def _may_manage(req: Request, auth: DashboardAuth) -> bool:
-    """`can_manage_models`, remembered per sign-in: for a CLI sign-in it costs two `orq` runs, about 1 s."""
-    cache, key = _store(req, 'models_admin'), _auth_key(auth)
-    hit = cache.get(key)
-    if hit is not None and hit[0] > time.monotonic():
-        return hit[1]
-    try:
-        allowed = await can_manage_models(auth)
-    except (httpx.HTTPError, OSError, *_UNEXPECTED_LOAD_ERRORS):  # a failed check hides the switches, not the page
-        logger.exception('The admin check for /models failed')
-        allowed = False
-    cache[key] = (time.monotonic() + (_ADMIN_YES_TTL_S if allowed else _ADMIN_NO_TTL_S), allowed)
-    return allowed
 
 
 def _intro(x_label: str) -> str:
@@ -866,7 +811,7 @@ def _balanced(result: ParetoResult, best: ParetoPoint, value: ParetoPoint | None
     def gap(p: ParetoPoint) -> float:
         return p.score - (value.score + (best.score - value.score) * (math.log(p.x) - lo) / (hi - lo))
 
-    between = [p for p in result.frontier if p.pareto_score is not None and value.x < p.x < best.x]
+    between = [p for p in result.frontier if p.score_per_usd is not None and value.x < p.x < best.x]
     knee = max(between, key=gap, default=None)
     return knee if knee is not None and gap(knee) > 0 else None
 
@@ -914,10 +859,10 @@ def _answer_cards(result: ParetoResult, min_score: float) -> str:
         return ''
     best = max(result.frontier, key=lambda p: p.score)
     cards = [_card('score', 'Best score', f'{best.score:.1f}', best, result, _x_text(best, result))]
-    valued = [p for p in result.frontier if p.pareto_score is not None]
-    value = max(valued, key=lambda p: cast('float', p.pareto_score), default=None)
+    valued = [p for p in result.frontier if p.score_per_usd is not None]
+    value = max(valued, key=lambda p: cast('float', p.score_per_usd), default=None)
     if value is not None:
-        per_dollar = cast('float', value.pareto_score)
+        per_dollar = cast('float', value.score_per_usd)
         # Whole numbers would print a score per $ under 0.5 as 0, so small values keep one decimal.
         shown = f'{per_dollar:,.0f}' if per_dollar >= 10 else f'{per_dollar:.1f}'
         sub = f'score {value.score:.1f} · {_x_text(value, result)}'
@@ -926,7 +871,7 @@ def _answer_cards(result: ParetoResult, min_score: float) -> str:
         cards.append(_card('value', f'Highest {what} per $', shown, value, result, sub, unit=' per $'))
     balanced = _balanced(result, best, value)
     if balanced is not None:
-        sub = f'{_x_text(balanced, result)} · {cast("float", balanced.pareto_score):,.0f} per $'
+        sub = f'{_x_text(balanced, result)} · {cast("float", balanced.score_per_usd):,.0f} per $'
         cards.append(_card('balanced', 'Balanced', f'{balanced.score:.1f}', balanced, result, sub))
         return f'<div class="stat-band models-cards">{"".join(cards)}</div>'
     cheapest = min(result.frontier, key=lambda p: result.x_spec.best_first(p.x))
@@ -982,7 +927,7 @@ async def _render(req: Request) -> HTMLResponse:
     mix = _mix(q.get('mix'))
     disabled = bool(q.get('disabled'))
     auth, reason = _auth(req)
-    models, admin = await asyncio.gather(_load(req, auth, reason, include_disabled=disabled), _is_admin(req, auth))
+    models, admin = await asyncio.gather(_load(auth, reason, include_disabled=disabled), _is_admin(auth))
     if isinstance(models, str):
         return _shell(f'{_intro(X_AXIS_SPECS[x].short_label)}{models}')
     indices = available_indices(models)
@@ -1032,9 +977,9 @@ def _auth(req: Request) -> tuple[DashboardAuth | None, str | None]:
     return auth_or_reason(lambda: selected_dashboard_auth(req.app))
 
 
-async def _is_admin(req: Request, auth: DashboardAuth | None) -> bool:
+async def _is_admin(auth: DashboardAuth | None) -> bool:
     """Whether `auth` may switch models on and off; False without one."""
-    return auth is not None and await _may_manage(req, auth)
+    return auth is not None and await may_manage_models(auth)
 
 
 # The id goes on the orq command line, so it must not start like an option.
@@ -1061,21 +1006,19 @@ async def toggle_model(req: Request) -> HTMLResponse:
     if not _MODEL_ID.fullmatch(model_id) or action not in ('enable', 'disable'):
         return answer('Unknown model or action.')
     auth = _auth(req)[0]
-    if auth is None or not await _may_manage(req, auth):
+    if auth is None or not await may_manage_models(auth):
         return answer('Only workspace admins can switch models on or off.')
     try:
         await set_model_enabled(auth, model_id, enabled=enable)
     except WorkspaceModelError as exc:
         logger.warning('{} {} failed: {}', 'Enabling' if enable else 'Disabling', model_id, exc)
         return answer(f'Orq refused: {exc}')
-    # The stored catalogue still has the old state; drop this sign-in's copies so the next page shows the switch.
-    cache, signed_in = _store(req, 'models_catalogue'), _auth_key(auth)
-    for key in [k for k in cache if k[0] == signed_in]:
-        del cache[key]
-    async with model_choices.catalogue_client(auth) as client:
-        forget_catalogue(client)
-    switches = _switches(req)
-    switches[signed_in] = switches.get(signed_in, 0) + 1
+    # The cached catalogue still has the old state; drop it so the next page shows the switch.
+    try:
+        async with model_choices.catalogue_client(auth) as client:
+            forget_catalogue(client)
+    except _UNEXPECTED_LOAD_ERRORS as exc:  # the switch is done; a stale copy only delays the page by the cache's TTL
+        logger.warning('Could not clear the model catalogue cache after switching {}: {}', model_id, exc)
     return answer(enabled=enable)
 
 

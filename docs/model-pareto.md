@@ -151,7 +151,7 @@ $ eq models pareto --model claude-sonnet-5-5 --index legal --json 2>/dev/null
       "router_id": "anthropic/claude-sonnet-5-5",
       "score": 48.7,
       "x": 1.47,
-      "pareto_score": 26.326530612244902,
+      "score_per_usd": 26.326530612244902,
       "on_frontier": false,
       "dominated_by": "google-ai/gemini-3.8-flash",
       "dominators": ["google-ai/gemini-3.8-flash", "openai/gpt-6.1-sol"],
@@ -167,7 +167,7 @@ $ eq models pareto --model claude-sonnet-5-5 --index legal --json 2>/dev/null
 }
 ```
 
-Read `x` for the blended price. Each point also carries a `price` field, and `price` is always the 3:1 list blend whatever `mix` says. The output above is trimmed: each point also carries every `ScoredModel` field (prices including `cache_read_price` and `aa_cache_read_price`, developer, effort ladder, domain scores, speed and latency), and `excluded` lists every model left out, with `below_min_score` set on the ones the quality floor removed. The JSON lists only the models you asked for; `dominators` names the winners but does not carry their scores. Run without `--model` to see the winner's row. Log lines go to stderr, so `2>/dev/null` leaves clean JSON on stdout.
+Read `x` for the blended price. Each point also carries a `price` field, and `price` is always the `agentic` blend whatever `mix` says. The output above is trimmed: each point also carries every `ScoredModel` field (prices including `cache_read_price` and `aa_cache_read_price`, developer, effort ladder, domain scores, speed and latency), and `excluded` lists every model left out, with `below_min_score` set on the ones the quality floor removed. The JSON lists only the models you asked for; `dominators` names the winners but does not carry their scores. Run without `--model` to see the winner's row. Log lines go to stderr, so `2>/dev/null` leaves clean JSON on stdout.
 
 A model below the floor is not compared, so `--model` with it prints `<id> is not plotted: score <n> is below min_score 10.` on stderr and `No models on the frontier for these filters.` on stdout; add `--min-score 0` to compare it. `dominated_by()` in Python applies no floor.
 
@@ -202,7 +202,7 @@ The price axis is a weighted average of a card's rates per million tokens. `--mi
 | Mix | Formula, USD per 1M | Label | Use it when |
 |---|---|---|---|
 | `agentic` (default) | (7 × cache read + 2 × input + 1 × output) / 10 | `Price $/1M (7:2:1 cached)` | The model runs in a loop that re-sends its history: agents, tool use, multi-turn simulation |
-| `list` | (3 × input + 1 × output) / 4 | `Price $/1M (3:1 list)` | Single-shot calls with short prompts, or to match what the Orq smart router and evaluatorq's own preset choice rank on |
+| `list` | (3 × input + 1 × output) / 4 | `Price $/1M (3:1 list)` | Single-shot calls with short prompts, or to match what the Orq smart router ranks on |
 | `READ:WRITE:FRESH:OUTPUT`, such as `7:1:1:1` | (R × cache read + W × cache write + F × input + O × output) / (R + W + F + O) | `Price $/1M (7:1:1:1)` | You know your own token mix, or your provider charges for cache writes |
 
 `agentic` is the blend [Artificial Analysis](https://artificialanalysis.ai/methodology) publishes: "we calculate a blended price assuming a 7:2:1 ratio of cache hit, input, and output tokens". It is the default because an agent loop sends its whole history again on every turn, and the provider serves most of that history from its prompt cache at a fraction of the input rate. Measured agent workloads cache more than 70% of input: 72% to 82% of all input on one gateway across twelve weeks ([Requesty](https://www.requesty.ai/data/weekly/2026-w46/prompt-cache)), 92% for Claude Code on the same gateway ([Requesty, April 2026](https://www.requesty.ai/data/coding-agent-cache-hit-rate-apr-2026)), 92% in [Bun's Rust rewrite](https://bun.com/blog/bun-in-rust), and 96% in a study of Claude Code repairing multi-hunk bugs ([arXiv 2511.11012](https://arxiv.org/html/2511.11012)). The 3:1 list blend prices every one of those re-sent tokens at the full input rate, so it overstates what an agent pays and hides which models have cheap cache reads.
@@ -321,6 +321,6 @@ A blended price is not what a task costs you. A reasoning model that writes four
 
 ## In code
 
-Every name used above imports from `evaluatorq.models`. `pareto()` returns a `ParetoResult` with the blend in `mix` and the axis labels in `x_spec`, whose `points` carry the score, the x value, `pareto_score` (score above `min_score` per dollar, `None` off the price axis), `cache_read_source` and `cache_write_source`, `on_frontier`, the nearest frontier model in `dominated_by`, and every model that beats it in `dominators`. `dominates(a, b)` answers the question for a single pair. `dominates`, `pareto_frontier` and `x_of` default to the `list` blend, because that is what evaluatorq's preset choice ranks on; pass `mix="agentic"` to match `pareto()`. The full list is in the [API reference](reference/evaluatorq/models.md).
+Every name used above imports from `evaluatorq.models`. `pareto()` returns a `ParetoResult` with the blend in `mix` and the axis labels in `x_spec`, whose `points` carry the score, the x value, `score_per_usd` (score above `min_score` per dollar, `None` off the price axis), `cache_read_source` and `cache_write_source`, `on_frontier`, the nearest frontier model in `dominated_by`, and every model that beats it in `dominators`. `dominates(a, b)` answers the question for a single pair. `dominates`, `pareto_frontier` and `x_of` default to the `agentic` blend, as `pareto()` and evaluatorq's own preset choice do; pass `mix="list"` for the 3:1 blend. `pareto_frontier` returns the frontier of `pareto(..., min_score=None)`: no score floor, and contributor listings left out. The full list is in the [API reference](reference/evaluatorq/models.md).
 
 For the CLI flags in one table, see [`eq models`](cli-reference/models.md).

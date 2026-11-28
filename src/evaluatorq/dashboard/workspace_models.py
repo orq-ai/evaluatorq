@@ -6,10 +6,13 @@ API key names no one; it counts as an admin when Orq lets it list the workspace 
 
 from __future__ import annotations
 
+import hashlib
+import time
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 import httpx
+from loguru import logger
 
 from evaluatorq.common.cli_oauth import OrqCLIError, is_workspace_admin, set_workspace_model
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
@@ -18,6 +21,11 @@ if TYPE_CHECKING:
     from evaluatorq.dashboard.auth import DashboardAuth
 
 _TIMEOUT_MS = 15_000
+# A sign-in's admin rights rarely change, so a yes is kept for half an hour; a no may be a failed check, so it expires
+# sooner. Keyed like the catalogue cache in `common.model_catalogue`: per host and credential, for the process.
+_ADMIN_YES_TTL_S = 30 * 60.0
+_ADMIN_NO_TTL_S = 60.0
+_admin_answers: dict[tuple[object, ...], tuple[float, bool]] = {}
 
 
 class WorkspaceModelError(RuntimeError):
@@ -42,6 +50,25 @@ async def can_manage_models(auth: DashboardAuth) -> bool:
     except httpx.HTTPError:
         return False
     return response.is_success
+
+
+async def may_manage_models(auth: DashboardAuth) -> bool:
+    """`can_manage_models`, remembered per sign-in (a CLI sign-in's check costs two `orq` runs, about 1 s).
+
+    A failed check reads as no, so it hides the switches rather than failing the page.
+    """
+    secret = hashlib.sha256(auth.api_key.encode()).hexdigest() if auth.api_key else None
+    key = (auth.method, auth.base_url, secret, auth.profile.name if auth.profile else None)
+    hit = _admin_answers.get(key)
+    if hit is not None and hit[0] > time.monotonic():
+        return hit[1]
+    try:
+        allowed = await can_manage_models(auth)
+    except (httpx.HTTPError, OSError, RuntimeError):
+        logger.exception('The workspace admin check failed')
+        allowed = False
+    _admin_answers[key] = (time.monotonic() + (_ADMIN_YES_TTL_S if allowed else _ADMIN_NO_TTL_S), allowed)
+    return allowed
 
 
 async def set_model_enabled(auth: DashboardAuth, model_id: str, *, enabled: bool) -> None:
