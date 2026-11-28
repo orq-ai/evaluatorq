@@ -730,13 +730,13 @@
   });
 
   document.body.addEventListener('input', function (evt) {
-    const search = evt.target.closest('.finder-facets .facet-search');
+    const search = evt.target.closest('.finder-facets .facet-search, .filter-dd .facet-search');
     if (!search) return;
     const query = search.value.trim().toLocaleLowerCase();
     const richPick = search.closest('.rich-pick--filter');
     const sub = search.closest('.facet-sub');
-    if (!richPick && !sub) return;
-    const list = richPick || sub;
+    const list = richPick || sub || search.closest('.filter-dd');
+    if (!list) return;
     let visible = 0;
     list.querySelectorAll('.facet-values .model-option, .facet-values label').forEach(function (option) {
       const label = option.querySelector('input + span');
@@ -747,7 +747,7 @@
     list.querySelector('.facet-no-results').hidden = visible !== 0;
   });
   document.body.addEventListener('keydown', function (evt) {
-    if (evt.key === 'Enter' && evt.target.matches('.rich-pick--filter .facet-search')) evt.preventDefault();
+    if (evt.key === 'Enter' && evt.target.matches('.rich-pick--filter .facet-search, .filter-dd .facet-search')) evt.preventDefault();
   });
 
   // Unticking a value in the menu must also drop the hidden input the chip row submits.
@@ -1068,12 +1068,13 @@
 })();
 
 // Persist open <details> filter dropdowns across HTMX filter swaps.
-// The filter POST outer-swaps #filter-swap, which would snap dropdowns shut.
+// The filter POST outer-swaps #filter-swap (the /models toolbar swaps
+// #models-root), which would snap dropdowns shut.
 // Record which are open before the swap, re-open the same ids after.
 (function () {
   var openIds = [];
   document.body.addEventListener('htmx:beforeSwap', function () {
-    var form = document.getElementById('filter-form');
+    var form = document.getElementById('filter-form') || document.querySelector('form.models-filters');
     if (!form) return;
     openIds = Array.prototype.slice
       .call(form.querySelectorAll('details[id^="filter-dd"][open]'))
@@ -1103,6 +1104,33 @@
       o.open = false;
     });
   }, true);
+})();
+
+// The Pareto Frontier toolbar (form.models-filters) opens its dropdowns as pop-overs over the chart, so a click
+// outside them or Escape closes them; the report rails keep their own behaviour. All lab boxes ticked is no
+// lab filter, so the request drops them: otherwise labs that appear later (Include disabled models)
+// would be filtered out by the list the page sent.
+(function () {
+  var OPEN = 'form.models-filters details.filter-dd[open]';
+  window.addEventListener('click', function (evt) {
+    document.querySelectorAll(OPEN).forEach(function (d) {
+      if (!d.contains(evt.target)) d.open = false;
+    });
+  }, true);
+  document.addEventListener('keydown', function (evt) {
+    if (evt.key !== 'Escape') return;
+    var open = Array.prototype.slice.call(document.querySelectorAll(OPEN));
+    if (!open.length) return;
+    open.forEach(function (d) { d.open = false; });
+    var summary = open[0].querySelector('summary');
+    if (summary) summary.focus();
+  });
+  document.body.addEventListener('htmx:configRequest', function (evt) {
+    var form = evt.detail.elt;
+    if (!form || !form.matches || !form.matches('form.models-filters')) return;
+    var boxes = Array.prototype.slice.call(form.querySelectorAll('input[type="checkbox"][name="lab"]'));
+    if (boxes.length && boxes.every(function (b) { return b.checked; })) delete evt.detail.parameters.lab;
+  });
 })();
 
 // Top failure modes panel — min-count slider filters bars client-side.

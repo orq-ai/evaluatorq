@@ -39,7 +39,7 @@ import math
 import re
 import time
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeVar, cast
 
 import httpx
 from loguru import logger
@@ -53,7 +53,11 @@ from evaluatorq.common.llm_client import (
 )
 from evaluatorq.contracts import DEFAULT_CLASSIFIER_MODEL
 
+T = TypeVar('T')
+
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from openai import AsyncOpenAI
 
     from evaluatorq.contracts import Usage
@@ -187,6 +191,17 @@ _failed_catalogues: set[tuple[str, str]] = set()
 # The same fetches unparsed, for readers that need card fields `ModelInfo` drops
 # (the benchmark scores the model garden ranks on, `enabled`, `metadata.region`).
 _raw_catalogues: dict[tuple[str, str], tuple[dict[str, object], ...]] = {}
+# OAuth card reads, kept for a minute: the session can switch workspace under the
+# same key, so they are not kept for the process, but a page that re-sorts the
+# same catalogue on every filter change must not refetch it (about 0.6 s).
+_OAUTH_CARDS_TTL_S = 60.0
+_oauth_cards: dict[tuple[str, str], tuple[float, tuple[dict[str, object], ...]]] = {}
+# Bumped by `forget_catalogue`, so a fetch already in flight when the catalogue
+# changed does not store the old copy.
+_generations: dict[tuple[str, str], int] = {}
+# Values built from one card tuple (the parsed model garden), one per builder.
+# ponytail: one slot per builder; a process alternating two credentials re-parses each switch.
+_derived: dict[Callable[..., object], tuple[tuple[dict[str, object], ...], object]] = {}
 # Built lazily: a module-level asyncio.Lock() binds to the loop running at import
 # time, and the CLI and test suite both drive several asyncio.run() loops, where
 # a lock bound to a dead loop raises "attached to a different loop".
@@ -251,6 +266,20 @@ async def _fetch_catalogue_payload(host: str, api_key: str | None, oauth_fetch: 
             ) from exc
 
 
+def forget_catalogue(client: AsyncOpenAI | None = None) -> None:
+    """Drop the cached catalogue *client* reads, so the next read refetches it.
+
+    For a caller that just changed the catalogue, such as enabling a model.
+    """
+    cache_key = _catalogue_source(client)[3]
+    _catalogues.pop(cache_key, None)
+    _raw_catalogues.pop(cache_key, None)
+    _oauth_cards.pop(cache_key, None)
+    _failed_catalogues.discard(cache_key)
+    _generations[cache_key] = _generations.get(cache_key, 0) + 1
+    _derived.clear()
+
+
 def reset_catalogue_cache() -> None:
     """Clear the process-lifetime catalogues; exists for test isolation.
 
@@ -260,6 +289,9 @@ def reset_catalogue_cache() -> None:
     global _lock
     _catalogues.clear()
     _raw_catalogues.clear()
+    _oauth_cards.clear()
+    _generations.clear()
+    _derived.clear()
     _failed_catalogues.clear()
     _fetch_failures.clear()
     _classify_fallback_warned.clear()
@@ -832,6 +864,7 @@ async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = F
             _catalogues[cache_key] = {}
             _failed_catalogues.add(cache_key)
             return _catalogues[cache_key]
+        generation = _generations.get(cache_key, 0)
         try:
             payload = await _fetch_catalogue_payload(host=host, api_key=api_key, oauth_fetch=oauth_fetch)
         except (httpx.HTTPError, ValueError, RuntimeError) as exc:
@@ -873,7 +906,7 @@ async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = F
             _failed_catalogues.add(cache_key)
         else:
             _failed_catalogues.discard(cache_key)
-        if cacheable:
+        if cacheable and _generations.get(cache_key, 0) == generation:
             _catalogues[cache_key] = parsed
             _raw_catalogues[cache_key] = _cards(payload)
         logger.debug('Loaded catalogue for {} models from {}', len(parsed), host)
@@ -897,17 +930,25 @@ async def model_cards(client: AsyncOpenAI | None = None) -> tuple[dict[str, obje
     Always strict: a garden derived from an empty table would seat nothing and
     report every preset as retired, so a missing key raises
     `MissingLLMCredentialsError` and a failed or malformed fetch raises
-    `ModelCatalogueError`. OAuth reads are fetched every call, as elsewhere.
+    `ModelCatalogueError`. OAuth reads are kept for a minute
+    (`_OAUTH_CARDS_TTL_S`), not for the process.
     """
     host, _api_key, oauth_fetch, cache_key = _catalogue_source(client)
     if callable(oauth_fetch):
+        hit = _oauth_cards.get(cache_key)
+        if hit is not None and hit[0] > time.monotonic():
+            return hit[1]
+        generation = _generations.get(cache_key, 0)
         try:
             payload = await _fetch_catalogue_payload(host=host, api_key=None, oauth_fetch=oauth_fetch)
         except (httpx.HTTPError, ValueError, RuntimeError) as exc:
             raise ModelCatalogueError(f'Orq model catalogue fetch failed: {exc}') from exc
         if not isinstance(payload, list) or not payload:
             raise ModelCatalogueError('Orq returned an unreadable or empty model catalogue.')
-        return _cards(payload)
+        cards = _cards(payload)
+        if _generations.get(cache_key, 0) == generation:
+            _oauth_cards[cache_key] = (time.monotonic() + _OAUTH_CARDS_TTL_S, cards)
+        return cards
     cached = _raw_catalogues.get(cache_key)
     if cached is not None and cache_key not in _failed_catalogues:
         return cached
@@ -916,6 +957,16 @@ async def model_cards(client: AsyncOpenAI | None = None) -> tuple[dict[str, obje
     if cards is None:
         raise ModelCatalogueError('Orq model catalogue was not cached after a successful read.')
     return cards
+
+
+def derived_from_cards(cards: tuple[dict[str, object], ...], build: Callable[[tuple[dict[str, object], ...]], T]) -> T:
+    """`build(cards)`, reused while *cards* is the cached tuple; `forget_catalogue` drops it with the cards."""
+    hit = _derived.get(build)
+    if hit is not None and hit[0] is cards:
+        return cast('T', hit[1])
+    value = build(cards)
+    _derived[build] = (cards, value)
+    return value
 
 
 ModelKind = Literal['chat', 'classify', 'embedding']
@@ -1207,6 +1258,7 @@ __all__ = [
     'get_model_info',
     'is_known_classify_model',
     'model_cards',
+    'models_by_provider',
     'price_usage',
     'qualified_model',
     'register_model',

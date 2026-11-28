@@ -1488,11 +1488,12 @@ _SIM_REPORT_CSS = """
 .report-aligned .rk-panel-body { margin-top: 12px; }
 
 /* ---- Tag (report_kit.tag) ---- */
-.report-aligned .rk-tag {
+.rk-tag {
     display: inline-block; font-size: 11px; font-weight: 500;
     border: 1px solid var(--border-default); border-radius: 999px;
     padding: 1px 8px; margin-left: 8px; color: var(--text-muted);
 }
+.rk-tag-sm { font-size: 10px; padding: 0 6px; margin-left: 4px; color: var(--text-faint); cursor: help; }
 
 .report-aligned .rk-pill {
     display: inline-flex; align-items: center; gap: 5px;
@@ -1715,18 +1716,18 @@ _SIM_TRANSCRIPT_CSS = """
     text-align: left; padding: 0; background: var(--surface-sunken);
     border-bottom: 1px solid var(--border-subtle); white-space: nowrap;
 }
-.sim-report .sim-th-sort {
+thead .th-sort {
     display: inline-flex; align-items: center; gap: 4px; width: 100%;
     padding: 10px 12px; background: none; border: 0; cursor: pointer;
     font: inherit; font-weight: 600; color: var(--text-strong); text-align: left;
 }
-.sim-report th.num .sim-th-sort { justify-content: flex-end; }
-.sim-report .sim-th-sort:hover { color: var(--teal-600); }
+th.num .th-sort { justify-content: flex-end; }
+thead .th-sort:hover { color: var(--teal-600); }
 /* Inactive sortable columns show a faint ⇅; it strengthens on hover so the
    header reads as clickable. The active column's ▲/▼ is always full-strength. */
-.sim-report .sim-th-caret { font-size: 9px; color: var(--text-faint); }
-.sim-report .sim-th-sort:hover .sim-th-caret { color: var(--teal-600); }
-.sim-report .sim-th-caret-active { color: var(--teal-600); }
+thead .th-caret { font-size: 9px; color: var(--text-faint); }
+thead .th-sort:hover .th-caret { color: var(--teal-600); }
+thead .th-caret-active { color: var(--teal-600); }
 .sim-report .sim-conv-table tbody td { padding: 10px 12px; }
 .sim-report .sim-conv-row {
     border-top: 1px solid var(--border-subtle);
@@ -3263,7 +3264,7 @@ _SIM_COMPARE_CSS = """
 .sim-report.cmp-report table.cmp-conv-table tbody td:not(:first-child) { text-align: left; vertical-align: middle; }
 .sim-report.cmp-report table.cmp-conv-table tbody td { padding: 10px; }
 .sim-report.cmp-report .cmp-conv-row { box-shadow: none; }
-.sim-report.cmp-report table.cmp-conv-table .sim-th-sort { padding: 10px; }
+.sim-report.cmp-report table.cmp-conv-table .th-sort { padding: 10px; }
 .cmp-conv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .cmp-seg { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--surface-sunken); }
 .cmp-seg-btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 0; border-radius: 7px;
@@ -3277,7 +3278,7 @@ _SIM_COMPARE_CSS = """
 .cmp-num-d--good { color: var(--teal-600); }
 .cmp-num-d--bad { color: var(--red-700); }
 .cmp-num-d--flat { color: var(--text-faint); }
-.sim-report .sim-th-caret-word { font: 500 10.5px var(--font-sans); text-transform: none; letter-spacing: 0; margin-left: 6px; color: var(--text-muted); }
+thead .th-caret-word { font: 500 10.5px var(--font-sans); text-transform: none; letter-spacing: 0; margin-left: 6px; color: var(--text-muted); }
 .cmp-outcome { white-space: nowrap; }
 .cmp-arrow { color: var(--text-faint); margin: 0 6px; }
 .cmp-unmatched { margin-top: 12px; font-size: 12px; color: var(--text-muted); }
@@ -4283,6 +4284,102 @@ _PAIRWISE_COMPARE_CSS = """
 @media (max-width:800px){.pw-compare .pw-cmp-cols{grid-template-columns:1fr}}
 """
 
+_MODELS_CSS = """
+/* ---- /models: Pareto view over the model catalogue ---- */
+.nav-item.nav-item-needs-auth { opacity: .45; }
+.models-page { display: flex; flex-direction: column; gap: 14px; width: 100%; max-width: 1120px; margin: 0 auto; }
+.models-intro, .models-summary { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+.models-summary { display: flex; flex-wrap: wrap; align-items: baseline; color: var(--text-muted); font-size: 12px; }
+.models-summary > span + span::before { content: '·'; margin: 0 8px; color: var(--text-faint); }
+.models-reset { margin-left: auto; color: var(--text-muted); }
+.models-reset:hover { color: var(--text-body); }
+.models-caption { margin: -6px 0 0; color: var(--text-muted); font-size: 12px; }
+.models-pop-btn { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.models-pop-btn:hover { color: var(--text-strong); }
+.models-pop { width: min(460px, calc(100vw - 32px)); max-height: 320px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface); color: var(--text-body); font-size: 12px; line-height: 1.5; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+.models-pop p { margin: 0 0 8px; }
+.models-pop p:last-child { margin: 0; }
+/* Anchored under its button where supported; elsewhere the popover keeps the browser's centred default. */
+@supports (position-area: bottom) { .models-pop { inset: auto; margin: 6px 0 0; position-area: bottom span-right; position-try-fallbacks: flip-block, flip-inline; } }
+.models-cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.models-card { --c: var(--orange-500); position: relative; overflow: hidden; background: var(--surface-card); }
+.models-card.is-value { --c: var(--teal-600); }
+.models-card.is-balanced { --c: var(--amber-600); }
+.models-card.is-cheapest { --c: var(--green-600); }
+.models-card .stat-label { color: var(--c); font-weight: 600; }
+.models-card .stat-value { font-size: 30px; margin-top: 2px; }
+.models-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.models-card-spark { position: absolute; right: 18px; top: 30px; width: 160px; height: 56px; overflow: visible; }
+.models-card-spark polyline { fill: none; stroke: var(--border-strong); stroke-width: 1.5; stroke-linejoin: round; }
+.models-card-spark g circle { fill: var(--border-strong); }
+.models-card-spark .is-mark { fill: var(--c); stroke: var(--surface-card); stroke-width: 1.5; }
+.models-card-model { margin-top: 6px; font-size: 18px; font-weight: 600; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.models-card .stat-sub { margin-top: 2px; }
+.models-group th { padding: 14px 10px 6px; font-size: 12px; font-weight: 600; color: var(--text-strong); background: none; text-align: left; border-bottom: 1px solid var(--border-subtle); text-transform: none; letter-spacing: 0; }
+.models-row.is-excluded td { color: var(--text-faint); }
+.models-cell { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.models-cell-main { min-width: 0; }
+.models-toggle { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; padding-top: 2px; }
+.models-toggle form { margin: 0; }
+.models-switch { position: relative; display: block; width: 28px; height: 16px; padding: 0; border: 0; border-radius: 8px; background: var(--border-strong); cursor: pointer; transition: background .15s; }
+.models-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface-card); box-shadow: 0 1px 2px rgb(0 0 0 / .2); transition: left .15s; }
+.models-switch[aria-checked="true"] { background: var(--teal-600); }
+.models-switch[aria-checked="true"]::after { left: 14px; }
+.models-switch:focus-visible { outline: 2px solid var(--teal-600); outline-offset: 2px; }
+.htmx-request .models-switch { opacity: .5; cursor: progress; }
+.models-toggle-note { max-width: 22ch; font-size: 11px; line-height: 1.3; text-align: right; color: var(--red-700); }
+.models-alert { padding: 12px 14px; border: 1px solid var(--red-100); border-radius: 8px; background: var(--red-50); color: var(--red-700); font-size: 13px; }
+.models-alert p { margin: 0 0 4px; }
+/* One toolbar line built from the shared filter controls; More filters opens a panel under its trigger. */
+.models-filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 12px; color: var(--text-body); }
+.models-field { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.models-field-label { color: var(--text-faint); font-size: 12px; }
+.models-field.is-off { cursor: not-allowed; }
+.models-field-off { display: contents; }
+.models-field.is-off .model-pick { opacity: .5; }
+.models-filters .model-pick-btn { padding: 5px 9px; }
+.models-filters .rich-pick .finder-facets { right: auto; min-width: 100%; }
+.models-filters .rich-pick .finder-facets .facet-list { width: max-content; min-width: 180px; max-width: 340px; }
+.models-filters .filter-dd-menu { left: 0; right: auto; }
+.models-filters .filter-dd-trigger { padding: 5px 9px; }
+.models-filters .model-pick-btn strong, .models-filters .filter-dd-value, .models-filters .filter-dd-value.is-engaged { font-weight: 400; }
+.models-filters .filter-dd-more .filter-dd-trigger, .models-filters > .filter-chip { gap: 6px; padding: 5px 9px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-size: 12.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-body); }
+/* The tick follows the checkbox itself, so it shows on the click rather than when the swapped page arrives. */
+.models-filters > .filter-chip:has(:checked) .filter-chip-dot { display: none; }
+.models-filters > .filter-chip:has(:checked) .filter-chip-check { display: inline-block; color: var(--green-600); }
+.models-filters > .filter-chip:not(:has(:checked)) .filter-chip-dot { display: inline-block; }
+.models-filters > .filter-chip:not(:has(:checked)) .filter-chip-check { display: none; }
+.models-filters .filter-dd-more-body { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; width: 300px; margin: 0; padding: 12px; gap: 12px; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); }
+.models-filters .filter-dd-more-body .models-field { justify-content: space-between; }
+/* The shared slider label is a mono caps heading on the report rails; here it matches the other toolbar labels. */
+.models-filters .filter-dd-more-body .filter-label { display: block; margin-bottom: 4px; font-family: inherit; font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-faint); }
+.models-chart { border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px; background: var(--surface); overflow-x: auto; }
+.models-chart .vega-embed { width: 100%; min-width: 480px; }
+@media (max-width: 640px) { .models-chart .vega-embed { min-width: 360px; } }
+.models-table-wrap { overflow-x: auto; }
+.models-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.models-table thead th { text-align: left; border-bottom: 1px solid var(--border-subtle); vertical-align: bottom; padding: 0; font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em; }
+/* Headers wrap: unwrapped, the long price labels alone pushed the table past a 1400px window. */
+.models-table thead .th-sort { white-space: normal; padding: 8px 10px; text-decoration: none; font-weight: 600; color: var(--text-faint); }
+.models-table .th-caret { visibility: hidden; }
+.models-table .th-caret-active, .models-table .th-sort:hover .th-caret, .models-table .th-sort:focus-visible .th-caret { visibility: visible; }
+.models-table td { padding: 8px 10px; border-top: 1px solid var(--border-subtle); vertical-align: top; }
+.models-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Wide enough that "next: <model>, +7.9 score, 31% pricier" takes two lines, not four. */
+.models-table td.models-beaten { min-width: 280px; }
+.models-table td.num-secondary { color: var(--text-muted); }
+.models-row.is-frontier td:first-child { box-shadow: inset 3px 0 0 var(--orange-500); }
+.models-name { display: block; font-weight: 600; color: var(--text-strong); }
+.models-id { display: block; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.models-gap { display: block; font-size: 11px; color: var(--text-muted); }
+.models-frontier { color: var(--orange-700); font-weight: 600; }
+/* no-stack keeps report.css from turning the rows into cards: the grid scrolls inside its wrapper instead. */
+@media (max-width: 760px) {
+  .models-table { min-width: 640px; }
+  .models-table .models-id { display: none; }
+}
+"""
+
 DASHBOARD_CSS = (
     _DASHBOARD_CSS_HEAD
     + _TAB_RULES
@@ -4301,6 +4398,7 @@ DASHBOARD_CSS = (
     + _PAIRWISE_REPORT_CSS
     + _PAIRWISE_COMPARISONS_CSS
     + _PAIRWISE_COMPARE_CSS
+    + _MODELS_CSS
 )
 
 # Report foundations and component rules, shared by offline HTML documents.

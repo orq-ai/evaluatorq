@@ -171,15 +171,16 @@ class TestDefaultEffortRanking:
 
 
 class TestPrice:
-    def test_price_is_the_three_to_one_blend_of_the_rates(self):
+    def test_price_is_the_agentic_blend_of_the_rates(self):
         m = ScoredModel(router_id='x/a', intelligence_index=40.0, input_price=1.0, output_price=5.0)
 
-        assert m.price == pytest.approx(2.0)
+        # No cache rate on the card, so reads price at the input rate: (7 * 1 + 2 * 1 + 1 * 5) / 10.
+        assert m.price == pytest.approx(1.4)
 
     def test_pareto_score_is_default_index_per_blended_dollar(self):
         m = ScoredModel(router_id='x/a', intelligence_index=40.0, input_price=1.0, output_price=5.0)
 
-        assert m.pareto_score == pytest.approx(20.0)
+        assert m.pareto_score == pytest.approx(40.0 / 1.4)
 
     def test_pareto_score_is_none_only_for_a_free_card(self):
         free = ScoredModel(router_id='x/a', intelligence_index=40.0, input_price=0.0, output_price=5.0)

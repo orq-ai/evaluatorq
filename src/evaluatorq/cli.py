@@ -260,7 +260,7 @@ def dashboard(
 
 
 def _register_subapps(app: typer.Typer) -> None:
-    """Register the redteam, sim, coding-agent, and Insights sub-apps.
+    """Register the redteam, sim, coding-agent, models and Insights sub-apps.
 
     Their deps are core, so a failing import here means a broken install — let it
     surface (via run_guarded) rather than silently dropping the subcommand
@@ -269,6 +269,7 @@ def _register_subapps(app: typer.Typer) -> None:
     from evaluatorq.backends.coding_agent_cli import app as coding_agent_app
     from evaluatorq.insights.cli import insights_cmd
     from evaluatorq.local_sessions.cli import sessions_cmd
+    from evaluatorq.models_cli import app as models_app
     from evaluatorq.redteam.cli import app as redteam_app
     from evaluatorq.simulation.cli import app as sim_app
     from evaluatorq.trace_finder.cli import _FIND_EPILOG, find
@@ -276,6 +277,7 @@ def _register_subapps(app: typer.Typer) -> None:
     app.add_typer(redteam_app, name='redteam', help='Red teaming commands.')
     app.add_typer(sim_app, name='sim', help='Agent simulation pipeline.')
     app.add_typer(coding_agent_app, name='coding-agent', help='Coding-agent target utilities.')
+    app.add_typer(models_app, name='models', help='Compare catalogue models on score against price, speed or latency.')
     app.command(
         'find',
         help='Find recent Orq traces with a natural-language classifier task.',

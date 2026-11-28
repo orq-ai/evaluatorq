@@ -37,6 +37,16 @@ Older screenshots use `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 
 | `sim-08-config.png` | Report → Config — run metadata and the persona dials |
 | `sim-09-compare.png` | Run comparison — two runs of the same agent, what changed, tiles, outcome bars and scorer means |
 
+## Models — `models-*.png`
+
+Captured on 2026-11-24 against the live Orq catalogue, 1400×1250 viewport, light theme, headless Chromium, with `eq dashboard` on the branch's defaults: agentic price mix (7:2:1 cached), minimum score 10. `models-01` and `models-02` show the top of the page; `models-03` is scrolled to the table.
+
+| File | Page |
+|---|---|
+| `models-01-frontier.png` | Pareto Frontier (`/models`) — the Best score and Best score per $ answer cards, each with a small sketch of the frontier marking its model (a Balanced card joins them when a frontier model sits well above the line between those two), the Score, X axis, Price mix, Lab and More filters controls, intelligence index against the agentic blended price with the frontier line and the Measured score / Estimated score legend, and the top of the table with its Score per $ column |
+| `models-02-legal.png` | Pareto Frontier (`/models?index=legal`) — the legal index, where about half the models have no score and are not plotted |
+| `models-03-fallback.png` | Pareto Frontier (`/models?lab=alibaba`), scrolled to the table — two Qwen cache-read rates tagged **input**, billed at the input rate because their cards list no cache price |
+
 ## Pending re-shoot
 
 Four shots do not show the thing their caption teaches. The decision is to re-shoot the set in one purpose-built capture session rather than keep documenting around it. Until then the three that exist are **unreferenced** — their `![...]` lines were removed from [`docs/dashboard.md`](../../dashboard.md); the prose stayed. Re-add each one in the same commit that replaces the file, not before. The prose caveats standing in for them are the only thing keeping the pages honest, so **do not delete them either**.
@@ -51,3 +61,4 @@ Four shots do not show the thing their caption teaches. The decision is to re-sh
 The screenshots that do show a report tab strip (`sim-03` … `sim-08`) are one tab short of the current dashboard, since Recommendations sits between Breakdown and Transcripts now. `sim-01`, `sim-02` and `sim-09` are outside a report and unaffected.
 
 To re-shoot: run `eq dashboard` in a checkout with runs under `.evaluatorq/runs/` and `.evaluatorq/sim-runs/`, 1440×900, light theme, to match the existing set.
+

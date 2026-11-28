@@ -480,8 +480,58 @@ The pairwise CSV writes one row per comparison: the question, the consensus winn
 
 Download links respect the currently active filter state — the CSV/JSON exports contain only the rows visible in the filtered report body.
 
+## Pareto Frontier { #models }
+
+The **Pareto Frontier** page (`/models`) plots every model in the Orq catalogue as one dot, score against a blended price, and joins the models nothing beats with an orange line: the Pareto frontier. It reads the live catalogue, so it needs the same Orq account as trace search. Without one, the sidebar item is greyed out and the page says how to connect.
+
+Answer cards above the chart give up to three quick answers, each for the models on the frontier. Each card names its model and carries a small sketch of the frontier with that model's dot marked in the card's colour:
+
+| Card | What it shows |
+|---|---|
+| **Best score** | The highest score, with that model and its value on the x axis. |
+| **Highest intelligence per $** | The highest **Score per $**, such as `630 per $`, with that model, its score and its price. Below 10 it keeps one decimal, such as `0.4 per $`. On a domain index it names that index, such as **Highest Legal score per $**. Shown only when the x axis is price. |
+| **Balanced** | On the price axis, the frontier model at the knee between the **Highest intelligence per $** and **Best score** models: draw a straight line between those two on the chart, and it is the frontier model furthest above that line. Up to it, more money buys a lot of score; after it, little. It shows the model's score, price and Score per $. When no frontier model sits above the line, the frontier has no sweet spot and the third card is the cheapest one below instead. |
+| **Cheapest at score ≥ *minimum score*** | The cheapest frontier model that clears the minimum score, such as **Cheapest at score ≥ 10** on the default page. With the minimum score at `0` it reads plain **Cheapest**. On the speed axes it reads **Fastest at score ≥ *minimum score*** or **Quickest first token at score ≥ *minimum score***. Shown only when there is no **Balanced** card, and hidden when it names the same model as another card. |
+
+**Score per $** is the points a model scores above the minimum score, divided by its blended price: `(score - minimum score) / price`. A model exactly at the minimum score gets 0, and with the minimum score at `0` it is the plain score per dollar. It is the same number as the `Score per $` column of `eq models pareto` (see [Model Pareto frontier](model-pareto.md#the-frontier-in-one-command)).
+
+![Pareto Frontier page on the default agentic price mix and minimum score of 10: the Best score and Highest intelligence per $ cards above the chart, each sketching the frontier with its model marked, and estimated scores drawn as rings](assets/dashboard/models-01-frontier.png)
+
+Filled dots are measured scores and rings are scores Orq estimated; the legend above the chart names both. In the table an estimated score carries a tilde, such as `~38.3`. Tick **Score per $ lines** in **More filters** to draw faint dashed guide curves on the price axis, each labelled with its Score per $, such as **50 per $**. Every model on one curve has the same Score per $, so a dot above a curve gives more score per dollar than the curve's label. The page draws every round value (1, 2, 5, 10, 20, 50 and so on) inside the range of the plotted models, up to eight; on a wider range it thins them to eight spread across it. The other x axes have no guides, because Score per $ is defined only against price.
+
+The controls above the chart. Every change is kept in the page address, and the browser remembers the last one: opening the page without settings in its address, from the sidebar for example, brings back the filters you used last. The memory is a cookie in this browser, so it does not follow you to another browser or machine. **Reset filters**, at the end of the line under the controls, forgets them and goes back to the defaults.
+
+| Control | What it does | Default |
+|---|---|---|
+| **Score** | Intelligence or a domain index such as legal. Lists only the indices at least one loaded model has a score on. | Intelligence |
+| **X axis** | Price, output speed or time to first token. | Price |
+| **Price mix** | **Agentic: 7:2:1 cached** (7 parts cache read, 2 parts fresh input, 1 part output) or **List: 3:1 input/output**. Greyed out on the other x axes. | Agentic |
+| **Lab** | Plots the models of the labs you tick: the company that made the model, such as `openai` or `alibaba`, whichever host serves it. Type in its search box to narrow the list. Ticking every lab, or none, plots them all, and the page address then carries no lab list, so models that **Include disabled models** adds still show. | All labs |
+| **Include disabled models** | On the toolbar. Adds models switched off in the workspace, tagged **disabled** in the table. When the dashboard's Orq sign-in may manage the workspace's models, every row gets an on/off switch at the right of its model cell instead of the tag, with or without this filter, teal when the model is enabled; turn the filter on to reach a disabled model's switch. One click switches the model for the whole workspace, and a second click switches it back. A sign-in through the Orq CLI (`orq auth login`) qualifies when you are a workspace admin; an API key qualifies when it is a Management Key that may read the workspace users, and a standard API key never does. If Orq refuses, the row says why. The page keeps the catalogue for a minute and the answer to whether you may switch models for half an hour (a no for a minute), so a filter change does not wait on Orq; a model switched on or off in the Orq web app can take up to a minute to show here, while a switch on this page shows at once. | Off |
+| **More filters** | The last button on the toolbar. Opens the five settings below. A number on the button counts how many of them differ from their default; the **Minimum score** readout turns teal under the same rule. A click outside the panel, or Escape, closes it, as it does the **Lab** list. | Closed |
+| **Reasoning level** | In **More filters**. Scores intelligence at one reasoning effort. Greyed out on a domain index. | Each model's default |
+| **Minimum score** | In **More filters**, a slider from 0 to 100. Hides models scoring below it on the chosen score; `0` plots every model. It is also the floor that Score per $ counts from. | 10 |
+| **Frontier only** | In **More filters**. Trims the table to the frontier models. | Off |
+| **Hide estimated scores** | In **More filters**. Drops the rings, which are scores Orq estimated rather than measured. | Off |
+| **Score per $ lines** | In **More filters**, on the price axis only. Draws the dashed Score per $ guide curves. | Off |
+
+For your own price ratio, add `?mix=7:1:1:1` (cache read : cache write : fresh input : output) to the page address; it appears in the **Price mix** picker as **Custom**. A value the page cannot read, in `?mix=` or `?min_score=`, silently falls back to the default, so check that the axis title names the blend you asked for. The axis title and the table header always name the blend in use.
+
+The summary line under the controls counts the frontier, the dominated models, the models not plotted and how many of those the minimum score hid. Set the minimum score to `0` when a model you expected is missing.
+
+The table below the chart lists every plotted model with its prices and, for a dominated model, the frontier model that beats it. On the price axis it has a **Score per $** column; click its header to rank the models by it. Click any column header to sort. Contributor listings (see [Model Pareto frontier](model-pareto.md#one-dot-per-model)) sit last, under **Excluded**, with an **excluded** tag whose tooltip gives the reason; they are not on the chart and are never compared. To check one model, find its row: **Beaten by** names the model that beats it, and the page has no single-model view, which `eq models pareto --model` gives. On a blend with a cache-read share it adds a **Cache read $/1M** column. An **AA** tag in that column marks a rate taken from the Artificial Analysis price because the host lists none, and an **input** tag marks a card with no cache price, billed at the input rate. The summary line counts the tagged models, and on a custom mix with a write share the count includes cache-write fallbacks, which the page has no column for. Filtering to the alibaba lab shows four Qwen models billed at the input rate:
+
+![Pareto Frontier page filtered to alibaba, scrolled to the table: four Qwen rows tag their cache-read rate with input](assets/dashboard/models-03-fallback.png)
+
+On a domain index such as legal, Artificial Analysis has scored fewer models, so the chart is sparser:
+
+![Pareto Frontier page on the legal index: fewer models carry a legal score, so most models are not plotted](assets/dashboard/models-02-legal.png)
+
+The page and `eq models pareto` compute the same thing. What the frontier means, how the blend works and where it misleads is in [Model Pareto frontier](model-pareto.md#the-price-axis).
+
 ## Where to next
 
 - **[Red Teaming](guides/red-teaming.md)** — generate the red-team reports the dashboard browses.
 - **[Agent Simulation](guides/agent-simulation.md)** — generate simulation reports.
 - **[CLI Reference](cli-reference/overview.md)** — the `eq dashboard` command and options.
+- **[Model Pareto frontier](model-pareto.md)** — the frontier behind the Pareto Frontier page, from the CLI and Python.

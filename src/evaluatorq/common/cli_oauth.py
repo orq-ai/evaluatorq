@@ -80,6 +80,7 @@ class _CLI:
         payload: dict[str, Any] | None = None,
         *,
         capture: tuple[str, str] | None = None,
+        ignore_output: bool = False,
     ) -> Any:
         # An explicit empty profile bypasses a globally selected API-key
         # profile and makes the CLI choose its saved OAuth session for the
@@ -116,6 +117,9 @@ class _CLI:
                 detail or f'orq CLI exited with status {process.returncode}',
                 failure_kind='authentication' if _is_authentication_error(detail) else 'unavailable',
             )
+        # A 204 write (such as `models enable`) has no body to parse; the exit code is the answer.
+        if ignore_output:
+            return None
         try:
             result = _attribute_value(json.loads(stdout))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -413,6 +417,36 @@ def oauth_subject(server_url: str) -> dict[str, str | None]:
     if not isinstance(user_id, str) or not user_id:
         raise OrqCLIError('The Orq CLI did not identify the signed-in user. Try again shortly.')
     return {key: data.get(key) for key in ('user_id', 'workspace', 'project')}
+
+
+# Orq's role IDs are fixed constants (orquesta-web `libs/models/permissions/src/enums/role.ts`).
+ADMIN_ROLE_ID = '01J3HZ9VGNP5867SAGRPS8JT4X'
+
+
+async def is_workspace_admin(server_url: str) -> bool:
+    """Whether the signed-in CLI user holds the Admin role in the active workspace.
+
+    The workspace user list only opens for admins, so any failure reads as not an admin.
+    """
+    try:
+        user_id = (await asyncio.to_thread(oauth_subject, server_url))['user_id']
+        users = await _CLI(server_url=server_url, workspace=None, project=None).call(['users', 'list'])
+    except OrqCLIError as exc:
+        logger.debug('Orq admin check failed: {}', exc)
+        return False
+    rows = users.get('users') if isinstance(users, dict) else None
+    me = next((u for u in rows or () if isinstance(u, dict) and u.get('account_id') == user_id), None)
+    return me is not None and ADMIN_ROLE_ID in (me.get('roles') or ())
+
+
+async def set_workspace_model(server_url: str, model_id: str, *, enabled: bool) -> None:
+    """Enable or disable a model, by its catalogue UUID, for the active workspace; raises `OrqCLIError` on failure."""
+    cli = _CLI(server_url=server_url, workspace=None, project=None)
+    if enabled:
+        await cli.call(['models', 'enable'], {'model_id': model_id}, ignore_output=True)
+    else:
+        # The CLI asks before a disable; --force is the non-interactive yes.
+        await cli.call(['models', 'disable', model_id, '--force'], ignore_output=True)
 
 
 SessionStatus = Literal['valid', 'signed-out', 'unknown', 'unreadable']

@@ -95,6 +95,8 @@ _AUTH_TOAST_SCRIPT = (
     '<script>'
     "document.addEventListener('DOMContentLoaded',function(){"
     "fetch('/auth/status',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(s){"
+    "if(s.status==='action'){document.querySelectorAll('.nav-item[data-needs-orq]').forEach(function(a){"
+    "a.classList.add('nav-item-needs-auth');a.title=s.message;});}"
     "if(s.status==='valid')return;"
     "const id='eq-auth-toast:'+s.method+':'+s.status+':'+s.message;"
     "try{if(sessionStorage.getItem(id))return;sessionStorage.setItem(id,'1');}catch(e){}"
@@ -190,12 +192,27 @@ _NAV: list[tuple[str, str, str, str]] = [
     ),
     ('insights', 'Insights', '/insights', '<path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 6-7"/>'),
     (
+        'models',
+        'Pareto Frontier',
+        '/models',
+        (
+            '<circle cx="6" cy="17" r="2"/><circle cx="11" cy="10" r="2"/><circle cx="18" cy="6" r="2"/>'
+            '<path d="M4 20h16"/><path d="M4 20V4"/>'
+        ),
+    ),
+    (
         'settings',
         'Settings',
         '/settings',
         '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
     ),
 ]
+
+
+# Nav items that read Orq data. The auth toast script greys them out when the
+# selected credential needs action (missing, or rejected by Orq); the page itself
+# still opens and says why.
+NAV_NEEDS_ORQ: frozenset[str] = frozenset({'models'})
 
 
 def icon(path_data: str, *, cls: str = 'nav-icon', size: int = 16) -> str:
@@ -220,7 +237,10 @@ def _sidebar_html(active_nav: str, *, compression_inspector_enabled: bool) -> st
                 f'{icon(COMPRESSION_ICON)}<span>Compression inspector</span></a>'
             )
         active = ' active' if key == active_nav else ''
-        items.append(f'<a class="nav-item{active}" href="{href}">{icon(icon_path)}<span>{esc(label)}</span></a>')
+        needs_orq = ' data-needs-orq="1"' if key in NAV_NEEDS_ORQ else ''
+        items.append(
+            f'<a class="nav-item{active}" href="{href}"{needs_orq}>{icon(icon_path)}<span>{esc(label)}</span></a>'
+        )
     return (
         '<aside class="app-sidebar">'
         f'<a class="app-brand" href="/">{logo_html}'

@@ -22,6 +22,7 @@ from evaluatorq.common.reports.sim_detail import _render_criteria_column as _ren
 from evaluatorq.common.reports.sim_detail import render_transcript_fragment as render_transcript_fragment
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
+from evaluatorq.dashboard.tables import flipped, sortable_th
 from evaluatorq.dashboard.trace_links import single_trace_url, thread_trace_url, trace_link_button
 from evaluatorq.dashboard.view import _sim_rowlist_wrapper
 
@@ -184,26 +185,16 @@ def _sim_header_row(
     for param, label, _key in columns:
         active = param == sort
         # Toggle direction on the active column; a fresh column starts ascending.
-        next_dir = 'desc' if (active and direction == 'asc') else 'asc'
-        aria = {'asc': 'ascending', 'desc': 'descending'}[direction] if active else 'none'
-        # Active column shows its direction (▲/▼); inactive sortable columns show
-        # a faint up-down glyph (⇅) so the "click to sort" affordance is always
-        # visible, not only after the first click.
-        if active and direction_labels and param in direction_labels:
-            caret = esc(direction_labels[param][0 if direction == 'asc' else 1])
-            caret_cls = 'sim-th-caret sim-th-caret-active sim-th-caret-word'
-        elif active:
-            caret = '&#x25B2;' if direction == 'asc' else '&#x25BC;'
-            caret_cls = 'sim-th-caret sim-th-caret-active'
-        else:
-            caret = '&#x21C5;'
-            caret_cls = 'sim-th-caret'
-        num = ' class="num"' if param in _NUMERIC_COLUMNS else ''
+        next_dir = flipped(direction) if active else 'asc'
         cells.append(
-            f'<th scope="col" aria-sort="{aria}"{num}>'
-            f'<button type="button" class="sim-th-sort" {control(param, next_dir, 1, size)}>'
-            f'{esc(label)}<span class="{caret_cls}">{caret}</span>'
-            f'</button></th>'
+            sortable_th(
+                label,
+                control=f'type="button" {control(param, next_dir, 1, size)}',
+                active=active,
+                direction=direction,
+                numeric=param in _NUMERIC_COLUMNS,
+                word=direction_labels.get(param) if direction_labels else None,
+            )
         )
     cells.extend(f'<th scope="col">{esc(label)}</th>' for label in trailing)
     return f'<thead><tr>{"".join(cells)}</tr></thead>'

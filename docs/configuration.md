@@ -326,7 +326,7 @@ Prices, provider ids, Responses support and accepted reasoning-effort values com
 Register an entry to fix that. Registered entries take priority over the fetched catalogue, so this also corrects an entry that is wrong:
 
 ```python
-from evaluatorq.common.model_catalogue import ModelInfo, get_model_info, register_model
+from evaluatorq.models import ModelInfo, get_model_info, register_model
 
 register_model(
     'my-self-hosted-llama',

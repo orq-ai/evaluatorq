@@ -137,15 +137,20 @@ _TAG_TONES: dict[str, str] = {
 }
 
 
-def tag(text: str, *, tone: str | None = None) -> str:
-    """Inline summary pill, e.g. "3 turns" / "score 0.82" (spec §Transcripts)."""
+def tag(text: str, *, tone: str | None = None, title: str = '', small: bool = False) -> str:
+    """Inline summary pill, e.g. "3 turns" / "score 0.82" (spec §Transcripts).
+
+    `title` is a hover explanation; `small` is the compact variant for table cells.
+    """
     if not text:
         return ''
     style = ''
     color = _TAG_TONES.get(tone or '')
     if color:
         style = f' style="color:{color};border-color:{color}"'
-    return f'<span class="rk-tag"{style}>{esc(text)}</span>'
+    tip = f' title="{esc(title)}"' if title else ''
+    cls = 'rk-tag rk-tag-sm' if small else 'rk-tag'
+    return f'<span class="{cls}"{style}{tip}>{esc(text)}</span>'
 
 
 def dial(value_text: str, fraction: float, *, radius: int, stroke: int, color: str, sub: str = '') -> str:

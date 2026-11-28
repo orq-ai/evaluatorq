@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 import html as _html
 import json
+from operator import itemgetter
 from typing import Any
 
 from loguru import logger
@@ -368,6 +369,125 @@ def vl_line(
         },
         'width': 420,
         'height': 200,
+    }
+
+
+# A unit circle with a hole: the outer arc runs one way and the inner the other, so the nonzero fill skips the hole.
+_RING = 'M-1,0A1,1 0 1,0 1,0A1,1 0 1,0 -1,0ZM-0.62,0A0.62,0.62 0 1,1 0.62,0A0.62,0.62 0 1,1 -0.62,0Z'
+
+
+def vl_frontier_scatter(
+    *,
+    rows: list[dict[str, Any]],
+    x_title: str,
+    y_title: str,
+    lower_is_better: bool,
+    tooltip: list[dict[str, Any]],
+    x_format: str = '~g',
+    guides: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Score against a ratio quantity, with the Pareto frontier joined by a step line and labelled.
+
+    Each row carries ``x``, ``score``, ``status`` (``Frontier`` or ``Dominated``), ``estimated``
+    (``estimated`` draws as a ring, named in a second legend) and ``label``, the text beside a frontier point,
+    empty to leave it to the tooltip. The x axis is logarithmic: price, speed and latency all span orders of magnitude, and a linear axis spends most of the plot on one outlier. Its
+    tick labels are formatted with the d3 `x_format` and thinned to 1-2-5 steps at any range.
+
+    `guides` rows (``x``, ``score``, ``k``) draw one faint dashed curve per ``k``, labelled ``<k> per $`` at its
+    highest point. They sit behind the dots, with no legend entry and no tooltip; none when `guides` is empty.
+    """
+    if not rows:
+        return {}
+    frontier = sorted((r for r in rows if r['status'] == 'Frontier'), key=itemgetter('x'))
+    x_enc: dict[str, Any] = {
+        'field': 'x',
+        'type': 'quantitative',
+        'title': x_title,
+        'scale': {'type': 'log', 'nice': False, 'padding': 12},
+        'axis': {
+            'format': x_format,
+            'tickCount': 12,
+            'labelExpr': "indexof(['1','2','5'], substring(format(datum.value, '.0e'), 0, 1)) >= 0 ? datum.label : ''",
+        },
+    }
+    y_enc = {'field': 'score', 'type': 'quantitative', 'title': y_title, 'scale': {'zero': False, 'padding': 8}}
+    color = {
+        'field': 'status',
+        'type': 'nominal',
+        'scale': {'domain': ['Frontier', 'Dominated'], 'range': [COLORS['orange_300'], COLORS['ink_300']]},
+        'legend': {'title': None, 'orient': 'top'},
+    }
+
+    # Estimated scores draw as a ring: a path shape, because Vega-Lite gives no legend for fill opacity.
+    shape = {
+        'field': 'estimated',
+        'type': 'nominal',
+        'scale': {'domain': ['measured', 'estimated'], 'range': ['circle', _RING]},
+        'legend': {
+            'title': None,
+            'orient': 'top',
+            'labelExpr': "datum.label === 'estimated' ? 'Estimated score' : 'Measured score'",
+            'symbolFillColor': COLORS['ink_300'],
+            'symbolStrokeWidth': 0,
+        },
+    }
+    dots = {
+        'mark': {'type': 'point', 'filled': True, 'size': 90, 'opacity': 0.9},
+        'encoding': {'x': x_enc, 'y': y_enc, 'color': color, 'shape': shape, 'tooltip': tooltip},
+    }
+
+    layers: list[dict[str, Any]] = []
+    if guides:
+        guide_mark = {'color': COLORS['ink_300'], 'tooltip': None}
+        layers.append({
+            'data': {'values': guides},
+            'layer': [
+                {
+                    'mark': {'type': 'line', 'strokeDash': [4, 3], 'strokeWidth': 1, 'opacity': 0.5, **guide_mark},
+                    'encoding': {
+                        'x': x_enc,
+                        'y': y_enc,
+                        'detail': {'field': 'k', 'type': 'nominal'},
+                        'order': {'field': 'x', 'type': 'quantitative'},
+                    },
+                },
+                {
+                    'transform': [
+                        {'joinaggregate': [{'op': 'max', 'field': 'score', 'as': 'top'}], 'groupby': ['k']},
+                        {'filter': 'datum.score === datum.top'},
+                        {'calculate': "datum.k + ' per $'", 'as': 'guide_label'},
+                    ],
+                    # Full ink_300, unlike the line: at half opacity the label is too faint to read.
+                    'mark': {'type': 'text', 'align': 'right', 'dx': -4, 'dy': -6, 'fontSize': 10, **guide_mark},
+                    'encoding': {'x': x_enc, 'y': y_enc, 'text': {'field': 'guide_label'}},
+                },
+            ],
+        })
+    return {
+        'data': {'values': rows},
+        'layer': [
+            *layers,
+            {
+                'data': {'values': frontier},
+                'mark': {
+                    'type': 'line',
+                    # Lower-is-better x: the frontier holds its score until the next, dearer step up.
+                    'interpolate': 'step-after' if lower_is_better else 'step-before',
+                    'color': COLORS['orange_300'],
+                    'strokeWidth': 1.5,
+                    'opacity': 0.7,
+                },
+                'encoding': {'x': x_enc, 'y': y_enc, 'order': {'field': 'x', 'type': 'quantitative'}},
+            },
+            dots,
+            {
+                'data': {'values': [r for r in rows if r.get('label')]},
+                'mark': {'type': 'text', 'align': 'left', 'dx': 8, 'dy': -6, 'fontSize': 11, 'limit': 160},
+                'encoding': {'x': x_enc, 'y': y_enc, 'text': {'field': 'label'}},
+            },
+        ],
+        'width': 'container',
+        'height': 420,
     }
 
 

@@ -52,7 +52,7 @@ from evaluatorq.common.llm_errors import status_code as sdk_status_code
 from evaluatorq.common.orq_client import OrqProfile, close_orq_client, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
-from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
+from evaluatorq.dashboard.auth import auth_or_reason, build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.compression_inspector import register_compression_inspector_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
@@ -262,16 +262,9 @@ async def _auth_status(req: Request) -> JSONResponse:
     """Verify the selected dashboard credential for the startup toast."""
 
     settings = effective_settings()
-    try:
-        auth = await asyncio.to_thread(resolve_dashboard_auth, settings)
-    except (OSError, RuntimeError, ValueError) as exc:
-        return JSONResponse({'status': 'action', 'method': settings.orq_auth_method, 'message': str(exc)})
-    if auth.method == 'environment' and not auth.api_key:
-        return JSONResponse({
-            'status': 'action',
-            'method': auth.method,
-            'message': 'ORQ_API_KEY is not set. Choose an authentication method in Settings.',
-        })
+    auth, reason = await asyncio.to_thread(auth_or_reason, lambda: resolve_dashboard_auth(settings))
+    if auth is None:
+        return JSONResponse({'status': 'action', 'method': settings.orq_auth_method, 'message': reason})
     orq = None
     llm = None
     try:
@@ -1353,6 +1346,13 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # ------------------------------------------------------------------
     register_insights_routes(app)
     register_compression_inspector_routes(app)
+
+    # ------------------------------------------------------------------
+    # Routes: /models — Pareto view over the Orq model catalogue
+    # ------------------------------------------------------------------
+    from evaluatorq.dashboard.models_views import register_models_routes
+
+    register_models_routes(app)
 
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page

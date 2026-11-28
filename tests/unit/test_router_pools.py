@@ -193,8 +193,10 @@ class TestSeatability:
     def test_max_savings_retires_while_the_subdollar_frontier_is_under_three_lineages(self, pools, garden):
         """Counted in lineages, not identities: deepseek-v4-pro and deepseek-v4-flash
         are two identities and one vendor, the correlated-failure shape a pool
-        exists to refuse. A wider cheap band is the tripwire to reinstate it."""
-        cheap = pareto_frontier([m for m in garden.values() if m.price <= 1.0 and m.region != 'europe' and seatable(m)])
+        exists to refuse. A wider cheap band is the tripwire to reinstate it.
+        The band was "under $1.00" on the 3:1 list blend; $0.35 agentic admits
+        the same frontier on the 2026-11-28 live catalogue."""
+        cheap = pareto_frontier([m for m in garden.values() if m.price <= 0.35 and m.region != 'europe' and seatable(m)])
         lineages = {judge_family(m.router_id) for m in cheap}
 
         if len(lineages) >= 3:

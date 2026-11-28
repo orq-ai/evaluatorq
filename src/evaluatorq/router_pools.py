@@ -83,7 +83,7 @@ class RouterPool(BaseModel):
         description='Default-effort intelligence index per blended USD per 1M tokens, per member.',
     )
     price_range: tuple[float, float] = Field(
-        description='Cheapest and dearest blended USD per 1M tokens, 3:1 input/output.'
+        description='Cheapest and dearest USD per 1M tokens under the agentic blend (7:2:1 cached).'
     )
     cost_per_1k_range: tuple[float, float] = Field(
         description='USD per 1,000 requests at 1,500 input / 500 output tokens, if every '

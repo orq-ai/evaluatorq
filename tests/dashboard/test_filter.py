@@ -964,17 +964,17 @@ class TestSimMetricFilters:
 
 class TestFilterChipOnOffClarity:
     def test_selected_chip_renders_check_span_and_is_active(self):
-        from evaluatorq.dashboard.view import _chip
+        from evaluatorq.dashboard.controls import chip
 
-        html = _chip('goal_outcome', 'Achieved', checked=True, dot_cls='chip-dot-green')
+        html = chip('goal_outcome', 'Achieved', checked=True, dot_cls='chip-dot-green')
         assert 'is-active' in html
         assert 'class="filter-chip-check chip-dot-green"' in html
         assert 'checked' in html
 
     def test_unselected_chip_has_no_is_active(self):
-        from evaluatorq.dashboard.view import _chip
+        from evaluatorq.dashboard.controls import chip
 
-        html = _chip('goal_outcome', 'Not achieved', checked=False, dot_cls='chip-dot-red')
+        html = chip('goal_outcome', 'Not achieved', checked=False, dot_cls='chip-dot-red')
         assert 'is-active' not in html
         # The check span is still emitted (markup is static); visibility is
         # driven purely by the .is-active CSS state, not by omitting markup.
